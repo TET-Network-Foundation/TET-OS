@@ -1,0 +1,26 @@
+[package]
+name = "tet-core"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+anyhow = "1.0.99"
+axum = "0.8.4"
+base64 = "0.22.1"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
+hex = "0.4.3"
+rand = "0.8.5"
+reqwest = { version = "0.12.23", features = ["json", "rustls-tls"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.143"
+subxt = "0.38.0"
+subxt-signer = "0.38.0"
+tokio = { version = "1.47.1", features = ["macros", "rt-multi-thread", "signal"] }
+tower-http = { version = "0.6.6", features = ["cors", "trace"] }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+sp-core = { version = "36.1.0", features = ["std"] }
+dilithium-rs = { version = "0.2.0", features = ["std"] }
+

@@ -1,0 +1,29 @@
+## TET Network (monorepo)
+## Ignore build artifacts and local-only files.
+
+# --- Rust / Substrate ---
+**/target/
+**/*.rs.bk
+**/*.pdb
+
+# --- Node / Next.js ---
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/.turbo/
+
+# --- Env / secrets ---
+.env
+.env.*
+**/.env
+**/.env.*
+
+# --- Logs ---
+*.log
+
+# --- OS / IDE ---
+.DS_Store
+.vscode/
+*.swp
+*~

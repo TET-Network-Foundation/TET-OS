@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+:root {
+  /* Slightly warmer/greener classic face tone (closer to Bitcoin v0.1 GUI refs) */
+  --background: #D6D4CE;
+  --foreground: #000000;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  /* Tailwind font-sans will resolve to this stack via body. */
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: Tahoma, "MS Sans Serif", Arial, sans-serif;
+  cursor: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACD0lEQVR42sWXoY7qYBCFP242AQySAEGRihrCG9TUgETicShMg0Hj6CtgCGlQDag6dJMaDALXBJI+AYbMGkp2uW237JYyyYimTXrmzJwz/w+Aruui67o4jiO8KQQQ27bfCyBMz/PkrQDC3O/3Lwfy7+uDYRjYtk2/3wdgu92yXC4lCALJhYHNZiMA4/H4kQ1yBRDGaDSKak1+AMLQdf1lQD7SfKSqKpVKhVKpxGq1AuB4PAqAoiiFlzMQpxhVVSVTFaSMwi05HA4Aomma5AkAANd1cV0XgNPpxHQ6FcMwJI8W/GRi+TDwtSVBEPwHaDqdSl4MJDLyE5CPrA1lNptRLBbxfR/TNDmfzziOI61WK1GyWTIAQBAEstvtZDabCSCDwUDm83nsps0cQBi3Q8494w49WargmUyngpvjxcntUQWFJzJ5CPf7vVwuF9brNb1eDwDTNBPBep4n1+uVUqlEu90u/EmGw+FQADmdThJB+beBe1Z+iUZ0s1SZTCYAhUajEVWJ1Ot1AahWq99o/bV5aJom/X5fHMcR3/cjKzgej+G7uG0ogHQ6HRkMBrJYLCQ1gFtF4rpuqrUcB0BRFGk2mwKEPvASK773u9vtSsS2fArAn7w/CUCYca3IYhtyPp+xLEssy7r/pFarYVkWhmEAUC6Xc7vURFpx2mH89eKJs9s8ZuARQO4novDucL/SPROfhQGBKiLS+J8AAAAASUVORK5CYII=') 0 0, auto;
+}
+
+a,
+button,
+[role="button"] {
+  cursor: url('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABY0lEQVR42u2Xu6qEMBCGf8VCEN/AB7CztbH3QcRmq23SWdvZpRFbi623s0st+ASW+wrLgovMaY6LHj0XjRdYzg9CDMnMRzKTTBTM1Pl8JgBomgaccwWSWmKAJOcPpM50TAAUxhhc1+337aIpZ9IAKg7WP8DbABAAsm2bjswCmvoYY7R3GpLv+z9CXa9X2gsAVVV9HdOH2T4I27YdHf9pmh6bBc/n89XWukYQBGSaJpqmgeM4CMNQ2QNGAwDLsijLspfDsizJMAy63+/KBrfp+By43W6DTl3X4XneIoO+78OyrPkRLoSgsixHER1FEQkhaOnNV9c1xXE8mMc5H9kiABQEwXdpthhgSn0Atb+Xj8djtMd5nu+XHnVdEwDq6r6tlCTJ9Gp2ABuXWr/b/wzG4wD6g/M8XxuEiqKgTWj/amvWbXi5XNYGkH4XHCZZAOkVeM+qWJN8nO4HwDlfxeHpdBr8fwDkSsZ/fvLMCAAAAABJRU5ErkJggg==') 6 0, pointer;
+}

@@ -1,0 +1,35 @@
+[Unit]
+Description=TET Testnet v1 Node
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+User=root
+Group=root
+WorkingDirectory=/var/lib/tet-node
+
+# Read operator-managed environment variables here.
+# Example location: /etc/tet-node/tet-node.env
+EnvironmentFile=/etc/tet-node/tet-node.env
+
+# The binary should be installed on the host at this path.
+ExecStart=/usr/local/bin/TET-Core
+
+Restart=always
+RestartSec=2
+
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/tet-node
+
+# Raise file descriptor limit for P2P.
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+

@@ -1,0 +1,148 @@
+groups:
+  - name: tet
+    rules:
+      # --- Node / P2P ---
+      - alert: TetPeersLow
+        expr: substrate_sub_libp2p_peers_count < 3
+        for: 5m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET peers count is low"
+          description: "substrate_sub_libp2p_peers_count fell below 3 for 5 minutes."
+
+      - alert: TetPeersBannedHigh
+        expr: substrate_sub_libp2p_peerset_num_banned_peers > 10
+        for: 10m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET has many banned peers"
+          description: "substrate_sub_libp2p_peerset_num_banned_peers exceeded 10 for 10 minutes."
+
+      - alert: TetLibp2pRequestFailureSpike
+        expr: increase(substrate_sub_libp2p_requests_out_failure_total[5m]) > 200
+        for: 5m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET outbound request failures spiking"
+          description: "substrate_sub_libp2p_requests_out_failure_total increased significantly over the last 5 minutes."
+
+      # --- Node / RPC ---
+      - alert: TetRpcErrorsHigh
+        expr: |
+          sum(increase(substrate_rpc_calls_finished{is_error="true"}[5m]))
+          /
+          clamp_min(sum(increase(substrate_rpc_calls_finished[5m])), 1)
+          > 0.02
+        for: 5m
+        labels:
+          severity: critical
+          team: tet
+        annotations:
+          summary: "TET RPC error ratio is high"
+          description: "RPC calls error ratio exceeded 2% over the last 5 minutes."
+
+      - alert: TetRpcCallsDropped
+        expr: sum(rate(substrate_rpc_calls_started[5m])) < 0.1
+        for: 10m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET RPC call rate is unexpectedly low"
+          description: "substrate_rpc_calls_started rate is below threshold for 10 minutes."
+
+      # --- Worker ---
+      - alert: TetWorkerNoSuccessfulTx
+        expr: rate(tet_worker_tx_success_total[10m]) == 0
+        for: 15m
+        labels:
+          severity: critical
+          team: tet
+        annotations:
+          summary: "TET worker stopped producing successful txs"
+          description: "tet_worker_tx_success_total has zero success rate for 15 minutes."
+
+      - alert: TetWorkerTxFailSpike
+        expr: increase(tet_worker_tx_fail_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET worker tx failures detected"
+          description: "tet_worker_tx_fail_total increased at least once in the last 5 minutes."
+
+      - alert: TetWorkerOllamaFailSpike
+        expr: increase(tet_worker_ollama_fail_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET worker Ollama failures detected"
+          description: "tet_worker_ollama_fail_total increased at least once in the last 5 minutes."
+
+      - alert: TetWorkerProofLatencyHigh
+        expr: tet_worker_proof_submission_latency_ms > 10_000
+        for: 3m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET worker proof submission latency is high"
+          description: "tet_worker_proof_submission_latency_ms exceeded 10s for 3 minutes."
+
+      # --- Node / Tx pool (approx fail rate) ---
+      # Substrate txpool doesn't expose a single "tx fail" counter at this layer.
+      # We approximate failure rate as: invalid validations / submitted.
+      - alert: TetTxFailRateHigh
+        expr: |
+          sum(rate(substrate_sub_txpool_validations_invalid[5m]))
+          /
+          clamp_min(sum(rate(substrate_sub_txpool_submitted_transactions[5m])), 1)
+          > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: tet
+        annotations:
+          summary: "TET txpool validation fail rate is high"
+          description: "Invalid validations / submitted transactions ratio exceeded 5% over 5 minutes."
+
+      # --- Node / RPC latency p95 ---
+      # substrate_rpc_calls_time is a histogram in microseconds.
+      - alert: TetRpcLatencyP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(substrate_rpc_calls_time_bucket[5m])) by (le)
+          ) > 500_000
+        for: 5m
+        labels:
+          severity: critical
+          team: tet
+        annotations:
+          summary: "TET RPC latency p95 is high"
+          description: "RPC p95 latency exceeded 500ms (500000us) over the last 5 minutes."
+
+      - alert: TetBlockImportP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(substrate_block_verification_and_import_time_bucket[5m])) by (le)
+          ) * 1000
+          > 5000
+        for: 5m
+        labels:
+          severity: warning
+          team: tet
+        annotations:
+          summary: "TET block verification+import p95 is high"
+          description: "block verification+import p95 exceeded 5s over the last 5 minutes."
+

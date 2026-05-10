@@ -1,0 +1,22 @@
+[package]
+name = "tet-prover-host"
+version = "0.1.0"
+edition = "2021"
+license = "MIT-0"
+publish = false
+
+[[bin]]
+name = "tet-prover-host"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+borsh.workspace = true
+hex.workspace = true
+risc0-zkvm = { workspace = true, default-features = false, features = ["prove", "std"] }
+serde.workspace = true
+serde_json.workspace = true
+tet-prover-methods = { path = "../methods" }
+tokio.workspace = true
+tower-http.workspace = true

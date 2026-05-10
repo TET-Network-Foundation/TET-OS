@@ -1,0 +1,6 @@
+[target.riscv32imac-unknown-none-elf]
+rustflags = [
+  "-C", "link-arg=-z",
+  "-C", "link-arg=notext",
+]
+
