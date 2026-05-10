@@ -1,0 +1,46 @@
+x-tet-core-common: &tet-core-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      RISC0_SKIP_BUILD: "0"
+      TET_BUILD_FEATURES: "zk-prove"
+  env_file:
+    - .env
+  ports:
+    - "${PORT:-5010}:5010"
+    - "8002:8002/tcp"
+    - "8002:8002/udp"
+  volumes:
+    - tet_core_data:/data
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5010/status >/dev/null 2>&1 || exit 1"]
+    interval: 30s
+    timeout: 5s
+    retries: 5
+    start_period: 30s
+
+services:
+  tet-core:
+    <<: *tet-core-common
+    container_name: tet-core-mainnet
+
+  tet-core-gpu:
+    <<: *tet-core-common
+    container_name: tet-core-mainnet-gpu
+    profiles:
+      - gpu
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  tet_core_data:

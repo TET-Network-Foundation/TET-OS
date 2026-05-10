@@ -1,0 +1,887 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TET Network</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #f7f9fc;
+        --card: #ffffff;
+        --text: #1a1f36;
+        --muted: rgba(26, 31, 54, 0.70);
+        --border: rgba(10, 37, 64, 0.10);
+        --navy: #0a2540;
+        --blue: #635bff;
+        --success: #00d924;
+        --danger: #ff3b30;
+        --shadow: 0 18px 50px rgba(10, 37, 64, 0.08);
+        --shadow-soft: 0 10px 24px rgba(10, 37, 64, 0.08);
+        --radius: 16px;
+        --radius-sm: 12px;
+        --font: Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        background:
+          radial-gradient(1200px 700px at 15% 0%, rgba(99, 91, 255, 0.10), transparent 55%),
+          radial-gradient(1200px 700px at 85% 0%, rgba(0, 217, 36, 0.08), transparent 55%),
+          var(--bg);
+        color: var(--text);
+        font-family: var(--font);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      .container {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 28px 18px 56px;
+      }
+
+      .screen[hidden] { display: none !important; }
+
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .btn {
+        appearance: none;
+        border: 1px solid transparent;
+        border-radius: 999px;
+        padding: 12px 16px;
+        font-weight: 700;
+        font-size: 14px;
+        cursor: pointer;
+        transition: transform 120ms ease, box-shadow 120ms ease, background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+      }
+      .btn:active { transform: translateY(1px); }
+      .btn-primary {
+        background: linear-gradient(135deg, var(--blue), #4b46ff);
+        color: #fff;
+        box-shadow: 0 12px 26px rgba(99, 91, 255, 0.22);
+      }
+      .btn-primary:hover { opacity: 0.96; }
+      .btn-secondary {
+        background: #fff;
+        color: var(--navy);
+        border-color: rgba(10, 37, 64, 0.14);
+      }
+      .btn-secondary:hover { border-color: rgba(10, 37, 64, 0.24); }
+      .btn-ghost {
+        background: transparent;
+        color: var(--navy);
+        border-color: rgba(10, 37, 64, 0.14);
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        border: 1px solid rgba(10, 37, 64, 0.12);
+        background: rgba(255, 255, 255, 0.70);
+        backdrop-filter: blur(10px);
+        font-weight: 700;
+        font-size: 13px;
+        color: var(--navy);
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(10, 37, 64, 0.25);
+        box-shadow: 0 0 0 4px rgba(10, 37, 64, 0.06);
+      }
+      .dot.ok {
+        background: var(--success);
+        box-shadow: 0 0 0 4px rgba(0, 217, 36, 0.18);
+      }
+      .mono {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      }
+
+      /* Explorer */
+      .explorerWrap {
+        margin-top: 14px;
+        display: grid;
+        gap: 12px;
+      }
+      .metricGrid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 860px) {
+        .metricGrid { grid-template-columns: 1fr 1fr 1fr; }
+      }
+      .metricCard {
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        background: rgba(247, 249, 252, 0.70);
+        border-radius: 14px;
+        padding: 14px 14px;
+      }
+      .metricK {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(10, 37, 64, 0.62);
+      }
+      .metricV {
+        margin-top: 8px;
+        font-size: 18px;
+        font-weight: 800;
+        color: var(--navy);
+        letter-spacing: -0.01em;
+      }
+      .table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .table th, .table td {
+        padding: 10px 10px;
+        border-bottom: 1px solid rgba(10, 37, 64, 0.10);
+        font-size: 13px;
+      }
+      .table th {
+        text-align: left;
+        font-size: 12px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(10, 37, 64, 0.62);
+      }
+      .table td {
+        color: rgba(26, 31, 54, 0.88);
+      }
+      .table tr:hover td {
+        background: rgba(99, 91, 255, 0.04);
+      }
+      .mutedLine {
+        font-size: 12px;
+        color: rgba(10, 37, 64, 0.62);
+      }
+
+      /* Landing */
+      .hero {
+        padding: 44px 28px;
+        border-radius: 26px;
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.78));
+        box-shadow: var(--shadow);
+      }
+      .heroTop {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: var(--navy);
+      }
+      .brandMark {
+        width: 34px;
+        height: 34px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, var(--navy), var(--blue));
+        box-shadow: 0 10px 22px rgba(10, 37, 64, 0.18);
+      }
+      .heroH1 {
+        margin: 22px 0 10px;
+        font-size: clamp(34px, 5.2vw, 50px);
+        line-height: 1.05;
+        letter-spacing: -0.04em;
+        color: var(--navy);
+      }
+      .heroP {
+        margin: 0;
+        max-width: 62ch;
+        font-size: 16px;
+        line-height: 1.65;
+        color: var(--muted);
+      }
+      .heroActions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 22px;
+      }
+      .trustRow {
+        margin-top: 22px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+        align-items: center;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .section {
+        margin-top: 14px;
+        padding: 18px;
+      }
+      .sectionTitle {
+        margin: 0 0 8px;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: rgba(10, 37, 64, 0.68);
+      }
+      .sectionBody {
+        margin: 0;
+        color: rgba(26, 31, 54, 0.86);
+        line-height: 1.65;
+        font-size: 14px;
+      }
+      .manifestoGrid {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      @media (min-width: 860px) {
+        .manifestoGrid { grid-template-columns: 1fr 1fr; }
+      }
+      .manifestoItem {
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        background: rgba(247, 249, 252, 0.70);
+        border-radius: 14px;
+        padding: 14px 14px;
+      }
+      .manifestoItem h3 {
+        margin: 0 0 6px;
+        font-size: 14px;
+        font-weight: 800;
+        color: var(--navy);
+        letter-spacing: -0.01em;
+      }
+      .manifestoItem p {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.6;
+        color: rgba(26, 31, 54, 0.82);
+      }
+      .disclosureList {
+        margin: 10px 0 0;
+        padding: 0;
+        list-style: none;
+        display: grid;
+        gap: 10px;
+      }
+      .disclosureList li {
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        background: rgba(255, 255, 255, 0.75);
+        border-radius: 14px;
+        padding: 12px 12px;
+        line-height: 1.55;
+        font-size: 13px;
+        color: rgba(26, 31, 54, 0.86);
+      }
+      .disclosureList b { color: var(--navy); }
+      .fineprint {
+        margin-top: 12px;
+        font-size: 12px;
+        color: rgba(26, 31, 54, 0.62);
+        line-height: 1.55;
+      }
+
+      /* Dashboard */
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        border-bottom: 1px solid rgba(10, 37, 64, 0.10);
+        background: rgba(247, 249, 252, 0.74);
+        backdrop-filter: blur(10px);
+      }
+      .topbarInner {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 14px 18px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .topbarLeft {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-width: 220px;
+      }
+      .topbarTitle {
+        font-weight: 800;
+        color: var(--navy);
+        letter-spacing: -0.02em;
+      }
+      .topbarRight {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .meshControls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        width: 100%;
+      }
+      .input {
+        border: 1px solid rgba(10, 37, 64, 0.14);
+        background: rgba(255, 255, 255, 0.85);
+        border-radius: 999px;
+        padding: 12px 14px;
+        min-width: min(520px, 80vw);
+        font-size: 13px;
+        outline: none;
+      }
+      .input:focus {
+        border-color: rgba(99, 91, 255, 0.65);
+        box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.12);
+      }
+
+      .grid {
+        margin-top: 18px;
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+      }
+      @media (min-width: 960px) {
+        .grid { grid-template-columns: 420px 1fr; align-items: start; }
+      }
+
+      .walletCard { padding: 18px; }
+      .walletLabel {
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(10, 37, 64, 0.62);
+      }
+      .balance {
+        margin-top: 10px;
+        font-size: 44px;
+        letter-spacing: -0.03em;
+        font-weight: 800;
+        color: var(--navy);
+        font-variant-numeric: tabular-nums;
+      }
+      .balanceSub {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .walletActions {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .walletMeta {
+        margin-top: 14px;
+        padding-top: 14px;
+        border-top: 1px solid rgba(10, 37, 64, 0.10);
+      }
+      .metaRow {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        align-items: center;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .metaRow b { color: var(--navy); font-weight: 800; }
+      .widBox {
+        margin-top: 10px;
+        padding: 10px 12px;
+        border-radius: 12px;
+        border: 1px solid rgba(10, 37, 64, 0.12);
+        background: rgba(247, 249, 252, 0.70);
+        font-size: 12px;
+        word-break: break-all;
+        color: rgba(10, 37, 64, 0.85);
+      }
+
+      .chatCard { padding: 18px; }
+      .chatHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .chatTitle {
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        color: var(--navy);
+        margin: 0;
+      }
+      .chatSub {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .chatLog, .chatHistory {
+        margin-top: 14px;
+        height: min(540px, 62vh);
+        overflow: auto;
+        padding: 14px;
+        border-radius: var(--radius);
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        background: linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.72));
+      }
+      .bubbleRow { display: flex; margin: 10px 0; }
+      .bubble {
+        max-width: min(70ch, 88%);
+        border-radius: 18px;
+        padding: 12px 14px;
+        box-shadow: 0 10px 20px rgba(10, 37, 64, 0.06);
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        white-space: pre-wrap;
+        word-break: break-word;
+        line-height: 1.55;
+        font-size: 14px;
+      }
+      .bubble.user {
+        margin-left: auto;
+        background: linear-gradient(135deg, var(--blue), #4b46ff);
+        color: #fff;
+        border-color: rgba(255,255,255,0.0);
+      }
+      .bubble.ai {
+        margin-right: auto;
+        background: #fff;
+        color: rgba(26, 31, 54, 0.88);
+      }
+      .bubbleMeta {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        border: 1px solid rgba(0, 217, 36, 0.25);
+        background: rgba(0, 217, 36, 0.08);
+        color: rgba(0, 120, 18, 0.92);
+      }
+      .badge.err {
+        border-color: rgba(255, 59, 48, 0.25);
+        background: rgba(255, 59, 48, 0.08);
+        color: rgba(170, 20, 12, 0.92);
+      }
+
+      .composer {
+        margin-top: 12px;
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: end;
+      }
+      .composer textarea {
+        resize: none;
+        min-height: 54px;
+        max-height: 160px;
+        border-radius: 16px;
+        padding: 14px 14px;
+        border: 1px solid rgba(10, 37, 64, 0.14);
+        background: rgba(255, 255, 255, 0.9);
+        font-size: 14px;
+        outline: none;
+      }
+      .composer textarea:focus {
+        border-color: rgba(99, 91, 255, 0.65);
+        box-shadow: 0 0 0 4px rgba(99, 91, 255, 0.12);
+      }
+      .sendBtn {
+        width: 54px;
+        height: 54px;
+        border-radius: 18px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 18px;
+        padding: 0;
+      }
+
+      .toast {
+        position: fixed;
+        bottom: 18px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(10, 37, 64, 0.92);
+        color: #fff;
+        padding: 10px 12px;
+        border-radius: 999px;
+        box-shadow: 0 16px 40px rgba(10, 37, 64, 0.22);
+        font-weight: 700;
+        font-size: 13px;
+        display: none;
+        z-index: 50;
+      }
+      .toast.show { display: block; }
+
+      /* Modal (Phase 2.2) */
+      .modalRoot[hidden] { display: none !important; }
+      .modalRoot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        z-index: 60;
+      }
+      .modalBackdrop {
+        position: absolute;
+        inset: 0;
+        background: rgba(10, 37, 64, 0.45);
+        backdrop-filter: blur(4px);
+      }
+      .modalCard {
+        position: relative;
+        width: min(720px, calc(100vw - 28px));
+        padding: 18px;
+        border-radius: 18px;
+        box-shadow: 0 26px 70px rgba(10, 37, 64, 0.35);
+      }
+      .modalHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .modalTitle {
+        font-weight: 900;
+        letter-spacing: -0.02em;
+        color: var(--navy);
+      }
+      .seedBox {
+        border: 1px solid rgba(10, 37, 64, 0.12);
+        background: rgba(247, 249, 252, 0.85);
+        border-radius: 14px;
+        padding: 14px;
+        line-height: 1.8;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .tosRow {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        margin-top: 12px;
+        padding: 12px;
+        border-radius: 14px;
+        border: 1px solid rgba(10, 37, 64, 0.10);
+        background: rgba(247, 249, 252, 0.70);
+      }
+      .tosRow input[type="checkbox"] {
+        margin-top: 3px;
+        width: 16px;
+        height: 16px;
+        accent-color: var(--blue);
+      }
+      .tosText {
+        font-size: 13px;
+        line-height: 1.55;
+        color: rgba(26, 31, 54, 0.86);
+      }
+      .btn[disabled] {
+        opacity: 0.55;
+        cursor: not-allowed;
+        transform: none !important;
+        box-shadow: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Screen 1: Landing -->
+    <main class="container screen" id="screenLanding">
+      <section class="hero">
+        <div class="heroTop">
+          <div class="brand">
+            <span class="brandMark" aria-hidden="true"></span>
+            <span>TET Network</span>
+        </div>
+          <span class="pill" title="Trustless verification in your browser">
+            <span class="dot" aria-hidden="true"></span>
+            <span>Trustless UI</span>
+          </span>
+      </div>
+
+        <h1 class="heroH1">Tradable energy. Intelligence without the middleman.</h1>
+        <p class="heroP">
+          TET is a post-quantum network for real AI work. No megacorporations. No bank password — your recovery phrase and device are the gate.
+          Built for Genesis Guardians.
+        </p>
+
+        <div class="heroActions">
+          <button class="btn btn-primary" id="btnCreateWallet" type="button">Create Wallet</button>
+          <button class="btn btn-secondary" id="btnAccessWallet" type="button">Import Wallet (Recovery Phrase)</button>
+          </div>
+
+        <div class="trustRow">
+          <span class="pill"><span style="color: var(--success); font-weight: 900;">🛡️</span> ZK Verified responses</span>
+          <span class="pill">Local edge inference (P2P mesh)</span>
+          <span class="pill">Post-quantum signatures (ML-DSA-44)</span>
+          <span class="pill">Token: TET (Tradable Energy Token)</span>
+          <span class="pill">1 TET = 1,000,000 stevemon</span>
+          <span class="pill">Max supply: 10,000,000,000 TET</span>
+          </div>
+      </section>
+
+      <section class="card section" aria-label="Genesis Manifesto">
+        <div class="sectionTitle">GENESIS MANIFESTO</div>
+        <p class="sectionBody">
+          This UI is designed for transparency. The network executes inference on independent edge nodes (Genesis Guardians) over a P2P mesh.
+          Every utility response is verified before it is displayed.
+        </p>
+
+        <div class="manifestoGrid">
+          <div class="manifestoItem">
+            <h3>1) What is TET?</h3>
+            <p>
+              An “Energy Currency” for AI computational power. The base unit is the <b>stevemon</b> (1 TET = 1,000,000 stevemon).
+            </p>
+        </div>
+          <div class="manifestoItem">
+            <h3>2) The Sovereign Grid (How it works)</h3>
+            <p>
+              The network is decentralized by design: no reliance on Big Tech inference APIs. Computations are executed locally by independent
+              operator hardware, authenticated with post-quantum signatures (NIST ML-DSA-44).
+            </p>
+        </div>
+          <div class="manifestoItem">
+            <h3>3) Proof of Resources</h3>
+            <p>
+              Every inference is strictly verified by RISC Zero (zkVM). The economic loop is cryptographically sealed — spend, route, verify, earn.
+            </p>
+        </div>
+          <div class="manifestoItem">
+            <h3>4) Genesis Guardians</h3>
+            <p>
+              Early node operators pooling their hardware capacity. Founder: Steve.
+            </p>
+        </div>
+      </div>
+      </section>
+
+      <section class="card section" aria-label="Protocol Disclosure">
+        <div class="sectionTitle">Protocol Disclosure</div>
+        <ul class="disclosureList">
+          <li>
+            <b>Economic Commitment:</b> Fixed Max Supply: 10,000,000,000 TET. Non-inflationary. Deflationary burn mechanism enabled on network utility.
+          </li>
+          <li>
+            <b>20% Strategic Allocation:</b> 2,000,000,000 TET is strictly reserved for the Strategic Treasury to ensure network liquidity and reward early node operators.
+          </li>
+          <li>
+            <b>Security Disclaimer:</b> This is an experimental high-tech infrastructure utilizing P2P Kademlia, ZK-proofs, and edge LLM inference. Post-Quantum Cryptography and ZK-proofs provide mathematical integrity, but users assume all risks related to operating hardware and safeguarding recovery phrases.
+          </li>
+          <li>
+            <b>No Investment Advice:</b> TET is a utility token for compute energy. Participation is a commitment to decentralized AI infrastructure.
+          </li>
+        </ul>
+        <p class="fineprint">
+          Note: Token economics and protocol properties are described for transparency and may evolve via documented releases. Always verify against the running node’s source and on-ledger events.
+        </p>
+      </section>
+    </main>
+
+    <!-- Screen 2: Dashboard -->
+    <header class="topbar screen" id="screenDashboard" hidden>
+      <div class="topbarInner">
+        <div class="topbarLeft">
+          <span class="brandMark" aria-hidden="true" style="width:28px;height:28px;border-radius:10px;"></span>
+            <div>
+            <div class="topbarTitle">TET Network</div>
+            <div class="mono" style="font-size: 12px; color: rgba(10, 37, 64, 0.62);">Operator Dashboard</div>
+            </div>
+            </div>
+
+        <div class="topbarRight">
+          <span class="pill" title="Browser mesh status">
+            <span class="dot" id="meshDot" aria-hidden="true"></span>
+            <span id="meshStatusLine">MESH: OFFLINE</span>
+          </span>
+          <button class="btn btn-ghost" id="btnLogout" type="button">Log out</button>
+            </div>
+
+        <div class="meshControls">
+          <input
+            class="input mono"
+            id="meshAddr"
+            type="text"
+            spellcheck="false"
+            autocomplete="off"
+            placeholder="/ip4/127.0.0.1/udp/7999/webrtc-direct/p2p/…"
+          />
+          <button class="btn btn-secondary" id="btnMeshConnect" type="button">Connect to Mesh</button>
+              </div>
+                </div>
+    </header>
+
+    <main class="container screen" id="screenDashboardBody" hidden>
+      <div class="grid">
+        <section class="card walletCard" aria-label="Wallet">
+          <div class="walletLabel">Wallet</div>
+          <div class="balance" id="bal">0.0000 TET</div>
+          <div class="balanceSub" id="walletHint">Balance is displayed from your local core.</div>
+
+          <div class="walletActions">
+            <button class="btn btn-secondary" id="btnReceive" type="button">Receive</button>
+            <button class="btn btn-primary" id="btnFaucet" type="button">Faucet</button>
+          </div>
+
+          <div class="walletMeta">
+            <div class="metaRow"><span>Wallet ID</span><b id="walletIdLabel">Local</b></div>
+            <div class="widBox mono" id="vaultWalletId">—</div>
+            <div class="metaRow" style="margin-top: 10px;"><span>Staked</span><b id="stakedLine">—</b></div>
+        </div>
+      </section>
+
+        <section class="card chatCard" aria-label="AI Chat">
+          <div class="chatHead">
+            <div>
+              <h2 class="chatTitle">AI Chat</h2>
+              <p class="chatSub">Every response is verified in your browser before it’s shown.</p>
+            </div>
+            <span class="pill"><span style="color: var(--success); font-weight: 900;">🛡️</span> Trustless</span>
+            </div>
+
+          <div class="chatLog chatHistory" id="chatHistory" aria-live="polite"></div>
+
+          <div class="composer">
+            <textarea id="chatInput" placeholder="Ask the mesh…" spellcheck="false"></textarea>
+            <button class="btn btn-primary sendBtn" id="btnSendPrompt" type="button" title="Send">➤</button>
+            </div>
+          <div class="mono" id="chatStatus" style="margin-top: 10px; color: rgba(10, 37, 64, 0.62); font-size: 12px;"></div>
+      </section>
+        </div>
+
+      <!-- Explorer -->
+      <section class="card section explorerWrap" aria-label="TET Explorer">
+        <h2 class="sectionTitle">TET Explorer</h2>
+        <p class="sectionBody" style="margin-top: 0;">
+          Live node overview + latest mined blocks (auto-refresh).
+        </p>
+
+        <div class="metricGrid" style="margin-top: 12px;">
+          <div class="metricCard">
+            <div class="metricK">Block Height</div>
+            <div class="metricV mono" id="explBlockHeight">—</div>
+          </div>
+          <div class="metricCard">
+            <div class="metricK">Mempool Pending</div>
+            <div class="metricV mono" id="explMempoolLen">—</div>
+          </div>
+          <div class="metricCard">
+            <div class="metricK">State Root</div>
+            <div class="metricV mono" id="explStateRoot" style="font-size: 13px; font-weight: 800; word-break: break-all;">—</div>
+          </div>
+        </div>
+
+        <div style="margin-top: 14px;">
+          <div class="metaRow" style="margin-bottom: 8px;">
+            <span>Latest Blocks</span>
+            <b class="mutedLine" id="explBlocksHint">Polling…</b>
+          </div>
+          <div style="overflow:auto; border-radius: 14px; border: 1px solid rgba(10,37,64,0.10);">
+            <table class="table" aria-label="Latest blocks table">
+              <thead>
+                <tr>
+                  <th>Height</th>
+                  <th>Txs</th>
+                  <th>State Root</th>
+                </tr>
+              </thead>
+              <tbody id="explBlocksTbody">
+                <tr><td class="mono" colspan="3">—</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="toast" id="toast"></div>
+    
+    <!-- Phase 2.2: Seed phrase modals -->
+    <div class="modalRoot" id="modalRoot" hidden>
+      <div class="modalBackdrop"></div>
+      <div class="modalCard card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+        <div class="modalHead">
+          <div class="modalTitle" id="modalTitle">Recovery Phrase</div>
+          <button class="btn btn-ghost" id="btnModalClose" type="button" title="Close">Close</button>
+        </div>
+        <div class="modalBody">
+          <div id="modalCreateWallet" hidden>
+            <p class="sectionBody" style="margin: 0 0 10px;">
+              Before generating a wallet, you must accept the Terms of Service and acknowledge operator responsibility.
+            </p>
+            <div class="tosRow">
+              <input id="tosAgree" type="checkbox" />
+              <label class="tosText" for="tosAgree">
+                I agree to the Terms of Service and acknowledge that I am solely responsible for the content generated via this network.
+              </label>
+            </div>
+            <div class="heroActions" style="margin-top: 14px;">
+              <button class="btn btn-primary" id="btnGenerateWallet" type="button" disabled>Generate Wallet</button>
+              <button class="btn btn-secondary" id="btnCreateCancel" type="button">Cancel</button>
+          </div>
+        </div>
+
+          <div id="modalNewWallet" hidden>
+            <p class="sectionBody" style="margin: 0 0 10px;">
+              Write down these 12 words in order. Anyone with this phrase can control your wallet.
+            </p>
+            <div class="seedBox mono" id="seedWords">—</div>
+            <div class="heroActions" style="margin-top: 14px;">
+              <button class="btn btn-primary" id="btnSeedSaved" type="button">I have saved these words</button>
+        </div>
+            </div>
+
+          <div id="modalImportWallet" hidden>
+            <p class="sectionBody" style="margin: 0 0 10px;">
+              Paste your 12-word recovery phrase to restore your wallet on this device.
+            </p>
+            <textarea class="input mono" id="seedInput" style="height: 96px; border-radius: 14px; padding: 12px; width: 100%;" placeholder="word1 word2 ... word12"></textarea>
+            <div class="heroActions" style="margin-top: 14px;">
+              <button class="btn btn-primary" id="btnSeedImport" type="button">Import Wallet</button>
+              <button class="btn btn-secondary" id="btnSeedCancel" type="button">Cancel</button>
+          </div>
+        </div>
+      </div>
+        </div>
+        </div>
+    <script src="/assets/ui.js" defer></script>
+  </body>
+</html>
+

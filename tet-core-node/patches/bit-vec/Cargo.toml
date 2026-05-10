@@ -1,0 +1,39 @@
+[package]
+name = "bit-vec"
+version = "0.8.0"
+edition = "2015"
+authors = ["Alexis Beingessner <a.beingessner@gmail.com>"]
+description = "A vector of bits (vendored patch: default no `std` for Substrate wasm `-Z build-std`)."
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/contain-rs/bit-vec"
+
+[lib]
+name = "bit_vec"
+path = "src/lib.rs"
+
+[dependencies.borsh]
+version = "1.5"
+features = ["derive"]
+optional = true
+default-features = false
+
+[dependencies.miniserde]
+version = "0.1"
+optional = true
+
+[dependencies.nanoserde]
+version = "0.1"
+optional = true
+
+[dependencies.serde]
+version = "1.0"
+features = ["derive"]
+optional = true
+default-features = false
+
+[features]
+borsh_std = ["borsh/std"]
+default = []
+serde_no_std = ["serde/alloc"]
+serde_std = ["std", "serde/std"]
+std = []

@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TET — The Global Energy Currency</title>
+    <style>
+      :root { --bg:#07070b; --fg:#f2f2ff; --muted:#a7a7c2; --line:#24243a; --gold:#d7b36a; --mint:#6ee7a5; --hot:#ff2bd6; }
+      body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background: radial-gradient(1200px 700px at 20% 0%, rgba(255,43,214,.10), transparent 55%), radial-gradient(900px 600px at 80% 20%, rgba(215,179,106,.10), transparent 55%), var(--bg); color:var(--fg); }
+      .wrap { max-width: 1020px; margin: 0 auto; padding: 38px 18px 80px; }
+      .hero { display:flex; gap: 22px; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; }
+      .kicker { letter-spacing:.22em; text-transform:uppercase; color:var(--muted); font-size:12px; }
+      h1 { margin: 10px 0 0; font-size: 46px; letter-spacing:.02em; line-height:1.05; }
+      .sub { margin-top: 12px; color: var(--muted); font-size: 14px; letter-spacing:.04em; max-width: 56ch; line-height:1.5; }
+      .card { border:1px solid var(--line); border-radius: 16px; padding: 14px 14px 12px; background: rgba(255,255,255,.03); backdrop-filter: blur(6px); }
+      .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+      @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } h1{font-size:40px;} }
+      .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+      .count { display:flex; gap:10px; flex-wrap:wrap; margin-top: 12px; }
+      .pill { display:inline-flex; align-items:center; gap:10px; border:1px solid var(--line); padding: 10px 12px; border-radius: 999px; background: rgba(0,0,0,.18); }
+      .num { font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 700; color: var(--fg); }
+      .lbl { font-size: 11px; letter-spacing:.14em; text-transform:uppercase; color: var(--muted); }
+      .manifesto { max-height: 320px; overflow:auto; border:1px solid #2b2b44; background:#0b0b14; padding:12px; border-radius:12px; line-height:1.45; }
+      .cta { margin-top: 14px; color: var(--gold); font-size: 12px; letter-spacing:.08em; }
+      a { color: var(--mint); text-decoration: none; }
+      footer { margin-top: 26px; color: var(--muted); font-size: 12px; letter-spacing:.06em; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="hero">
+        <div>
+          <div class="kicker">TET — The Global Energy Currency</div>
+          <h1>Compute becomes money.<br/>Money becomes a supercomputer.</h1>
+          <div class="sub">
+            TET is a Swiss‑grade architecture for verified compute: a CHF‑pegged energy currency, a worker network, and an orchestrator that shards, verifies, and merges results with an auditable trail.
+          </div>
+          <div class="count mono" aria-label="Countdown">
+            <div class="pill"><span class="num" id="d">—</span><span class="lbl">Days</span></div>
+            <div class="pill"><span class="num" id="h">—</span><span class="lbl">Hours</span></div>
+            <div class="pill"><span class="num" id="m">—</span><span class="lbl">Minutes</span></div>
+            <div class="pill"><span class="num" id="s">—</span><span class="lbl">Seconds</span></div>
+          </div>
+          <div class="cta mono">Genesis Guardians: first 10,000 seats. Coming soon.</div>
+        </div>
+        <div class="card" style="min-width: 280px; flex: 1;">
+          <div class="kicker">Launch signal</div>
+          <div class="sub mono" style="margin-top:10px;">
+            - 1 CHF == 1 TET peg<br/>
+            - stevemon (8 decimals)<br/>
+            - worker proofs + audit CSV<br/>
+            - /v1/compute orchestration
+          </div>
+          <footer class="mono">Founder: Steve</footer>
+        </div>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="kicker">Genesis Manifesto</div>
+          <div class="manifesto mono" style="margin-top:10px;">
+TET GENESIS MANIFESTO: The Fusion of Physics and Intelligence
+
+1. What is TET (Tradable Energy Token)?
+TET is not just a cryptocurrency. It is an energy currency for the direct exchange of AI computational power — the most valuable resource of the modern age. The base unit of this network is the stevemon.
+
+2. How does the system work?
+When you submit a prompt and authenticate, the TET network ignites. Hybrid cryptography protects your request, consuming TET as energy to pull verified computation from the global network.
+
+3. How will TET evolve?
+Phase 1 bridges to external engines for speed. Phase 2 activates the worker network. Phase 3 becomes a CHF‑pegged commercial compute economy and a single, massive decentralized supercomputer.
+
+4. What is required?
+The first 10,000 Genesis Guardians. You are the foundation of a new energy economy.
+
+Welcome to the TET Empire. You are the future of energy.
+          </div>
+        </div>
+        <div class="card">
+          <div class="kicker">Coming soon</div>
+          <div class="sub mono" style="margin-top:10px;">
+            This is a standalone landing stub.<br/>
+            Set a target date via <b>?date=2026-06-01T00:00:00Z</b> in the URL.
+          </div>
+          <div class="cta mono">Tip: open <a href="./WHITEPAPER.md">WHITEPAPER.md</a> locally.</div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const qp = new URLSearchParams(location.search);
+      const iso = qp.get("date") || "2026-06-01T00:00:00Z";
+      const target = new Date(iso).getTime();
+      const pad = (n) => String(n).padStart(2, "0");
+      function tick() {
+        const now = Date.now();
+        let ms = Math.max(0, target - now);
+        const sec = Math.floor(ms / 1000);
+        const days = Math.floor(sec / 86400);
+        const hours = Math.floor((sec % 86400) / 3600);
+        const mins = Math.floor((sec % 3600) / 60);
+        const secs = sec % 60;
+        document.getElementById("d").textContent = String(days);
+        document.getElementById("h").textContent = pad(hours);
+        document.getElementById("m").textContent = pad(mins);
+        document.getElementById("s").textContent = pad(secs);
+      }
+      tick();
+      setInterval(tick, 1000);
+    </script>
+  </body>
+</html>
+

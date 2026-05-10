@@ -1,0 +1,17 @@
+[package]
+name = "tet-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = "2"
+hex = "0.4"
+methods = { path = "../methods" }
+reqwest = { version = "0.12", default-features = true, features = ["json", "rustls-tls"] }
+serde_json = "1"
+sha2 = "0.10"
+tet-core = { path = "../tet-core" }
+tokio = { version = "1", features = ["full"] }

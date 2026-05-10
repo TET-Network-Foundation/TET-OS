@@ -1,0 +1,23 @@
+node_modules/
+target/
+
+# Local ledger / database / snapshots
+tet.db/
+tet.db_*/
+tet_data/
+*.db
+db_*/
+db_eta_*/
+db_node_*/
+tet_ledger.json
+*.snap.json
+
+# Local env files (never commit secrets)
+.env
+.env.local
+.env.production
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

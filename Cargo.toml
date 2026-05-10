@@ -1,0 +1,25 @@
+[workspace]
+members = [
+    "tet-core",
+    "methods",
+    "nexus-wasm",
+    "nexus-protocol",
+    "tet-pqc-wasm",
+    "prover/methods",
+    "prover/host",
+    "tet-cli",
+]
+resolver = "2"
+
+# Shared by `prover/methods` and `prover/host` (RISC Zero + HTTP daemon).
+[workspace.dependencies]
+anyhow = "1"
+axum = "0.8"
+borsh = "1.5"
+hex = "0.4"
+risc0-build = "3.0.5"
+risc0-zkvm = { version = "3.0.5", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { version = "0.6", features = ["cors"] }

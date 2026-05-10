@@ -1,0 +1,164 @@
+{
+  "uid": "tet-node-rpc-worker",
+  "title": "TET Node / RPC / Worker",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "tags": ["tet", "sprint0", "observability"],
+  "style": "dark",
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Peers (connected)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "substrate_sub_libp2p_peers_count", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "RPC Latency p95 (ms)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(substrate_rpc_calls_time_bucket[5m])) by (le)) / 1000",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "RPC Error Rate (ratio)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percent" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(substrate_rpc_calls_finished{is_error=\"true\"}[1m])) / clamp_min(sum(rate(substrate_rpc_calls_finished[1m])), 1)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Block Verification+Import p95 (ms)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(substrate_block_verification_and_import_time_bucket[5m])) by (le)) * 1000",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Tx Fail Rate (txpool invalid / submitted)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "percent" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(substrate_sub_txpool_validations_invalid[5m])) / clamp_min(sum(rate(substrate_sub_txpool_submitted_transactions[5m])), 1)",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "RPC Call Rate (req/s)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "sum(rate(substrate_rpc_calls_started[1m]))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker Proof Submission Latency (ms)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "tet_worker_proof_submission_latency_ms", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker Tx Success Rate (req/s)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 24 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "rate(tet_worker_tx_success_total[1m])", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker Tx Fail Rate (req/s)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "rate(tet_worker_tx_fail_total[1m])", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Worker Last Loop Duration (ms)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 32 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "tet_worker_last_loop_duration_ms", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Peers (banned)",
+      "gridPos": { "h": 8, "w": 6, "x": 0, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "substrate_sub_libp2p_peerset_num_banned_peers", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Libp2p outbound request failure rate (req/s)",
+      "gridPos": { "h": 8, "w": 6, "x": 6, "y": 40 },
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "reqps" } },
+      "options": { "legend": { "showLegend": true } },
+      "targets": [
+        { "expr": "sum(rate(substrate_sub_libp2p_requests_out_failure_total[5m]))", "refId": "A" }
+      ]
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  }
+}
+
