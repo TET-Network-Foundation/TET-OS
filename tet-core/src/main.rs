@@ -18,12 +18,14 @@ mod onchain;
 mod oracle;
 mod p2p;
 mod p2p_dex;
+mod p2p_keystore;
 mod p2p_network;
 mod protocol;
 mod quantum_shield;
 mod render_farm;
 mod replication;
 mod rest;
+mod sync;
 mod tee_compute;
 mod updater;
 mod vision;
@@ -367,14 +369,41 @@ async fn main() -> Result<(), AnyErr> {
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(true);
 
+    let p2p_listen = std::env::var("TET_P2P_LISTEN")
+        .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string());
+
+    let libp2p_keypair = if enable_p2p {
+        match crate::p2p_keystore::P2pKeystore::load_or_create(std::path::Path::new(&db_dir)) {
+            Ok(ks) => {
+                crate::p2p_keystore::log_peer_id_banner(&ks.peer_id(), &p2p_listen);
+                Some(ks.keypair())
+            }
+            Err(e) => {
+                log::warn!("libp2p keystore: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let p2p = if enable_p2p {
-        let mut nm = NetworkManager::new(initial_wallet.clone()).await?;
-        let tx = nm.tx();
-        crate::replication::set_p2p_sender(Some(tx.clone()));
-        tokio::spawn(async move {
-            let _ = nm.run().await;
-        });
-        Some(tx)
+        match libp2p_keypair.clone() {
+            Some(keypair) => {
+                let mut nm = NetworkManager::new(initial_wallet.clone(), keypair).await?;
+                let tx = nm.tx();
+                crate::replication::set_p2p_sender(Some(tx.clone()));
+                tokio::spawn(async move {
+                    let _ = nm.run().await;
+                });
+                Some(tx)
+            }
+            None => {
+                log::warn!("[p2p] NetworkManager not started: libp2p keystore unavailable");
+                crate::replication::set_p2p_sender(None);
+                None
+            }
+        }
     } else {
         crate::replication::set_p2p_sender(None);
         None
@@ -386,25 +415,42 @@ async fn main() -> Result<(), AnyErr> {
         eprintln!("[onchain][warn] worker register/stake skipped or failed: {e}");
     }
 
-    let nexus_p2p_client = match crate::p2p_network::start_p2p_node(ledger.clone()) {
-        Ok((c, _jh)) => Some(c),
-        Err(e) => {
-            eprintln!("[p2p][warn] TET P2P engine failed to start: {e}");
-            None
-        }
+    let nexus_p2p_client = match libp2p_keypair.as_ref() {
+        Some(kp) => match crate::p2p_network::start_p2p_node(ledger.clone(), kp.clone()) {
+            Ok((c, _jh)) => Some(c),
+            Err(e) => {
+                eprintln!("[p2p][warn] TET P2P engine failed to start: {e}");
+                None
+            }
+        },
+        None => None,
     };
 
     let mempool = Arc::new(tokio::sync::Mutex::new(Vec::new()));
 
-    // Phase 0: libp2p local discovery mesh (mDNS + Ping).
-    // Runs behind the HTTP server, listens on tcp/0 (ephemeral), logs PeerId + listen addr.
+    // Block-plane libp2p (gossip + chain-sync RPC) on TET_P2P_LISTEN.
+    let block_p2p_listen = crate::p2p::parse_block_listen_multiaddr(&p2p_listen)
+        .unwrap_or_else(|e| {
+            log::warn!("[p2p][block] {e}; fallback /ip4/0.0.0.0/tcp/0");
+            "/ip4/0.0.0.0/tcp/0"
+                .parse()
+                .expect("fallback listen addr")
+        });
     let gossip_tx = if enable_p2p {
-        match crate::p2p::start_mdns_ping_swarm(ledger.clone(), mempool.clone()) {
-            Ok(tx) => Some(tx),
-            Err(e) => {
-                eprintln!("[p2p][warn] failed to start mdns/ping/gossip swarm: {e}");
-                None
-            }
+        match libp2p_keypair {
+            Some(kp) => match crate::p2p::start_mdns_ping_swarm(
+                ledger.clone(),
+                mempool.clone(),
+                kp,
+                block_p2p_listen,
+            ) {
+                Ok(tx) => Some(tx),
+                Err(e) => {
+                    eprintln!("[p2p][warn] failed to start mdns/ping/gossip swarm: {e}");
+                    None
+                }
+            },
+            None => None,
         }
     } else {
         None

@@ -27,6 +27,12 @@ use tokio::sync::{Mutex, mpsc};
 
 use crate::models::NetworkEvent;
 use crate::protocol::SignedTxEnvelopeV1;
+use crate::sync::{
+    block_record_to_remote_gossip, build_chain_hello, build_chain_sync_range_response,
+    new_catch_up_driver, new_hello_registry, CatchUpAction, CatchUpDriverEvent, ChainHello,
+    ChainSyncRangeRequest, ChainSyncRangeResponse, SharedCatchUpDriver, SharedHelloRegistry,
+    CHAIN_SYNC_HELLO_PROTOCOL, CHAIN_SYNC_RANGE_PROTOCOL,
+};
 use std::sync::Arc;
 
 type AnyErr = Box<dyn Error + Send + Sync + 'static>;
@@ -264,6 +270,9 @@ struct TetBehaviour {
     identify: identify::Behaviour,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
     block_sync: request_response::json::Behaviour<BlockRequest, BlockResponse>,
+    chain_sync_hello: request_response::json::Behaviour<ChainHello, ChainHello>,
+    chain_sync_range:
+        request_response::json::Behaviour<ChainSyncRangeRequest, ChainSyncRangeResponse>,
 }
 
 #[derive(Debug)]
@@ -274,6 +283,10 @@ enum Event {
     Identify(identify::Event),
     Kademlia(kad::Event),
     BlockSync(request_response::Event<BlockRequest, BlockResponse>),
+    ChainSyncHello(request_response::Event<ChainHello, ChainHello>),
+    ChainSyncRange(
+        request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>,
+    ),
 }
 
 impl From<mdns::Event> for Event {
@@ -304,6 +317,18 @@ impl From<kad::Event> for Event {
 impl From<request_response::Event<BlockRequest, BlockResponse>> for Event {
     fn from(e: request_response::Event<BlockRequest, BlockResponse>) -> Self {
         Self::BlockSync(e)
+    }
+}
+impl From<request_response::Event<ChainHello, ChainHello>> for Event {
+    fn from(e: request_response::Event<ChainHello, ChainHello>) -> Self {
+        Self::ChainSyncHello(e)
+    }
+}
+impl From<request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>> for Event {
+    fn from(
+        e: request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>,
+    ) -> Self {
+        Self::ChainSyncRange(e)
     }
 }
 
@@ -349,6 +374,283 @@ fn block_sync_behaviour() -> request_response::json::Behaviour<BlockRequest, Blo
         )],
         request_response::Config::default().with_request_timeout(Duration::from_secs(20)),
     )
+}
+
+fn chain_sync_hello_behaviour() -> request_response::json::Behaviour<ChainHello, ChainHello> {
+    request_response::json::Behaviour::new(
+        [(
+            StreamProtocol::new(CHAIN_SYNC_HELLO_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+    )
+}
+
+fn chain_sync_range_behaviour(
+) -> request_response::json::Behaviour<ChainSyncRangeRequest, ChainSyncRangeResponse> {
+    request_response::json::Behaviour::new(
+        [(
+            StreamProtocol::new(CHAIN_SYNC_RANGE_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+    )
+}
+
+async fn ingest_remote_chain_hello(
+    registry: &SharedHelloRegistry,
+    ledger: &crate::ledger::Ledger,
+    peer: PeerId,
+    hello: ChainHello,
+) {
+    let local_height = ledger.block_height().unwrap_or(0);
+    let peer_s = peer.to_string();
+    let mut reg = registry.lock().await;
+    let record = reg.record_peer_hello(&peer_s, hello, local_height);
+    println!(
+        "[P2P-block] 🤝 chain_hello from {peer} height={} tip={} local={local_height} diff={} catch_up_pending={}",
+        record.hello.block_height,
+        record.hello.tip_block_id,
+        record.height_diff,
+        record.catch_up_pending,
+    );
+    if record.catch_up_pending {
+        println!("[P2P-block] 🔔 catch-up trigger set (peer ahead; B.3b driver pending)");
+    }
+    let snap = reg.heights_snapshot();
+    println!(
+        "[P2P-block] sync_hello map peers={} catch_up_triggered={} snapshot={snap:?}",
+        reg.peer_count(),
+        reg.catch_up_triggered(),
+    );
+    log::info!(
+        "[p2p][block] sync_hello peers={} catch_up_triggered={}",
+        reg.peer_count(),
+        reg.catch_up_triggered(),
+    );
+}
+
+async fn run_catch_up_action(
+    action: CatchUpAction,
+    swarm: &mut Swarm<TetBehaviour>,
+    hello_registry: &SharedHelloRegistry,
+    catch_up_driver: &SharedCatchUpDriver,
+    pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+) {
+    match action {
+        CatchUpAction::None => {}
+        CatchUpAction::ClearCatchUpTriggered => {
+            hello_registry.lock().await.clear_catch_up_triggered();
+            println!("[P2P-block] ✅ catch-up complete; catch_up_triggered=false");
+            log::info!("[p2p][block] catch-up complete");
+        }
+        CatchUpAction::SendRangeRequest { peer_id, request } => {
+            let Ok(pid) = peer_id.parse::<PeerId>() else {
+                log::warn!("[p2p][block] catch-up invalid peer_id={peer_id}");
+                catch_up_driver.lock().await.blacklist_peer(peer_id);
+                return;
+            };
+            let rid = swarm
+                .behaviour_mut()
+                .chain_sync_range
+                .send_request(&pid, request.clone());
+            pending_catch_up_range.insert(rid, pid);
+            println!(
+                "[P2P-block] 📥 catch-up range → {peer_id} heights {}..{}",
+                request.from_height, request.to_height
+            );
+        }
+    }
+}
+
+async fn try_start_catch_up(
+    catch_up_driver: &SharedCatchUpDriver,
+    hello_registry: &SharedHelloRegistry,
+    ledger: &crate::ledger::Ledger,
+    swarm: &mut Swarm<TetBehaviour>,
+    pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+) {
+    let local_height = ledger.block_height().unwrap_or(0);
+    let action = {
+        let mut driver = catch_up_driver.lock().await;
+        if !driver.is_idle() {
+            return;
+        }
+        let reg = hello_registry.lock().await;
+        if !reg.catch_up_triggered() {
+            return;
+        }
+        driver.handle(CatchUpDriverEvent::Triggered, &reg, local_height)
+    };
+    run_catch_up_action(
+        action,
+        swarm,
+        hello_registry,
+        catch_up_driver,
+        pending_catch_up_range,
+    )
+    .await;
+}
+
+async fn apply_catch_up_blocks(
+    ledger: Arc<crate::ledger::Ledger>,
+    mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    blocks: Vec<crate::ledger::BlockRecordV1>,
+) -> (usize, bool) {
+    let mut applied = 0usize;
+    for block in blocks {
+        let height = block.height;
+        let block_id = block.block_id.clone();
+        let gossip = block_record_to_remote_gossip(&block);
+        match crate::consensus::apply_remote_block_from_gossip(
+            ledger.clone(),
+            mempool.clone(),
+            gossip,
+        )
+        .await
+        {
+            Ok(crate::consensus::RemoteBlockApplyOutcome::Applied {
+                block_height,
+                ..
+            }) => {
+                applied += 1;
+                println!(
+                    "[P2P-block] ✅ catch-up applied height={} block_id={block_id}",
+                    block_height
+                );
+            }
+            Ok(crate::consensus::RemoteBlockApplyOutcome::Skipped { reason }) => {
+                if reason.contains("missing previous blocks") {
+                    println!(
+                        "[P2P-block] ❌ catch-up apply gap height={height} block_id={block_id}: {reason}"
+                    );
+                    return (applied, true);
+                }
+                println!(
+                    "[P2P-block] ⏭️ catch-up apply skipped height={height} block_id={block_id}: {reason}"
+                );
+            }
+            Ok(other) => {
+                println!(
+                    "[P2P-block] ⚠️ catch-up apply outcome height={height} block_id={block_id}: {other:?}"
+                );
+            }
+            Err(e) => {
+                println!(
+                    "[P2P-block] ❌ catch-up apply rejected height={height} block_id={block_id}: {}",
+                    e.message()
+                );
+                return (applied, true);
+            }
+        }
+    }
+    (applied, false)
+}
+
+async fn on_catch_up_range_response(
+    peer: PeerId,
+    response: ChainSyncRangeResponse,
+    catch_up_driver: &SharedCatchUpDriver,
+    hello_registry: &SharedHelloRegistry,
+    ledger: Arc<crate::ledger::Ledger>,
+    mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    swarm: &mut Swarm<TetBehaviour>,
+    pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+) {
+    let peer_s = peer.to_string();
+    println!(
+        "[P2P-block] 📦 catch-up range from {peer} blocks={} to_height={}",
+        response.blocks.len(),
+        response.to_height
+    );
+
+    if response.blocks.is_empty() {
+        let action = {
+            let mut driver = catch_up_driver.lock().await;
+            let reg = hello_registry.lock().await;
+            let local_height = ledger.block_height().unwrap_or(0);
+            driver.handle(
+                CatchUpDriverEvent::RangeFailed {
+                    peer_id: peer_s,
+                    reason: "empty range response".into(),
+                },
+                &reg,
+                local_height,
+            )
+        };
+        run_catch_up_action(
+            action,
+            swarm,
+            hello_registry,
+            catch_up_driver,
+            pending_catch_up_range,
+        )
+        .await;
+        return;
+    }
+
+    let (applied, failed) = apply_catch_up_blocks(ledger.clone(), mempool, response.blocks).await;
+    let local_height = ledger.block_height().unwrap_or(0);
+    let action = {
+        let mut driver = catch_up_driver.lock().await;
+        let reg = hello_registry.lock().await;
+        driver.handle(
+            CatchUpDriverEvent::BatchApplied {
+                peer_id: peer_s,
+                applied,
+                failed,
+            },
+            &reg,
+            local_height,
+        )
+    };
+    run_catch_up_action(
+        action,
+        swarm,
+        hello_registry,
+        catch_up_driver,
+        pending_catch_up_range,
+    )
+    .await;
+}
+
+async fn on_catch_up_range_failed(
+    peer: PeerId,
+    reason: String,
+    catch_up_driver: &SharedCatchUpDriver,
+    hello_registry: &SharedHelloRegistry,
+    ledger: &crate::ledger::Ledger,
+    swarm: &mut Swarm<TetBehaviour>,
+    pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+) {
+    let local_height = ledger.block_height().unwrap_or(0);
+    let action = {
+        let mut driver = catch_up_driver.lock().await;
+        let reg = hello_registry.lock().await;
+        driver.handle(
+            CatchUpDriverEvent::RangeFailed {
+                peer_id: peer.to_string(),
+                reason,
+            },
+            &reg,
+            local_height,
+        )
+    };
+    run_catch_up_action(
+        action,
+        swarm,
+        hello_registry,
+        catch_up_driver,
+        pending_catch_up_range,
+    )
+    .await;
+}
+
+pub fn parse_block_listen_multiaddr(listen: &str) -> Result<Multiaddr, AnyErr> {
+    listen
+        .trim()
+        .parse::<Multiaddr>()
+        .map_err(|e| -> AnyErr { format!("invalid block listen multiaddr {listen:?}: {e}").into() })
 }
 
 fn orphan_buffer_from_env() -> OrphanBuffer {
@@ -403,10 +705,12 @@ fn network_event_topics(
 pub fn start_mdns_ping_swarm(
     ledger: Arc<crate::ledger::Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    keypair: identity::Keypair,
+    listen: Multiaddr,
 ) -> Result<mpsc::Sender<String>, AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
     tokio::spawn(async move {
-        if let Err(e) = run_mdns_ping_swarm(ledger, mempool, rx).await {
+        if let Err(e) = run_mdns_ping_swarm(ledger, mempool, rx, keypair, listen).await {
             println!("[P2P] Swarm task exited: {e}");
             log::warn!("[p2p][mdns] swarm exited: {e}");
         }
@@ -414,18 +718,18 @@ pub fn start_mdns_ping_swarm(
     Ok(tx)
 }
 
-/// Run a libp2p swarm that:
-/// - listens on `/ip4/0.0.0.0/tcp/0` (port auto-assigned)
-/// - discovers peers via mDNS
-/// - dials discovered peers automatically
-/// - sends ping keepalives and logs RTT / failures
+/// Run the block-plane libp2p swarm (gossip + chain-sync RPC).
+/// Listens on `listen` (typically `TET_P2P_LISTEN` from `main.rs`).
 async fn run_mdns_ping_swarm(
     ledger: Arc<crate::ledger::Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     mut publish_rx: mpsc::Receiver<String>,
+    keypair: identity::Keypair,
+    listen: Multiaddr,
 ) -> Result<(), AnyErr> {
-    let keypair = identity::Keypair::generate_ed25519();
     let peer_id = PeerId::from(keypair.public());
+    let hello_registry = new_hello_registry();
+    let catch_up_driver = new_catch_up_driver();
     log::info!("[P2P] My Peer ID: {peer_id}");
 
     let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
@@ -507,6 +811,8 @@ async fn run_mdns_ping_swarm(
         identify,
         kademlia,
         block_sync: block_sync_behaviour(),
+        chain_sync_hello: chain_sync_hello_behaviour(),
+        chain_sync_range: chain_sync_range_behaviour(),
     };
     let mut swarm = Swarm::new(
         transport,
@@ -591,7 +897,9 @@ async fn run_mdns_ping_swarm(
         println!("[P2P] No TET_BOOTNODES provided. Running as an isolated node.");
     }
 
-    swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse::<Multiaddr>()?)?;
+    swarm.listen_on(listen.clone())?;
+    println!("[P2P-block] binding block swarm to {listen}");
+    log::info!("[p2p][block] binding listen={listen}");
 
     let mut dialing: HashSet<PeerId> = HashSet::new();
     let mut orphan_buffer = orphan_buffer_from_env();
@@ -601,8 +909,22 @@ async fn run_mdns_ping_swarm(
     let mut pending_backfill: HashMap<request_response::OutboundRequestId, PendingBackfillEntry> =
         HashMap::new();
     let mut blacklisted_peers = BoundedPeerBlacklist::from_env();
+    let mut pending_catch_up_range: HashMap<request_response::OutboundRequestId, PeerId> =
+        HashMap::new();
+    let mut catch_up_interval = tokio::time::interval(Duration::from_secs(1));
+    catch_up_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            _ = catch_up_interval.tick() => {
+                try_start_catch_up(
+                    &catch_up_driver,
+                    &hello_registry,
+                    ledger.as_ref(),
+                    &mut swarm,
+                    &mut pending_catch_up_range,
+                )
+                .await;
+            }
             maybe_msg = publish_rx.recv() => {
                 let now = now_ms();
                 blacklisted_peers.prune(now);
@@ -639,7 +961,11 @@ async fn run_mdns_ping_swarm(
             }
             ev = swarm.select_next_some() => match ev {
             SwarmEvent::NewListenAddr { address, .. } => {
-                log::info!("[p2p][mdns] listen_addr={address}");
+                let dial = address
+                    .clone()
+                    .with(Protocol::P2p(*swarm.local_peer_id()));
+                println!("[P2P-block] listening on {dial}");
+                log::info!("[p2p][block] listen_addr={dial}");
             }
             SwarmEvent::Behaviour(Event::Mdns(mdns::Event::Discovered(peers))) => {
                 for (pid, addr) in peers {
@@ -674,6 +1000,138 @@ async fn run_mdns_ping_swarm(
                 // Keep it noisy for debugging while stabilizing Phase 2 network discovery.
                 log::debug!("[p2p][kad] event={ev:?}");
             }
+            SwarmEvent::Behaviour(Event::ChainSyncHello(ev)) => match ev {
+                request_response::Event::Message {
+                    peer,
+                    message:
+                        request_response::Message::Request {
+                            request, channel, ..
+                        },
+                    ..
+                } => {
+                    ingest_remote_chain_hello(
+                        &hello_registry,
+                        ledger.as_ref(),
+                        peer,
+                        request,
+                    )
+                    .await;
+                    try_start_catch_up(
+                        &catch_up_driver,
+                        &hello_registry,
+                        ledger.as_ref(),
+                        &mut swarm,
+                        &mut pending_catch_up_range,
+                    )
+                    .await;
+                    let response = match build_chain_hello(ledger.as_ref()) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            log::warn!("[p2p][chain-sync] hello build failed: {e}");
+                            ChainHello {
+                                chain_id: crate::ledger::chain_id_from_env(),
+                                block_height: ledger.block_height().unwrap_or(0),
+                                tip_block_id: String::new(),
+                                state_root: ledger.compute_state_root(),
+                            }
+                        }
+                    };
+                    let _ = swarm
+                        .behaviour_mut()
+                        .chain_sync_hello
+                        .send_response(channel, response);
+                }
+                request_response::Event::Message {
+                    peer,
+                    message: request_response::Message::Response { response, .. },
+                    ..
+                } => {
+                    ingest_remote_chain_hello(
+                        &hello_registry,
+                        ledger.as_ref(),
+                        peer,
+                        response,
+                    )
+                    .await;
+                    try_start_catch_up(
+                        &catch_up_driver,
+                        &hello_registry,
+                        ledger.as_ref(),
+                        &mut swarm,
+                        &mut pending_catch_up_range,
+                    )
+                    .await;
+                }
+                _ => {}
+            },
+            SwarmEvent::Behaviour(Event::ChainSyncRange(ev)) => match ev {
+                request_response::Event::Message {
+                    peer,
+                    message:
+                        request_response::Message::Request {
+                            request, channel, ..
+                        },
+                    ..
+                } => {
+                    let response =
+                        build_chain_sync_range_response(ledger.as_ref(), &request);
+                    println!(
+                        "[P2P-block] ↩️ CHAIN_SYNC RANGE peer={} req {}..{} → blocks={} actual_to={}",
+                        peer,
+                        request.from_height,
+                        request.to_height,
+                        response.blocks.len(),
+                        response.to_height
+                    );
+                    let _ = swarm
+                        .behaviour_mut()
+                        .chain_sync_range
+                        .send_response(channel, response);
+                }
+                request_response::Event::Message {
+                    peer,
+                    message:
+                        request_response::Message::Response {
+                            request_id,
+                            response,
+                        },
+                    ..
+                } => {
+                    if pending_catch_up_range.remove(&request_id).is_some() {
+                        on_catch_up_range_response(
+                            peer,
+                            response,
+                            &catch_up_driver,
+                            &hello_registry,
+                            ledger.clone(),
+                            mempool.clone(),
+                            &mut swarm,
+                            &mut pending_catch_up_range,
+                        )
+                        .await;
+                    }
+                }
+                request_response::Event::OutboundFailure {
+                    peer,
+                    request_id,
+                    error,
+                    ..
+                } => {
+                    if pending_catch_up_range.remove(&request_id).is_some() {
+                        on_catch_up_range_failed(
+                            peer,
+                            format!("{error:?}"),
+                            &catch_up_driver,
+                            &hello_registry,
+                            ledger.as_ref(),
+                            &mut swarm,
+                            &mut pending_catch_up_range,
+                        )
+                        .await;
+                    }
+                }
+                _ => {}
+            },
             SwarmEvent::Behaviour(Event::BlockSync(ev)) => {
                 match ev {
                     request_response::Event::Message {
@@ -849,10 +1307,49 @@ async fn run_mdns_ping_swarm(
                     peer_id,
                     endpoint.get_remote_address()
                 );
+                if peer_id != *swarm.local_peer_id() {
+                    match build_chain_hello(ledger.as_ref()) {
+                        Ok(our_hello) => {
+                            swarm
+                                .behaviour_mut()
+                                .chain_sync_hello
+                                .send_request(&peer_id, our_hello);
+                            println!("[P2P-block] 👋 chain_hello sent to {peer_id}");
+                        }
+                        Err(e) => {
+                            log::warn!("[p2p][block] chain_hello send failed: {e}");
+                        }
+                    }
+                }
             }
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                 log::warn!("[p2p][mdns] disconnected peer_id={peer_id} cause={cause:?}");
                 dialing.remove(&peer_id);
+                {
+                    let peer_s = peer_id.to_string();
+                    let action = {
+                        let mut reg = hello_registry.lock().await;
+                        reg.remove_peer(&peer_s);
+                        println!(
+                            "[P2P-block] sync_hello removed peer={peer_id} map_size={}",
+                            reg.peer_count()
+                        );
+                        let local_height = ledger.block_height().unwrap_or(0);
+                        catch_up_driver.lock().await.handle(
+                            CatchUpDriverEvent::PeerRemoved { peer_id: peer_s },
+                            &reg,
+                            local_height,
+                        )
+                    };
+                    run_catch_up_action(
+                        action,
+                        &mut swarm,
+                        &hello_registry,
+                        &catch_up_driver,
+                        &mut pending_catch_up_range,
+                    )
+                    .await;
+                }
             }
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                 println!("[P2P] DIAL ERROR to {:?}: {:?}", peer_id, error);
@@ -1153,6 +1650,8 @@ mod tests {
             identify,
             kademlia,
             block_sync: block_sync_behaviour(),
+            chain_sync_hello: chain_sync_hello_behaviour(),
+            chain_sync_range: chain_sync_range_behaviour(),
         };
 
         Swarm::new(
