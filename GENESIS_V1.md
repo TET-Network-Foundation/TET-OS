@@ -1,15 +1,12 @@
 # TET NETWORK
-## 流動的なP2P計算・エネルギーリソースプロトコル
-## AIネイティブ・ソブリン・レイヤー1
+## A Fluid Protocol for Peer-to-Peer Computational and Energy Resources
+## AI-Native Sovereign Layer-1
 
 **Version:** Genesis Draft v1.0  
 **Date:** 2026-04-28  
 **Author:** Steve  
 **Title:** Founder-Architect, TET Network Project  
 **Contact:** yizhenxianshi@gmail.com  
-
-**Status:** Canonical whitepaper (repository root). Supersedes [`archive/WHITEPAPER_v0_economic.md`](archive/WHITEPAPER_v0_economic.md).  
-**Manuscript:** [`GENESIS_V1.md`](GENESIS_V1.md) (identical body below).
 
 ---
 
