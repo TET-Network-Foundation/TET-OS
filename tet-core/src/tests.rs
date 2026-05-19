@@ -56,6 +56,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         p2p_tx: None,
         p2p_client: None,
         gossip_tx: None,
+        block_sync_board: None,
         mempool: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
@@ -491,7 +492,7 @@ async fn auto_miner_skips_when_local_node_is_not_leader() {
             crate::ledger::STEVEMON,
         ));
 
-    let handle = crate::consensus::spawn_auto_miner(state.clone(), non_leader, validators);
+    let handle = crate::consensus::spawn_auto_miner(state.clone(), None, non_leader, validators);
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     handle.abort();
 
@@ -519,7 +520,8 @@ async fn auto_miner_mines_coinbase_only_blocks_when_mempool_is_empty() {
         .unwrap();
     let producer_before = ledger.balance_micro("alice").unwrap();
 
-    let handle = crate::consensus::spawn_auto_miner(state.clone(), "alice".to_string(), validators);
+    let handle =
+        crate::consensus::spawn_auto_miner(state.clone(), None, "alice".to_string(), validators);
     tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
     handle.abort();
 
@@ -774,6 +776,7 @@ async fn por_auto_miner_preserves_ai_workload_and_mines_empty_block() {
 
     let handle = crate::consensus::spawn_auto_miner(
         state.clone(),
+        None,
         "alice".to_string(),
         crate::consensus::ValidatorSet::new(["alice"]),
     );
@@ -1174,6 +1177,99 @@ async fn coinbase_reward_moves_worker_pool_to_producer_without_minting() {
         pool_before + 5_000 - outcome.reward.total_reward_micro
     );
     assert_eq!(ledger.total_supply_micro().unwrap(), supply_before - 5_000);
+}
+
+#[tokio::test]
+async fn mined_block_record_parent_block_id_chains_to_previous() {
+    let _g = env_lock();
+    set_test_env_base();
+    unsafe {
+        std::env::set_var("TET_WALLET_ID", "local-wallet");
+        std::env::set_var("TET_VALIDATOR_IDS", "local-wallet");
+    }
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let b1 = crate::consensus::mine_pending_block_as(state.clone(), "local-wallet".to_string())
+        .await
+        .unwrap();
+    assert_eq!(b1.block_height, 1);
+    let rec1 = ledger.block_record_by_id(&b1.block_id).unwrap().unwrap();
+    assert_eq!(rec1.parent_block_id, None);
+
+    let b2 = crate::consensus::mine_pending_block_as(state, "local-wallet".to_string())
+        .await
+        .unwrap();
+    assert_eq!(b2.block_height, 2);
+    let rec2 = ledger.block_record_by_id(&b2.block_id).unwrap().unwrap();
+    assert_eq!(
+        rec2.parent_block_id.as_deref(),
+        Some(b1.block_id.as_str()),
+        "block N parent must be block N-1 id"
+    );
+}
+
+#[tokio::test]
+async fn gossip_applied_block_parent_block_id_chains_to_previous() {
+    let _g = env_lock();
+    set_test_env_base();
+    unsafe {
+        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        std::env::set_var("TET_WALLET_ID", "alice");
+    }
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let b1 = crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
+        .await
+        .unwrap();
+    assert_eq!(b1.block_height, 1);
+
+    let txs: Vec<crate::protocol::SignedTxEnvelopeV1> = Vec::new();
+    let reward = crate::consensus::reward_for_block(&txs).unwrap();
+    let tx_hashes: Vec<String> = Vec::new();
+    let block_id = crate::consensus::block_id_for_block(2, &tx_hashes);
+    let state_root = ledger
+        .compute_state_root_after_remote_block(&txs, "alice", reward.total_reward_micro)
+        .unwrap();
+
+    let applied = crate::consensus::apply_remote_block_from_gossip(
+        ledger.clone(),
+        state.mempool.clone(),
+        crate::consensus::RemoteBlockGossip {
+            block_height: 2,
+            block_id: block_id.clone(),
+            parent_block_id: None,
+            producer_id: "alice".to_string(),
+            base_reward_micro: reward.base_reward_micro,
+            compute_reward_micro: reward.compute_reward_micro,
+            total_reward_micro: reward.total_reward_micro,
+            state_root,
+            txs,
+        },
+    )
+    .await
+    .unwrap();
+
+    match applied {
+        crate::consensus::RemoteBlockApplyOutcome::Applied { block_height, .. } => {
+            assert_eq!(block_height, 2);
+        }
+        other => panic!("expected gossip apply at height 2, got {other:?}"),
+    }
+
+    let rec2 = ledger.block_record_by_id(&block_id).unwrap().unwrap();
+    assert_eq!(
+        rec2.parent_block_id.as_deref(),
+        Some(b1.block_id.as_str()),
+        "gossip block N parent must resolve to block N-1 id"
+    );
 }
 
 #[tokio::test]
@@ -3089,6 +3185,10 @@ mod block_sync {
         unsafe {
             std::env::set_var("TET_CHAIN_ID", "phase-c-block-sync");
             std::env::set_var("TET_VALIDATOR_IDS", "alice");
+            std::env::set_var("TET_GOSSIP_MESH_N", "2");
+            std::env::set_var("TET_GOSSIP_MESH_N_LOW", "2");
+            std::env::set_var("TET_GOSSIP_MESH_N_HIGH", "4");
+            std::env::set_var("TET_SYNC_STABLE_SEC", "1");
             std::env::remove_var("TET_BOOTNODES");
             std::env::remove_var("TET_IS_BOOTNODE");
             std::env::remove_var("TET_AUTO_MINE");
@@ -3101,8 +3201,10 @@ mod block_sync {
         ledger: Arc<crate::ledger::Ledger>,
         db_dir: std::path::PathBuf,
         state: crate::rest::RestState,
+        block_sync_board: crate::sync::SharedBlockSyncBoard,
         boot_multiaddr: String,
         swarm_task: JoinHandle<()>,
+        auto_miner: Option<JoinHandle<()>>,
     }
 
     async fn start_block_swarm_on_ledger(
@@ -3110,7 +3212,13 @@ mod block_sync {
         db_dir: &std::path::Path,
         bootnode_of: Option<&str>,
         is_boot: bool,
-    ) -> (crate::rest::RestState, String, JoinHandle<()>) {
+        post_listen_delay_ms: u64,
+    ) -> (
+        crate::rest::RestState,
+        crate::sync::SharedBlockSyncBoard,
+        String,
+        JoinHandle<()>,
+    ) {
         let ks = crate::p2p_keystore::P2pKeystore::load_or_create(db_dir).unwrap();
         let keypair = ks.keypair();
         let peer_id = ks.peer_id();
@@ -3137,6 +3245,8 @@ mod block_sync {
         let mempool = Arc::new(Mutex::new(Vec::new()));
         let hello_registry = crate::sync::new_hello_registry();
         let catch_up_driver = crate::sync::new_catch_up_driver();
+        let block_sync_board =
+            crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
 
         let (gossip_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
@@ -3145,13 +3255,17 @@ mod block_sync {
             listen,
             hello_registry,
             catch_up_driver,
+            block_sync_board.clone(),
         )
         .expect("block swarm");
 
         let mut state = rest_state_for_tests(ledger);
         state.gossip_tx = Some(gossip_tx);
-        tokio::time::sleep(Duration::from_millis(400)).await;
-        (state, boot_multiaddr, swarm_task)
+        state.block_sync_board = Some(block_sync_board.clone());
+        if post_listen_delay_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(post_listen_delay_ms)).await;
+        }
+        (state, block_sync_board, boot_multiaddr, swarm_task)
     }
 
     async fn spawn_node(bootnode_of: Option<&str>, is_boot: bool) -> TestNode {
@@ -3162,28 +3276,46 @@ mod block_sync {
         let ledger = Arc::new(crate::ledger::Ledger::open(db.to_str().unwrap()).unwrap());
         ledger.init_genesis_founder_premine_from_env().unwrap();
         let _ = ledger.apply_genesis_allocation("founder");
-        let (state, boot_multiaddr, swarm_task) =
-            start_block_swarm_on_ledger(ledger.clone(), &db_dir, bootnode_of, is_boot).await;
+        let (state, block_sync_board, boot_multiaddr, swarm_task) =
+            start_block_swarm_on_ledger(ledger.clone(), &db_dir, bootnode_of, is_boot, 400).await;
         TestNode {
             ledger,
             db_dir,
             state,
+            block_sync_board,
             boot_multiaddr,
             swarm_task,
+            auto_miner: None,
         }
     }
 
+    fn spawn_auto_miner_on_node(node: &mut TestNode) {
+        let validators = crate::consensus::ValidatorSet::new(["alice"]);
+        let handle = crate::consensus::spawn_auto_miner(
+            node.state.clone(),
+            Some(node.block_sync_board.clone()),
+            "alice".to_string(),
+            validators,
+        );
+        node.auto_miner = Some(handle);
+    }
+
     async fn respawn_swarm(node: &mut TestNode, bootnode_of: Option<&str>, is_boot: bool) {
+        if let Some(h) = node.auto_miner.take() {
+            h.abort();
+        }
         node.swarm_task.abort();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let (state, boot, task) = start_block_swarm_on_ledger(
+        let (state, board, boot, task) = start_block_swarm_on_ledger(
             node.ledger.clone(),
             &node.db_dir,
             bootnode_of,
             is_boot,
+            400,
         )
         .await;
         node.state = state;
+        node.block_sync_board = board;
         node.boot_multiaddr = boot;
         node.swarm_task = task;
     }
@@ -3269,7 +3401,51 @@ mod block_sync {
 
     fn stop(nodes: &[TestNode]) {
         for n in nodes {
+            if let Some(h) = &n.auto_miner {
+                h.abort();
+            }
             n.swarm_task.abort();
+        }
+    }
+
+    async fn sync_gate_active(
+        board: &crate::sync::SharedBlockSyncBoard,
+        ledger: &crate::ledger::Ledger,
+    ) -> bool {
+        crate::sync::auto_mine_blocked_by_sync(Some(board), ledger).await
+    }
+
+    fn tip_triplet(ledger: &crate::ledger::Ledger) -> (u64, String, String) {
+        let height = ledger.block_height().unwrap_or(0);
+        let state_root = ledger.compute_state_root();
+        let block_id = ledger
+            .chain_tip()
+            .ok()
+            .flatten()
+            .map(|t| t.block_id)
+            .unwrap_or_default();
+        (height, block_id, state_root)
+    }
+
+    async fn wait_strict_tip_match(
+        ledgers: &[Arc<crate::ledger::Ledger>],
+        timeout: Duration,
+    ) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snaps: Vec<_> = ledgers.iter().map(|l| tip_triplet(l.as_ref())).collect();
+            let all_match = snaps.first().map(|first| {
+                first.0 > 0 && snaps.iter().all(|s| s == first)
+            }) == Some(true);
+            if all_match {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "strict tip mismatch within {:?}: {snaps:?}",
+                timeout
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
 
@@ -3298,7 +3474,8 @@ mod block_sync {
         stop(&[n1, n2, n3]);
     }
 
-    /// C.2 — peer disconnect, alternate peer, late joiner, restarted node re-merges.
+    /// C.2 — peer disconnect with **manual** `respawn_swarm` to repoint bootnode (test convenience).
+    /// Automatic bootnode-dead recovery is covered by [`bootnode_failure_recovery_no_manual_intervention`].
     #[tokio::test]
     async fn chain_sync_recovers_after_peer_disconnect() {
         let _g = env_lock();
@@ -3355,9 +3532,6 @@ mod block_sync {
     }
 
     /// C.3 — rapid concurrent follower start; single producer; chain converges without fork.
-    ///
-    /// Note: in-process tests share one `BlockSyncBoard` OnceLock, so true triple auto-miner
-    /// sync-gate coverage is via `scripts/start-3-node-testnet.sh`.
     #[tokio::test]
     async fn sync_gate_prevents_fork_under_concurrent_start() {
         let _g = env_lock();
@@ -3378,6 +3552,211 @@ mod block_sync {
         wait_height_convergence(&ledgers, 2, Duration::from_secs(30)).await;
         assert_no_fork_through_min_height(&ledgers);
         assert_state_roots_match(&ledgers);
+
+        stop(&[n1, n2, n3]);
+    }
+
+    /// A.3 — each in-process node has its own `BlockSyncBoard`; followers gate auto-mine until caught up.
+    #[tokio::test]
+    async fn in_process_three_nodes_auto_mine_with_sync_gate_per_node() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            std::env::set_var("TET_AUTO_MINE", "1");
+            std::env::set_var("TET_BLOCK_TIME_SEC", "2");
+            std::env::remove_var("TET_AUTO_MINE_IGNORE_SYNC");
+        }
+
+        let mut n1 = spawn_node(None, true).await;
+        spawn_auto_miner_on_node(&mut n1);
+
+        let bootstrap_deadline = Instant::now() + Duration::from_secs(20);
+        while n1.ledger.block_height().unwrap_or(0) < 5 {
+            assert!(
+                Instant::now() < bootstrap_deadline,
+                "node1 failed to mine bootstrap blocks"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let h1_before_followers = n1.ledger.block_height().unwrap_or(0);
+
+        let boot = n1.boot_multiaddr.clone();
+
+        let tmp2 = tempfile::tempdir().unwrap();
+        let db2 = tmp2.path().join("db");
+        let db_dir2 = tmp2.path().to_path_buf();
+        std::mem::forget(tmp2);
+        let ledger2 = Arc::new(crate::ledger::Ledger::open(db2.to_str().unwrap()).unwrap());
+        ledger2.init_genesis_founder_premine_from_env().unwrap();
+        let _ = ledger2.apply_genesis_allocation("founder");
+        let (state2, board2, _, swarm2) = start_block_swarm_on_ledger(
+            ledger2.clone(),
+            &db_dir2,
+            Some(&boot),
+            false,
+            0,
+        )
+        .await;
+        assert_ne!(Arc::as_ptr(&n1.block_sync_board), Arc::as_ptr(&board2));
+        assert!(
+            sync_gate_active(&board2, ledger2.as_ref()).await,
+            "node2 should gate before first hello (awaiting_first_hello)"
+        );
+
+        let mut n2 = TestNode {
+            ledger: ledger2,
+            db_dir: db_dir2,
+            state: state2,
+            block_sync_board: board2,
+            boot_multiaddr: String::new(),
+            swarm_task: swarm2,
+            auto_miner: None,
+        };
+        let mut n3 = spawn_node(Some(&boot), false).await;
+        assert_ne!(
+            Arc::as_ptr(&n2.block_sync_board),
+            Arc::as_ptr(&n3.block_sync_board),
+        );
+
+        tokio::time::sleep(Duration::from_millis(600)).await;
+
+        spawn_auto_miner_on_node(&mut n2);
+        spawn_auto_miner_on_node(&mut n3);
+
+        let ledgers = vec![n1.ledger.clone(), n2.ledger.clone(), n3.ledger.clone()];
+        wait_height_convergence(&ledgers, 2, Duration::from_secs(30)).await;
+
+        // A.5: gate clears only after lag_blocks==0 for TET_SYNC_STABLE_SEC; pause miners so followers can catch up.
+        if let Some(h) = n1.auto_miner.take() {
+            h.abort();
+        }
+        if let Some(h) = n2.auto_miner.take() {
+            h.abort();
+        }
+        if let Some(h) = n3.auto_miner.take() {
+            h.abort();
+        }
+        wait_height_convergence(&ledgers, 0, Duration::from_secs(45)).await;
+
+        let ungate_deadline = Instant::now() + Duration::from_secs(45);
+        loop {
+            if !sync_gate_active(&n2.block_sync_board, n2.ledger.as_ref()).await
+                && !sync_gate_active(&n3.block_sync_board, n3.ledger.as_ref()).await
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < ungate_deadline,
+                "followers did not clear sync gate within timeout"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        assert!(
+            n1.ledger.block_height().unwrap_or(0) >= h1_before_followers,
+            "node1 auto-miner should continue while followers catch up"
+        );
+        assert_state_roots_match(&ledgers);
+
+        stop(&[n1, n2, n3]);
+    }
+
+    async fn wait_min_height(ledger: &Arc<crate::ledger::Ledger>, min: u64, timeout: Duration) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if ledger.block_height().unwrap_or(0) >= min {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timeout waiting for height>={min}, got {}",
+                ledger.block_height().unwrap_or(0)
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+
+    /// A.4 — bootnode stops; followers catch up via mdns + range sync without `respawn_swarm`.
+    #[tokio::test]
+    async fn bootnode_failure_recovery_no_manual_intervention() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            std::env::set_var("TET_HELLO_TIMEOUT_SEC", "5");
+            std::env::set_var("TET_BOOTNODE_REDIAL_SEC", "60");
+        }
+
+        let mut n1 = spawn_node(None, true).await;
+        mine_n(&n1.state, 5).await;
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        let n3 = spawn_node(Some(&boot), false).await;
+        wait_height_convergence(
+            &[n1.ledger.clone(), n2.ledger.clone(), n3.ledger.clone()],
+            2,
+            Duration::from_secs(30),
+        )
+        .await;
+
+        // Stop bootnode (Node1) only — no respawn_swarm on followers.
+        if let Some(h) = n1.auto_miner.take() {
+            h.abort();
+        }
+        n1.swarm_task.abort();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let target = n1.ledger.block_height().unwrap_or(0).saturating_add(3);
+        mine_n(&n2.state, 3).await;
+
+        let follower_deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let h2 = n2.ledger.block_height().unwrap_or(0);
+            let h3 = n3.ledger.block_height().unwrap_or(0);
+            if h2 >= target && h3 >= target.saturating_sub(1) {
+                break;
+            }
+            assert!(
+                Instant::now() < follower_deadline,
+                "followers did not catch up after bootnode death: n2={h2} n3={h3} target={target}"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+
+        wait_min_height(&n3.ledger, target.saturating_sub(1), Duration::from_secs(30)).await;
+        assert_state_roots_match(&[n2.ledger.clone(), n3.ledger.clone()]);
+
+        // Node1 rejoins and catches up from Node2 (respawn allowed for dead bootnode only).
+        let n2_boot = n2.boot_multiaddr.clone();
+        respawn_swarm(&mut n1, Some(&n2_boot), false).await;
+        let all = vec![n1.ledger.clone(), n2.ledger.clone(), n3.ledger.clone()];
+        wait_height_convergence(&all, 2, Duration::from_secs(60)).await;
+        assert_state_roots_match(&all);
+
+        stop(&[n1, n2, n3]);
+    }
+
+    /// A.5 — after burst mine on Node1, all nodes share identical tip block_id + state_root.
+    #[tokio::test]
+    async fn tip_state_root_strict_match_after_mine() {
+        let _g = env_lock();
+        block_sync_env();
+
+        let n1 = spawn_node(None, true).await;
+        mine_n(&n1.state, 10).await;
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        let n3 = spawn_node(Some(&boot), false).await;
+        let ledgers = vec![n1.ledger.clone(), n2.ledger.clone(), n3.ledger.clone()];
+        wait_height_convergence(&ledgers, 0, Duration::from_secs(45)).await;
+        wait_strict_tip_match(&ledgers, Duration::from_secs(10)).await;
+
+        mine_n(&n1.state, 5).await;
+
+        wait_strict_tip_match(&ledgers, Duration::from_secs(5)).await;
+        assert_state_roots_match(&ledgers);
+        let (_, tip_id, tip_root) = tip_triplet(&n1.ledger);
+        assert!(tip_id.starts_with("0x"), "expected hex tip block_id, got {tip_id}");
+        assert!(tip_root.starts_with("0x"), "expected hex state_root, got {tip_root}");
 
         stop(&[n1, n2, n3]);
     }

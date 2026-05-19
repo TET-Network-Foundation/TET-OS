@@ -12,6 +12,7 @@ use libp2p::identity;
 use libp2p::kad;
 use libp2p::mdns;
 use libp2p::multiaddr::Protocol;
+use std::net::Ipv4Addr;
 use libp2p::noise;
 use libp2p::ping;
 use libp2p::request_response;
@@ -31,8 +32,8 @@ use crate::sync::{
     block_record_to_remote_gossip, build_chain_hello, build_chain_sync_range_response,
     set_in_progress_range,
     CatchUpAction, CatchUpDriverEvent, ChainHello, ChainSyncRangeRequest, ChainSyncRangeResponse,
-    InProgressRangeRequest, SharedCatchUpDriver, SharedHelloRegistry, CHAIN_SYNC_HELLO_PROTOCOL,
-    CHAIN_SYNC_RANGE_PROTOCOL,
+    InProgressRangeRequest, SharedBlockSyncBoard, SharedCatchUpDriver, SharedHelloRegistry,
+    CHAIN_SYNC_HELLO_PROTOCOL, CHAIN_SYNC_RANGE_PROTOCOL,
 };
 use std::sync::Arc;
 
@@ -367,6 +368,281 @@ fn now_ms() -> u64 {
         .min(u128::from(u64::MAX)) as u64
 }
 
+fn hello_timeout_sec_from_env() -> u64 {
+    std::env::var("TET_HELLO_TIMEOUT_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(10)
+}
+
+fn bootnode_redial_sec_from_env() -> u64 {
+    std::env::var("TET_BOOTNODE_REDIAL_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(30)
+}
+
+fn listen_bound_loopback(listen: &Multiaddr) -> bool {
+    listen
+        .iter()
+        .any(|p| matches!(p, Protocol::Ip4(ip) if ip == Ipv4Addr::LOCALHOST))
+}
+
+/// When nodes listen on loopback, mDNS often advertises LAN IPs; remap so dials reach the listener.
+fn remap_discovered_addr_for_listen(discovered: Multiaddr, listen: &Multiaddr) -> Multiaddr {
+    if !listen_bound_loopback(listen) {
+        return discovered;
+    }
+    let mut out = Multiaddr::empty();
+    let mut remapped = false;
+    for proto in discovered.iter() {
+        if matches!(proto, Protocol::Ip4(_)) && !remapped {
+            out.push(Protocol::Ip4(Ipv4Addr::LOCALHOST));
+            remapped = true;
+        } else {
+            out.push(proto);
+        }
+    }
+    if remapped { out } else { discovered }
+}
+
+fn gossip_mesh_params_from_env() -> (usize, usize, usize) {
+    let mesh_n = std::env::var("TET_GOSSIP_MESH_N")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(6);
+    let mesh_n_low = std::env::var("TET_GOSSIP_MESH_N_LOW")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(4);
+    let mesh_n_high = std::env::var("TET_GOSSIP_MESH_N_HIGH")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(12);
+    (mesh_n, mesh_n_low, mesh_n_high)
+}
+
+/// Tracks bootnode hello deadlines, dead state, and periodic re-dial (A.4).
+#[derive(Debug)]
+struct BootnodeWatch {
+    bootnode_ids: HashSet<PeerId>,
+    bootnode_dial_addrs: HashMap<PeerId, Multiaddr>,
+    hello_sent_at: HashMap<PeerId, u64>,
+    hello_answered: HashSet<PeerId>,
+    dead: HashSet<PeerId>,
+    last_redial_at: HashMap<PeerId, u64>,
+}
+
+impl BootnodeWatch {
+    fn from_env() -> Self {
+        let mut bootnode_ids = HashSet::new();
+        let mut bootnode_dial_addrs = HashMap::new();
+        for raw in crate::vision::fluid_net::bootnode_addrs_from_env() {
+            if let Ok(addr) = raw.parse::<Multiaddr>() {
+                if let Some((_, pid)) = split_p2p_peer(addr.clone()) {
+                    bootnode_ids.insert(pid);
+                    bootnode_dial_addrs.insert(pid, addr);
+                }
+            }
+        }
+        Self {
+            bootnode_ids,
+            bootnode_dial_addrs,
+            hello_sent_at: HashMap::new(),
+            hello_answered: HashSet::new(),
+            dead: HashSet::new(),
+            last_redial_at: HashMap::new(),
+        }
+    }
+
+    fn is_bootnode(&self, peer: &PeerId) -> bool {
+        self.bootnode_ids.contains(peer)
+    }
+
+    fn is_dead(&self, peer: &PeerId) -> bool {
+        self.dead.contains(peer)
+    }
+
+    fn on_hello_sent(&mut self, peer: PeerId) {
+        if self.is_bootnode(&peer) && !self.dead.contains(&peer) {
+            self.hello_sent_at.insert(peer, now_ms());
+        }
+    }
+
+    fn on_hello_received(&mut self, peer: PeerId) {
+        if self.is_bootnode(&peer) {
+            self.hello_answered.insert(peer);
+            self.dead.remove(&peer);
+            self.hello_sent_at.remove(&peer);
+        }
+    }
+
+    fn mark_bootnode_dead(&mut self, peer: PeerId) {
+        if self.is_bootnode(&peer) && self.dead.insert(peer) {
+            self.hello_sent_at.remove(&peer);
+            println!("[P2P-block] ☠️ bootnode dead (no hello within timeout): {peer}");
+            log::warn!("[p2p][block] bootnode dead peer_id={peer}");
+        }
+    }
+
+    async fn request_hello_from_connected_peers(
+        swarm: &mut Swarm<TetBehaviour>,
+        ledger: &crate::ledger::Ledger,
+        exclude: &HashSet<PeerId>,
+    ) {
+        let Ok(our_hello) = build_chain_hello(ledger) else {
+            return;
+        };
+        let local = *swarm.local_peer_id();
+        for peer in swarm.connected_peers().cloned().collect::<Vec<_>>() {
+            if peer == local || exclude.contains(&peer) {
+                continue;
+            }
+            swarm
+                .behaviour_mut()
+                .chain_sync_hello
+                .send_request(&peer, our_hello.clone());
+            println!("[P2P-block] 👋 fallback chain_hello → {peer} (bootnode recovery)");
+        }
+    }
+
+    async fn tick(
+        &mut self,
+        swarm: &mut Swarm<TetBehaviour>,
+        listen: &Multiaddr,
+        ledger: &crate::ledger::Ledger,
+        hello_registry: &SharedHelloRegistry,
+        catch_up_driver: &SharedCatchUpDriver,
+        block_sync_board: &SharedBlockSyncBoard,
+        pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+        peer_dial_book: &HashMap<PeerId, Multiaddr>,
+        dialing: &mut HashSet<PeerId>,
+    ) {
+        let now = now_ms();
+        let timeout_ms = hello_timeout_sec_from_env().saturating_mul(1000);
+        let redial_ms = bootnode_redial_sec_from_env().saturating_mul(1000);
+
+        let mut newly_dead = Vec::new();
+        for peer in self.bootnode_ids.clone() {
+            if self.dead.contains(&peer) {
+                let last = self.last_redial_at.get(&peer).copied().unwrap_or(0);
+                if now.saturating_sub(last) >= redial_ms {
+                    if let Some(addr) = self.bootnode_dial_addrs.get(&peer) {
+                        let _ = swarm.dial(addr.clone());
+                        self.last_redial_at.insert(peer, now);
+                        println!("[P2P-block] 🔁 bootnode re-dial attempt: {peer}");
+                    }
+                }
+                continue;
+            }
+            if self.hello_answered.contains(&peer) {
+                continue;
+            }
+            let Some(sent_at) = self.hello_sent_at.get(&peer).copied() else {
+                continue;
+            };
+            if now.saturating_sub(sent_at) >= timeout_ms {
+                newly_dead.push(peer);
+            }
+        }
+
+        let had_newly_dead = !newly_dead.is_empty();
+        for peer in newly_dead {
+            self.mark_bootnode_dead(peer);
+            let _ = swarm.disconnect_peer_id(peer);
+            catch_up_driver
+                .lock()
+                .await
+                .blacklist_peer(peer.to_string());
+            dialing.remove(&peer);
+        }
+
+        if had_newly_dead {
+            self.run_bootnode_recovery_fallback(
+                swarm,
+                listen,
+                ledger,
+                hello_registry,
+                catch_up_driver,
+                block_sync_board,
+                pending_catch_up_range,
+                peer_dial_book,
+                dialing,
+            )
+            .await;
+        } else if self.bootnode_ids.iter().any(|p| self.dead.contains(p)) {
+            self.dial_known_followers(swarm, listen, peer_dial_book, dialing);
+        }
+    }
+
+    fn dial_known_followers(
+        &self,
+        swarm: &mut Swarm<TetBehaviour>,
+        listen: &Multiaddr,
+        peer_dial_book: &HashMap<PeerId, Multiaddr>,
+        dialing: &mut HashSet<PeerId>,
+    ) {
+        let local = *swarm.local_peer_id();
+        for (pid, addr) in peer_dial_book {
+            if *pid == local || self.is_bootnode(pid) || self.is_dead(pid) {
+                continue;
+            }
+            if swarm.is_connected(pid) || dialing.contains(pid) {
+                continue;
+            }
+            dialing.insert(*pid);
+            let dial = remap_discovered_addr_for_listen(addr.clone(), listen);
+            match swarm.dial(dial) {
+                Ok(()) => println!("[P2P-block] 🔗 follower re-dial (bootnode recovery): {pid}"),
+                Err(e) => println!("[P2P-block] follower re-dial failed {pid}: {e}"),
+            }
+        }
+    }
+
+    async fn run_bootnode_recovery_fallback(
+        &self,
+        swarm: &mut Swarm<TetBehaviour>,
+        listen: &Multiaddr,
+        ledger: &crate::ledger::Ledger,
+        hello_registry: &SharedHelloRegistry,
+        catch_up_driver: &SharedCatchUpDriver,
+        block_sync_board: &SharedBlockSyncBoard,
+        pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+        peer_dial_book: &HashMap<PeerId, Multiaddr>,
+        dialing: &mut HashSet<PeerId>,
+    ) {
+        let exclude = self.dead.clone();
+        let local = *swarm.local_peer_id();
+        let gossip_peers: Vec<PeerId> = swarm
+            .connected_peers()
+            .cloned()
+            .filter(|p| *p != local && !exclude.contains(p))
+            .collect();
+        for peer in gossip_peers {
+            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer);
+        }
+        self.dial_known_followers(swarm, listen, peer_dial_book, dialing);
+        Self::request_hello_from_connected_peers(swarm, ledger, &exclude).await;
+        let local_height = ledger.block_height().unwrap_or(0);
+        let mut reg = hello_registry.lock().await;
+        if reg.peer_count() == 0 || reg.any_peer_ahead(local_height) {
+            reg.force_catch_up_triggered();
+        }
+        drop(reg);
+        try_start_catch_up(
+            block_sync_board,
+            catch_up_driver,
+            hello_registry,
+            ledger,
+            swarm,
+            pending_catch_up_range,
+        )
+        .await;
+    }
+}
+
 fn block_sync_behaviour() -> request_response::json::Behaviour<BlockRequest, BlockResponse> {
     request_response::json::Behaviour::new(
         [(
@@ -403,7 +679,11 @@ async fn ingest_remote_chain_hello(
     ledger: &crate::ledger::Ledger,
     peer: PeerId,
     hello: ChainHello,
+    bootnode_watch: Option<&mut BootnodeWatch>,
 ) {
+    if let Some(watch) = bootnode_watch {
+        watch.on_hello_received(peer);
+    }
     let local_height = ledger.block_height().unwrap_or(0);
     let peer_s = peer.to_string();
     let mut reg = registry.lock().await;
@@ -433,6 +713,7 @@ async fn ingest_remote_chain_hello(
 
 async fn run_catch_up_action(
     action: CatchUpAction,
+    block_sync_board: &SharedBlockSyncBoard,
     swarm: &mut Swarm<TetBehaviour>,
     hello_registry: &SharedHelloRegistry,
     catch_up_driver: &SharedCatchUpDriver,
@@ -442,7 +723,7 @@ async fn run_catch_up_action(
         CatchUpAction::None => {}
         CatchUpAction::ClearCatchUpTriggered => {
             hello_registry.lock().await.clear_catch_up_triggered();
-            set_in_progress_range(None).await;
+            set_in_progress_range(block_sync_board, None).await;
             println!("[P2P-block] ✅ catch-up complete; catch_up_triggered=false");
             log::info!("[p2p][block] catch-up complete");
         }
@@ -452,11 +733,14 @@ async fn run_catch_up_action(
                 catch_up_driver.lock().await.blacklist_peer(peer_id);
                 return;
             };
-            set_in_progress_range(Some(InProgressRangeRequest {
-                peer_id: peer_id.clone(),
-                from_height: request.from_height,
-                to_height: request.to_height,
-            }))
+            set_in_progress_range(
+                block_sync_board,
+                Some(InProgressRangeRequest {
+                    peer_id: peer_id.clone(),
+                    from_height: request.from_height,
+                    to_height: request.to_height,
+                }),
+            )
             .await;
             let rid = swarm
                 .behaviour_mut()
@@ -472,6 +756,7 @@ async fn run_catch_up_action(
 }
 
 async fn try_start_catch_up(
+    block_sync_board: &SharedBlockSyncBoard,
     catch_up_driver: &SharedCatchUpDriver,
     hello_registry: &SharedHelloRegistry,
     ledger: &crate::ledger::Ledger,
@@ -492,6 +777,7 @@ async fn try_start_catch_up(
     };
     run_catch_up_action(
         action,
+        block_sync_board,
         swarm,
         hello_registry,
         catch_up_driver,
@@ -558,6 +844,7 @@ async fn apply_catch_up_blocks(
 async fn on_catch_up_range_response(
     peer: PeerId,
     response: ChainSyncRangeResponse,
+    block_sync_board: &SharedBlockSyncBoard,
     catch_up_driver: &SharedCatchUpDriver,
     hello_registry: &SharedHelloRegistry,
     ledger: Arc<crate::ledger::Ledger>,
@@ -573,7 +860,7 @@ async fn on_catch_up_range_response(
     );
 
     if response.blocks.is_empty() {
-        set_in_progress_range(None).await;
+        set_in_progress_range(block_sync_board, None).await;
         let action = {
             let mut driver = catch_up_driver.lock().await;
             let reg = hello_registry.lock().await;
@@ -589,6 +876,7 @@ async fn on_catch_up_range_response(
         };
         run_catch_up_action(
             action,
+            block_sync_board,
             swarm,
             hello_registry,
             catch_up_driver,
@@ -599,7 +887,7 @@ async fn on_catch_up_range_response(
     }
 
     let (applied, failed) = apply_catch_up_blocks(ledger.clone(), mempool, response.blocks).await;
-    set_in_progress_range(None).await;
+    set_in_progress_range(block_sync_board, None).await;
     let local_height = ledger.block_height().unwrap_or(0);
     let action = {
         let mut driver = catch_up_driver.lock().await;
@@ -616,6 +904,7 @@ async fn on_catch_up_range_response(
     };
     run_catch_up_action(
         action,
+        block_sync_board,
         swarm,
         hello_registry,
         catch_up_driver,
@@ -627,13 +916,14 @@ async fn on_catch_up_range_response(
 async fn on_catch_up_range_failed(
     peer: PeerId,
     reason: String,
+    block_sync_board: &SharedBlockSyncBoard,
     catch_up_driver: &SharedCatchUpDriver,
     hello_registry: &SharedHelloRegistry,
     ledger: &crate::ledger::Ledger,
     swarm: &mut Swarm<TetBehaviour>,
     pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
 ) {
-    set_in_progress_range(None).await;
+    set_in_progress_range(block_sync_board, None).await;
     let local_height = ledger.block_height().unwrap_or(0);
     let action = {
         let mut driver = catch_up_driver.lock().await;
@@ -649,6 +939,7 @@ async fn on_catch_up_range_failed(
     };
     run_catch_up_action(
         action,
+        block_sync_board,
         swarm,
         hello_registry,
         catch_up_driver,
@@ -720,6 +1011,7 @@ pub fn start_mdns_ping_swarm(
     listen: Multiaddr,
     hello_registry: SharedHelloRegistry,
     catch_up_driver: SharedCatchUpDriver,
+    block_sync_board: SharedBlockSyncBoard,
 ) -> Result<(mpsc::Sender<String>, tokio::task::JoinHandle<()>), AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
     let join = tokio::spawn(async move {
@@ -731,6 +1023,7 @@ pub fn start_mdns_ping_swarm(
             listen,
             hello_registry,
             catch_up_driver,
+            block_sync_board,
         )
         .await
         {
@@ -751,6 +1044,7 @@ async fn run_mdns_ping_swarm(
     listen: Multiaddr,
     hello_registry: SharedHelloRegistry,
     catch_up_driver: SharedCatchUpDriver,
+    block_sync_board: SharedBlockSyncBoard,
 ) -> Result<(), AnyErr> {
     let peer_id = PeerId::from(keypair.public());
     log::info!("[P2P] My Peer ID: {peer_id}");
@@ -770,13 +1064,16 @@ async fn run_mdns_ping_swarm(
     );
 
     let max_gossip_bytes = global_gossip_max_msg_bytes();
+    let (mesh_n, mesh_n_low, mesh_n_high) = gossip_mesh_params_from_env();
+    let mesh_outbound_min = (mesh_n / 2).max(1).min(mesh_n_low);
     let gossipsub_config = gossipsub::ConfigBuilder::default()
         .validation_mode(gossipsub::ValidationMode::Strict)
         .validate_messages()
         .max_transmit_size(max_gossip_bytes)
-        .mesh_n(6)
-        .mesh_n_low(4)
-        .mesh_n_high(12)
+        .mesh_outbound_min(mesh_outbound_min)
+        .mesh_n(mesh_n)
+        .mesh_n_low(mesh_n_low)
+        .mesh_n_high(mesh_n_high)
         .heartbeat_interval(Duration::from_millis(800))
         .max_messages_per_rpc(Some(32))
         .build()
@@ -925,6 +1222,8 @@ async fn run_mdns_ping_swarm(
     log::info!("[p2p][block] binding listen={listen}");
 
     let mut dialing: HashSet<PeerId> = HashSet::new();
+    let mut peer_dial_book: HashMap<PeerId, Multiaddr> = HashMap::new();
+    let mut bootnode_watch = BootnodeWatch::from_env();
     let mut orphan_buffer = orphan_buffer_from_env();
     let max_backfill_depth = max_backfill_depth_from_env();
     let pending_backfill_max = pending_backfill_max_from_env();
@@ -939,7 +1238,21 @@ async fn run_mdns_ping_swarm(
     loop {
         tokio::select! {
             _ = catch_up_interval.tick() => {
+                bootnode_watch
+                    .tick(
+                        &mut swarm,
+                        &listen,
+                        ledger.as_ref(),
+                        &hello_registry,
+                        &catch_up_driver,
+                        &block_sync_board,
+                        &mut pending_catch_up_range,
+                        &peer_dial_book,
+                        &mut dialing,
+                    )
+                    .await;
                 try_start_catch_up(
+                    &block_sync_board,
                     &catch_up_driver,
                     &hello_registry,
                     ledger.as_ref(),
@@ -999,10 +1312,15 @@ async fn run_mdns_ping_swarm(
                         continue;
                     }
                     dialing.insert(pid);
-                    log::info!("[p2p][mdns] discovered peer_id={pid} addr={addr}");
-                    swarm.behaviour_mut().kademlia.add_address(&pid, addr.clone());
+                    let dial_addr = remap_discovered_addr_for_listen(addr, &listen);
+                    peer_dial_book.insert(pid, dial_addr.clone());
+                    log::info!("[p2p][mdns] discovered peer_id={pid} addr={dial_addr}");
+                    swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&pid, dial_addr.clone());
                     swarm.behaviour_mut().gossipsub.add_explicit_peer(&pid);
-                    let _ = swarm.dial(addr);
+                    let _ = swarm.dial(dial_addr);
                 }
             }
             SwarmEvent::Behaviour(Event::Mdns(mdns::Event::Expired(peers))) => {
@@ -1037,9 +1355,17 @@ async fn run_mdns_ping_swarm(
                         ledger.as_ref(),
                         peer,
                         request,
+                        Some(&mut bootnode_watch),
                     )
                     .await;
+                    if bootnode_watch.is_bootnode(&peer) {
+                        catch_up_driver
+                            .lock()
+                            .await
+                            .unblacklist_peer(&peer.to_string());
+                    }
                     try_start_catch_up(
+                        &block_sync_board,
                         &catch_up_driver,
                         &hello_registry,
                         ledger.as_ref(),
@@ -1074,9 +1400,17 @@ async fn run_mdns_ping_swarm(
                         ledger.as_ref(),
                         peer,
                         response,
+                        Some(&mut bootnode_watch),
                     )
                     .await;
+                    if bootnode_watch.is_bootnode(&peer) {
+                        catch_up_driver
+                            .lock()
+                            .await
+                            .unblacklist_peer(&peer.to_string());
+                    }
                     try_start_catch_up(
+                        &block_sync_board,
                         &catch_up_driver,
                         &hello_registry,
                         ledger.as_ref(),
@@ -1124,6 +1458,7 @@ async fn run_mdns_ping_swarm(
                         on_catch_up_range_response(
                             peer,
                             response,
+                            &block_sync_board,
                             &catch_up_driver,
                             &hello_registry,
                             ledger.clone(),
@@ -1144,6 +1479,7 @@ async fn run_mdns_ping_swarm(
                         on_catch_up_range_failed(
                             peer,
                             format!("{error:?}"),
+                            &block_sync_board,
                             &catch_up_driver,
                             &hello_registry,
                             ledger.as_ref(),
@@ -1325,18 +1661,24 @@ async fn run_mdns_ping_swarm(
             }
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 println!("[P2P] CONNECTION ESTABLISHED with {}", peer_id);
-                log::info!(
-                    "[p2p][mdns] connected peer_id={} endpoint={:?}",
-                    peer_id,
-                    endpoint.get_remote_address()
+                let remote = remap_discovered_addr_for_listen(
+                    endpoint.get_remote_address().clone(),
+                    &listen,
                 );
+                log::info!("[p2p][mdns] connected peer_id={peer_id} endpoint={remote}");
+                peer_dial_book.insert(peer_id, remote);
                 if peer_id != *swarm.local_peer_id() {
+                    swarm
+                        .behaviour_mut()
+                        .gossipsub
+                        .add_explicit_peer(&peer_id);
                     match build_chain_hello(ledger.as_ref()) {
                         Ok(our_hello) => {
                             swarm
                                 .behaviour_mut()
                                 .chain_sync_hello
                                 .send_request(&peer_id, our_hello);
+                            bootnode_watch.on_hello_sent(peer_id);
                             println!("[P2P-block] 👋 chain_hello sent to {peer_id}");
                         }
                         Err(e) => {
@@ -1348,6 +1690,26 @@ async fn run_mdns_ping_swarm(
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                 log::warn!("[p2p][mdns] disconnected peer_id={peer_id} cause={cause:?}");
                 dialing.remove(&peer_id);
+                if bootnode_watch.is_bootnode(&peer_id) && !bootnode_watch.is_dead(&peer_id) {
+                    bootnode_watch.mark_bootnode_dead(peer_id);
+                    catch_up_driver
+                        .lock()
+                        .await
+                        .blacklist_peer(peer_id.to_string());
+                    bootnode_watch
+                        .run_bootnode_recovery_fallback(
+                            &mut swarm,
+                            &listen,
+                            ledger.as_ref(),
+                            &hello_registry,
+                            &catch_up_driver,
+                            &block_sync_board,
+                            &mut pending_catch_up_range,
+                            &peer_dial_book,
+                            &mut dialing,
+                        )
+                        .await;
+                }
                 {
                     let peer_s = peer_id.to_string();
                     let action = {
@@ -1366,6 +1728,7 @@ async fn run_mdns_ping_swarm(
                     };
                     run_catch_up_action(
                         action,
+                        &block_sync_board,
                         &mut swarm,
                         &hello_registry,
                         &catch_up_driver,
@@ -1456,6 +1819,29 @@ async fn run_mdns_ping_swarm(
                                 state_root,
                                 txs,
                             } => {
+                                let local_h = ledger.block_height().unwrap_or(0);
+                                if let Some(source) = source_peer {
+                                    let peer_s = source.to_string();
+                                    {
+                                        let mut reg = hello_registry.lock().await;
+                                        reg.note_peer_block_height(
+                                            &peer_s,
+                                            block_height,
+                                            local_h,
+                                        );
+                                    }
+                                    if block_height > local_h {
+                                        try_start_catch_up(
+                                            &block_sync_board,
+                                            &catch_up_driver,
+                                            &hello_registry,
+                                            ledger.as_ref(),
+                                            &mut swarm,
+                                            &mut pending_catch_up_range,
+                                        )
+                                        .await;
+                                    }
+                                }
                                 let gossip = crate::consensus::RemoteBlockGossip {
                                     block_height,
                                     block_id: block_id.clone(),
@@ -1555,6 +1941,30 @@ async fn run_mdns_ping_swarm(
                                         reason,
                                     }) => {
                                         println!("[P2P] ⏭️ REMOTE BLOCK SKIPPED: {}", reason);
+                                        let local_h = ledger.block_height().unwrap_or(0);
+                                        let needs_catch_up = reason.contains("missing previous blocks")
+                                            || block_height > local_h;
+                                        if needs_catch_up {
+                                            if let Some(source) = source_peer {
+                                                let peer_s = source.to_string();
+                                                let mut reg = hello_registry.lock().await;
+                                                reg.note_peer_block_height(
+                                                    &peer_s,
+                                                    block_height,
+                                                    local_h,
+                                                );
+                                                drop(reg);
+                                            }
+                                            try_start_catch_up(
+                                                &block_sync_board,
+                                                &catch_up_driver,
+                                                &hello_registry,
+                                                ledger.as_ref(),
+                                                &mut swarm,
+                                                &mut pending_catch_up_range,
+                                            )
+                                            .await;
+                                        }
                                     }
                                     Err(e) => {
                                         println!(
