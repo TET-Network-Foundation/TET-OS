@@ -9,8 +9,10 @@ import {
 } from "./ai_infer_hybrid";
 import { expectedChainBinding } from "./chain_binding";
 import { getHybridSignerSession } from "./hybrid_signer_session";
+import { type LedgerState, parseLedgerState } from "./ledger_state";
 import { mldsa44SignDeterministic } from "./pqc";
 
+/** @deprecated Use `SyncUiState` from `ledger_state.ts` (ledger sync gate). */
 export type ChainConnectionStatus = "connecting" | "synced" | "disconnected";
 
 /** Whitepaper: 1 TET = 10^6 Stevemon (micro-TET ledger units). */
@@ -446,6 +448,21 @@ export async function fetchNetworkStatsMicro(baseUrl: string): Promise<{ ok: boo
   }
   logHttpFailure("network/stats", { url: baseUrl, detail: "all paths failed" });
   return emptyFail();
+}
+
+const LEDGER_STATE_PATHS = ["/v1/vision/ledger/state", "/ledger/state"] as const;
+
+export async function fetchLedgerState(
+  baseUrl: string,
+): Promise<{ ok: boolean; state?: LedgerState; status: number; text?: string }> {
+  for (const path of LEDGER_STATE_PATHS) {
+    const r = await fetchJson<unknown>(tetCoreUrl(baseUrl, path));
+    if (!r.ok) continue;
+    const state = parseLedgerState(r.data);
+    if (state) return { ok: true, state, status: r.status };
+  }
+  const r = await fetchJson<unknown>(tetCoreUrl(baseUrl, "/ledger/state"));
+  return { ok: false, status: r.status, text: r.text };
 }
 
 export async function fetchLedgerBlocks(

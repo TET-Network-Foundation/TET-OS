@@ -12,14 +12,15 @@ import { clearSession, loadSession } from "../lib/session";
 import { loadAddressBook, saveAddressBook, type AddressBookEntryV0 } from "../lib/address_book_store";
 import { loadTxs, saveTxs, type TxRowV0, type TxType } from "../lib/tx_store";
 import { clearWalletStore, loadWalletStore, sha256Hex } from "../lib/wallet_store";
+import { deriveSyncUi, type LedgerState, type SyncUiState } from "../lib/ledger_state";
 import {
-  type ChainConnectionStatus,
   type ExplorerTxJson,
   type LedgerBlockDetailJson,
   fetchExplorerTx,
   fetchJson,
   fetchLedgerBlock,
   fetchLedgerBlocks,
+  fetchLedgerState,
   fetchMarketTotalSupplyMicro,
   fetchNetworkStatsMicro,
   getLedgerMeBalanceMicro,
@@ -237,8 +238,11 @@ export default function NexusOS() {
   const [pinErr, setPinErr] = useState<string>("");
   const [pinOk, setPinOk] = useState<string>("");
   const [bestNumber, setBestNumber] = useState<number | null>(null);
-  /** REST mode never blocks the UI while connecting. */
-  const [chainStatus, setChainStatus] = useState<ChainConnectionStatus>("synced");
+  const [ledgerState, setLedgerState] = useState<LedgerState | null>(null);
+  const ledgerStateFetchedOnceRef = useRef(false);
+  const [syncUi, setSyncUi] = useState<SyncUiState>(() =>
+    deriveSyncUi(null, { offline: false, connecting: true }),
+  );
   /** Formatted TET (Stevemon / 10^6), comma-separated whole part + 2 decimals */
   const [totalSupply, setTotalSupply] = useState<string>("—");
   /** Raw total issuance in Stevemon (10^6 per TET) for supply line */
@@ -733,18 +737,29 @@ export default function NexusOS() {
     }
   }, [txHistory, isLoaded]);
 
-  // Network telemetry: REST `/status`, `/v1/vision/network/stats`, `/market/index`, `/explorer/events`.
+  // Network telemetry: `/ledger/state` (sync gate), `/v1/vision/network/stats`, `/market/index`, `/explorer/events`.
   useEffect(() => {
     let cancelled = false;
 
     const tick = async () => {
       if (cancelled) return;
-      const st = await fetchJson<unknown>(tetCoreUrl(baseUrl, "/status"));
-      if (!st.ok) {
-        setChainStatus("disconnected");
-        return;
+
+      const stateRes = await fetchLedgerState(baseUrl);
+      if (cancelled) return;
+      if (stateRes.ok && stateRes.state) {
+        ledgerStateFetchedOnceRef.current = true;
+        setLedgerState(stateRes.state);
+        setSyncUi(deriveSyncUi(stateRes.state, { offline: false, connecting: false }));
+        setBestNumber(stateRes.state.block_height);
+      } else {
+        setLedgerState(null);
+        setSyncUi(
+          deriveSyncUi(null, {
+            offline: ledgerStateFetchedOnceRef.current,
+            connecting: !ledgerStateFetchedOnceRef.current,
+          }),
+        );
       }
-      setChainStatus("synced");
 
       const statsMicro = await fetchNetworkStatsMicro(baseUrl);
       const blockRes = await fetchLedgerBlocks(baseUrl);
@@ -1418,13 +1433,6 @@ export default function NexusOS() {
     sendAmountStevemon != null && sendAmountStevemon > 0n
       ? tetTransferFeeBreakdown(sendAmountStevemon)
       : null;
-  const chainStatusLabel =
-    chainStatus === "synced"
-      ? "(Synced)"
-      : chainStatus === "disconnected"
-        ? "(Disconnected)"
-        : "(Connecting...)";
-
   const networkComputeTflopsLabel = useMemo(() => {
     if (networkTflops != null && Number.isFinite(networkTflops)) return networkTflops.toFixed(1);
     if (statusWorkers != null && statusWorkers >= 0) return (statusWorkers * 12.4).toFixed(1);
@@ -1564,19 +1572,12 @@ export default function NexusOS() {
         {/* Network supply / mining pool — Win98 inset panel (matches app chrome) */}
         <div
           className={`${inset} bg-[#c0c0c0] px-3 py-2 text-sm text-black ${
-            chainStatus === "synced" ? "shadow-[inset_0_0_0_1px_rgba(42,255,154,0.35)]" : ""
+            syncUi.panelGreenTint ? "shadow-[inset_0_0_0_1px_rgba(42,255,154,0.35)]" : ""
           }`}
         >
           <div className="flex flex-wrap gap-x-6 gap-y-1 items-baseline justify-between">
             <span className="min-w-0 max-w-full truncate">
-              <span
-                className={
-                  chainStatus === "synced"
-                    ? "mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-[#00a651]"
-                    : "mr-2 inline-block h-2 w-2 rounded-full bg-[#c1121f]"
-                }
-                aria-hidden
-              />
+              <span className={syncUi.dotClass} aria-hidden />
               Total network supply:{" "}
               <span className="tabular-nums font-semibold" title={totalSupplyStevemon != null ? `${formatStevemonToTetFullDisplay(totalSupplyStevemon)} TET` : totalSupply}>
                 {totalSupplyStevemon != null ? formatStevemonToTetCompact(totalSupplyStevemon) : totalSupply}
@@ -1608,8 +1609,26 @@ export default function NexusOS() {
             </span>
           </div>
           <div className="mt-1 font-mono text-[10px] text-black/65">
-            API: {baseUrl} · {chainStatus === "synced" ? "live polling" : "waiting for tet-core"}
+            API: {baseUrl} · {syncUi.pollingHint}
+            {ledgerState?.state_root ? (
+              <>
+                {" "}
+                · root{" "}
+                <span className="font-mono" title={ledgerState.state_root}>
+                  {ledgerState.state_root.length > 14
+                    ? `${ledgerState.state_root.slice(0, 10)}…`
+                    : ledgerState.state_root}
+                </span>
+              </>
+            ) : null}
           </div>
+          {syncUi.detailLines.length > 0 ? (
+            <div className="mt-0.5 font-mono text-[10px] text-black/70 space-y-0.5">
+              {syncUi.detailLines.map((line) => (
+                <div key={line}>{line}</div>
+              ))}
+            </div>
+          ) : null}
           <div className="mt-1 text-sm text-black tabular-nums leading-snug">
             [THERMODYNAMIC BURN]{" "}
             <span className="text-[10px] font-sans text-black/55 normal-case">(network total)</span> Extinguished:{" "}
@@ -2280,9 +2299,7 @@ export default function NexusOS() {
             <div
               className={`flex-1 min-w-0 px-2 py-0.5 border border-t-[#808080] border-l-[#808080] border-b-white border-r-white rounded-none truncate font-mono text-xs`}
             >
-              <span className={chainStatus === "synced" ? "text-[#0b5c2e] font-semibold" : "text-red-700 font-semibold"}>
-                {chainStatus === "synced" ? "● LIVE" : "● OFFLINE"}
-              </span>
+              <span className={syncUi.badgeClass}>{syncUi.badgeText}</span>
               <span> · API: {baseUrl}</span>
               <span> · </span>
               <span>
@@ -2307,8 +2324,8 @@ export default function NexusOS() {
                 · {pqcStatusShort}
               </span>
             </div>
-            <div className="w-[210px] shrink-0 px-2 py-0.5 border border-t-[#808080] border-l-[#808080] border-b-white border-r-white rounded-none text-right font-mono text-xs">
-              Block: {bestNumber == null ? "—" : bestNumber.toLocaleString("en-US")} {chainStatusLabel}
+            <div className="w-[min(320px,38vw)] shrink-0 px-2 py-0.5 border border-t-[#808080] border-l-[#808080] border-b-white border-r-white rounded-none text-right font-mono text-xs leading-tight">
+              Block: {bestNumber == null ? "—" : bestNumber.toLocaleString("en-US")} {syncUi.shortLabel}
             </div>
           </div>
         </div>
