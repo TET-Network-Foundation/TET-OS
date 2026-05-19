@@ -11,6 +11,11 @@ import { expectedChainBinding } from "./chain_binding";
 import { getHybridSignerSession } from "./hybrid_signer_session";
 import { type LedgerState, parseLedgerState } from "./ledger_state";
 import { mldsa44SignDeterministic } from "./pqc";
+import type {
+  WalletTransferNonceResp,
+  WalletTransferResp,
+  WalletTransferSignedReq,
+} from "./transfer";
 
 /** @deprecated Use `SyncUiState` from `ledger_state.ts` (ledger sync gate). */
 export type ChainConnectionStatus = "connecting" | "synced" | "disconnected";
@@ -463,6 +468,29 @@ export async function fetchLedgerState(
   }
   const r = await fetchJson<unknown>(tetCoreUrl(baseUrl, "/ledger/state"));
   return { ok: false, status: r.status, text: r.text };
+}
+
+export async function fetchWalletTransferNonce(
+  baseUrl: string,
+  walletIdHex64: string,
+): Promise<{ ok: boolean; data?: WalletTransferNonceResp; status: number; text?: string }> {
+  const wid = normalizeWalletId64(walletIdHex64);
+  if (!wid) return { ok: false, status: 400, text: "wallet_id must be 64 hex chars" };
+  return fetchJson<WalletTransferNonceResp>(
+    tetCoreUrl(baseUrl, `/wallet/nonce/${encodeURIComponent(wid)}`),
+  );
+}
+
+/** Hybrid-signed transfer (immediate ledger commit). Prefer over enveloped `POST /ledger/transfer`. */
+export async function postWalletTransfer(
+  baseUrl: string,
+  body: WalletTransferSignedReq,
+): Promise<{ ok: boolean; data?: WalletTransferResp; status: number; text?: string }> {
+  return fetchJson<WalletTransferResp>(tetCoreUrl(baseUrl, "/wallet/transfer"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 export async function fetchLedgerBlocks(

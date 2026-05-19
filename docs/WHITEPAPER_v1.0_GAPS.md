@@ -176,4 +176,49 @@ Genesis binding and allocation include a **fourth slot** beyond the whitepaper �
 
 ---
 
-*Last updated: Sprint 3 Phase A (UI-P0-1) + Sprint 2 Phase 2B Task B.1.*
+## 10. UI / REST API — Phase 1 improvements (Sprint 3 Phase A discovery)
+
+Discovered while shipping **UI-P0-3** (`POST /wallet/transfer` hybrid flow in `tet-network/ui`). Phase 0 uses the current contract; items below are **Phase 1 / Phase 0.5** backlog (no tet-core change in Sprint 3 Phase A UI work).
+
+### 10.1 Stevemon unit naming
+
+| | |
+|-|-|
+| **Current** | `wallet.rs` / ledger use **Stevemon** as the 10⁻⁶ TET subunit name (`STEVEMON = 1_000_000` per TET). Docs and UI mix “Stevemon”, “micro-TET”, and `*_micro` field names. |
+| **Issue** | Terminology predates Phase 2B economics alignment; operators and WP readers see inconsistent labels. |
+| **Phase 1** | Pick canonical naming (**micro-TET** vs **Stevemon**), align REST field docs and **Whitepaper §11** denomination table. |
+
+### 10.2 `/wallet/transfer` response — no `tx_hash`
+
+| | |
+|-|-|
+| **Current** | `POST /wallet/transfer` returns `{ from_wallet_id, to_wallet_id, amount_micro, net_micro, fee_micro }` only (`rest/handlers/wallet.rs`). |
+| **Issue** | UI cannot deep-link to block explorer or show “confirmed in block N” after Send Coins. |
+| **Phase 1** | Add **`tx_hash`** and/or **`block_height` + `tx_index`** (or audit `seq`) to the JSON response. |
+
+### 10.3 Fee calculation lineage
+
+| | |
+|-|-|
+| **Current** | `fee_micro` returned on transfer; on-chain fee is **1%** gross via `PROTOCOL_MAINTENANCE_FEE_BPS` (50% worker pool / 50% burn split in ledger). |
+| **Issue** | Relation to whitepaper **§11** founder / protocol fee schedule is not spelled out for wallet HTTP clients. |
+| **Phase 1 / WP v1.1** | Document fee derivation in **§11** and operator docs (`RUNNING_A_NODE.md`). |
+
+### 10.4 `amount_tet` as `f64` on REST
+
+| | |
+|-|-|
+| **Current** | `WalletTransferSignedReq.amount_tet` is **`f64`**; hybrid signing uses **`amount_micro`** (`u64`) in the message bytes. |
+| **Issue** | Sufficient for Phase 0 demos (≥ 0.001 TET); **double-precision loss** risk for very large transfers (> ~10¹⁵ micro if ever allowed). |
+| **Phase 1** | Prefer **string decimal** or **`amount_micro` u64** in REST; keep `amount_tet` as display-only alias if needed. |
+
+### 10.5 Endpoint clarity (documented, not a code gap)
+
+| Path | Role |
+|------|------|
+| **`POST /wallet/transfer`** | Hybrid Ed25519 + ML-DSA; **immediate** ledger debit/credit (`transfer_with_fee_attested_dual_verified`). **UI-P0-3 uses this.** |
+| **`POST /ledger/transfer`** | `SignedTxEnvelopeV1` → mempool (`202 Accepted`); different auth and lifecycle. |
+
+---
+
+*Last updated: Sprint 3 Phase A (UI-P0-1 / P0-2 / P0-3) + Sprint 2 Phase 2B Task B.1.*
