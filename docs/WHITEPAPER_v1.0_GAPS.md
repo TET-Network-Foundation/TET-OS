@@ -139,4 +139,41 @@
 
 ---
 
-*Last updated: Sprint 2 Phase 2B Task B.1.*
+## 9. Protocol Reserve slot (§11.1 not documented)
+
+### 9.1 What the implementation has
+
+Genesis binding and allocation include a **fourth slot** beyond the whitepaper §11.1 narrative (founder / mining pool / treasury):
+
+| Slot | Address constant | Genesis mint (`apply_genesis_allocation`) |
+|------|------------------|-------------------------------------------|
+| Worker pool | `WALLET_WORKER_POOL` (`…0001`) | 50% (5B TET) |
+| Ecosystem sentinel (legacy) | `WALLET_ECOSYSTEM` (`…0002`) | **0** post–Phase 2B (treasury moved to `TET_TREASURY_ADDRESS`) |
+| Protocol reserve | `WALLET_PROTOCOL_RESERVE` (`…0003`) | **0** micro-TET (`GENESIS_PROTOCOL_RESERVE_SHARE_MICRO = 0`) |
+| Treasury (Phase 2B) | `TET_TREASURY_ADDRESS` (env, 64 hex) | 25% (2.5B TET) |
+
+`deterministic_genesis_hash` always serializes:
+
+`…|reserve={WALLET_PROTOCOL_RESERVE}|reserve_micro=0|…`
+
+**Repurposing this slot (non-zero mint, different address, or removing fields) changes the genesis hash** and is **chain-incompatible** with nodes that already committed the current payload.
+
+### 9.2 History (Phase 2B vs earlier)
+
+| Change | Sprint / commit era |
+|--------|---------------------|
+| `WALLET_PROTOCOL_RESERVE` + `reserve` / `reserve_micro` in genesis hash payload | **Pre–Phase 2B** (present at monorepo genesis import, `50ffb79`) |
+| Phase 2B B.2: treasury via `TET_TREASURY_ADDRESS`, `treasury=` field in hash (replaces `ecosystem=` + `WALLET_ECOSYSTEM` mint) | **Phase 2B** (`68a4b94`) |
+
+**Phase 2B did not introduce the Reserve slot**; it only retargeted the 25% tranche from the ecosystem sentinel to the configurable treasury wallet. The zeroed reserve slot remained in the hash formula for backward compatibility with the four-field layout.
+
+### 9.3 Phase 1 / Whitepaper v1.1 work
+
+- Define **purpose** of Protocol Reserve (governance grants, bug bounty, buyback, emergency ops, etc.).
+- Decide whether **Phase 0** ships with **0 micro** (current) or a pre-allocated tranche.
+- Document the four-way split explicitly in **§11.1** alongside founder / worker pool / treasury.
+- If reserve is never funded, consider WP “Future Work” vs removing the field (would require a **new genesis** / new `tet-genesis-v2` binding — not a silent upgrade).
+
+---
+
+*Last updated: Sprint 3 Phase A (UI-P0-1) + Sprint 2 Phase 2B Task B.1.*
