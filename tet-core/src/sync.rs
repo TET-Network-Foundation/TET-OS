@@ -7,7 +7,7 @@ use crate::consensus::RemoteBlockGossip;
 use crate::ledger::{BlockRecordV1, Ledger, LedgerError};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use tokio::sync::Mutex;
 
 /// libp2p request-response protocol name (hello / status exchange).
@@ -225,6 +225,14 @@ impl SyncHelloRegistry {
             .max_by_key(|(_, r)| r.hello.block_height)
             .map(|(pid, r)| (pid.clone(), r.hello.block_height))
     }
+
+    /// Highest reported peer height from hello map (any peer).
+    pub fn best_peer_overall(&self) -> Option<(String, u64)> {
+        self.peers
+            .iter()
+            .max_by_key(|(_, r)| r.hello.block_height)
+            .map(|(pid, r)| (pid.clone(), r.hello.block_height))
+    }
 }
 
 /// Convert a stored block record into gossip apply payload (B.3b).
@@ -414,6 +422,180 @@ impl CatchUpDriver {
             CatchUpAction::None
         }
     }
+}
+
+/// Outbound range pull in flight (B.4 observability).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InProgressRangeRequest {
+    pub peer_id: String,
+    #[serde(rename = "from")]
+    pub from_height: u64,
+    #[serde(rename = "to")]
+    pub to_height: u64,
+}
+
+/// Nested `sync` object on `/ledger/state` (B.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncStatusInfo {
+    pub active: bool,
+    pub lag_blocks: u64,
+    pub best_peer_height: u64,
+    pub best_peer_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_progress_request: Option<InProgressRangeRequest>,
+}
+
+/// `/ledger/state` sync gate fields (B.4).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LedgerSyncStatus {
+    pub synced: bool,
+    pub sync: SyncStatusInfo,
+}
+
+impl LedgerSyncStatus {
+    /// When block-plane P2P is disabled or not registered yet.
+    pub fn default_when_no_p2p(local_height: u64) -> Self {
+        Self {
+            synced: true,
+            sync: SyncStatusInfo {
+                active: false,
+                lag_blocks: 0,
+                best_peer_height: local_height,
+                best_peer_id: String::new(),
+                in_progress_request: None,
+            },
+        }
+    }
+}
+
+/// Compute sync gate view from hello registry + catch-up driver (B.4).
+pub fn compute_ledger_sync_status(
+    local_height: u64,
+    registry: &SyncHelloRegistry,
+    driver: &CatchUpDriver,
+    in_progress: Option<&InProgressRangeRequest>,
+) -> LedgerSyncStatus {
+    compute_ledger_sync_status_with_bootnodes(
+        local_height,
+        registry,
+        driver,
+        in_progress,
+        !crate::vision::fluid_net::bootnode_addrs_from_env().is_empty(),
+    )
+}
+
+/// Like [`compute_ledger_sync_status`] but `has_bootnodes` is explicit (unit tests).
+pub fn compute_ledger_sync_status_with_bootnodes(
+    local_height: u64,
+    registry: &SyncHelloRegistry,
+    driver: &CatchUpDriver,
+    in_progress: Option<&InProgressRangeRequest>,
+    has_bootnodes: bool,
+) -> LedgerSyncStatus {
+    let active = !driver.is_idle();
+    let catch_up_triggered = registry.catch_up_triggered();
+    let awaiting_first_hello =
+        has_bootnodes && registry.peer_count() == 0 && !is_bootnode_from_env();
+    let (best_peer_id, best_peer_height) = registry
+        .best_peer_overall()
+        .unwrap_or_else(|| (String::new(), local_height));
+    let lag_blocks = best_peer_height.saturating_sub(local_height);
+    let synced = !awaiting_first_hello
+        && !catch_up_triggered
+        && !registry.any_peer_ahead(local_height)
+        && driver.is_idle();
+    LedgerSyncStatus {
+        synced,
+        sync: SyncStatusInfo {
+            active,
+            lag_blocks,
+            best_peer_height,
+            best_peer_id,
+            in_progress_request: in_progress.cloned(),
+        },
+    }
+}
+
+/// True when auto-mine must pause for chain catch-up (B.4).
+pub fn should_gate_auto_mine(status: &LedgerSyncStatus) -> bool {
+    !status.synced || status.sync.active || status.sync.in_progress_request.is_some()
+}
+
+pub fn auto_mine_ignore_sync_flag(value: Option<&str>) -> bool {
+    matches!(
+        value.map(str::trim),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
+
+pub fn auto_mine_ignore_sync_from_env() -> bool {
+    auto_mine_ignore_sync_flag(std::env::var("TET_AUTO_MINE_IGNORE_SYNC").ok().as_deref())
+}
+
+pub fn is_bootnode_from_env() -> bool {
+    matches!(
+        std::env::var("TET_IS_BOOTNODE")
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("1") | Some("true") | Some("TRUE") | Some("yes") | Some("YES")
+    )
+}
+
+/// Shared block-plane sync state for REST + auto-mine gate (installed from `main.rs`).
+pub(crate) struct BlockSyncBoard {
+    hello_registry: SharedHelloRegistry,
+    catch_up_driver: SharedCatchUpDriver,
+    in_progress: Option<InProgressRangeRequest>,
+}
+
+pub type SharedBlockSyncBoard = Arc<Mutex<BlockSyncBoard>>;
+
+static BLOCK_SYNC_BOARD: OnceLock<SharedBlockSyncBoard> = OnceLock::new();
+
+/// Register hello registry + catch-up driver for `/ledger/state` and auto-mine gate.
+pub fn install_block_sync_board(hello_registry: SharedHelloRegistry, catch_up_driver: SharedCatchUpDriver) {
+    let _ = BLOCK_SYNC_BOARD.set(Arc::new(Mutex::new(BlockSyncBoard {
+        hello_registry,
+        catch_up_driver,
+        in_progress: None,
+    })));
+}
+
+pub fn block_sync_board() -> Option<SharedBlockSyncBoard> {
+    BLOCK_SYNC_BOARD.get().cloned()
+}
+
+/// Update in-flight range request (called from `p2p.rs` when sending/completing range RPC).
+pub async fn set_in_progress_range(req: Option<InProgressRangeRequest>) {
+    let Some(board) = block_sync_board() else {
+        return;
+    };
+    board.lock().await.in_progress = req;
+}
+
+/// Current ledger sync status for REST and consensus auto-mine gate.
+pub async fn ledger_sync_status(local_height: u64) -> LedgerSyncStatus {
+    let Some(board) = block_sync_board() else {
+        return LedgerSyncStatus::default_when_no_p2p(local_height);
+    };
+    let board = board.lock().await;
+    let reg = board.hello_registry.lock().await;
+    let driver = board.catch_up_driver.lock().await;
+    compute_ledger_sync_status(
+        local_height,
+        &reg,
+        &driver,
+        board.in_progress.as_ref(),
+    )
+}
+
+/// Whether the auto-miner should skip this tick (B.4).
+pub async fn auto_mine_blocked_by_sync(local_height: u64) -> bool {
+    if auto_mine_ignore_sync_from_env() {
+        return false;
+    }
+    should_gate_auto_mine(&ledger_sync_status(local_height).await)
 }
 
 /// Local chain status for hello request/response.
@@ -847,6 +1029,133 @@ mod tests {
             action,
             CatchUpAction::SendRangeRequest { ref peer_id, .. } if peer_id == "peer-b"
         ));
+    }
+
+    #[test]
+    fn ledger_sync_status_not_synced_before_first_hello_with_bootnodes() {
+        let reg = SyncHelloRegistry::default();
+        let driver = CatchUpDriver::default();
+        let status = compute_ledger_sync_status_with_bootnodes(0, &reg, &driver, None, true);
+        assert!(!status.synced);
+        assert!(!status.sync.active);
+    }
+
+    #[test]
+    fn ledger_sync_status_when_peer_ahead_not_synced() {
+        let mut reg = SyncHelloRegistry::default();
+        reg.record_peer_hello(
+            "peer-a",
+            ChainHello {
+                chain_id: "t".into(),
+                block_height: 5,
+                tip_block_id: "b5".into(),
+                state_root: "r".into(),
+            },
+            0,
+        );
+        let driver = CatchUpDriver::default();
+        let status = compute_ledger_sync_status_with_bootnodes(0, &reg, &driver, None, true);
+        assert!(!status.synced);
+        assert_eq!(status.sync.lag_blocks, 5);
+        assert_eq!(status.sync.best_peer_height, 5);
+        assert_eq!(status.sync.best_peer_id, "peer-a");
+        assert!(!status.sync.active);
+    }
+
+    #[test]
+    fn ledger_sync_status_active_when_driver_requesting() {
+        let reg = SyncHelloRegistry::default();
+        let mut driver = CatchUpDriver::default();
+        driver.phase = CatchUpPhase::Requesting {
+            peer_id: "p1".into(),
+        };
+        let in_prog = InProgressRangeRequest {
+            peer_id: "p1".into(),
+            from_height: 1,
+            to_height: 5,
+        };
+        let status = compute_ledger_sync_status_with_bootnodes(0, &reg, &driver, Some(&in_prog), false);
+        assert!(!status.synced);
+        assert!(status.sync.active);
+        assert_eq!(
+            status.sync.in_progress_request,
+            Some(in_prog)
+        );
+    }
+
+    #[test]
+    fn ledger_sync_status_synced_when_caught_up() {
+        let mut reg = SyncHelloRegistry::default();
+        reg.record_peer_hello(
+            "peer-a",
+            ChainHello {
+                chain_id: "t".into(),
+                block_height: 5,
+                tip_block_id: "b5".into(),
+                state_root: "r".into(),
+            },
+            5,
+        );
+        let driver = CatchUpDriver::default();
+        let status = compute_ledger_sync_status_with_bootnodes(5, &reg, &driver, None, false);
+        assert!(status.synced);
+        assert_eq!(status.sync.lag_blocks, 0);
+        assert!(!status.sync.active);
+    }
+
+    #[test]
+    fn should_gate_auto_mine_when_awaiting_first_hello() {
+        let reg = SyncHelloRegistry::default();
+        let driver = CatchUpDriver::default();
+        let status = compute_ledger_sync_status_with_bootnodes(0, &reg, &driver, None, true);
+        assert!(should_gate_auto_mine(&status));
+    }
+
+    #[test]
+    fn should_gate_auto_mine_when_not_synced_or_active() {
+        let behind = LedgerSyncStatus {
+            synced: false,
+            sync: SyncStatusInfo {
+                active: false,
+                lag_blocks: 3,
+                best_peer_height: 5,
+                best_peer_id: "p".into(),
+                in_progress_request: None,
+            },
+        };
+        assert!(should_gate_auto_mine(&behind));
+
+        let active = LedgerSyncStatus {
+            synced: false,
+            sync: SyncStatusInfo {
+                active: true,
+                lag_blocks: 2,
+                best_peer_height: 5,
+                best_peer_id: "p".into(),
+                in_progress_request: None,
+            },
+        };
+        assert!(should_gate_auto_mine(&active));
+
+        let ok = LedgerSyncStatus {
+            synced: true,
+            sync: SyncStatusInfo {
+                active: false,
+                lag_blocks: 0,
+                best_peer_height: 5,
+                best_peer_id: "p".into(),
+                in_progress_request: None,
+            },
+        };
+        assert!(!should_gate_auto_mine(&ok));
+    }
+
+    #[test]
+    fn auto_mine_ignore_sync_flag_parses_escape_hatch() {
+        assert!(auto_mine_ignore_sync_flag(Some("1")));
+        assert!(auto_mine_ignore_sync_flag(Some("true")));
+        assert!(!auto_mine_ignore_sync_flag(Some("0")));
+        assert!(!auto_mine_ignore_sync_flag(None));
     }
 
     #[test]

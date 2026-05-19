@@ -29,9 +29,10 @@ use crate::models::NetworkEvent;
 use crate::protocol::SignedTxEnvelopeV1;
 use crate::sync::{
     block_record_to_remote_gossip, build_chain_hello, build_chain_sync_range_response,
-    new_catch_up_driver, new_hello_registry, CatchUpAction, CatchUpDriverEvent, ChainHello,
-    ChainSyncRangeRequest, ChainSyncRangeResponse, SharedCatchUpDriver, SharedHelloRegistry,
-    CHAIN_SYNC_HELLO_PROTOCOL, CHAIN_SYNC_RANGE_PROTOCOL,
+    set_in_progress_range,
+    CatchUpAction, CatchUpDriverEvent, ChainHello, ChainSyncRangeRequest, ChainSyncRangeResponse,
+    InProgressRangeRequest, SharedCatchUpDriver, SharedHelloRegistry, CHAIN_SYNC_HELLO_PROTOCOL,
+    CHAIN_SYNC_RANGE_PROTOCOL,
 };
 use std::sync::Arc;
 
@@ -441,6 +442,7 @@ async fn run_catch_up_action(
         CatchUpAction::None => {}
         CatchUpAction::ClearCatchUpTriggered => {
             hello_registry.lock().await.clear_catch_up_triggered();
+            set_in_progress_range(None).await;
             println!("[P2P-block] ✅ catch-up complete; catch_up_triggered=false");
             log::info!("[p2p][block] catch-up complete");
         }
@@ -450,6 +452,12 @@ async fn run_catch_up_action(
                 catch_up_driver.lock().await.blacklist_peer(peer_id);
                 return;
             };
+            set_in_progress_range(Some(InProgressRangeRequest {
+                peer_id: peer_id.clone(),
+                from_height: request.from_height,
+                to_height: request.to_height,
+            }))
+            .await;
             let rid = swarm
                 .behaviour_mut()
                 .chain_sync_range
@@ -565,6 +573,7 @@ async fn on_catch_up_range_response(
     );
 
     if response.blocks.is_empty() {
+        set_in_progress_range(None).await;
         let action = {
             let mut driver = catch_up_driver.lock().await;
             let reg = hello_registry.lock().await;
@@ -590,6 +599,7 @@ async fn on_catch_up_range_response(
     }
 
     let (applied, failed) = apply_catch_up_blocks(ledger.clone(), mempool, response.blocks).await;
+    set_in_progress_range(None).await;
     let local_height = ledger.block_height().unwrap_or(0);
     let action = {
         let mut driver = catch_up_driver.lock().await;
@@ -623,6 +633,7 @@ async fn on_catch_up_range_failed(
     swarm: &mut Swarm<TetBehaviour>,
     pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
 ) {
+    set_in_progress_range(None).await;
     let local_height = ledger.block_height().unwrap_or(0);
     let action = {
         let mut driver = catch_up_driver.lock().await;
@@ -707,15 +718,27 @@ pub fn start_mdns_ping_swarm(
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     keypair: identity::Keypair,
     listen: Multiaddr,
-) -> Result<mpsc::Sender<String>, AnyErr> {
+    hello_registry: SharedHelloRegistry,
+    catch_up_driver: SharedCatchUpDriver,
+) -> Result<(mpsc::Sender<String>, tokio::task::JoinHandle<()>), AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
-    tokio::spawn(async move {
-        if let Err(e) = run_mdns_ping_swarm(ledger, mempool, rx, keypair, listen).await {
+    let join = tokio::spawn(async move {
+        if let Err(e) = run_mdns_ping_swarm(
+            ledger,
+            mempool,
+            rx,
+            keypair,
+            listen,
+            hello_registry,
+            catch_up_driver,
+        )
+        .await
+        {
             println!("[P2P] Swarm task exited: {e}");
             log::warn!("[p2p][mdns] swarm exited: {e}");
         }
     });
-    Ok(tx)
+    Ok((tx, join))
 }
 
 /// Run the block-plane libp2p swarm (gossip + chain-sync RPC).
@@ -726,10 +749,10 @@ async fn run_mdns_ping_swarm(
     mut publish_rx: mpsc::Receiver<String>,
     keypair: identity::Keypair,
     listen: Multiaddr,
+    hello_registry: SharedHelloRegistry,
+    catch_up_driver: SharedCatchUpDriver,
 ) -> Result<(), AnyErr> {
     let peer_id = PeerId::from(keypair.public());
-    let hello_registry = new_hello_registry();
-    let catch_up_driver = new_catch_up_driver();
     log::info!("[P2P] My Peer ID: {peer_id}");
 
     let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
