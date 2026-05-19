@@ -55,8 +55,12 @@ Start the UI:
 
 ```bash
 cd /Users/sengokukazuma/Nexus_Network/tet-network/ui
+cp .env.example .env.local
+# NEXT_PUBLIC_TET_TREASURY_ADDRESS must match the node's TET_TREASURY_ADDRESS
 NEXT_PUBLIC_TET_CORE_URL=http://127.0.0.1:5010 npm run dev
 ```
+
+Genesis hash alignment: see [`docs/RUNNING_A_NODE.md`](../../docs/RUNNING_A_NODE.md) (Sovereign OS UI env) and `node scripts/verify-genesis-hash.mjs`.
 
 Test flow:
 

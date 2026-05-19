@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "verify:genesis": "node scripts/verify-genesis-hash.mjs"
   },
   "dependencies": {
     "@polkadot/keyring": "^14.0.3",

@@ -226,6 +226,46 @@ The process exits at startup (exit code **2** from `StartupConfig`) when:
 
 Empty ledger: env is validated and treasury is written at **`apply_genesis_allocation`**.
 
+### Sovereign OS UI (`tet-network/ui`) — genesis hash env
+
+Hybrid-signed requests (inference, airdrop, future transfer) embed `chain_id` + `genesis_hash`. The UI computes the same hash as `deterministic_genesis_hash(founder, treasury)` when **`NEXT_PUBLIC_TET_GENESIS_HASH`** is unset.
+
+Copy `tet-network/ui/.env.example` → `.env.local` and set:
+
+| Variable | Must match node |
+|----------|-----------------|
+| `NEXT_PUBLIC_TET_TREASURY_ADDRESS` | **`TET_TREASURY_ADDRESS`** (64 hex) |
+| `NEXT_PUBLIC_TET_CHAIN_ID` | **`TET_CHAIN_ID`** (if set) |
+| `NEXT_PUBLIC_TET_MAINNET` | **`TET_MAINNET`** (`1` → `tet-mainnet-1`) |
+| `NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID` or `NEXT_PUBLIC_TET_FOUNDER_WALLET` | **`TET_GENESIS_FOUNDER_WALLET_ID`** / **`TET_FOUNDER_WALLET`** |
+
+```bash
+cd tet-network/ui
+cp .env.example .env.local
+# edit NEXT_PUBLIC_TET_TREASURY_ADDRESS to match your node
+npm run dev
+```
+
+Static cross-check (no node required):
+
+```bash
+cd tet-network/ui
+node scripts/verify-genesis-hash.mjs
+```
+
+**Verifying hash against a running node**
+
+- **`GET /ledger/me` does not return `genesis_hash`** (balance / supply fields only).
+- **`GET /ledger/state` does not return `genesis_hash`** either.
+- Options:
+  1. Compare UI output from `node scripts/verify-genesis-hash.mjs` (with the same founder + treasury + chain_id as the node) to the hash stored at genesis — e.g. inspect ledger meta on first boot logs, or set `NEXT_PUBLIC_TET_GENESIS_HASH` from a known-good value.
+  2. Set **`NEXT_PUBLIC_TET_GENESIS_HASH`** explicitly to the node’s stored hash (advanced; skips local computation).
+  3. Trigger a hybrid-signed dev call (e.g. initial airdrop): node rejects with `chain_id/genesis_hash` mismatch if UI env is wrong.
+
+**Dev golden vector** (default founder `57e0b29d…`, treasury `fedcba09…`, `chain_id=tet-local-dev`):
+
+`0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36`
+
 ---
 
 ## 6. Bootnode PeerId — source of truth
