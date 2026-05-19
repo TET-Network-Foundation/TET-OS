@@ -239,6 +239,15 @@ pub fn submit_challenge(
         let _ = ledger.zkcourt_settle_challenger_bond(&req.inference_id, &challenger, false);
         return Err("challenge not open for this inference".into());
     }
+    let now = now_unix_ms();
+    if now < ent.challenge_opens_at_ms {
+        let _ = ledger.zkcourt_settle_challenger_bond(&req.inference_id, &challenger, false);
+        return Err("challenge window not open yet".into());
+    }
+    if now > ent.challenge_closes_at_ms {
+        let _ = ledger.zkcourt_settle_challenger_bond(&req.inference_id, &challenger, false);
+        return Err("challenge window closed".into());
+    }
     ent.phase = ChallengePhase::EvidencePending;
     ent.lazy_eval_suspected = true;
     ent.challenger_wallet_id = Some(challenger);
@@ -479,21 +488,35 @@ pub fn apply_slash_verdict(
 pub fn params_json() -> serde_json::Value {
     serde_json::json!({
         "challenge_window_ms": challenge_window_ms(),
-        "slash_equation_v1": "S = lambda * R_expected (Stevemon micro); full liquid slash + burn",
+        "slash_equation_v1": "S = lambda * R_expected (Stevemon micro); guilty path burns full worker liquid bond",
+        "whitepaper_alignment": {
+            "wp_section": "Genesis v1.0 §14.1 + §14.3 + §5.1",
+            "challenge_window": "implemented (opens/closes enforced on submit)",
+            "zkvm_prover": "RISC Zero guest when ELF built; prove timeout => dismissed (not guilty)",
+            "slash_model": "implementation: slash_worker_bond_to_ecosystem_all (100% liquid bond); WP §14.1 prose also cites lambda*R_expected — see docs/WHITEPAPER_v1.0_GAPS.md",
+            "sp1": "not wired (Phase 1)",
+            "optimistic_verify_endpoint": "dev/test only when zk_dev_mock_allowed",
+        },
         "lambda_multiplier_default": 100,
         "prove_timeout_sec": prove_timeout_sec(),
+        "zk_dev_mock_allowed": crate::zk_verifier::zk_dev_mock_allowed(),
         "zkvm": "risc0_zkvm guest modes 0=inference journal 1=zk_court commitment",
-        "optimistic_execution_v01": "POST /v1/vision/zk-court/verify-optimistic — dummy verify; bond slash uses slash_worker_bond_zk_court_burn_all",
+        "optimistic_execution_v01": "POST /v1/vision/zk-court/verify-optimistic — dev placeholder; mainnet returns error",
         "env": {
-            "TET_SLASH_LAMBDA_MULTIPLIER": "lambda (>=1, default 100) — §13.1 penalty S = lambda * R_expected_micro",
+            "TET_ZK_COURT_CHALLENGE_MS": "challenge window duration (default 86400000)",
+            "TET_SLASH_LAMBDA_MULTIPLIER": "lambda (>=1, default 100) — logged in params; slash uses full bond",
             "TET_ZK_COURT_PROVE_TIMEOUT_SEC": prove_timeout_sec(),
         },
     })
 }
 
-/// v0.1 placeholder for zkVM receipt verification (production: bind `commitment` + `proof` bytes).
+/// v0.1 **dev-only** placeholder for zkVM receipt verification (see `zk_verifier::zk_dev_mock_allowed`).
 /// Returns `false` when `proof` is empty or equals **`INVALID`** (simulated fraud for integration tests).
+/// On mainnet this always returns `false`; use [`run_challenge_pipeline`] for real disputes.
 pub fn verify_optimistic_execution(worker_id: &str, commitment: &[u8], proof: &[u8]) -> bool {
+    if !crate::zk_verifier::zk_dev_mock_allowed() {
+        return false;
+    }
     let _ = (worker_id, commitment);
     if proof.is_empty() || proof == b"INVALID" {
         return false;
@@ -538,6 +561,12 @@ pub fn execute_optimistic_slash_if_fraud(
     commitment: &[u8],
     proof: &[u8],
 ) -> Result<Option<ZkCourtPunishmentLogV1>, String> {
+    if !crate::zk_verifier::zk_dev_mock_allowed() {
+        return Err(
+            "optimistic placeholder verification disabled (mainnet); use POST /v1/vision/zk-court/challenge"
+                .into(),
+        );
+    }
     if verify_optimistic_execution(worker_id, commitment, proof) {
         return Ok(None);
     }

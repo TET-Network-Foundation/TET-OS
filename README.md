@@ -1,4 +1,12 @@
-# TET Network — Monorepo
+# TET Network
+
+Post-quantum Layer 1 (ML-DSA), AI-native workloads, and hardware-adaptive consensus — implemented primarily in Rust (`tet-core`).
+
+> ⚠️ **Phase 0 Alpha**: TET Network is in active development. The current
+> codebase is a developer preview targeting Phase 0 public testnet launch.
+> The whitepaper specification may be updated to v1.1 before mainnet.
+> See [docs/RUNNING_A_NODE.md](docs/RUNNING_A_NODE.md) for known limitations
+> and operational guidance.
 
 ## Canonical Components
 

@@ -22,6 +22,10 @@ fn set_test_env_base() {
         std::env::set_var("TET_ADMIN_API_KEY", "test-admin-key");
         std::env::set_var("TET_DISABLE_RATE_LIMIT", "1");
         std::env::set_var("TET_FOUNDER_WALLET", "founder");
+        std::env::set_var(
+            "TET_TREASURY_ADDRESS",
+            "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+        );
         // Tests assume founder funds are liquid; disable founder genesis cliff lock for unit tests.
         std::env::set_var("TET_FOUNDER_CLIFF_MS", "0");
         // Avoid cross-test leakage (parallel default + snapshot test overrides).
@@ -2537,7 +2541,14 @@ fn genesis_allocates_exact_split_once_and_rejects_second() {
             .balance_micro(crate::ledger::WALLET_SYSTEM_WORKER_POOL)
             .unwrap(),
         crate::ledger::GENESIS_WORKER_POOL_SHARE_MICRO,
-        "§10 genesis: 75% system-locked mint credits worker pool"
+        "§11.1 genesis: 50% system-locked mint credits worker pool"
+    );
+    assert_eq!(
+        ledger
+            .balance_micro("fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321")
+            .unwrap(),
+        crate::ledger::GENESIS_TREASURY_SHARE_MICRO,
+        "§11.1 genesis: 25% treasury tranche"
     );
     assert_eq!(
         ledger.total_supply_micro().unwrap(),
@@ -2561,6 +2572,91 @@ impl Drop for EnvVarRemoveOnDrop {
             std::env::remove_var(self.key);
         }
     }
+}
+
+#[test]
+fn ledger_coinbase_allocates_25_50_25_internal_split() {
+    let _g = env_lock();
+    set_test_env_base();
+    const TREASURY: &str =
+        "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+    const MINER: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    let ledger = open_temp_ledger();
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    let total = crate::ledger::GENESIS_TOTAL_MINT_MICRO;
+    let reward_per_block = 75_000u64;
+    for h in 1..=100u64 {
+        ledger
+            .apply_block_reward(MINER, reward_per_block, h)
+            .unwrap();
+    }
+
+    let founder_bal = ledger.balance_micro("founder").unwrap();
+    let pool_bal = ledger
+        .balance_micro(crate::ledger::WALLET_SYSTEM_WORKER_POOL)
+        .unwrap();
+    let miner_bal = ledger.balance_micro(MINER).unwrap();
+    let treasury_bal = ledger.balance_micro(TREASURY).unwrap();
+    let mining_bucket = pool_bal.saturating_add(miner_bal);
+
+    eprintln!(
+        "25:50:25 after 100 blocks: founder={founder_bal} mining_bucket={mining_bucket} treasury={treasury_bal} total={total}"
+    );
+
+    assert_eq!(founder_bal, total * 25 / 100);
+    assert_eq!(treasury_bal, total * 25 / 100);
+    assert_eq!(
+        mining_bucket,
+        total * 50 / 100,
+        "mining bucket (pool + producers) must equal 50% of total mint"
+    );
+}
+
+#[test]
+fn treasury_address_startup_validation() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    unsafe {
+        std::env::remove_var("TET_TREASURY_ADDRESS");
+    }
+    assert!(crate::ledger::treasury_address_from_env().is_err());
+
+    unsafe {
+        std::env::set_var("TET_TREASURY_ADDRESS", "");
+    }
+    assert!(crate::ledger::treasury_address_from_env().is_err());
+
+    unsafe {
+        std::env::set_var("TET_TREASURY_ADDRESS", "not-a-valid-wallet");
+    }
+    assert!(crate::ledger::treasury_address_from_env().is_err());
+
+    let treasury_a =
+        "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+    let treasury_b =
+        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    unsafe {
+        std::env::set_var("TET_TREASURY_ADDRESS", treasury_a);
+    }
+    let ledger = open_temp_ledger();
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    unsafe {
+        std::env::set_var("TET_TREASURY_ADDRESS", treasury_b);
+    }
+    let env_b = crate::ledger::treasury_address_from_env().unwrap();
+    assert!(ledger.validate_treasury_address_at_startup(&env_b).is_err());
+
+    unsafe {
+        std::env::set_var("TET_TREASURY_ADDRESS", treasury_a);
+    }
+    let env_a = crate::ledger::treasury_address_from_env().unwrap();
+    assert!(ledger.validate_treasury_address_at_startup(&env_a).is_ok());
 }
 
 #[test]
@@ -2884,6 +2980,40 @@ fn ledger_prune_removes_old_block_undo_beyond_depth() {
     unsafe {
         std::env::remove_var("TET_PRUNE_DEPTH");
         std::env::remove_var("TET_AUDIT_MAX_EVENTS");
+    }
+}
+
+#[test]
+fn zkcourt_challenge_rejected_after_window_closes() {
+    let _g = env_lock();
+    set_test_env_base();
+    unsafe {
+        std::env::set_var("TET_ZK_COURT_CHALLENGE_MS", "1");
+        std::env::set_var("TET_ZK_COURT_CHALLENGER_BOND_MICRO", "1000");
+    }
+    let ledger = open_temp_ledger();
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let challenger = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let worker = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    ledger
+        .transfer_no_fee("founder", challenger, 10_000)
+        .unwrap();
+    crate::vision::zk_court::record_inference_delivered_full(
+        &ledger, "infer-late", "p", "r", 1, worker, 1,
+    );
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let req = crate::vision::zk_court::ChallengeSubmitReq {
+        inference_id: "infer-late".to_string(),
+        challenger_wallet_id: challenger.to_string(),
+        reason: "late".to_string(),
+    };
+    let err = crate::vision::zk_court::submit_challenge(&ledger, &req)
+        .unwrap_err();
+    assert!(err.contains("challenge window closed"), "got: {err}");
+    unsafe {
+        std::env::remove_var("TET_ZK_COURT_CHALLENGE_MS");
+        std::env::remove_var("TET_ZK_COURT_CHALLENGER_BOND_MICRO");
     }
 }
 

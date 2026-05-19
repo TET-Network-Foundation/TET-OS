@@ -59,6 +59,7 @@ struct StartupConfig {
     port: u16,
     db_dir: String,
     initial_wallet: String,
+    treasury_address: String,
     p2p_listen: String,
     enable_p2p: bool,
     rest_bind: String,
@@ -126,10 +127,18 @@ impl StartupConfig {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(25)
             .max(1);
+        let treasury_address = match crate::ledger::treasury_address_from_env() {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("[FATAL] {e}");
+                std::process::exit(2);
+            }
+        };
         Self {
             port,
             db_dir,
             initial_wallet,
+            treasury_address,
             p2p_listen,
             enable_p2p,
             rest_bind,
@@ -359,8 +368,12 @@ async fn main() -> Result<(), AnyErr> {
         }
     };
     ledger.init_genesis_founder_premine_from_env()?;
+    ledger.validate_treasury_address_at_startup(&config.treasury_address)?;
     let local_height = ledger.block_height().unwrap_or(0);
-    log::info!("[startup] ledger opened, local_height={local_height}");
+    log::info!(
+        "[startup] ledger opened, local_height={local_height} treasury={}",
+        config.treasury_address
+    );
 
     // MVP tokenomics bootstrap: if ledger is empty, apply genesis to the Sovereign OS founder wallet
     // (`//Ferdie` pubkey hex). Must stay in sync with tet-network OsClient `FOUNDER_SIGNING_URI`.

@@ -49,8 +49,10 @@ pub const GENESIS_DEX_TREASURY_MICRO: u64 = 0;
 /// **50%** system-locked tranche minted to [`WALLET_SYSTEM_WORKER_POOL`] at genesis (5B TET).
 pub const GENESIS_SYSTEM_LOCKED_TET: u64 = 5_000_000_000;
 pub const GENESIS_WORKER_POOL_SHARE_MICRO: u64 = GENESIS_SYSTEM_LOCKED_TET * STEVEMON;
-/// **25%** ecosystem treasury tranche minted to [`WALLET_ECOSYSTEM`] at genesis (2.5B TET).
+/// **25%** treasury tranche minted to [`TET_TREASURY_ADDRESS`] at genesis (2.5B TET).
 pub const GENESIS_ECOSYSTEM_SHARE_MICRO: u64 = 2_500_000_000u64 * STEVEMON;
+/// Alias for whitepaper §11.1 treasury tranche (same as [`GENESIS_ECOSYSTEM_SHARE_MICRO`]).
+pub const GENESIS_TREASURY_SHARE_MICRO: u64 = GENESIS_ECOSYSTEM_SHARE_MICRO;
 pub const WALLET_PROTOCOL_RESERVE: &str =
     "0000000000000000000000000000000000000000000000000000000000000003";
 pub const GENESIS_PROTOCOL_RESERVE_SHARE_MICRO: u64 = 0;
@@ -83,17 +85,41 @@ pub fn chain_id_from_env() -> String {
         })
 }
 
-pub fn deterministic_genesis_hash(founder_wallet_id: &str) -> String {
+pub fn normalize_treasury_address(raw: &str) -> Result<String, LedgerError> {
+    let w = raw.trim().to_ascii_lowercase();
+    if w.is_empty() {
+        return Err(LedgerError::Invalid(
+            "TET_TREASURY_ADDRESS must not be empty".into(),
+        ));
+    }
+    if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(LedgerError::Invalid(
+            "TET_TREASURY_ADDRESS must be 64 hex chars".into(),
+        ));
+    }
+    Ok(w)
+}
+
+/// Required at node startup; no silent fallback.
+pub fn treasury_address_from_env() -> Result<String, LedgerError> {
+    let raw = std::env::var("TET_TREASURY_ADDRESS").map_err(|_| {
+        LedgerError::Invalid("TET_TREASURY_ADDRESS is required".into())
+    })?;
+    normalize_treasury_address(&raw)
+}
+
+pub fn deterministic_genesis_hash(founder_wallet_id: &str, treasury_wallet_id: &str) -> String {
     let founder = founder_wallet_id.trim().to_ascii_lowercase();
+    let treasury = treasury_wallet_id.trim().to_ascii_lowercase();
     let payload = format!(
-        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|ecosystem={}|ecosystem_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
+        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|treasury={}|treasury_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
         chain_id_from_env(),
         founder,
         GENESIS_FOUNDER_SHARE_MICRO,
         WALLET_SYSTEM_WORKER_POOL,
         GENESIS_WORKER_POOL_SHARE_MICRO,
-        WALLET_ECOSYSTEM,
-        GENESIS_ECOSYSTEM_SHARE_MICRO,
+        treasury,
+        GENESIS_TREASURY_SHARE_MICRO,
         WALLET_PROTOCOL_RESERVE,
         GENESIS_PROTOCOL_RESERVE_SHARE_MICRO,
         MAX_SUPPLY_MICRO,
@@ -117,7 +143,10 @@ pub fn expected_genesis_hash_from_env() -> String {
             return h;
         }
     }
-    deterministic_genesis_hash(&expected_genesis_founder_wallet_from_env())
+    let founder = expected_genesis_founder_wallet_from_env();
+    let treasury = treasury_address_from_env()
+        .expect("TET_TREASURY_ADDRESS is required for genesis hash");
+    deterministic_genesis_hash(&founder, &treasury)
 }
 
 /// Genesis Worker grant: 100,000 TET × 1,000 nodes = 100,000,000 TET (funded from `system:worker_pool` at genesis).
@@ -154,6 +183,8 @@ const META_NEXT_VEST_SEQ: &[u8] = b"next_global_vest_seq";
 const META_TOTAL_SUPPLY: &[u8] = b"total_supply_micro";
 const META_TOTAL_BURNED: &[u8] = b"total_burned_micro";
 const META_FOUNDER_WALLET: &[u8] = b"founder_wallet";
+/// Treasury wallet (`TET_TREASURY_ADDRESS`) persisted at genesis for restart/env consistency checks.
+const META_TREASURY_WALLET: &[u8] = b"treasury_wallet_v1";
 /// Founder genesis vesting: 1-year cliff → 100% unlock.
 const META_FOUNDER_GENESIS_UNLOCK_AT_MS: &[u8] = b"founder_genesis_unlock_at_ms_v1";
 /// Amount of founder genesis allocation that is locked until `META_FOUNDER_GENESIS_UNLOCK_AT_MS`.
@@ -1641,7 +1672,7 @@ impl Ledger {
         if producer.is_empty() {
             return Err(LedgerError::Invalid("producer_id required".into()));
         }
-        if Self::is_reserved_reward_wallet(&producer) {
+        if Self::is_reserved_reward_wallet(&producer, None) {
             return Err(LedgerError::Invalid(
                 "reserved wallet cannot receive block reward".into(),
             ));
@@ -1658,11 +1689,18 @@ impl Ledger {
         Ok(())
     }
 
-    fn is_reserved_reward_wallet(wallet: &str) -> bool {
+    fn is_reserved_system_wallet(wallet: &str) -> bool {
         wallet == WALLET_SYSTEM_WORKER_POOL
             || wallet == WALLET_DEX_TREASURY
             || wallet == WALLET_PROTOCOL_RESERVE
             || wallet == WALLET_ECOSYSTEM
+    }
+
+    fn is_reserved_reward_wallet(wallet: &str, treasury_wallet: Option<&str>) -> bool {
+        if Self::is_reserved_system_wallet(wallet) {
+            return true;
+        }
+        treasury_wallet.is_some_and(|t| wallet == t)
     }
 
     pub fn apply_block_reward(
@@ -1678,7 +1716,8 @@ impl Ledger {
         if producer.is_empty() {
             return Err(LedgerError::Invalid("producer_id required".into()));
         }
-        if Self::is_reserved_reward_wallet(&producer) {
+        let treasury_wallet = self.treasury_wallet_id().ok();
+        if Self::is_reserved_reward_wallet(&producer, treasury_wallet.as_deref()) {
             return Err(LedgerError::Invalid(
                 "reserved wallet cannot receive block reward".into(),
             ));
@@ -1729,6 +1768,7 @@ impl Ledger {
             }
         })?;
 
+        let treasury_wallet = treasury_wallet.unwrap_or_default();
         let audit = serde_json::json!({
             "v": 1,
             "ts_ms": ledger_now_ms(),
@@ -1737,6 +1777,10 @@ impl Ledger {
             "producer_id": producer,
             "from_wallet": WALLET_SYSTEM_WORKER_POOL,
             "reward_micro": reward_micro,
+            "coinbase_receivers": [
+                {"wallet_id": producer, "role": "mining", "amount_micro": reward_micro},
+                {"wallet_id": treasury_wallet, "role": "treasury", "amount_micro": 0},
+            ],
         });
         let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
         self.persist_snapshot_best_effort();
@@ -4042,7 +4086,8 @@ impl Ledger {
         Ok(())
     }
 
-    /// One-time genesis mint: **25%** founder + **75%** [`WALLET_SYSTEM_WORKER_POOL`] (= full [`MAX_SUPPLY_MICRO`]).
+    /// One-time genesis mint (WP §11.1): **25%** founder + **50%** [`WALLET_SYSTEM_WORKER_POOL`] (mining)
+    /// + **25%** [`TET_TREASURY_ADDRESS`] (= full [`MAX_SUPPLY_MICRO`]).
     /// Fails with [`LedgerError::GenesisAlreadyApplied`] if total supply is already non-zero.
     ///
     /// **Big bang:** when `META_TOTAL_SUPPLY` is unset or 0, the `balances` tree is **cleared** first so async
@@ -4081,13 +4126,14 @@ impl Ledger {
         self.worker_stakes.clear()?;
         self.db.flush()?;
 
+        let treasury_wallet_id = treasury_address_from_env()?;
         let founder_key = founder.as_bytes().to_vec();
         let pool_key = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
-        let ecosystem_key = WALLET_ECOSYSTEM.as_bytes().to_vec();
+        let treasury_key = treasury_wallet_id.as_bytes().to_vec();
         let reserve_key = WALLET_PROTOCOL_RESERVE.as_bytes().to_vec();
         let now_ms = ledger_now_ms();
         let unlock_at_ms = now_ms.saturating_add(founder_genesis_cliff_ms());
-        let genesis_hash = deterministic_genesis_hash(&founder);
+        let genesis_hash = deterministic_genesis_hash(&founder, &treasury_wallet_id);
 
         let res: Result<GenesisAllocationSummary, TransactionError<sled::Error>> =
             (&self.meta, &self.balances).transaction(|(m, b)| {
@@ -4138,7 +4184,9 @@ impl Ledger {
 
                 credit(b, &founder_key, GENESIS_FOUNDER_SHARE_MICRO)?;
                 credit(b, &pool_key, GENESIS_WORKER_POOL_SHARE_MICRO)?;
-                credit(b, &ecosystem_key, GENESIS_ECOSYSTEM_SHARE_MICRO)?;
+                // Treasury coinbase: ensure wallet exists at 0 before crediting the 25% tranche.
+                credit(b, &treasury_key, 0)?;
+                credit(b, &treasury_key, GENESIS_TREASURY_SHARE_MICRO)?;
                 credit(b, &reserve_key, GENESIS_PROTOCOL_RESERVE_SHARE_MICRO)?;
 
                 m.insert(
@@ -4146,6 +4194,10 @@ impl Ledger {
                     self.encrypt_value(&u64_to_bytes(GENESIS_TOTAL_MINT_MICRO))?,
                 )?;
                 m.insert(META_FOUNDER_WALLET, self.encrypt_value(founder.as_bytes())?)?;
+                m.insert(
+                    META_TREASURY_WALLET,
+                    self.encrypt_value(treasury_wallet_id.as_bytes())?,
+                )?;
                 m.insert(
                     META_GENESIS_HASH,
                     self.encrypt_value(genesis_hash.as_bytes())?,
@@ -4185,14 +4237,14 @@ impl Ledger {
             "v": 1,
             "ts_ms": ledger_now_ms(),
             "action": "genesis_allocation",
-            "genesis_hash": deterministic_genesis_hash(&summary.founder_wallet_id),
-            "genesis_tokenomics": "fixed_supply_25_founder_50_worker_pool_25_ecosystem",
+            "genesis_hash": deterministic_genesis_hash(&summary.founder_wallet_id, &treasury_wallet_id),
+            "genesis_tokenomics": "fixed_supply_25_founder_50_worker_pool_25_treasury",
             "founder_wallet_id": summary.founder_wallet_id,
             "founder_allocation_micro": summary.founder_allocation_micro,
             "worker_pool_wallet_id": WALLET_WORKER_POOL,
             "worker_pool_allocation_micro": GENESIS_WORKER_POOL_SHARE_MICRO,
-            "ecosystem_wallet_id": WALLET_ECOSYSTEM,
-            "ecosystem_allocation_micro": GENESIS_ECOSYSTEM_SHARE_MICRO,
+            "treasury_wallet_id": treasury_wallet_id,
+            "treasury_allocation_micro": GENESIS_TREASURY_SHARE_MICRO,
             "protocol_reserve_wallet_id": WALLET_PROTOCOL_RESERVE,
             "protocol_reserve_allocation_micro": GENESIS_PROTOCOL_RESERVE_SHARE_MICRO,
             "dex_treasury_wallet": WALLET_DEX_TREASURY,
@@ -4232,12 +4284,12 @@ impl Ledger {
             pool_bal, GENESIS_WORKER_POOL_SHARE_MICRO,
             "FATAL: system-locked pool balance mismatch after genesis"
         );
-        let ecosystem_bal = self.balance_micro(WALLET_ECOSYSTEM).unwrap_or_else(|e| {
-            panic!("FATAL: could not read ecosystem balance after genesis: {e}")
-        });
+        let treasury_bal = self
+            .balance_micro(&treasury_wallet_id)
+            .unwrap_or_else(|e| panic!("FATAL: could not read treasury balance after genesis: {e}"));
         assert_eq!(
-            ecosystem_bal, GENESIS_ECOSYSTEM_SHARE_MICRO,
-            "FATAL: ecosystem treasury balance mismatch after genesis"
+            treasury_bal, GENESIS_TREASURY_SHARE_MICRO,
+            "FATAL: treasury balance mismatch after genesis"
         );
 
         let snap_bytes = self
@@ -4264,6 +4316,41 @@ impl Ledger {
             }
         }
         Ok(false)
+    }
+
+    pub fn treasury_wallet_id_stored(&self) -> Result<Option<String>, LedgerError> {
+        let Some(v) = self.meta.get(META_TREASURY_WALLET)? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        let s = String::from_utf8(pt)
+            .map_err(|_| LedgerError::Invalid("treasury wallet meta corrupt".into()))?;
+        let s = s.trim().to_ascii_lowercase();
+        if s.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(s))
+    }
+
+    /// Resolve treasury wallet for block rewards: persisted meta first, else env (required).
+    pub fn treasury_wallet_id(&self) -> Result<String, LedgerError> {
+        if let Some(stored) = self.treasury_wallet_id_stored()? {
+            return Ok(stored);
+        }
+        treasury_address_from_env()
+    }
+
+    /// Startup guard: env treasury must match ledger meta when genesis already applied.
+    pub fn validate_treasury_address_at_startup(&self, env_treasury: &str) -> Result<(), LedgerError> {
+        let env = normalize_treasury_address(env_treasury)?;
+        if let Some(stored) = self.treasury_wallet_id_stored()? {
+            if stored != env {
+                return Err(LedgerError::Invalid(format!(
+                    "TET_TREASURY_ADDRESS mismatch: env={env} ledger={stored}"
+                )));
+            }
+        }
+        Ok(())
     }
 
     pub fn balance_micro(&self, peer: &str) -> Result<u64, LedgerError> {
