@@ -43,6 +43,8 @@ pub struct RestState {
     pub p2p_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
     pub p2p_client: Option<crate::p2p_network::P2pClient>,
     pub gossip_tx: Option<mpsc::Sender<String>>,
+    /// Per-node block-plane sync board (`None` when P2P / block swarm is disabled).
+    pub block_sync_board: Option<crate::sync::SharedBlockSyncBoard>,
     /// In-memory pending transactions (Phase 2 mempool).
     pub mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,

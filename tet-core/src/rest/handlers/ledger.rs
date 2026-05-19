@@ -894,7 +894,10 @@ pub async fn get_ledger_state(State(state): State<RestState>) -> impl IntoRespon
     };
     let block_height = state.ledger.block_height().unwrap_or(0);
     let state_root = state.ledger.compute_state_root();
-    let ledger_sync = crate::sync::ledger_sync_status(block_height).await;
+    let ledger_sync = match &state.block_sync_board {
+        Some(board) => crate::sync::ledger_sync_status(board, &state.ledger).await,
+        None => crate::sync::LedgerSyncStatus::default_when_no_p2p(block_height),
+    };
     (
         StatusCode::OK,
         Json(R {

@@ -612,6 +612,7 @@ pub fn block_time_from_env() -> Duration {
 
 pub fn spawn_auto_miner(
     state: RestState,
+    block_sync_board: Option<crate::sync::SharedBlockSyncBoard>,
     local_node_id: String,
     validator_set: ValidatorSet,
 ) -> tokio::task::JoinHandle<()> {
@@ -627,8 +628,13 @@ pub fn spawn_auto_miner(
         loop {
             tokio::time::sleep(block_time).await;
             let local_height = state.ledger.block_height().unwrap_or(0);
-            if crate::sync::auto_mine_blocked_by_sync(local_height).await {
-                let sync = crate::sync::ledger_sync_status(local_height).await;
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+                .await
+            {
+                let sync = match block_sync_board.as_ref() {
+                    Some(board) => crate::sync::ledger_sync_status(board, &state.ledger).await,
+                    None => crate::sync::LedgerSyncStatus::default_when_no_p2p(local_height),
+                };
                 log::info!(
                     "[consensus] auto-mine gated: synced={} active={} lag_blocks={} catch_up_in_progress={}",
                     sync.synced,
@@ -670,6 +676,14 @@ pub fn spawn_auto_miner(
                     "[consensus] auto-mine routing: node_id={} is not POC; preserving AI workload mempool and mining coinbase-only block",
                     local_node_id
                 );
+                if crate::sync::auto_mine_blocked_by_sync(
+                    block_sync_board.as_ref(),
+                    &state.ledger,
+                )
+                .await
+                {
+                    continue;
+                }
                 match mine_coinbase_only_block_as(state.clone(), local_node_id.clone()).await {
                     Ok(outcome) if outcome.mined => {
                         log::info!(
@@ -689,6 +703,12 @@ pub fn spawn_auto_miner(
                         println!("[CONSENSUS] Auto-mine failed: {}", e.message());
                     }
                 }
+                continue;
+            }
+
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+                .await
+            {
                 continue;
             }
 
@@ -732,13 +752,52 @@ fn caac_block_weight(ledger: &Ledger, producer_id: &str) -> u64 {
     caac_weight_from_record(rec.as_ref()).max(1)
 }
 
-fn parent_block_id_for_height(ledger: &Ledger, height: u64) -> Result<Option<String>, String> {
-    if height <= 1 {
+/// Parent block id for a block at `block_height` (the block being stored or gossiped).
+///
+/// Height 1 blocks anchor to implicit genesis (no `BlockRecordV1` at height 0).
+/// Height ≥ 2 uses the canonical block at `height - 1`, with chain-tip fallback.
+fn parent_block_id_for_height(ledger: &Ledger, block_height: u64) -> Result<Option<String>, String> {
+    if block_height == 0 {
         return Ok(None);
     }
-    ledger
-        .canonical_block_id_at_height(height.saturating_sub(1))
-        .map_err(|e| e.to_string())
+    if block_height == 1 {
+        return Ok(None);
+    }
+    let parent_height = block_height.saturating_sub(1);
+    if let Some(id) = ledger
+        .canonical_block_id_at_height(parent_height)
+        .map_err(|e| e.to_string())?
+    {
+        return Ok(Some(id));
+    }
+    if let Some(tip) = ledger.chain_tip().map_err(|e| e.to_string())? {
+        if tip.height == parent_height {
+            return Ok(Some(tip.block_id));
+        }
+    }
+    Err(format!(
+        "missing canonical parent for block height={block_height} (parent_height={parent_height})"
+    ))
+}
+
+fn resolve_parent_block_id(
+    ledger: &Ledger,
+    block_height: u64,
+    explicit: Option<String>,
+) -> Result<Option<String>, RemoteBlockApplyError> {
+    let explicit = explicit.and_then(|p| {
+        let t = p.trim().to_string();
+        if t.is_empty() { None } else { Some(t) }
+    });
+    let expected = parent_block_id_for_height(ledger, block_height)
+        .map_err(RemoteBlockApplyError::Ledger)?;
+    match (explicit, expected) {
+        (Some(got), Some(ref exp)) if got != *exp => Err(RemoteBlockApplyError::Rejected(format!(
+            "parent_block_id mismatch expected={exp} received={got}"
+        ))),
+        (Some(got), _) => Ok(Some(got)),
+        (None, exp) => Ok(exp),
+    }
 }
 
 fn cumulative_weight_for_block(
@@ -1105,6 +1164,8 @@ async fn mine_coinbase_only_block_as(
     let txs: Vec<SignedTxEnvelopeV1> = Vec::new();
     let tx_hashes: Vec<String> = Vec::new();
     let next_height = state.ledger.block_height().unwrap_or(0).saturating_add(1);
+    let parent_block_id = parent_block_id_for_height(&state.ledger, next_height)
+        .map_err(|e| MineError::BadRequest(e))?;
     let block_id = block_id_for_block(next_height, &tx_hashes);
     let reward = reward_for_block(&txs).map_err(MineError::Unauthorized)?;
     let undo = state
@@ -1141,7 +1202,7 @@ async fn mine_coinbase_only_block_as(
         RecordBlockArgs {
             block_height,
             block_id: &block_id,
-            parent_block_id: None,
+            parent_block_id: parent_block_id.clone(),
             producer_id: &producer_id,
             tx_hashes: &tx_hashes,
             txs: &txs,
@@ -1156,9 +1217,7 @@ async fn mine_coinbase_only_block_as(
         let ev = NetworkEvent::BlockMined {
             block_height,
             block_id: block_id.clone(),
-            parent_block_id: parent_block_id_for_height(&state.ledger, block_height)
-                .ok()
-                .flatten(),
+            parent_block_id: parent_block_id.clone(),
             producer_id: producer_id.clone(),
             base_reward_micro: reward.base_reward_micro,
             compute_reward_micro: reward.compute_reward_micro,
@@ -1209,6 +1268,8 @@ pub async fn mine_pending_block_as(
         .collect::<Result<Vec<_>, _>>()
         .map_err(MineError::Unauthorized)?;
     let next_height = state.ledger.block_height().unwrap_or(0).saturating_add(1);
+    let parent_block_id = parent_block_id_for_height(&state.ledger, next_height)
+        .map_err(|e| MineError::BadRequest(e))?;
     let block_id = block_id_for_block(next_height, &tx_hashes);
     validate_zk_task_claims(&state.ledger, &txs).map_err(MineError::Unauthorized)?;
     let reward = reward_for_block(&txs).map_err(MineError::Unauthorized)?;
@@ -1253,7 +1314,7 @@ pub async fn mine_pending_block_as(
         RecordBlockArgs {
             block_height,
             block_id: &block_id,
-            parent_block_id: None,
+            parent_block_id: parent_block_id.clone(),
             producer_id: &producer_id,
             tx_hashes: &tx_hashes,
             txs: &txs,
@@ -1271,9 +1332,7 @@ pub async fn mine_pending_block_as(
         let ev = NetworkEvent::BlockMined {
             block_height,
             block_id: block_id.clone(),
-            parent_block_id: parent_block_id_for_height(&state.ledger, block_height)
-                .ok()
-                .flatten(),
+            parent_block_id: parent_block_id.clone(),
             producer_id: producer_id.clone(),
             base_reward_micro: reward.base_reward_micro,
             compute_reward_micro: reward.compute_reward_micro,
@@ -1306,7 +1365,7 @@ pub async fn apply_remote_block_from_gossip(
     let RemoteBlockGossip {
         block_height,
         block_id,
-        parent_block_id,
+        parent_block_id: gossip_parent_block_id,
         producer_id,
         base_reward_micro,
         compute_reward_micro,
@@ -1352,6 +1411,20 @@ pub async fn apply_remote_block_from_gossip(
             producer_id.as_str()
         )));
     }
+
+    let parent_block_id = if block_height == local_height.saturating_add(1) {
+        resolve_parent_block_id(&ledger, block_height, gossip_parent_block_id)?
+    } else {
+        gossip_parent_block_id
+            .as_ref()
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .or_else(|| {
+                parent_block_id_for_height(&ledger, block_height)
+                    .ok()
+                    .flatten()
+            })
+    };
 
     let mut tx_hashes = Vec::with_capacity(txs.len());
     let mut seen = HashSet::with_capacity(txs.len());

@@ -192,6 +192,9 @@ enum ZkAction {
     /// Verify a RISC Zero receipt and enqueue into mempool.
     Verify {
         receipt_path: String,
+        /// EnterpriseInference tx hash (64 hex). Links proof to an AI workload task for settlement.
+        #[arg(long, default_value = "")]
+        task_id: String,
         /// Auto-mine a block after this proof is accepted (God Mode).
         #[arg(long)]
         mine: bool,
@@ -434,7 +437,11 @@ async fn main() -> Result<()> {
         }
         Command::Zk { action } => {
             match action {
-                ZkAction::Verify { receipt_path, mine } => {
+                ZkAction::Verify {
+                    receipt_path,
+                    task_id,
+                    mine,
+                } => {
                     let base = cli.node_url.trim_end_matches('/');
                     let p = Path::new(receipt_path.trim());
                     let bytes = std::fs::read(p)
@@ -455,6 +462,7 @@ async fn main() -> Result<()> {
                     let mnemonic = wi.mnemonic_12.clone().unwrap_or_default();
 
                     let tx = tet_core::protocol::TxV1::VerifyZkProof {
+                        task_id: task_id.trim().to_string(),
                         image_id,
                         journal_b64,
                         receipt_b64,

@@ -494,12 +494,17 @@ async fn main() -> Result<(), AnyErr> {
     let catch_up_driver = crate::sync::new_catch_up_driver();
 
     // --- Step 5: BlockSyncBoard (REST + auto-mine sync gate) ---
-    if config.enable_p2p && libp2p_keypair.is_some() {
-        crate::sync::install_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
-        log::info!("[startup] sync board installed");
+    let block_sync_board = if config.enable_p2p && libp2p_keypair.is_some() {
+        let board = crate::sync::new_block_sync_board(
+            hello_registry.clone(),
+            catch_up_driver.clone(),
+        );
+        log::info!("[startup] sync board created (per-node Arc<BlockSyncBoard>)");
+        Some(board)
     } else {
         log::info!("[startup] sync board skipped (p2p disabled or no keystore)");
-    }
+        None
+    };
 
     let block_p2p_listen = crate::p2p::parse_block_listen_multiaddr(&config.p2p_listen)
         .unwrap_or_else(|e| {
@@ -518,6 +523,9 @@ async fn main() -> Result<(), AnyErr> {
                     block_p2p_listen.clone(),
                     hello_registry,
                     catch_up_driver,
+                    block_sync_board
+                        .clone()
+                        .expect("block_sync_board required when block swarm starts"),
                 ) {
                     Ok((tx, _swarm_jh)) => {
                         swarm_block = true;
@@ -558,6 +566,7 @@ async fn main() -> Result<(), AnyErr> {
         p2p_tx: p2p,
         p2p_client: nexus_p2p_client,
         gossip_tx,
+        block_sync_board: block_sync_board.clone(),
         mempool,
         http_ratelimit: Arc::new(tokio::sync::Mutex::new(HttpRateLimit::new(config.http_rps))),
         workers: Arc::new(StdMutex::new(WorkerRegistry::default())),
@@ -575,8 +584,12 @@ async fn main() -> Result<(), AnyErr> {
     if crate::consensus::auto_mine_enabled_from_env() {
         let consensus_node_id = config.initial_wallet.trim().to_ascii_lowercase();
         let validator_set = crate::consensus::ValidatorSet::from_env_or_single(&consensus_node_id);
-        let _auto_miner =
-            crate::consensus::spawn_auto_miner(state.clone(), consensus_node_id, validator_set);
+        let _auto_miner = crate::consensus::spawn_auto_miner(
+            state.clone(),
+            block_sync_board.clone(),
+            consensus_node_id,
+            validator_set,
+        );
         log::info!("[startup] auto-miner spawned (will wait for sync gate when behind peers)");
     } else {
         log::info!("[startup] auto-miner disabled (TET_AUTO_MINE unset)");
