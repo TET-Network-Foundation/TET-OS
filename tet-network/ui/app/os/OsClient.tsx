@@ -31,11 +31,17 @@ import {
   getWorkerStats,
   normalizeWalletId64,
   postEnterpriseInference,
+  fetchWalletTransferNonce,
   postInitialAirdropClaim,
+  postWalletTransfer,
   STEVEMON_PER_TET,
   tetCoreUrl,
   walletIdHexFromPublicKey,
 } from "../lib/tet_core_http";
+import {
+  buildSignedWalletTransfer,
+  userFacingTransferError,
+} from "../lib/transfer";
 import { fetchWorkerCockpit, microTetToTet, type WorkerCockpitJson } from "../lib/worker_cockpit";
 import { GENESIS_FOUNDER_WALLET_ID_HEX } from "../lib/genesis_wallet";
 import {
@@ -292,7 +298,13 @@ export default function NexusOS() {
   const [sendAmountTet, setSendAmountTet] = useState("");
   const [sendMessage, setSendMessage] = useState("");
   const [sendingTx, setSendingTx] = useState(false);
+  const [sendTransferPhase, setSendTransferPhase] = useState<
+    "idle" | "signing" | "submitting" | "confirmed" | "failed"
+  >("idle");
+  const [sendTransferUserMsg, setSendTransferUserMsg] = useState<string>("");
   const [isSignerReady, setIsSignerReady] = useState(false);
+
+  const MIN_SEND_MICRO = 1_000n; // 0.001 TET
 
   /** On-chain `requestAiInference` (escrow lock); reward auto-sized from prompt length. */
   const [aiTaskPrompt, setAiTaskPrompt] = useState("");
@@ -1225,40 +1237,125 @@ export default function NexusOS() {
 
   async function onSendCoins() {
     if (sendingTx) return;
-    const to = sendTo.trim();
-    const amtStv = parseTet(sendAmountTet.trim());
-    const msg = sendMessage.trim().slice(0, 64);
-    if (!to) {
-      appendLedger(["Send Coins: missing Pay To"]);
+    setSendTransferUserMsg("");
+    setSendTransferPhase("idle");
+
+    const sess = getHybridSignerSession();
+    if (!sess) {
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg("Unlock your wallet first (File → Wallet…).");
+      appendLedger(["Send Coins: no wallet session — unlock wallet first."]);
       return;
     }
+
+    const from = normalizeWalletId64(founderWalletIdHex64);
+    if (!from) {
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg("From wallet is not ready.");
+      appendLedger(["Send Coins: invalid From wallet id."]);
+      return;
+    }
+
+    const to = normalizeWalletId64(sendTo.trim());
+    if (!to) {
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg("Pay To must be a 64-character hex wallet id.");
+      appendLedger(["Send Coins: Pay To must be 64 hex chars (Ed25519 wallet id)."]);
+      return;
+    }
+    if (from === to) {
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg("Cannot send to the same wallet.");
+      appendLedger(["Send Coins: cannot transfer to self."]);
+      return;
+    }
+
+    const amtStv = parseTet(sendAmountTet.trim());
     if (amtStv == null) {
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg("Enter a valid amount in TET (e.g. 0.001).");
       appendLedger(["Send Coins: invalid Amount"]);
       return;
     }
-    if (amtStv <= 0n) {
-      appendLedger(["Send Coins: amount must be > 0"]);
+    if (amtStv < MIN_SEND_MICRO) {
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg("Minimum transfer is 0.001 TET.");
+      appendLedger(["Send Coins: minimum amount is 0.001 TET"]);
       return;
     }
-    setSendingTx(true);
-    appendLedger([
-      "[Send Coins] L1 uses Axum REST only. Submit signed transfers via POST /ledger/transfer or POST /tx/submit.",
-      `[Input] Recipient ${to.length > 28 ? `${to.slice(0, 28)}…` : to} · ${formatStevemonToTetDisplay(amtStv)} TET`,
-    ]);
-    if (msg) {
-      appendLedger([`[Optional] Memo "${msg}" — demo /execute submission only.`]);
-      try {
-        const res = await fetch(tetCoreUrl(middlewareUrl, "/execute"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: msg }),
-        });
-        if (!res.ok) appendLedger([`[execute] HTTP ${res.status}`]);
-      } catch (e: unknown) {
-        appendLedger([`[execute] ${e instanceof Error ? e.message : String(e)}`]);
-      }
+
+    if (balanceStevemon != null && amtStv > balanceStevemon) {
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg("Amount exceeds your balance (fee is included in the gross).");
+      appendLedger(["Send Coins: insufficient balance"]);
+      return;
     }
-    setSendingTx(false);
+
+    const msg = sendMessage.trim().slice(0, 64);
+    setSendingTx(true);
+    setSendTransferPhase("signing");
+
+    try {
+      const nonceRes = await fetchWalletTransferNonce(baseUrl, from);
+      if (!nonceRes.ok || !nonceRes.data) {
+        const err = userFacingTransferError(nonceRes.status, nonceRes.text);
+        setSendTransferPhase("failed");
+        setSendTransferUserMsg(err);
+        appendLedger([`Send Coins: nonce fetch failed — ${err}`]);
+        console.error("[Send Coins] GET /wallet/nonce failed", nonceRes);
+        return;
+      }
+      const nonce = nonceRes.data.next_nonce;
+      if (!Number.isFinite(nonce) || nonce <= 0) {
+        setSendTransferPhase("failed");
+        setSendTransferUserMsg("Node returned an invalid transfer nonce.");
+        appendLedger(["Send Coins: invalid next_nonce from node"]);
+        return;
+      }
+
+      const signed = await buildSignedWalletTransfer(from, to, amtStv, nonce, baseUrl);
+      setSendTransferPhase("submitting");
+      appendLedger([
+        `[Send Coins] POST /wallet/transfer · nonce ${nonce} · gross ${formatStevemonToTetDisplay(amtStv)} TET → ${to.slice(0, 12)}…`,
+      ]);
+
+      const res = await postWalletTransfer(baseUrl, signed.body);
+      if (!res.ok || !res.data) {
+        const err = userFacingTransferError(res.status, res.text);
+        setSendTransferPhase("failed");
+        setSendTransferUserMsg(err);
+        appendLedger([`Send Coins: failed — ${err}`]);
+        console.error("[Send Coins] POST /wallet/transfer failed", res);
+        return;
+      }
+
+      const { net_micro, fee_micro } = res.data;
+      setSendTransferPhase("confirmed");
+      setSendTransferUserMsg(
+        `Sent ${formatStevemonToTetDisplay(BigInt(net_micro))} TET (fee ${formatStevemonToTetDisplay(BigInt(fee_micro))} TET).`,
+      );
+      appendLedger([
+        `[Send Coins] OK · net ${net_micro.toLocaleString("en-US")} µ · fee ${fee_micro.toLocaleString("en-US")} µ`,
+        `  to ${res.data.to_wallet_id.slice(0, 16)}…`,
+      ]);
+      if (msg) {
+        appendLedger([`[Memo] "${msg}" (local note only — not sent on-chain).`]);
+      }
+
+      const bal = await getLedgerMeBalanceMicro(baseUrl, from);
+      if (bal.ok) {
+        previousBalanceRef.current = bal.micro;
+        setBalanceStevemon(bal.micro);
+      }
+    } catch (e: unknown) {
+      const detail = e instanceof Error ? e.message : String(e);
+      setSendTransferPhase("failed");
+      setSendTransferUserMsg(detail.includes("Wallet") ? detail : "Signing or network error. See console.");
+      appendLedger([`Send Coins: ${detail}`]);
+      console.error("[Send Coins] unexpected error", e);
+    } finally {
+      setSendingTx(false);
+    }
   }
 
   async function onSubmitAiTaskRequest() {
@@ -1446,8 +1543,27 @@ export default function NexusOS() {
     [aiTaskPrompt],
   );
 
+  const sendTransferButtonLabel = !isSignerReady
+    ? "Unlock Wallet…"
+    : sendTransferPhase === "signing"
+      ? "Signing…"
+      : sendTransferPhase === "submitting"
+        ? "Submitting…"
+        : sendingTx
+          ? "Processing…"
+          : "Send";
+
   const sendCoinsFields = (
     <div className="space-y-2 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="w-20">From:</span>
+        <span
+          className={`${inset} flex-1 ${field} px-2 py-1 text-xs font-mono text-black/80 truncate`}
+          title={founderWalletIdHex64}
+        >
+          {normalizeWalletId64(founderWalletIdHex64) || "—"}
+        </span>
+      </div>
       <div className="flex items-center gap-2">
         <span className="w-20">Pay To:</span>
         <input
@@ -1462,7 +1578,7 @@ export default function NexusOS() {
           value={sendAmountTet}
           onChange={(e) => setSendAmountTet(e.target.value)}
           className={`${inset} w-40 ${field} px-2 py-1 text-sm font-mono outline-none`}
-          placeholder="5.00"
+          placeholder="0.001"
         />
         <span className="text-sm">TET</span>
         {sendAmountStevemonDisplay ? (
@@ -1483,11 +1599,25 @@ export default function NexusOS() {
             onChange={(e) => setSendMessage(e.target.value.slice(0, 64))}
             maxLength={64}
             className={`${inset} w-full ${field} px-2 py-1 text-sm outline-none`}
-            placeholder="(Optional) up to 64 chars"
+            placeholder="(Optional local note, not on-chain)"
           />
           <div className="mt-1 text-xs text-black/70">{sendMessage.length} / 64</div>
         </div>
       </div>
+      {sendTransferUserMsg ? (
+        <div
+          className={`text-xs pl-[5.5rem] leading-snug ${
+            sendTransferPhase === "confirmed"
+              ? "text-[#0b5c2e] font-medium"
+              : sendTransferPhase === "failed"
+                ? "text-red-800 font-medium"
+                : "text-black/75"
+          }`}
+          role="status"
+        >
+          {sendTransferUserMsg}
+        </div>
+      ) : null}
       <div className="pt-2">
         <button
           type="button"
@@ -1495,7 +1625,7 @@ export default function NexusOS() {
           onClick={() => void onSendCoins()}
           className={`${winBtn} ${panel} px-4 py-1 text-sm max-w-full text-left ${sendingTx ? "text-xs" : ""}`}
         >
-          {!isSignerReady ? "Loading Key..." : sendingTx ? "[SYSTEM] Processing…" : "Send"}
+          {sendTransferButtonLabel}
         </button>
       </div>
     </div>
