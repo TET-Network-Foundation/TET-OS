@@ -626,7 +626,19 @@ pub fn spawn_auto_miner(
         let leader_mode = leader_election_mode_from_env();
         loop {
             tokio::time::sleep(block_time).await;
-            let next_height = state.ledger.block_height().unwrap_or(0).saturating_add(1);
+            let local_height = state.ledger.block_height().unwrap_or(0);
+            if crate::sync::auto_mine_blocked_by_sync(local_height).await {
+                let sync = crate::sync::ledger_sync_status(local_height).await;
+                log::info!(
+                    "[consensus] auto-mine gated: synced={} active={} lag_blocks={} catch_up_in_progress={}",
+                    sync.synced,
+                    sync.sync.active,
+                    sync.sync.lag_blocks,
+                    sync.sync.in_progress_request.is_some()
+                );
+                continue;
+            }
+            let next_height = local_height.saturating_add(1);
             let is_leader = match leader_mode {
                 LeaderElectionMode::Hash => {
                     election.is_leader(next_height, &local_node_id, &validator_set)

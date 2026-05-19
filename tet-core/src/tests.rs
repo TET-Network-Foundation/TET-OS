@@ -3027,3 +3027,358 @@ fn admin_rest_faucet_once_per_wallet_and_ip_rl() {
         other => panic!("unexpected outcome: {other:?}"),
     }
 }
+
+#[test]
+fn should_start_worker_daemon_skips_when_guest_elf_empty_without_panic() {
+    let _g = env_lock();
+    unsafe {
+        std::env::remove_var("TET_WORKER_DAEMON");
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let db_dir = tmp.path().join("db");
+    let ledger = crate::ledger::Ledger::open(db_dir.to_str().unwrap()).unwrap();
+    let wallet = "0000000000000000000000000000000000000000000000000000000000000001";
+
+    if methods::NEXUS_GUEST_ELF.is_empty() {
+        let no_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::worker_daemon::should_start_worker_daemon(&ledger, wallet)
+        }));
+        assert!(
+            no_panic.is_ok(),
+            "should_start_worker_daemon must not panic when NEXUS_GUEST_ELF is empty"
+        );
+        assert!(
+            !crate::worker_daemon::should_start_worker_daemon(&ledger, wallet),
+            "worker daemon must stay off when guest ELF is unavailable"
+        );
+    }
+}
+
+#[test]
+fn test_p2p_keystore_persistence() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().to_path_buf();
+
+    let ks1 = crate::p2p_keystore::P2pKeystore::load_or_create(&path).unwrap();
+    let pid1 = ks1.peer_id();
+
+    let ks2 = crate::p2p_keystore::P2pKeystore::load_or_create(&path).unwrap();
+    let pid2 = ks2.peer_id();
+
+    assert_eq!(pid1, pid2, "PeerId must persist across loads");
+}
+
+/// Sprint 1 Phase C — in-process multi-node block sync integration tests.
+mod block_sync {
+    use super::{env_lock, rest_state_for_tests, set_test_env_base};
+    use libp2p::Multiaddr;
+    use std::sync::atomic::{AtomicU16, Ordering};
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use tokio::sync::Mutex;
+    use tokio::task::JoinHandle;
+
+    static NEXT_TCP_PORT: AtomicU16 = AtomicU16::new(29_200);
+
+    fn alloc_tcp_port() -> u16 {
+        NEXT_TCP_PORT.fetch_add(1, Ordering::SeqCst)
+    }
+
+    fn block_sync_env() {
+        set_test_env_base();
+        unsafe {
+            std::env::set_var("TET_CHAIN_ID", "phase-c-block-sync");
+            std::env::set_var("TET_VALIDATOR_IDS", "alice");
+            std::env::remove_var("TET_BOOTNODES");
+            std::env::remove_var("TET_IS_BOOTNODE");
+            std::env::remove_var("TET_AUTO_MINE");
+            std::env::remove_var("TET_BLOCK_TIME_SEC");
+            std::env::remove_var("TET_AUTO_MINE_IGNORE_SYNC");
+        }
+    }
+
+    struct TestNode {
+        ledger: Arc<crate::ledger::Ledger>,
+        db_dir: std::path::PathBuf,
+        state: crate::rest::RestState,
+        boot_multiaddr: String,
+        swarm_task: JoinHandle<()>,
+    }
+
+    async fn start_block_swarm_on_ledger(
+        ledger: Arc<crate::ledger::Ledger>,
+        db_dir: &std::path::Path,
+        bootnode_of: Option<&str>,
+        is_boot: bool,
+    ) -> (crate::rest::RestState, String, JoinHandle<()>) {
+        let ks = crate::p2p_keystore::P2pKeystore::load_or_create(db_dir).unwrap();
+        let keypair = ks.keypair();
+        let peer_id = ks.peer_id();
+
+        let port = alloc_tcp_port();
+        let listen: Multiaddr = format!("/ip4/127.0.0.1/tcp/{port}")
+            .parse()
+            .expect("listen multiaddr");
+        let boot_multiaddr = format!("{listen}/p2p/{peer_id}");
+
+        unsafe {
+            if let Some(b) = bootnode_of {
+                std::env::set_var("TET_BOOTNODES", b);
+            } else {
+                std::env::remove_var("TET_BOOTNODES");
+            }
+            if is_boot {
+                std::env::set_var("TET_IS_BOOTNODE", "1");
+            } else {
+                std::env::remove_var("TET_IS_BOOTNODE");
+            }
+        }
+
+        let mempool = Arc::new(Mutex::new(Vec::new()));
+        let hello_registry = crate::sync::new_hello_registry();
+        let catch_up_driver = crate::sync::new_catch_up_driver();
+
+        let (gossip_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
+            ledger.clone(),
+            mempool,
+            keypair,
+            listen,
+            hello_registry,
+            catch_up_driver,
+        )
+        .expect("block swarm");
+
+        let mut state = rest_state_for_tests(ledger);
+        state.gossip_tx = Some(gossip_tx);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        (state, boot_multiaddr, swarm_task)
+    }
+
+    async fn spawn_node(bootnode_of: Option<&str>, is_boot: bool) -> TestNode {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("db");
+        let db_dir = tmp.path().to_path_buf();
+        std::mem::forget(tmp);
+        let ledger = Arc::new(crate::ledger::Ledger::open(db.to_str().unwrap()).unwrap());
+        ledger.init_genesis_founder_premine_from_env().unwrap();
+        let _ = ledger.apply_genesis_allocation("founder");
+        let (state, boot_multiaddr, swarm_task) =
+            start_block_swarm_on_ledger(ledger.clone(), &db_dir, bootnode_of, is_boot).await;
+        TestNode {
+            ledger,
+            db_dir,
+            state,
+            boot_multiaddr,
+            swarm_task,
+        }
+    }
+
+    async fn respawn_swarm(node: &mut TestNode, bootnode_of: Option<&str>, is_boot: bool) {
+        node.swarm_task.abort();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let (state, boot, task) = start_block_swarm_on_ledger(
+            node.ledger.clone(),
+            &node.db_dir,
+            bootnode_of,
+            is_boot,
+        )
+        .await;
+        node.state = state;
+        node.boot_multiaddr = boot;
+        node.swarm_task = task;
+    }
+
+    async fn mine_n(state: &crate::rest::RestState, n: u64) {
+        for _ in 0..n {
+            crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
+                .await
+                .expect("mine block");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    fn heights(ledgers: &[Arc<crate::ledger::Ledger>]) -> Vec<u64> {
+        ledgers
+            .iter()
+            .map(|l| l.block_height().unwrap_or(0))
+            .collect()
+    }
+
+    fn height_spread(hs: &[u64]) -> u64 {
+        let min = *hs.iter().min().unwrap_or(&0);
+        let max = *hs.iter().max().unwrap_or(&0);
+        max.saturating_sub(min)
+    }
+
+    async fn wait_height_convergence(
+        ledgers: &[Arc<crate::ledger::Ledger>],
+        max_delta: u64,
+        timeout: Duration,
+    ) {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let hs = heights(ledgers);
+            if height_spread(&hs) <= max_delta {
+                let root = ledgers[0].compute_state_root();
+                if ledgers.iter().all(|l| l.compute_state_root() == root) {
+                    return;
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "timeout waiting for sync: heights={hs:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+
+    fn block_id_at_height(ledger: &crate::ledger::Ledger, height: u64) -> Option<String> {
+        ledger
+            .recent_blocks(48)
+            .into_iter()
+            .find(|b| b.height == height)
+            .map(|b| b.block_id)
+    }
+
+    fn assert_no_fork_through_min_height(ledgers: &[Arc<crate::ledger::Ledger>]) {
+        let min_h = heights(ledgers).into_iter().min().unwrap_or(0);
+        for h in 1..=min_h {
+            let Some(id0) = block_id_at_height(&ledgers[0], h) else {
+                panic!("missing canonical height {h} on reference node");
+            };
+            for (i, l) in ledgers.iter().enumerate().skip(1) {
+                assert_eq!(
+                    block_id_at_height(l, h).as_deref(),
+                    Some(id0.as_str()),
+                    "fork at height {h}: node0 vs node{i}"
+                );
+            }
+        }
+    }
+
+    fn assert_state_roots_match(ledgers: &[Arc<crate::ledger::Ledger>]) {
+        let root = ledgers[0].compute_state_root();
+        for (i, l) in ledgers.iter().enumerate() {
+            assert_eq!(
+                l.compute_state_root(),
+                root,
+                "state_root mismatch at node index {i}"
+            );
+        }
+    }
+
+    fn stop(nodes: &[TestNode]) {
+        for n in nodes {
+            n.swarm_task.abort();
+        }
+    }
+
+    /// C.1 — bootstrap mines, two followers catch up; heights within ±2; same state_root.
+    #[tokio::test]
+    async fn chain_sync_three_nodes_in_process() {
+        let _g = env_lock();
+        block_sync_env();
+
+        let n1 = spawn_node(None, true).await;
+        mine_n(&n1.state, 10).await;
+        assert!(n1.ledger.block_height().unwrap_or(0) >= 10, "node1 should reach height 10");
+
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        let n3 = spawn_node(Some(&boot), false).await;
+
+        let ledgers = vec![n1.ledger.clone(), n2.ledger.clone(), n3.ledger.clone()];
+        wait_height_convergence(&ledgers, 2, Duration::from_secs(30)).await;
+
+        let hs = heights(&ledgers);
+        assert!(height_spread(&hs) <= 2, "height spread too large: {hs:?}");
+        assert_state_roots_match(&ledgers);
+        assert_no_fork_through_min_height(&ledgers);
+
+        stop(&[n1, n2, n3]);
+    }
+
+    /// C.2 — peer disconnect, alternate peer, late joiner, restarted node re-merges.
+    #[tokio::test]
+    async fn chain_sync_recovers_after_peer_disconnect() {
+        let _g = env_lock();
+        block_sync_env();
+
+        let mut n1 = spawn_node(None, true).await;
+        mine_n(&n1.state, 5).await;
+
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        let mut n3 = spawn_node(Some(&boot), false).await;
+        wait_height_convergence(
+            &[n1.ledger.clone(), n2.ledger.clone(), n3.ledger.clone()],
+            2,
+            Duration::from_secs(25),
+        )
+        .await;
+
+        n1.swarm_task.abort();
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let n2_boot_early = n2.boot_multiaddr.clone();
+        respawn_swarm(&mut n3, Some(&n2_boot_early), false).await;
+
+        mine_n(&n2.state, 3).await;
+        wait_height_convergence(
+            &[n2.ledger.clone(), n3.ledger.clone()],
+            2,
+            Duration::from_secs(25),
+        )
+        .await;
+
+        let n2_boot = n2.boot_multiaddr.clone();
+        let n4 = spawn_node(Some(&n2_boot), false).await;
+        wait_height_convergence(
+            &[n2.ledger.clone(), n3.ledger.clone(), n4.ledger.clone()],
+            2,
+            Duration::from_secs(25),
+        )
+        .await;
+
+        respawn_swarm(&mut n1, Some(&n2_boot), false).await;
+        let all = vec![
+            n1.ledger.clone(),
+            n2.ledger.clone(),
+            n3.ledger.clone(),
+            n4.ledger.clone(),
+        ];
+        wait_height_convergence(&all, 2, Duration::from_secs(45)).await;
+        assert_state_roots_match(&all);
+        assert_no_fork_through_min_height(&all);
+
+        stop(&[n1, n2, n3, n4]);
+    }
+
+    /// C.3 — rapid concurrent follower start; single producer; chain converges without fork.
+    ///
+    /// Note: in-process tests share one `BlockSyncBoard` OnceLock, so true triple auto-miner
+    /// sync-gate coverage is via `scripts/start-3-node-testnet.sh`.
+    #[tokio::test]
+    async fn sync_gate_prevents_fork_under_concurrent_start() {
+        let _g = env_lock();
+        block_sync_env();
+
+        let n1 = spawn_node(None, true).await;
+        let boot = n1.boot_multiaddr.clone();
+
+        let (n2, n3) = tokio::join!(
+            spawn_node(Some(&boot), false),
+            spawn_node(Some(&boot), false),
+        );
+
+        mine_n(&n1.state, 8).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let ledgers = vec![n1.ledger.clone(), n2.ledger.clone(), n3.ledger.clone()];
+        wait_height_convergence(&ledgers, 2, Duration::from_secs(30)).await;
+        assert_no_fork_through_min_height(&ledgers);
+        assert_state_roots_match(&ledgers);
+
+        stop(&[n1, n2, n3]);
+    }
+}

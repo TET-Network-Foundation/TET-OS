@@ -885,6 +885,8 @@ pub async fn get_ledger_state(State(state): State<RestState>) -> impl IntoRespon
         block_height: u64,
         mempool_len: usize,
         state_root: String,
+        synced: bool,
+        sync: crate::sync::SyncStatusInfo,
     }
     let mempool_len = {
         let mp = state.mempool.lock().await;
@@ -892,12 +894,15 @@ pub async fn get_ledger_state(State(state): State<RestState>) -> impl IntoRespon
     };
     let block_height = state.ledger.block_height().unwrap_or(0);
     let state_root = state.ledger.compute_state_root();
+    let ledger_sync = crate::sync::ledger_sync_status(block_height).await;
     (
         StatusCode::OK,
         Json(R {
             block_height,
             mempool_len,
             state_root,
+            synced: ledger_sync.synced,
+            sync: ledger_sync.sync,
         }),
     )
         .into_response()
