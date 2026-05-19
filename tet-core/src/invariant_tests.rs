@@ -19,6 +19,12 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let db = dir.path().join("db");
             unsafe { std::env::set_var("TET_FOUNDER_WALLET", "founder"); }
+            unsafe {
+                std::env::set_var(
+                    "TET_TREASURY_ADDRESS",
+                    "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+                );
+            }
             unsafe { std::env::set_var("TET_REQUIRE_ATTESTATION", "false"); }
             unsafe { std::env::set_var("TET_DB_ENCRYPT", "false"); }
             let ledger = Ledger::open(db.to_str().unwrap()).unwrap();
@@ -42,6 +48,10 @@ mod tests {
         let db = dir.path().join("db2");
         unsafe {
             std::env::set_var("TET_FOUNDER_WALLET", "founder");
+            std::env::set_var(
+                "TET_TREASURY_ADDRESS",
+                "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+            );
             std::env::set_var("TET_PROTOCOL_FEE_BPS", "100");
             std::env::set_var("TET_DB_ENCRYPT", "false");
             std::env::set_var("TET_REQUIRE_ATTESTATION", "false");

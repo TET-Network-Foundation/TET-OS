@@ -182,16 +182,28 @@ fn expected_genesis_founder_wallet_from_env() -> String {
         .unwrap_or_else(|| GENESIS_FOUNDER_DEV_PUBLIC_HEX.to_string())
 }
 
-pub fn deterministic_genesis_hash(founder_wallet_id: &str) -> String {
+fn treasury_address_from_env_for_hash() -> String {
+    let raw = std::env::var("TET_TREASURY_ADDRESS")
+        .expect("TET_TREASURY_ADDRESS is required for genesis hash");
+    let w = raw.trim().to_ascii_lowercase();
+    assert!(
+        !w.is_empty() && w.len() == 64 && w.chars().all(|c| c.is_ascii_hexdigit()),
+        "TET_TREASURY_ADDRESS must be 64 hex chars"
+    );
+    w
+}
+
+pub fn deterministic_genesis_hash(founder_wallet_id: &str, treasury_wallet_id: &str) -> String {
     let founder = founder_wallet_id.trim().to_ascii_lowercase();
+    let treasury = treasury_wallet_id.trim().to_ascii_lowercase();
     let payload = format!(
-        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|ecosystem={}|ecosystem_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
+        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|treasury={}|treasury_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
         chain_id_from_env(),
         founder,
         GENESIS_FOUNDER_SHARE_MICRO,
         WALLET_SYSTEM_WORKER_POOL,
         GENESIS_WORKER_POOL_SHARE_MICRO,
-        WALLET_ECOSYSTEM,
+        treasury,
         GENESIS_ECOSYSTEM_SHARE_MICRO,
         WALLET_PROTOCOL_RESERVE,
         GENESIS_PROTOCOL_RESERVE_SHARE_MICRO,
@@ -207,7 +219,9 @@ pub fn expected_genesis_hash_from_env() -> String {
             return h;
         }
     }
-    deterministic_genesis_hash(&expected_genesis_founder_wallet_from_env())
+    let founder = expected_genesis_founder_wallet_from_env();
+    let treasury = treasury_address_from_env_for_hash();
+    deterministic_genesis_hash(&founder, &treasury)
 }
 
 /// Verify detached ML-DSA signature; pubkey/sig are STANDARD base64 over **raw** FIPS-204 bytes (no mode prefix).

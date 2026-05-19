@@ -12,6 +12,11 @@ pub enum VerifiedZkJournal {
     ZkCourt(ZkCourtJournalV1),
 }
 
+/// Whether dev/test mock ZK receipts (`MOCKJ1:` / `MOCKZC1:`) and ZK-Court optimistic placeholders are allowed.
+pub fn zk_dev_mock_allowed() -> bool {
+    mock_zk_allowed()
+}
+
 fn mock_zk_allowed() -> bool {
     let mainnet = std::env::var("TET_MAINNET")
         .ok()

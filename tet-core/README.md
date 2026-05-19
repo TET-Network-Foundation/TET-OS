@@ -3,6 +3,12 @@
 > Sovereign Layer 1 node implementation for the TET Network.
 > Post-quantum (ML-DSA), AI-native, hardware-adaptive consensus.
 
+> ⚠️ **Phase 0 Alpha**: TET Network is in active development. The current
+> codebase is a developer preview targeting Phase 0 public testnet launch.
+> The whitepaper specification may be updated to v1.1 before mainnet.
+> See [docs/RUNNING_A_NODE.md](../docs/RUNNING_A_NODE.md) for known limitations
+> and operational guidance.
+
 ## What is this?
 
 TET-Core is the **canonical** reference node for the TET Network: a persistent ledger with hybrid Ed25519 + ML-DSA authentication, libp2p mesh networking, and APIs that settle AI and enterprise workloads on-chain using deterministic tokenomics (including an 80/15/5 worker settlement split). It implements the Thermodynamic Execution Tree vision—binding compute intent, signatures, and ledger state—while CAAC (hardware-adaptive roles) and ZK-Court scaffolding evolve toward full PoC/PoR production consensus.
