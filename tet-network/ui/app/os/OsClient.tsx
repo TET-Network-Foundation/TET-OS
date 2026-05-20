@@ -5,8 +5,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { Keyring } from "@polkadot/keyring";
 import { cryptoWaitReady, mnemonicValidate } from "@polkadot/util-crypto";
+import { mnemonicToTetEd25519Keypair, signTetEd25519 } from "../lib/ed25519_tet";
 import { stringToU8a } from "@polkadot/util";
 import { clearSession, loadSession } from "../lib/session";
 import { loadAddressBook, saveAddressBook, type AddressBookEntryV0 } from "../lib/address_book_store";
@@ -36,7 +36,6 @@ import {
   postWalletTransfer,
   STEVEMON_PER_TET,
   tetCoreUrl,
-  walletIdHexFromPublicKey,
 } from "../lib/tet_core_http";
 import {
   buildSignedWalletTransfer,
@@ -499,25 +498,24 @@ export default function NexusOS() {
   }, [walletGate]);
 
   async function applyUnlockedHybridSessionFromMnemonic(mnemonicNorm: string) {
-    await cryptoWaitReady();
     await pqcInit();
     const phrase = mnemonicNorm.trim().toLowerCase().replace(/\s+/g, " ");
     if (!mnemonicValidate(phrase)) {
       throw new Error("Invalid Mnemonic: BIP39 validation failed.");
     }
-    const kr = new Keyring({ type: "ed25519", ss58Format: 42 });
-    const edPair = kr.addFromMnemonic(phrase);
-    const wid = walletIdHexFromPublicKey(edPair.publicKey).toLowerCase();
+    const ed = mnemonicToTetEd25519Keypair(phrase);
+    const wid = ed.walletIdHex.toLowerCase();
+    const sk = ed.secretKey;
     const pqc = await mldsa44KeypairFromMnemonic(phrase);
     setHybridSignerSession({
       walletIdHex64: wid,
-      signEd25519: (buf) => Promise.resolve(edPair.sign(buf)),
+      signEd25519: (buf) => signTetEd25519(sk, buf),
       mldsa44_keypair_b64: pqc.keypair_b64,
       mldsa44_pubkey_b64: pqc.pubkey_b64,
-      displayAddress: edPair.address,
+      displayAddress: `${wid.slice(0, 10)}…${wid.slice(-6)}`,
     });
     setFounderWalletIdHex64(wid);
-    setActiveAccountAddress(edPair.address);
+    setActiveAccountAddress(`${wid.slice(0, 10)}…${wid.slice(-8)}`);
     if (wid !== GENESIS_FOUNDER_WALLET_ID_HEX) {
       appendLedger([
         "[INFO] Active wallet_id differs from default genesis dev key — use this Wallet ID on tet-core (faucet / mint) for balances.",

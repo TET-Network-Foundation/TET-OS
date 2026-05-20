@@ -123,6 +123,9 @@ export async function buildSignedWalletTransfer(
 
 export function userFacingTransferError(status: number, text?: string): string {
   const raw = (text ?? "").trim();
+  if (process.env.NODE_ENV === "development" && raw) {
+    console.error("[transfer] server response (raw):", raw);
+  }
   const lower = raw.toLowerCase();
   if (status === 0) {
     return "Cannot reach the node. Check that TET-Core is running and the API URL is correct.";

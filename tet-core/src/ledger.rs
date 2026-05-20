@@ -28,8 +28,7 @@ pub const TARGET_BLOCK_TIME_MS: u64 = 4_000;
 /// Aligned with Sovereign OS normalized in-app wallet genesis; `apply_genesis_allocation` credits
 /// [`GENESIS_FOUNDER_SHARE_MICRO`] (25億 TET) to this address on first boot.
 /// Override at runtime with `TET_GENESIS_FOUNDER_WALLET_ID`.
-pub const GENESIS_FOUNDER_DEV_PUBLIC_HEX: &str =
-    "57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0";
+pub use crate::genesis::GENESIS_FOUNDER_DEV_PUBLIC_HEX;
 /// Legacy denomination before Stevemon scale alignment (8 decimals per TET).
 pub const LEGACY_STEVEMON_PER_TET: u64 = 100_000_000;
 pub const MAX_SUPPLY_MICRO: u64 = 10_000_000_000u64 * STEVEMON;
@@ -64,25 +63,11 @@ pub const GENESIS_TOTAL_MINT_MICRO: u64 =
 const _: () = assert!(GENESIS_TOTAL_MINT_MICRO == MAX_SUPPLY_MICRO);
 
 pub fn mainnet_env_enabled() -> bool {
-    std::env::var("TET_MAINNET")
-        .ok()
-        .as_deref()
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    crate::genesis::mainnet_env_enabled()
 }
 
 pub fn chain_id_from_env() -> String {
-    std::env::var("TET_CHAIN_ID")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if mainnet_env_enabled() {
-                "tet-mainnet-1".to_string()
-            } else {
-                "tet-local-dev".to_string()
-            }
-        })
+    crate::genesis::chain_id_from_env()
 }
 
 pub fn normalize_treasury_address(raw: &str) -> Result<String, LedgerError> {
@@ -109,44 +94,15 @@ pub fn treasury_address_from_env() -> Result<String, LedgerError> {
 }
 
 pub fn deterministic_genesis_hash(founder_wallet_id: &str, treasury_wallet_id: &str) -> String {
-    let founder = founder_wallet_id.trim().to_ascii_lowercase();
-    let treasury = treasury_wallet_id.trim().to_ascii_lowercase();
-    let payload = format!(
-        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|treasury={}|treasury_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
-        chain_id_from_env(),
-        founder,
-        GENESIS_FOUNDER_SHARE_MICRO,
-        WALLET_SYSTEM_WORKER_POOL,
-        GENESIS_WORKER_POOL_SHARE_MICRO,
-        treasury,
-        GENESIS_TREASURY_SHARE_MICRO,
-        WALLET_PROTOCOL_RESERVE,
-        GENESIS_PROTOCOL_RESERVE_SHARE_MICRO,
-        MAX_SUPPLY_MICRO,
-    );
-    format!("0x{}", hex::encode(Sha256::digest(payload.as_bytes())))
+    crate::genesis::deterministic_genesis_hash_from_parts(founder_wallet_id, treasury_wallet_id)
 }
 
 pub fn expected_genesis_founder_wallet_from_env() -> String {
-    std::env::var("TET_GENESIS_FOUNDER_WALLET_ID")
-        .ok()
-        .or_else(|| std::env::var("TET_FOUNDER_WALLET").ok())
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| GENESIS_FOUNDER_DEV_PUBLIC_HEX.to_string())
+    crate::genesis::expected_genesis_founder_wallet_from_env()
 }
 
 pub fn expected_genesis_hash_from_env() -> String {
-    if let Ok(h) = std::env::var("TET_GENESIS_HASH") {
-        let h = h.trim().to_ascii_lowercase();
-        if !h.is_empty() {
-            return h;
-        }
-    }
-    let founder = expected_genesis_founder_wallet_from_env();
-    let treasury = treasury_address_from_env()
-        .expect("TET_TREASURY_ADDRESS is required for genesis hash");
-    deterministic_genesis_hash(&founder, &treasury)
+    crate::genesis::expected_genesis_hash_from_env()
 }
 
 /// Genesis Worker grant: 100,000 TET × 1,000 nodes = 100,000,000 TET (funded from `system:worker_pool` at genesis).
