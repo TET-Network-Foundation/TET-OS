@@ -1,0 +1,9 @@
+node_modules
+.next
+out
+.git
+.DS_Store
+npm-debug.log*
+coverage
+tet.db*
+*.db

@@ -1,31 +1,122 @@
+# Local 3-node testnet + Sovereign OS UI.
+# Build context is the monorepo root (needs methods/ + nexus-protocol/).
+#
+# Quick start (recommended):
+#   ./scripts/start-network.sh
+#
+# Manual first-time bootstrap:
+#   1. docker compose up -d tet-node-1
+#   2. ./scripts/print-bootnode.sh tet-node-1
+#      → copy the multiaddr into TET_BOOTNODES below (or export TET_BOOTNODES=...)
+#   3. docker compose up -d
+#
+# Second run onward: PeerId is persisted in volumes — `docker compose up` is enough
+# if TET_BOOTNODES is set in the environment or in this file.
+
 services:
-  tet-core:
-    build: .
+  tet-node-1:
+    build:
+      context: ..
+      dockerfile: tet-core/Dockerfile
+    container_name: tet-node-1
+    hostname: tet-node-1
+    environment:
+      PORT: "5010"
+      TET_REST_BIND: "0.0.0.0:5010"
+      TET_P2P_LISTEN: "/ip4/0.0.0.0/tcp/5011"
+      TET_DB_DIR: "/data/tet.db"
+      TET_ENABLE_P2P: "1"
+      TET_AUTO_MINE: "1"
+      TET_IS_BOOTNODE: "1"
+      TET_WORKER_DAEMON: "0"
+      RISC0_SKIP_BUILD: "1"
     ports:
       - "5010:5010"
-    environment:
-      # Persist DB on the host (sled dir)
-      - TET_DB_DIR=/app/tet.db
-      # Production hardening (recommended on GCP)
-      # - TET_PROD=true
-      # - TET_DB_KEY_B64=YOUR_32_BYTE_BASE64_KEY_HERE
-      # If not set, server will default price to pre-sale ($0.05) for UI/chart sync
-      # - TET_USD_PER_TET=0.05
-      # Optional API key for founder/genesis/admin operations
-      # - TET_API_KEY=change-me
+      - "5011:5011"
     volumes:
-      - ./tet_data:/app/tet.db
+      - tet-data-1:/data
+    networks:
+      - tet-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:5010/ledger/state || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
 
-  # Placeholder reverse proxy for future SSL / domain routing (Caddy/Nginx).
-  # reverse-proxy:
-  #   image: caddy:2
-  #   ports:
-  #     - "80:80"
-  #     - "443:443"
-  #   volumes:
-  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
-  #   depends_on:
-  #     - tet-core
+  tet-node-2:
+    build:
+      context: ..
+      dockerfile: tet-core/Dockerfile
+    container_name: tet-node-2
+    hostname: tet-node-2
+    environment:
+      PORT: "5020"
+      TET_REST_BIND: "0.0.0.0:5020"
+      TET_P2P_LISTEN: "/ip4/0.0.0.0/tcp/5021"
+      TET_DB_DIR: "/data/tet.db"
+      TET_ENABLE_P2P: "1"
+      TET_BOOTNODES: "${TET_BOOTNODES:-}"
+      TET_WORKER_DAEMON: "0"
+      RISC0_SKIP_BUILD: "1"
+    ports:
+      - "5020:5020"
+      - "5021:5021"
+    volumes:
+      - tet-data-2:/data
+    depends_on:
+      tet-node-1:
+        condition: service_healthy
+    networks:
+      - tet-net
 
-volumes: {}
+  tet-node-3:
+    build:
+      context: ..
+      dockerfile: tet-core/Dockerfile
+    container_name: tet-node-3
+    hostname: tet-node-3
+    environment:
+      PORT: "5030"
+      TET_REST_BIND: "0.0.0.0:5030"
+      TET_P2P_LISTEN: "/ip4/0.0.0.0/tcp/5031"
+      TET_DB_DIR: "/data/tet.db"
+      TET_ENABLE_P2P: "1"
+      TET_BOOTNODES: "${TET_BOOTNODES:-}"
+      TET_WORKER_DAEMON: "0"
+      RISC0_SKIP_BUILD: "1"
+    ports:
+      - "5030:5030"
+      - "5031:5031"
+    volumes:
+      - tet-data-3:/data
+    depends_on:
+      tet-node-1:
+        condition: service_healthy
+    networks:
+      - tet-net
 
+  tet-ui:
+    build:
+      context: ../tet-network/ui
+      dockerfile: Dockerfile
+    container_name: tet-ui
+    environment:
+      NEXT_PUBLIC_TET_CORE_URL: "http://localhost:5010"
+      TET_CORE_ORIGIN: "http://tet-node-1:5010"
+    ports:
+      - "3000:3000"
+    depends_on:
+      tet-node-1:
+        condition: service_healthy
+    networks:
+      - tet-net
+
+networks:
+  tet-net:
+    driver: bridge
+
+volumes:
+  tet-data-1:
+  tet-data-2:
+  tet-data-3:
