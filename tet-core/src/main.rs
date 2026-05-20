@@ -7,6 +7,7 @@ mod chaos;
 mod conductor;
 mod consensus;
 mod e2ee;
+mod genesis;
 mod executor;
 mod invariant_tests;
 mod ledger;

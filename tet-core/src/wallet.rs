@@ -7,19 +7,6 @@ use rand_core::{OsRng, RngCore};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
-const STEVEMON: u64 = 1_000_000;
-const MAX_SUPPLY_MICRO: u64 = 10_000_000_000u64 * STEVEMON;
-const GENESIS_FOUNDER_SHARE_MICRO: u64 = 2_500_000_000u64 * STEVEMON;
-const GENESIS_WORKER_POOL_SHARE_MICRO: u64 = 5_000_000_000u64 * STEVEMON;
-const GENESIS_ECOSYSTEM_SHARE_MICRO: u64 = 2_500_000_000u64 * STEVEMON;
-const GENESIS_PROTOCOL_RESERVE_SHARE_MICRO: u64 = 0;
-const WALLET_SYSTEM_WORKER_POOL: &str = "system:worker_pool";
-const WALLET_ECOSYSTEM: &str = "0000000000000000000000000000000000000000000000000000000000000002";
-const WALLET_PROTOCOL_RESERVE: &str =
-    "0000000000000000000000000000000000000000000000000000000000000003";
-const GENESIS_FOUNDER_DEV_PUBLIC_HEX: &str =
-    "57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0";
-
 #[derive(Debug, thiserror::Error)]
 pub enum WalletError {
     #[error("invalid mnemonic")]
@@ -152,76 +139,19 @@ pub fn infer_mldsa_mode_from_raw_pubkey(pk: &[u8]) -> Option<DilithiumMode> {
 }
 
 pub fn mainnet_env_enabled() -> bool {
-    std::env::var("TET_MAINNET")
-        .ok()
-        .as_deref()
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    crate::genesis::mainnet_env_enabled()
 }
 
 pub fn chain_id_from_env() -> String {
-    std::env::var("TET_CHAIN_ID")
-        .ok()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            if mainnet_env_enabled() {
-                "tet-mainnet-1".to_string()
-            } else {
-                "tet-local-dev".to_string()
-            }
-        })
-}
-
-fn expected_genesis_founder_wallet_from_env() -> String {
-    std::env::var("TET_GENESIS_FOUNDER_WALLET_ID")
-        .ok()
-        .or_else(|| std::env::var("TET_FOUNDER_WALLET").ok())
-        .map(|s| s.trim().to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| GENESIS_FOUNDER_DEV_PUBLIC_HEX.to_string())
-}
-
-fn treasury_address_from_env_for_hash() -> String {
-    let raw = std::env::var("TET_TREASURY_ADDRESS")
-        .expect("TET_TREASURY_ADDRESS is required for genesis hash");
-    let w = raw.trim().to_ascii_lowercase();
-    assert!(
-        !w.is_empty() && w.len() == 64 && w.chars().all(|c| c.is_ascii_hexdigit()),
-        "TET_TREASURY_ADDRESS must be 64 hex chars"
-    );
-    w
+    crate::genesis::chain_id_from_env()
 }
 
 pub fn deterministic_genesis_hash(founder_wallet_id: &str, treasury_wallet_id: &str) -> String {
-    let founder = founder_wallet_id.trim().to_ascii_lowercase();
-    let treasury = treasury_wallet_id.trim().to_ascii_lowercase();
-    let payload = format!(
-        "tet-genesis-v1|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|treasury={}|treasury_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}",
-        chain_id_from_env(),
-        founder,
-        GENESIS_FOUNDER_SHARE_MICRO,
-        WALLET_SYSTEM_WORKER_POOL,
-        GENESIS_WORKER_POOL_SHARE_MICRO,
-        treasury,
-        GENESIS_ECOSYSTEM_SHARE_MICRO,
-        WALLET_PROTOCOL_RESERVE,
-        GENESIS_PROTOCOL_RESERVE_SHARE_MICRO,
-        MAX_SUPPLY_MICRO,
-    );
-    format!("0x{}", hex::encode(Sha256::digest(payload.as_bytes())))
+    crate::genesis::deterministic_genesis_hash_from_parts(founder_wallet_id, treasury_wallet_id)
 }
 
 pub fn expected_genesis_hash_from_env() -> String {
-    if let Ok(h) = std::env::var("TET_GENESIS_HASH") {
-        let h = h.trim().to_ascii_lowercase();
-        if !h.is_empty() {
-            return h;
-        }
-    }
-    let founder = expected_genesis_founder_wallet_from_env();
-    let treasury = treasury_address_from_env_for_hash();
-    deterministic_genesis_hash(&founder, &treasury)
+    crate::genesis::expected_genesis_hash_from_env()
 }
 
 /// Verify detached ML-DSA signature; pubkey/sig are STANDARD base64 over **raw** FIPS-204 bytes (no mode prefix).
