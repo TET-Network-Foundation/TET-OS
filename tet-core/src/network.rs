@@ -173,8 +173,7 @@ struct PeerBudget {
 }
 
 impl NetworkManager {
-    pub async fn new(_namespace: String) -> NetResult<Self> {
-        let keypair = identity::Keypair::generate_ed25519();
+    pub async fn new(_namespace: String, keypair: identity::Keypair) -> NetResult<Self> {
         let peer_id = PeerId::from(keypair.public());
 
         let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
