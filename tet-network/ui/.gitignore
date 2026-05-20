@@ -22,6 +22,7 @@
 
 # misc
 .DS_Store
+tet_ledger.json
 *.pem
 
 # debug

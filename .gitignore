@@ -1,19 +1,41 @@
+# Rust
 target/
 **/target/
-.DS_Store
+*.rs.bk
+
+# Local DB / P2P identity
 tet.db
+tet.db_*/
 **/tet.db
 tet.db/**
 **/tet.db/**
+**/libp2p_keypair.bin
+
+# Node
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+**/.next/
+.next/
+
+# IDE / OS
+.vscode/
+.idea/
+.cursor/
+.DS_Store
+
+# Logs
+*.log
+/tmp/tet-*.log
+
+# Secrets / env
 .env
 .env.*
 **/.env
 **/.env.*
-node_modules/
-**/node_modules/
-.next/
-**/.next/
-*.log
+
 deploy/secrets/
 tet-wallet*.json
 test-ledger/

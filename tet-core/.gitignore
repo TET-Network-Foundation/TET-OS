@@ -1,5 +1,7 @@
-node_modules/
+# Rust
 target/
+**/target/
+*.rs.bk
 
 # Local ledger / database / snapshots
 tet.db/
@@ -11,6 +13,15 @@ db_eta_*/
 db_node_*/
 tet_ledger.json
 *.snap.json
+libp2p_keypair.bin
+
+# Node
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+.next/
 
 # Local env files (never commit secrets)
 .env
@@ -21,3 +32,7 @@ tet_ledger.json
 .DS_Store
 .idea/
 .vscode/
+.cursor/
+
+# Logs
+*.log
