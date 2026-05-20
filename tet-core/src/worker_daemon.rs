@@ -46,14 +46,21 @@ fn poll_interval_from_env() -> Duration {
     Duration::from_millis(ms)
 }
 
+/// `true` when the RISC0 guest ELF is linked (not the `RISC0_SKIP_BUILD` stub).
+pub fn nexus_guest_elf_available() -> bool {
+    !methods::NEXUS_GUEST_ELF.is_empty()
+}
+
 pub fn should_start_worker_daemon(ledger: &Ledger, worker_wallet: &str) -> bool {
     if !daemon_enabled_from_env() {
         return false;
     }
-    if methods::NEXUS_GUEST_ELF.is_empty() {
-        panic!(
-            "CRITICAL ERROR: NEXUS_GUEST_ELF is empty! Do not use RISC0_SKIP_BUILD in production."
+    if !nexus_guest_elf_available() {
+        log::warn!(
+            "[worker-daemon] not started: NEXUS_GUEST_ELF is empty (RISC0_SKIP_BUILD or guest not built); \
+             set TET_WORKER_DAEMON=0 to silence, or build with the RISC0 guest for ZK proving"
         );
+        return false;
     }
     if ledger
         .caac_get_worker_record(worker_wallet)
@@ -241,10 +248,10 @@ fn prove_zk_court_task_receipt(
     use nexus_protocol::zk_court_inference_commitment_v1;
     use risc0_zkvm::{ExecutorEnv, default_prover};
 
-    if methods::NEXUS_GUEST_ELF.is_empty() {
-        panic!(
-            "CRITICAL ERROR: NEXUS_GUEST_ELF is empty! Do not use RISC0_SKIP_BUILD in production."
-        );
+    if !nexus_guest_elf_available() {
+        return Err(anyhow::anyhow!(
+            "NEXUS_GUEST_ELF is empty; ZK proving unavailable (build without RISC0_SKIP_BUILD)"
+        ));
     }
 
     let commitment_sha256 =
