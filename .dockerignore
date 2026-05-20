@@ -1,0 +1,38 @@
+# Git / editor
+.git
+.github
+.cursor
+.DS_Store
+
+# Rust artifacts (keep sources under methods/, nexus-protocol/, tet-core/)
+**/target/
+**/*.rs.bk
+
+# Node / frontend build outputs
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+
+# Local ledger DBs and test data
+tet-core/tet.db*
+tet.db*
+**/*.db
+test-ledger/
+
+# Archived / unused for canonical tet-core image
+tet-core-node/
+tet-network/chain/
+tet-network/ui/
+nexus network/
+nexus-onchain/
+observability/
+deploy/
+web-wallet/
+nexus-frontend/
+pwa/
+
+# Logs and bulky runtime files
+*.log
+bootnode.log
+client.log
