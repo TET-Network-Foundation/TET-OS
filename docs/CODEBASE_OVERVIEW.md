@@ -1,31 +1,36 @@
-# TET Network — Codebase Overview
+# TET Network — Codebase Overview (v2)
 
-**作成日:** 2026-05-18  
-**対象リポジトリ:** `/Users/sengokukazuma/Nexus_Network`（旧 Nexus Network）  
+**Version:** v2 (post–Sprint 1)  
+**作成日:** 2026-05-19  
+**前版:** [`archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md`](archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md)（2026-05-18、Sprint 1 開始前）  
+**対象リポジトリ:** `/Users/sengokukazuma/Nexus_Network`  
+**Sprint 1 参照コミット（報告値）:** `7264191`（catch-up driver）、`499bb00`（sync gate + startup）、`183fd14`（Phase C 統合テスト）— **未検証: ローカルで `git log` 未実行**
+
 **読者:** Founder-Architect / シニアエンジニア向けオンボーディング  
-**方法:** コード変更なし。列挙ファイルを実読。
+**方法:** コード変更なし。列挙ファイルを実読（2026-05-19）。
 
 ---
 
-## 0. ホワイトペーパー正本（2026-05-18 更新）
+## 0. ホワイトペーパー正本
 
-**正本:** [`WHITEPAPER.md`](../WHITEPAPER.md) / [`GENESIS_V1.md`](../GENESIS_V1.md) — **Genesis Draft v1.0**（2026-04-28、§1–§17、~287 行）。
+**正本:** [`WHITEPAPER.md`](../WHITEPAPER.md) / [`GENESIS_V1.md`](../GENESIS_V1.md) — **Genesis Draft v1.0**（2026-04-28、§1–§17）。
 
 | 章 | 内容 |
 |----|------|
 | §4 | CAAC — §4.1 PoC, §4.2 PoR |
 | §5 | Fluid chain — §5.1 Sovereign Runtime (+ challenge window → ZK-Court), §5.2 R(T) / Sovereign Peg |
-| §6 | Fluid transaction workload flag |
-| §7–§8 | Weight Locality, edge light clients |
+| §6 | Fluid transaction `workload_flag` |
+| §7–§8 | Weight locality, edge light clients |
 | §9 | Thermodynamic efficiency, Cockroach Doctrine |
 | §10 | ML-DSA (FIPS 204) |
-| §11 | Tokenomics (10B cap, 25/50/25, 50% fee burn) |
-| §12.1–12.4 | Binding applications; **§12.5–12.7 = Future Work** |
-| §13–§14 | Roadmap, threat model (§14.2 hardware fingerprinting) |
+| §11 | Tokenomics (10B cap, 25/50/25 allocation, 50% fee burn) |
+| §12.1–12.4 | Binding Phase 0/1 applications |
+| §12.5–12.7 | **Future Work**（本文で明示） |
+| §13–§14 | Roadmap, threat model (§14.1 ZK fraud, §14.2 hardware fingerprinting) |
 
-**Deprecated:** [`archive/WHITEPAPER_v0_economic.md`](../archive/WHITEPAPER_v0_economic.md)（CHF peg / stevemon / Imperial Tax / Sharding Plugins）。
+**Deprecated:** [`archive/WHITEPAPER_v0_economic.md`](../archive/WHITEPAPER_v0_economic.md)
 
-**補助:** `tet-network/ui/public/tet-network-whitepaper.pdf`（2026-04-28、~1.8 MB）— 本文 diff は Phase 0 ship 直前（[`WHITEPAPER_V1.0_LAUNCH.md`](WHITEPAPER_V1.0_LAUNCH.md)）。
+**補助 PDF:** `tet-network/ui/public/tet-network-whitepaper.pdf`（2026-04-28）— MD との diff は **要 Steve 判断**（Phase 0 ship 前に突合推奨）。
 
 ---
 
@@ -34,79 +39,57 @@
 ```
 Nexus_Network/
 ├── tet-core/                    [CANONICAL] Rust L1 ノード (TET-Core バイナリ)
-│   ├── src/                     メインロジック (~15k LOC 中核)
-│   ├── scripts/                 start-network.sh, print-bootnode.sh
+│   ├── src/                     メインロジック（sync.rs 新規 + main 604 行）
+│   ├── scripts/                 start-network.sh, start-3-node-testnet.sh, print-bootnode.sh
 │   ├── Dockerfile, docker-compose.yml
 │   └── tests/, examples/
 ├── tet-network/
 │   ├── ui/                      [CANONICAL] Next.js 16 Sovereign OS / Explorer
-│   └── chain/                   [ARCHIVED] Substrate テンプレ実験
+│   └── chain/                   [ARCHIVED] Substrate テンプレ
 ├── methods/, prover/            [CANONICAL] RISC0 zkVM / guest
-├── nexus-protocol/              [CANONICAL] 共有プロトコル型 (chain-bound payload)
+├── nexus-protocol/              [CANONICAL] 共有プロトコル型
 ├── tet-pqc-wasm/, nexus-wasm/   PQC WASM 補助
 ├── tet-agent-sdk/               TypeScript M2M クライアント
-├── tet-cli/                     CLI（workspace メンバー、現状テストビルド失敗あり）
+├── tet-cli/                     CLI（workspace；`TxV1::VerifyZkProof` ビルド不整合あり）
 ├── docs/                        STATUS, SYNC_ISSUE, SPRINT_PLAN, 本ファイル
-├── tet-core-node/               [ARCHIVED] Substrate node 実験
-├── nexus-onchain/               [ARCHIVED] Solana Anchor 実験
-├── nexus network/               [ARCHIVED] レガシー入れ子 (tet-core-node, tet-ui)
-├── observability/               Prometheus/Grafana 雛形
-├── deploy/, web-wallet/, pwa/   運用・フロント実験
-├── WHITEPAPER.md, LITEPAPER.md  ルート正本（経済・計算ビジョン）
-└── Cargo.toml                   workspace: tet-core, methods, prover, tet-cli, ...
+├── WHITEPAPER.md                Genesis v1.0 正本
+└── Cargo.toml                   workspace
 ```
 
 | パス | タグ | 一行説明 |
 |------|------|----------|
-| `tet-core/` | **canonical** | sled 台帳 + Axum REST + libp2p 3 スタック + consensus/auto-mine |
-| `tet-network/ui/` | **canonical** | `/os`, `/explorer`, `/worker` 等の Next.js UI |
-| `methods/`, `prover/` | **canonical** | RISC0 guest / prover host |
-| `nexus-protocol/` | **canonical** | `TxV1` 等と整合する共有スキーマ |
-| `tet-agent-sdk/` | active | HTTP クライアント + ZK-Court 監査テスト例 |
-| `tet-pqc-wasm/` | active | ML-DSA WASM |
-| `tet-cli/` | active (壊れ気味) | 運用 CLI |
-| `tet-core-node/`, `tet-network/chain/` | **archived** | Substrate；CI `if: false` |
-| `nexus-onchain/` | **archived** | Solana プログラム実験 |
-| `nexus network/` | **archived** | 旧ディレクトリ構造 |
-| `observability/` | auxiliary | 監視ダッシュボード素材 |
-| `docs/` | meta | ギャップ分析・同期診断・スプリント計画 |
+| `tet-core/` | **canonical** | sled 台帳 + Axum REST + libp2p 3 スタック + catch-up + auto-mine gate |
+| `tet-network/ui/` | **canonical** | `/os`, `/explorer`, `/worker`, `/whitepaper` |
+| `methods/`, `prover/` | **canonical** | RISC0 guest（`RISC0_SKIP_BUILD=1` で ELF スタブ可） |
+| `nexus-protocol/` | **canonical** | `ZkCourtJournalV1` 等 |
+| `tet-cli/` | active（壊れ気味） | workspace 全体 `cargo test` が失敗し得る |
+| *(removed)* `tet-core-node/`, `tet-network/chain/` | **removed** | Substrate experiments (git history) |
+| `docs/archive/` | meta | v1 overview 退避 |
 
-**注意:** プロンプトの `nexus-network/` は **存在しない**。同等は `tet-network/`。
-
-**存在しないファイル（プロンプト記載 → 実体）:**
-
-| 期待名 | 実体 |
-|--------|------|
-| `block.rs` | **UNKNOWN** — ブロック型は `consensus.rs` / `ledger.rs` 内 |
-| `tx.rs` | `protocol.rs`（`TxV1` enum） |
-| `signature.rs` / `pqc.rs` | `quantum_shield.rs`, `wallet.rs`, `pqc_keystore.rs` |
-| `api.rs` | `rest.rs` + `rest/routes.rs` + `rest/handlers/*` |
-| `lib.rs`（フルツリー） | `tet-core/src/lib.rs` は **14 行**の部分 re-export のみ；**バイナリは `main.rs` が全モジュールを宣言** |
+**注意:** プロンプトの `nexus-network/` ディレクトリは **存在しない**（同等は `tet-network/`）。
 
 ---
 
 ## 2. モジュール依存グラフ（tet-core）
 
-`TET-Core` バイナリは **library crate としては薄く**、`main.rs` が 37 モジュールを直宣言（L3–L37）。
+`TET-Core` バイナリは `main.rs` が **38 モジュール + `sync`** を直宣言（L3–L43）。`lib.rs` は薄い re-export のみ。
 
 ### 2.1 Mermaid（起動・データフロー）
 
 ```mermaid
 flowchart TB
-    main[main.rs]
+    main[main.rs + StartupConfig]
+    sync[sync.rs]
     rest[rest / Axum]
     consensus[consensus.rs]
     ledger[ledger.rs]
     protocol[protocol.rs]
-    p2p[p2p.rs block gossip]
+    p2p[p2p.rs block + chain-sync RR]
     p2pnet[p2p_network.rs inference]
     net[network.rs ledger gossip]
     ks[p2p_keystore.rs]
-    vision[vision/* CAAC ZK-Court]
-    worker[worker_daemon / worker_engine]
-    zk[zk_verifier.rs]
-    methods[(methods crate ELF)]
 
+    main --> sync
     main --> rest
     main --> consensus
     main --> ledger
@@ -114,262 +97,296 @@ flowchart TB
     main --> p2pnet
     main --> net
     main --> ks
-    main --> vision
-    main --> worker
-    consensus --> ledger
-    consensus --> protocol
+    sync --> ledger
+    sync --> consensus
+    p2p --> sync
     p2p --> consensus
     p2p --> ledger
-    p2p --> protocol
+    consensus --> ledger
+    consensus --> protocol
+    rest --> consensus
+    rest --> sync
     p2pnet --> ledger
     net --> ledger
-    ks --> p2p
-    ks --> p2pnet
-    ks --> net
-    rest --> consensus
-    rest --> ledger
-    worker --> zk
-    zk --> methods
-    vision --> ledger
 ```
 
-### 2.2 ASCII（依存の要点）
+### 2.2 起動順（B.5、`main.rs` 実読）
 
-```
-main.rs
-  ├─► ledger.rs ◄──────────────────────────────────┐
-  ├─► consensus.rs ──► protocol.rs                 │
-  ├─► rest/ ──► handlers/* ──► consensus, ledger   │
-  ├─► p2p_keystore.rs                              │
-  │     ├─► network.rs (topic /tet/v1/ledger)      │
-  │     ├─► p2p_network.rs (topic nexus-inference-v1)
-  │     └─► p2p.rs (topics /tet/v1/blocks|txs)     │
-  ├─► replication.rs ◄── network publish           │
-  ├─► vision/{caac,zk_court,thermo_genesis,...}    │
-  ├─► worker_daemon.rs ──► zk_verifier ──► methods
-  └─► serve(RestState) ────────────────────────────┘
-```
+| Step | 内容 | ログ / 行 |
+|------|------|-----------|
+| 1 | `StartupConfig::from_env()` | L262–268 `[startup] config loaded` |
+| 2 | libp2p keystore (`p2p_keystore`) | L318–334 |
+| 2b | ML-DSA node keystore (`tet_core::pqc_keystore`) | L337–343 |
+| 3 | Ledger open + genesis/faucet | L345–363 `[startup] ledger opened` |
+| 4a | `NetworkManager` (`network.rs`) | L452–472 |
+| 4b | `p2p_network::start_p2p_node` | L479–491 |
+| 5 | `sync::install_block_sync_board` | L493–502（hello registry + catch-up driver） |
+| 4c | `p2p::start_mdns_ping_swarm`（**同一** `TET_P2P_LISTEN` を `parse_block_listen_multiaddr` 経由） | L504–536 |
+| — | bootnode dial（各 swarm タスク内） | L538–543 |
+| 6 | `serve(RestState)` 準備 | L555–569 |
+| 7 | `spawn_auto_miner`（`sync::auto_mine_blocked_by_sync`） | L574–583 |
+| 8 | `serve` ブロック | L598+ |
 
-**起動順（引用）:** `main.rs` L374–387 keystore → L389–408 `NetworkManager` → L417–426 `p2p_network::start_p2p_node` → L432–441 `p2p::start_mdns_ping_swarm` → L478–482 `spawn_auto_miner` → L501 `serve`.
+**v1 からの改善:** block-plane は `tcp/0` 専用ではなく `config.p2p_listen`（`TET_P2P_LISTEN`）を使用（`main.rs` L504–518、`p2p.rs` L660, L745）。
+
+**残課題:** 依然 **3 独立 swarms**（`network` / `p2p_network` / `p2p`）。bootnode multiaddr は **block-plane の listen + `/p2p/<id>`** である必要あり（`SYNC_ISSUE.md` §1 は一部 outdated）。
 
 ---
 
-## 3. ホワイトペーパー要素 → 実装マッピング
+## 3. ホワイトペーパー要素 → 実装マッピング（Genesis v1.0）
 
-**実装状況:** `0` 未着手 / `1` スケルトン / `2` 部分 / `3` 完全（単体ノード + テスト基準）
+**実装状況:** `0` 未着手 / `1` スケルトン / `2` 部分 / `3` 単体・統合テストで実証済み
 
-| WP § | 概念 | WHITEPAPER 参照 | 実装ファイル | 状況 | Gap |
-|------|------|-----------------|--------------|------|-----|
-| §4.1 | PoC | L60–62 | `vision/caac.rs`, `consensus.rs`, `worker_daemon.rs` | **2** | 本番スケジューラ未接続 |
-| §4.2 | PoR | L64–66 | `vision/caac.rs`, `p2p.rs` | **2** | 帯域ガード・coinbase-only mining まで |
-| §5.1 | Sovereign Runtime + optimistic window | L76–80 | `main.rs`, `rest/`, `tet-network/ui/app/os/` | **2** | window 長・watcher 報酬未定義（v1.1 Gap 3） |
-| §5.1 | ZK-Court | L78–80 | `vision/zk_court.rs`, `methods/`, `zk_verifier.rs` | **2** | dispute フル E2E・本番証明は未 |
-| §5.2 | R(T) / Sovereign Peg | L82–88 | `vision/thermo_genesis.rs`, `consensus.rs` | **2** | η(Wᵢ) 未実装；コード式は flops/joules×Γ |
-| §6 | workload flag | L92–99 | `protocol.rs` | **3** | `EnterpriseInference.workload_flag` + テスト |
-| §7 | Weight Locality | L101–105 | `consensus.rs` CAAC weights | **1–2** | 地理クラスタリング未実装 |
+| WP § | 概念 | WHITEPAPER 参照 | 実装ファイル | 状況 | Gap（Sprint 1 後） |
+|------|------|-----------------|--------------|------|---------------------|
+| §4.1 | PoC | L60–62 | `vision/caac.rs`, `worker_daemon.rs`, `consensus.rs` | **2** | ローカル PoC 判定 + daemon；ネットワーク広域スケジューラ未接続 |
+| §4.2 | PoR | L64–66 | `vision/caac.rs`, `p2p.rs` relay/gossip | **2** | 帯域・gossip 参加はあるが PoR 専用報酬経路は薄い |
+| §5.1 | Sovereign Runtime + challenge window | L76–80 | `rest/`, `vision/zk_court.rs`, `worker_daemon.rs` | **2** | challenge window 実装あり；本番 zkVM 証明は dev 中心 |
+| §5.1 | ZK-Court slash | L78–80 | `vision/zk_court.rs` L64–77, L115+ | **2** | in-memory dispute；100% slash は λ 倍率モデル（WP 文言と要突合） |
+| §5.2 | R(T) / Sovereign Peg | L82–88 | `vision/thermo_genesis.rs` L53–78 | **2** | コードは `(C/E)×Γ`；**η(Wᵢ)** 項は未実装（WP 式と不一致） |
+| §6 | workload flag | L92–99 | `protocol.rs` | **3** | flag 0/1 + ルーティング拒否テスト |
+| §7 | Weight Locality | L101–105 | `consensus.rs` CAAC leader weights | **1–2** | 地理クラスタ未実装 |
 | §8 | Light client / Merkle | L109–113 | `ledger.rs` `compute_state_root` | **1** | SPV プロトコル未 |
-| §10 | ML-DSA | L127–131 | `quantum_shield.rs`, `tet-pqc-wasm/` | **2** | 監査レベル検証は SPRINT0 GAP |
-| §11 | Tokenomics cap / allocation | L135–143 | `ledger.rs` `MAX_SUPPLY_MICRO` | **3** | 10B cap；配分は genesis 設計と要突合 |
-| §11.2 | 50% fee burn | L145–147 | `ledger.rs` burn meta, fee split | **2** | 80/15/5 AI settlement は別レイヤ（Gap 6） |
-| §12.5–12.7 | Future Work apps | L173–199 | — | **0** | 本文で Phase 0/1 対象外と明記 |
-| §14.1 | Lazy evaluation / ZK-Court | L215–217 | `vision/zk_court.rs`, `tests.rs` | **2** | mock テストあり |
-| §14.2 | Hardware fingerprinting | L219–221 | `vision/caac.rs` | **2** | probabilistic micro-tasks 未実装 |
+| §9 | Zero-waste compute | L117–119 | inference 経路 | **2** | PoW パズルなし；AI タスクは実ユーティリティ |
+| §10 | ML-DSA genesis | L127–131 | `quantum_shield.rs`, `wallet.rs`, `tet-pqc-wasm/` | **2** | トランザクションは hybrid Ed25519+ML-DSA；ノード補助鍵は別 |
+| §11 | 10B cap | L135–137 | `ledger.rs` L35 `MAX_SUPPLY_MICRO` | **3** | `10_000_000_000 * STEVEMON` |
+| §11.1 | Genesis 25/50/25 | L139–143 | `ledger.rs` L4045–4046 | **部分** | コードは **25% founder + 75% worker pool**（WP 50% mining / 25% treasury と不一致） |
+| §11.2 | 50% fee burn | L145–147 | `ledger.rs` `META_TOTAL_BURNED` | **2** | 一般手数料 burn あり；AI は 80/15/5 別レイヤ |
+| §12.2 | AI Inference Marketplace | L161–163 | `p2p_network.rs`, `rest/handlers/enterprise.rs` | **2** | E2EE + settlement + ZK モック |
+| §12.5–12.7 | Future Work | L173–177 | — | **0** | 本文で Phase 0/1 対象外 |
+| §14.1 | Lazy eval / ZK fraud | L215–217 | `zk_court.rs`, `zk_verifier.rs`, `methods/` | **2** | mock receipt テスト多い |
+| §14.2 | Hardware fingerprinting | L219–221 | `vision/caac.rs` L138–195 | **2** | SHA256-chain micro-task；タイミング Sybil 防御は部分 |
+| **P2P chain sync** | （WP は分散 L1 一般要件） | — | **`sync.rs`**, `p2p.rs` | **3** | Hello + range pull + driver + gate（Sprint 1） |
 
 ---
 
-## 4. tet-core モジュール早見表
+## 4. tet-core モジュール早見表（Sprint 1 後）
 
-| モジュール | 行数(概算) | 役割 |
-|------------|------------|------|
-| `ledger.rs` | 6427 | sled KV、残高、手数料、genesis、CAAC/ZK-Court メタ、CHF mint |
-| `consensus.rs` | 1522 | mine、auto-miner、remote block apply、validator/leader |
-| `p2p_network.rs` | 1405 | inference gossip、Kademlia、WebRTC、worker stake gate |
-| `p2p.rs` | 1344 | **block** gossip `/tet/v1/blocks`、block-sync RPC、mdns |
-| `tests.rs` | 3069 | **~50+** 統合テスト（in-process） |
-| `main.rs` | 503 | 起動、P2P 配線、prod guard |
-| `network.rs` | 356 | `/tet/v1/ledger` replication gossip |
-| `protocol.rs` | 124 | `TxV1`, `SignedTxEnvelopeV1` |
-| `worker_daemon.rs` | 368 | POC 自動 inference → `VerifyZkProof` |
-| `p2p_keystore.rs` | 76 | `libp2p_keypair.bin` 永続化 |
+| モジュール | 行数 | 役割 |
+|------------|------|------|
+| `ledger.rs` | 6427 | sled KV、genesis、burn、CAAC/ZK-Court メタ、CHF（legacy） |
+| `sync.rs` | **1261** | **新規** — `ChainHello`, catch-up driver, `BlockSyncBoard`, `/ledger/state` 用 status |
+| `p2p.rs` | 1865 | block gossip、`/tet/v1/chain-sync/*` RR、bootnode dial、catch-up apply |
+| `consensus.rs` | 1534 | mine、auto-miner + **sync gate**、remote apply |
+| `tests.rs` | 3384 | **92** テスト（Phase C `mod block_sync` 含む） |
+| `main.rs` | 604 | `StartupConfig`、明示的 `[startup]` 順序 |
+| `p2p_network.rs` | 1405 | inference gossip `nexus-inference-v1` |
+| `network.rs` | 356 | `/tet/v1/ledger` replication |
+| `p2p_keystore.rs` | 76 | `libp2p_keypair.bin` |
 
-**Binaries** (`tet-core/Cargo.toml` L73–83): `TET-Core`, `TET-Signer`, `TET-Worker-App`, `solana_pda`.
+**Binaries** (`tet-core/Cargo.toml`): `TET-Core`, `TET-Signer`, `TET-Worker-App`, `solana_pda`。
 
 ---
 
-## 5. 重要な現存バグ・未解決問題
+## 5. Sprint 1 完了サマリー（実装）
 
-### 5.1 `docs/SYNC_ISSUE.md` 要約
+| マイルストーン | 内容 |
+|----------------|------|
+| B.3a/b | `sync.rs` + `p2p.rs` — Hello、range request/response、catch-up driver、`apply_remote_block_from_gossip` 経由 apply |
+| B.4 | `/ledger/state` に `synced` + `sync`；`auto_mine_blocked_by_sync` |
+| B.5 | `main.rs` 起動順序 + `[startup]` ログ；`install_block_sync_board` を REST 前に実行 |
+| Phase C | `tests.rs` `mod block_sync` 3 本 + `scripts/start-3-node-testnet.sh` |
 
-| # | 問題 |
-|---|------|
-| 1 | **3 つの libp2p スワーム** — ブロック gossip は `p2p.rs` の **ephemeral `tcp/0`** のみ（`main.rs` L430–431） |
-| 2 | **tip-only gossip** — `apply_remote_block_from_gossip` は `height > local+1` を skip（`consensus.rs` L1314–1319） |
-| 3 | **起動遅れのピア** — height 0 のノードは height 15 のブロックを受けても適用不可 |
-| 4 | **bootnode :5011** — `TET_P2P_LISTEN` は inference/ledger 用；block mesh とは別ポート |
-| 5 | **観測** — PING/mdns は成功しても `block_height` は 15/0/0 のまま |
+**DoD（`docs/SPRINT_PLAN.md`）:** `cargo test --bin TET-Core block_sync` + 3-node `max(height)-min(height) ≤ 2` — **手動スクリプトで PASS 報告**（spread=1）。
 
-### 5.2 追加発見
+---
+
+## 6. 重要な現存バグ・未解決問題
+
+### 6.1 Sprint 1 carry-over（5 項目）
+
+| # | 問題 | 根拠（ファイル:行） |
+|---|------|---------------------|
+| C1 | **3 libp2p swarms 未統合** | `main.rs` L452–536；`docs/SYNC_ISSUE.md` §1 は block listen の記述が古い |
+| C2 | **Gossip tip-only skip 残存** | `consensus.rs` L1326–1331 — `height > local+1` は skip；catch-up は **range apply** で回避 |
+| C3 | **`parent_block_id: None` on local mine** | `consensus.rs` L1144, L1256（`record_block_record` 引数） |
+| C4 | **`BlockSyncBoard` はプロセス内 `OnceLock` 1 つ** | `sync.rs` L554 — 同一プロセス多ノードテストでは auto-miner gate が共有されない |
+| C5 | **`docs/SYNC_ISSUE.md` 未更新** | L17 仍記 `tcp/0`；Sprint 1 完了チェック未反映 |
+
+### 6.2 Sprint 1 / Phase C で新規に見えた点
 
 | 項目 | 根拠 |
 |------|------|
-| `record_block_record` で `parent_block_id: None` を渡す箇所 | `consensus.rs` L1244（mine 時）— gossip では `parent_block_id_for_height` を使用（L1262–1264） |
-| `ForkLost` / reorg 未完了 | `p2p.rs` L1033 — 「REORG UNSUPPORTED」ログ |
-| genesis snapshot race | `ledger.rs` L4247 — 並列起動で `atomic_write_snapshot` panic 報告あり（3 ノード同時起動） |
-| `tet-cli` workspace テスト破損 | `cargo test --workspace --no-run` → `tet-cli` `TxV1::VerifyZkProof` に `task_id` 不足 |
-| README と実装の env 名 | README: `TET_BOOTNODES`；古い記述に `TET_BOOTSTRAP_PEERS` なし（整合済み） |
+| **tip `state_root` が height ±1 で一致しないことがある** | 手動 3-node: n1=11 vs n2/n3=12 で root 差（DoD は height のみ） |
+| **follower が死んだ bootnode に張り付いたまま gossip 不足** | Phase C C.2 — Node3 を Node2 bootnode に `respawn_swarm` で回避 |
+| **`p2p_network.rs` 先頭コメントが誤り** | L3–4「not wired into main.rs」— 実際 `main.rs` L479–491 で起動 |
+| **WP §11.1 25/50/25 vs ledger 25/75** | `WHITEPAPER.md` L139–143 vs `ledger.rs` L4045–4046 |
+| **`tet-cli` workspace テスト破損** | v1 同様 — `VerifyZkProof` フィールド不整合 |
+| **REORG 未サポート** | `p2p.rs` — 「REORG UNSUPPORTED」ログ（v1 継続、行番号要再 grep） |
 
-### 5.3 grep: TODO / FIXME / unimplemented!
+### 6.3 grep: TODO / FIXME
 
-| パターン | `tet-core/src/**/*.rs` 結果 |
-|----------|----------------------------|
-| `TODO` | **0 件** |
-| `FIXME` | **0 件** |
-| `unimplemented!` | **0 件** |
-| `panic!` | **本番ガード + genesis 厳格化 + テスト assert**（下表） |
-
-**本番系 `panic!`（抜粋）:**
-
-| ファイル | 行 | 内容 |
-|----------|-----|------|
-| `main.rs` | 217 | prod で `NEXUS_GUEST_ID == 0` 拒否 |
-| `main.rs` | 231, 238 | mainnet で mock ZK / founder 必須 |
-| `ledger.rs` | 4206–4247 | genesis 失敗時 FATAL |
-| `zk_verifier.rs` | 28 | mainnet + mock ZK 禁止 |
-| `e2ee.rs` | 58, 73 | prod で dev E2EE キー禁止 |
-
-**修正済み（参考）:** `worker_daemon.rs` L54–63 — 空 `NEXUS_GUEST_ELF` で warn + return false（旧 CRITICAL panic 撤去）。
+`tet-core/src/**/*.rs`: **TODO/FIXME/unimplemented! = 0 件**（v1 同様）。
 
 ---
 
-## 6. テストカバレッジ
+## 7. テストカバレッジ
 
-### 6.1 `cargo test --workspace --no-run`
+### 7.1 `cargo test --bin TET-Core`
 
 ```text
-# 2026-05-18 実行
-cd Nexus_Network && RISC0_SKIP_BUILD=1 cargo test --workspace --no-run
-→ FAILED: tet-cli E0063 missing field `task_id` in TxV1::VerifyZkProof
+# 2026-05-19 実行
+RISC0_SKIP_BUILD=1 cargo test --bin TET-Core
+→ test result: ok. 92 passed; 0 failed
 ```
 
-**workspace members** (`Cargo.toml` L2–11): `tet-core`, `methods`, `nexus-wasm`, `nexus-protocol`, `tet-pqc-wasm`, `prover/*`, `tet-cli`.
+| 内訳（概算） | 件数 |
+|--------------|------|
+| `tests.rs` | ~58 |
+| `sync.rs` tests | ~27 |
+| `p2p.rs` tests | 3 |
+| `invariant_tests.rs` | 3 |
+| `chaos.rs` | 1 |
 
-### 6.2 `cargo test -p tet-core --no-run`（成功）
+### 7.2 Phase C — `tests.rs` `mod block_sync`
 
-| テスト実行ファイル | ソース |
-|--------------------|--------|
-| `TET_Core-*.exe` (main) | `src/main.rs` + `tests.rs` |
-| `tet_core-*.exe` (lib) | `src/lib.rs`（小） |
-| `TET_Signer-*.exe` | `bin/tet-signer.rs` |
-| `TET_Worker_App-*.exe` | `bin/tet-worker.rs` |
-| `solana_pda-*.exe` | `bin/solana_pda.rs` |
+| テスト | 役割 | タイムアウト |
+|--------|------|--------------|
+| `chain_sync_three_nodes_in_process` | bootstrap height 10 → 2 followers catch-up；spread ≤2；`state_root` 一致；fork なし | 30s |
+| `chain_sync_recovers_after_peer_disconnect` | Node1 停止 → Node2 延長 → Node4 参加 → Node1 再合流 | 45s |
+| `sync_gate_prevents_fork_under_concurrent_start` | 同時起動 + 単一 producer；canonical `block_id` 一致 | 30s |
 
-**`tests.rs`:** 先頭付近に **50件以上**の `#[tokio::test]` / `#[test]`（grep 関数定義 ~65、うちヘルパー含む）。
+**手動:** `tet-core/scripts/start-3-node-testnet.sh` — ports 5010/5020/5030、DoD spread 判定。
 
-**カバーが厚い領域:** consensus remote block、CAAC leader、ZK verify、reorg/backfill、CHF AML、worker daemon mock。
-
-**カバーが薄い / 無い領域:**
+### 7.3 カバーが薄い領域
 
 | 領域 | 理由 |
 |------|------|
-| ライブ 3 ノード TCP E2E | 手動のみ；CI なし |
-| `p2p_network` inference ループ | 統合テスト少 |
-| `network.rs` ledger gossip | 主に手動 |
-| UI (`tet-network/ui`) | `package.json` に test script なし |
-| `invariant_tests.rs` | モジュール宣言あり（`main.rs` L11）— 専用テスト関数は **要別途確認** |
+| 本番 TCP 3-node 長時間 soak | CI 未組み込み |
+| 3 プロセス各々の sync gate 同時 auto-mine | `OnceLock` 制約 |
+| `p2p_network` WebRTC NAT | 統合テスト少 |
+| `tet-network/ui` | `package.json` test script なし |
+| `RISC0_SKIP_BUILD=0` フル guest | ツールチェーン依存 |
 
----
+### 7.4 workspace 全体
 
-## 7. Sprint 1 具体タスク（`docs/SPRINT_PLAN.md` より）
-
-**目標:** pull-based catch-up + 3 ノード `block_height` ±2。
-
-| # | タスク | 変更ファイル | 新規 | テスト | 工数 | 難易度 |
-|---|--------|--------------|------|--------|------|--------|
-| 1.1 | **単一 libp2p スワーム設計** — listen を `TET_P2P_LISTEN` に統一；inference はサブトピック化 | `main.rs`, `p2p.rs`, `p2p_network.rs`, `network.rs` | `docs/` 設計メモ可 | — | 16–24h | **Hard** |
-| 1.2 | **Chain sync ループ** — peer `height` 交換後 `[local+1..peer]` を `block-sync` で取得し順次 `apply_remote_block_from_gossip` | `p2p.rs`, 新規 `sync.rs` 候補 | `tet-core/src/sync.rs`（候補） | `tests.rs` `catch_up_*` | 20–28h | **Hard** |
-| 1.3 | **起動時 sync gate** — catch-up 完了まで `synced=false` | `consensus.rs`, `rest/handlers/ledger.rs` | — | REST assert | 6–8h | Med |
-| 1.4 | **構造化ログ** — skip reason を `WARN` + metric | `consensus.rs`, `metrics.rs` | — | — | 4h | Easy |
-| 1.5 | **統合テスト** — in-process 2 node で height 追従 | `tests.rs` | — | `cargo test block_sync` | 8–12h | Med |
-| 1.6 | **手動 3-node 手順** — README / `start-network.sh` と DoD 一致 | `scripts/start-network.sh`, `docker-compose.yml` | — | curl 3 ports | 4h | Easy |
-| 1.7 | **`SYNC_ISSUE.md` 更新** — Phase A/B 完了チェック | `docs/SYNC_ISSUE.md` | — | — | 2h | Easy |
-
-**合計見積:** 約 **60–82h**（1 FTE 週の 1.5–2 倍 — リスク込みで現実的）。
-
-**完了判定（SPRINT_PLAN 引用）:**
-
-```bash
-RISC0_SKIP_BUILD=1 cargo test --bin TET-Core block_sync
-for p in 5010 5020 5030; do curl -sf http://127.0.0.1:$p/ledger/state | jq -r .block_height; done
-# max-min <= 2
+```text
+cargo test --workspace --no-run
+→ tet-cli コンパイルエラーの可能性（v1 継続）— 要 Steve 判断で CI 方針
 ```
 
 ---
 
-## 8. tet-network/ui（要約）
+## 8. Sprint 2 具体タスク（`docs/SPRINT_PLAN.md` + Cursor 再検証）
+
+**`SPRINT_PLAN.md` Sprint 2 との整合:**
+
+| SPRINT_PLAN 項目 | Cursor 視点 | 一致？ |
+|------------------|-------------|--------|
+| Shared `TET_VALIDATOR_IDS` | **NEEDED** — hash leader で非 leader が mine しない問題が運用で頻出 | ✅ |
+| Leader-only auto-mine テスト固定 | **NEEDED** — `auto_miner_*` 拡張 | ✅ |
+| `parent_block_id` 整合 | **NEEDED** — carry-over C3 | ✅ |
+| `/ledger/state` synced/lag | **完了（B.4）** — `ledger.rs` L888–904；Sprint 2 は **compose 必須化** のみ残る | ✅ 部分 |
+
+**推奨スコープ（carry-over 1–3 + 運用）との対応:**
+
+| 推奨タスク | Sprint 2 への落とし込み |
+|------------|-------------------------|
+| carry-over 1–3（swarm 統合設計、SYNC_ISSUE 更新、parent） | SPRINT_PLAN 1.1–1.3 + `SYNC_ISSUE.md` メンテ |
+| tet-cli 修復 | **SPRINT_PLAN 外** — 別 PR 推奨（workspace CI 復旧） |
+| parent_block_id | SPRINT_PLAN 項目 3 |
+| 運用 docs（bootnode = block-plane listen） | `README.md`, `scripts/start-3-node-testnet.sh` 注記 |
+
+**Cursor 追加推奨（Sprint 2）:**
+
+1. `docs/SYNC_ISSUE.md` を Sprint 1 完了状態に書き換え（`TET_P2P_LISTEN`、catch-up フロー図）。
+2. genesis 配分を WP §11.1 と突合（25/75 vs 25/50/25）— **要 Steve 判断**。
+3. 3-node DoD に optional `state_root` 一致条件（同 height 時）。
+
+---
+
+## 9. ファイル別 Whitepaper 整合性 + Sprint 2 判定
+
+### 9.1 優先度 P0
+
+| ファイル | WP 整合 | Sprint 2 | 難易度 | 根拠（引用） |
+|----------|---------|----------|--------|--------------|
+| `vision/caac.rs` | **部分** | **OPTIONAL** | Med | PoC/PoR: L9–17, L99–105；challenge L138–195；**server wall time は判定に使わない** L173–177 |
+| `vision/zk_court.rs` | **部分** | **NEEDED** | Med | §14.1 L215–217；challenge window L64–68；slash λ L71–76；disputes in-memory L87–91 |
+| `vision/thermo_genesis.rs` | **部分** | **NEEDED** | Med | §5.2 L82–88 の **η(Wᵢ)** 未実装；コードは L53–78 `(c_flops/e)×Γ` |
+| `quantum_shield.rs` | **部分** | **OPTIONAL** | Easy | §10 L127–131；hybrid verify L76+；`pqc_active` prod default L40–41 |
+| `pqc_keystore.rs`（crate `tet_core`） | **部分** | **OPTIONAL** | Easy | ノード ML-DSA-65 補助 L15–37；**トランザクション署名とは別系統** |
+| `ledger.rs` | **部分** | **NEEDED** | Hard | cap L35；genesis L4045–4046 **25/75** vs WP **25/50/25** L139–143；burn meta L155 |
+
+### 9.2 優先度 P1
+
+| ファイル | WP 整合 | Sprint 2 | 難易度 | 根拠（引用） |
+|----------|---------|----------|--------|--------------|
+| `p2p_network.rs` | **部分** | **DEFER** | Hard | §12.2 L161–163；`INFERENCE_TOPIC` L41；**モジュールコメント L3–4 は誤り** |
+| `worker_daemon.rs` | **部分** | **OPTIONAL** | Med | §4.1 PoC L60–62；POC gate L65–73；`NEXUS_GUEST_ELF` L49–52 |
+| `rest/handlers/enterprise.rs` | **部分** | **OPTIONAL** | Med | §12.2；80/15/5 settlement L212–217（WP §11.2 50% burn とは別レイヤ） |
+| `methods/` + `prover/` | **部分** | **DEFER**（Sprint 3） | Hard | `methods/Cargo.toml` RISC0 3.0.5；Sprint 3 で `RISC0_SKIP_BUILD=0` CI |
+
+### 9.3 優先度 P2（Phase 0 外）
+
+| パス | WP 整合 | Sprint 2 | 備考 |
+|------|---------|----------|------|
+| `nexus-protocol/` | **部分** | **DEFER** | `ZkCourtJournalV1` 等 — tet-core と同期維持 |
+| `tet-pqc-wasm/` | **部分** | **DEFER** | ブラウザ署名 — UI 連携 |
+| `tet-network/ui/app/*` | **部分** | **DEFER** | REST 5010 前提；`/whitepaper` ルートあり |
+
+---
+
+## 10. tet-network/ui（要約）
 
 | 項目 | 内容 |
 |------|------|
-| スタック | Next.js 16, React 19 (`package.json` L15–17) |
-| 主要ルート | `app/page.tsx`, `app/os/page.tsx`, `app/explorer/*`, `app/worker/page.tsx`, `app/whitepaper/page.tsx` |
-| API 向き | `TET-Core` REST（デフォルト 5010） |
-| Dockerfile | `tet-network/ui/Dockerfile`（compose から build） |
-| Phase 0 手順 | `tet-network/ui/README.md` — `TET_AUTO_MINE`, `TET_ALLOW_MOCK_ZK`, worker daemon |
+| スタック | Next.js 16, React 19 |
+| ルート | `app/os/`, `app/explorer/`, `app/worker/`, `app/whitepaper/` |
+| API | `TET-Core` REST；`/ledger/state` の `synced` は Sprint 1 で追加 |
+| Phase 0 | `tet-network/ui/README.md` — `TET_AUTO_MINE`, mock ZK |
 
 ---
 
-## 9. ホワイトペーパー側で明確化すべき箇所（査読メモ）
+## 11. ホワイトペーパー v1.1 改稿時に明確化すべき箇所（Sprint 1 実装後）
 
-Manu Sheel Gupta レベルの第三者が突くであろう **技術的疑問**（コード読了ベース）:
+1. **Genesis 配分表** — WP §11.1（25/50/25）と `ledger.rs` `apply_genesis_allocation`（25% founder + 75% `WALLET_SYSTEM_WORKER_POOL`、L4045–4046）の **どちらが正**か。
 
-1. **η(Wᵢ) と thermo_genesis** — §5.2 R(T)（`WHITEPAPER.md` L82–88）と `thermo_genesis.rs` の flops/joules 式の対応（[`WHITEPAPER_V1.1_GAPS.md`](WHITEPAPER_V1.1_GAPS.md) Gap 1）。
+2. **§5.2 R(T) 実装式** — WP の η(Wᵢ)·C(tᵢ)/D(t) と `thermo_genesis.rs` の `(c_flops/e_joules_per_flop)×Γ`（L53–78）の **記号対応表**。
 
-2. **PoC vs PoR の判定責任** — `caac.rs` L173 は server wall time を PoC/PoR 判定に使わないと明記。クライアント申告 latency の信頼モデルは？
+3. **AI 経済 80/15/5 vs §11.2 50% burn** — `enterprise.rs` L212–217 と fee burn の **適用順序・対象トランザクション**。
 
-3. **単一マシン上の「分散」** — 3 プロセス × 3 swarms は分散 testnet か、それとも dev convenience か。本番拓扑要件は？
+4. **分散 testnet 拓扑** — 3 swarms / 3 ports の **本番要件**（dev convenience か production か）。
 
-4. **Legacy CHF mint** — Genesis 正本に CHF peg なし。`ledger.rs` `chf_top_up_mint` は deprecated 経路として文書化するか（**要 Steve 判断**）。
+5. **Block sync プロトコル** — `/tet/v1/chain-sync/hello|range/json`（`sync.rs` L14–17）を normative にするか Appendix 化するか。
 
-5. **ML-DSA mainnet 基準** — §10 と `quantum_shield.rs` の検証強度。mainnet 判定基準は？
+6. **Bootnode multiaddr** — block-plane `listening on .../p2p/<id>` を運用必須と明記（keystore バナーと不一致し得る）。
 
-6. **§11 vs 80/15/5 AI settlement** — WP §11.2 は 50% fee burn；`enterprise.rs` は 80/15/5。一本の tokenomics 表がない（Gap 6）。
+7. **Sync readiness** — `synced` / `lag_blocks` の定義（`sync.rs` `compute_ledger_sync_status*`）を REST 仕様として固定。
 
-7. **Supply cap と動的 burn** — `MAX_SUPPLY_MICRO` は固定；`META_TOTAL_BURNED` 更新が cap 計算にどう効くか WP に閉式がない。
+8. **ML-DSA スコープ** — §10「base-layer from genesis」と **hybrid Ed25519+ML-DSA トランザクション** + **ノード補助 ML-DSA-65**（`pqc_keystore.rs`）の関係。
 
-8. **Light client 非存在** — モバイルウォレット・Agent は full node 前提か。SPV ロードマップは？
+9. **Catch-up vs gossip** — tip-only apply skip が残る理由と range catch-up の **normative パス**（`consensus.rs` L1326–1331）。
 
-9. **Agent-Gate / state channels** — ロードマップに無いのに対外ピッチで出すなら scope creep リスク。
-
-10. **`tet-network-whitepaper.pdf` と repo MD の関係** — PDF のみに載る主張の実装義務は？
+10. **§14.2 probabilistic fingerprinting** — `caac.rs` SHA256-chain challenge（L138–195）が WP の「timing signature」主張を満たすか、または claim を弱めるか。
 
 ---
 
-## 10. 読了ログ（必須ファイル）
+## 12. 読了ログ
 
 | # | ファイル | 状態 |
 |---|----------|------|
-| 1 | `WHITEPAPER.md` | ✅ 全文（Genesis v1.0, ~287 行） |
-| 2 | `archive/LITEPAPER_v0.md` | ✅ deprecated |
-| 3 | `README.md` | ✅ |
-| 4 | `docs/STATUS.md`, `SYNC_ISSUE.md`, `SPRINT_PLAN.md` | ✅ |
-| 5 | `tet-core/README.md` | ✅ 一部（L1–100+） |
-| 6 | `tet-core/Cargo.toml` | ✅ |
-| 7 | `tet-core/src/main.rs` | ✅ 全文 503 行 |
-| 8 | `tet-core/src/lib.rs` | ✅ 14 行（部分 crate） |
-| 9 | `tet-core/src/*.rs` | ✅ 中核 10 ファイル精読 + 全 .rs 一覧（~40+ ユニークモジュール） |
-| 10 | `tet-core/scripts/*` | ✅ 3 ファイル |
-| 11 | Docker / compose | ✅ パス確認 |
-| 12 | `tet-network/ui` | ✅ README, package.json, app ルート一覧 |
-| 13 | archived | ✅ タグ付けのみ（深読なし） |
+| 1 | `WHITEPAPER.md` | ✅ 構造 + §4–§14 精読 |
+| 2 | `docs/archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md` | ✅ |
+| 3 | `docs/SPRINT_PLAN.md` | ✅ Sprint 1–2 |
+| 4 | `docs/SYNC_ISSUE.md` | ✅（**内容は Sprint 1 前のまま**） |
+| 5 | `tet-core/src/sync.rs` | ✅ 先頭 + tests 構成 |
+| 6 | `tet-core/src/main.rs` | ✅ 起動順 L262–598 |
+| 7 | `tet-core/src/p2p.rs`, `consensus.rs` | ✅ catch-up + skip 条件 |
+| 8 | P0/P1 整合性ファイル | ✅ 上表引用行 |
+| 9 | `tests.rs` `mod block_sync` | ✅ |
+| 10 | `scripts/start-3-node-testnet.sh` | ✅ 実行ログ参照 |
 
 ---
 
-## 11. 関連ドキュメント
+## 13. 関連ドキュメント
 
-- [`STATUS.md`](./STATUS.md) — コンポーネント別ステータス（絵文字版）
-- [`SYNC_ISSUE.md`](./SYNC_ISSUE.md) — ブロック同期根本原因
-- [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) — 6 週間ロードマップ
-- [`../SPRINT0_ISSUES.md`](../SPRINT0_ISSUES.md) — 公開 testnet GAP バックログ
+- [`archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md`](archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md)
+- [`STATUS.md`](./STATUS.md)
+- [`SYNC_ISSUE.md`](./SYNC_ISSUE.md) — **要 Sprint 2 更新**
+- [`SPRINT_PLAN.md`](./SPRINT_PLAN.md)
+- [`../WHITEPAPER.md`](../WHITEPAPER.md)
 
 ---
 
-*本ドキュメントはコード変更を伴わない。実装開始時は `docs/SYNC_ISSUE.md` Sprint 1 を最優先とすること。*
+*本ドキュメントはコード変更を伴わない。次の実装は `docs/SPRINT_PLAN.md` Sprint 2 と `SYNC_ISSUE.md` 更新を推奨。*
