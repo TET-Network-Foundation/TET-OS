@@ -16,14 +16,18 @@ Post-quantum Layer 1 (ML-DSA), AI-native workloads, and hardware-adaptive consen
 - `tet-pqc-wasm/` — Post-quantum signature WASM (ML-DSA-44)
 - `methods/`, `prover/` — RISC0 zkVM foundation for ZK-Court
 
-## Archived (Not Canonical)
+## Archived (removed from repo)
 
-- `tet-core-node/` — Substrate-based experiment
-- `tet-network/chain/` — Substrate chain experiment (duplicate template)
-- `nexus-onchain/` — Solana Anchor experiment
-- `nexus network/` — Legacy nested directories (`tet-core-node`, `tet-ui`)
+Substrate / Solana experiments and the legacy `nexus network/` tree were **removed from this repository** (2026-05-20) to reduce clone size and CI noise. Canonical L1 is **`tet-core/`** only.
 
-See individual READMEs for archive status.
+| Former path | Was |
+|-------------|-----|
+| `tet-core-node/` | Substrate node template |
+| `tet-network/chain/` | Duplicate Substrate chain template |
+| `nexus-onchain/` | Solana Anchor experiment |
+| `nexus network/` | Legacy nested copies |
+
+To recover sources, check git history before the removal commit on `main`.
 
 ## Quick Start
 

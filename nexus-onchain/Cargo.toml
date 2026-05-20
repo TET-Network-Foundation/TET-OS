@@ -1,9 +1,0 @@
-[workspace]
-members = [
-  "programs/nexus_onchain",
-]
-resolver = "2"
-
-[profile.release]
-overflow-checks = true
-
