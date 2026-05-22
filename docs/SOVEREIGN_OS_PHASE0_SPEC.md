@@ -1,9 +1,10 @@
 # Sovereign OS — Phase 0 Full Specification
 
-**Version:** 0.2 (Steve review draft)  
+**Version:** 0.3 (Steve decisions locked)  
 **Date:** 2026-05-19  
 **Status:** Design-only — **no code changes**, **no git commit**  
-**Authority:** Steve final direction (quality > calendar; AI Worker → Phase 0.5)
+**Authority:** Steve final direction (quality > calendar; AI Worker → Phase 0.5)  
+**WP sync:** [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md) §13, §11.5, §17.8–17.9, §18–§19 (v0.3)
 
 **Companion docs (must stay consistent):**
 
@@ -13,7 +14,7 @@
 | [`WORKER_MODE_AUDIT.md`](./WORKER_MODE_AUDIT.md) | AI Worker **not** Phase 0 |
 | [`AUDIT_WORKER_REGISTER_AND_STAKE.md`](./AUDIT_WORKER_REGISTER_AND_STAKE.md) | Stake/register — Phase 0.5 |
 | [`CODEBASE_ATLAS.md`](./CODEBASE_ATLAS.md) | Module map |
-| [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md) | **Not edited** — Part C gives merge outline only |
+| [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md) | **Synced v0.3** — Sovereign OS in Part I §13; Part C below is historical merge notes |
 
 **Length note:** Dense technical spec (~40–50 printed pages at 11pt if appendices included). Steve reviews section-by-section; numbering is stable for comments.
 
@@ -34,7 +35,7 @@
 | **Notes** | Encrypted local notes (mini-app) |
 | **Calculator** | With TET/USD/JPY (mini-app) |
 | **Clock** | Block height + crypto timezones (mini-app) |
-| **Worker** | **Hidden / removed from Start menu** — Phase 0.5 only ([`WORKER_MODE_AUDIT.md`](./WORKER_MODE_AUDIT.md)) |
+| **Worker** | **Hidden** — Start menu 非表示；`SHOW_WORKER_TAB=true` で dev 有効化 — Phase 0.5 product ([`WORKER_MODE_AUDIT.md`](./WORKER_MODE_AUDIT.md)) |
 
 **Anonymous Mode** is **first-class**, not a demo flag: anchor + ephemeral identities + ZK ownership proof + anchor-only audit trail.
 
@@ -60,16 +61,36 @@
 
 **Gap:** No `98.css` in `package.json` today — add dependency in implementation **Sprint 6** (Win95 shell).
 
-## 0.4 Ship date recommendation
+## 0.4 Ship date (locked)
 
 | Target | Calendar | Rationale |
 |--------|----------|-----------|
-| **L1 Foundation ready** | **End of Sprint 4** | Public seed + faucet + one-command node before Tmail work |
-| **Feature freeze** | **2026-08-22 – 2026-08-29** | +2 wk vs prior plan (Foundation sprint) |
-| **Public Phase 0 ship** | **2026-08-31 – 2026-09-30** | QA buffer; **ship-able testnet** not UI-only |
+| **L1 Foundation ready** | **End of Sprint 4** | Public seed + faucet + `docker compose up` (node + UI) before Tmail |
+| **Feature freeze** | **2026-08-31** | End of August — Sovereign OS feature-complete |
+| **Polish window** | **2026-09-01 – 2026-09-14** | 2 weeks QA / UX / docs |
+| **Public Phase 0 ship** | **2026-09-15** | **Target date** (Steve #5) |
 | **Not** | 2026-06-30 | Incompatible with L1 Foundation + full Tmail + Anonymous + Win95 |
 
-**Total engineering:** **14–18 weeks** from Sprint 4 start (§B.1) — **+2 wk** for L1 Foundation; aligns with “quality > 期日”.
+**Total engineering:** **14–18 weeks** from Sprint 4 start (§B.1).
+
+## 0.5 Final decisions (Steve, 2026-05-19)
+
+| # | Topic | **Locked decision** |
+|---|--------|---------------------|
+| 1 | Time-lock | **Stake-scheduled** in Phase 0; **VDF** in Phase 0.1 |
+| 2 | Burn UI | *"Best-effort burn. Cooperating nodes will purge after read receipt. Non-cooperating peers may retain encrypted copies."* |
+| 3 | Anonymous escrow | **1 TET** (1M Stevemon) |
+| 4 | Desktop UI legal | **"Inspired by 1990s desktop OS"** — no Microsoft trademarks or trade dress claims |
+| 5 | Ship date | **2026-09-15** (freeze **2026-08-31** + 2 wk polish) |
+| 6 | World-first marketing | **AT-3, AT-4, AT-5** must all pass before public claims |
+| 7 | Worker tab | **Hidden**; `SHOW_WORKER_TAB=true` enables dev access |
+| 8 | Docker | **Mandatory** for general users — **node + UI** via `docker compose up` |
+| 9 | Sprint 4 | **L1 Foundation** (gates Tmail) |
+| 10 | Faucet | **100 TET / day / IP** (rate-limited) |
+| 11 | Public seed | **1 node** pre-ship (Hetzner EU, ~$5/mo); **2nd node** post-ship if traffic — SPOF accepted |
+| 12 | Docker scope | **tet-core + Sovereign OS UI** in one compose stack |
+
+Canonical checklist: **Appendix V**.
 
 ---
 
@@ -294,7 +315,9 @@ Nodes on receipt:
 | **Cryptographic irrecoverability** | **No guarantee** — warn in UI + WP |
 | **Forward secrecy after burn** | **Not required** Phase 0 |
 
-**User-facing copy:** “Burn removes message from TET network nodes that honor the protocol. Save screenshots at your own risk.”
+**User-facing copy (Steve #2, locked):**
+
+> Best-effort burn. Cooperating nodes will purge after read receipt. Non-cooperating peers may retain encrypted copies.
 
 ### A.3.3 Read receipt flow
 
@@ -373,7 +396,7 @@ Anchor (A) ──fund──► Ephemeral (E) ──send Tmail──► Receiver
 
 | Control | Value (tunable) |
 |---------|-----------------|
-| `ANONYMOUS_MIN_STAKE_MICRO` | **10_000 TET** (10× worker bond — inference) |
+| `ANONYMOUS_MIN_STAKE_MICRO` | **1 TET** (1_000_000 µTET — Steve #3) |
 | `ANONYMOUS_ESCROW_MS` | **24h** default auto-settle |
 | Auto-settle | Return unused stake to anchor; slash if fraud proof links to ZK-Court |
 
@@ -387,12 +410,19 @@ Anchor (A) ──fund──► Ephemeral (E) ──send Tmail──► Receiver
 
 Steve’s decision compresses **3–6 month research** into **one summer**. Mitigation:
 
-- Sprint 7 dedicated (3 weeks)
+- Sprint 8 dedicated (2–3 weeks)
 - Fallback: if ZK guest not ready by freeze, **disable Anonymous in UI** but keep code behind `TET_ANONYMOUS_TMAIL=1` — **Steve rejects placeholder** → team must prioritize guest before ship, slip date instead.
 
 ---
 
 ## A.5 Win95 UI shell architecture
+
+### A.5.0 Trademark and aesthetic (Steve #4)
+
+- Product copy: **"Inspired by 1990s desktop OS"** (About dialog, README, WP §13).
+- **Do not** use Microsoft®, Windows®, or Windows 95™ in marketing or UI chrome.
+- Visual kit: open **98.css** — not a Microsoft asset or endorsement.
+- Startup audio: **legally distinct** waveform (Win95-*inspired*, not a sample of Microsoft IP).
 
 ### A.5.1 Stack
 
@@ -613,9 +643,9 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 
 | Work item | Dev-days | Risk | Mitigation |
 |-----------|----------|------|------------|
-| **Public seed node(s)** — Hetzner/DO, static IP, bootnode multiaddr in docs | **3** | **H** — misconfig, firewall | Terraform or scripted deploy; health check `/health` |
-| **Faucet** — `POST /faucet/request` + rate limit + ledger credit; **Faucet** Win95 page or `/faucet` route | **3** | **M** — abuse, drain | Per-wallet daily cap; IP throttle; monitor balance |
-| **Docker stack (production-grade)** — one-command `docker compose up`; genesis + 3 P2P ports documented | **4** | **M** — drift from local dev | CI builds image; pinned tags; `.env.example` |
+| **Public seed (1×)** — Hetzner EU (~$5/mo), static IP, bootnode multiaddr | **3** | **H** — SPOF (accepted pre-ship) | Scripted deploy; `/health`; 2nd seed post-ship if traffic |
+| **Faucet** — `POST /faucet/request`; **100 TET/day/IP**; Win95 or `/faucet` UI | **3** | **M** — abuse, drain | IP rate limit; seed treasury monitor |
+| **Docker (node + UI)** — `docker compose up` runs **tet-core + Sovereign OS**; genesis + 3 P2P ports | **4** | **M** — drift from local dev | CI builds images; pinned tags; `.env.example` |
 | **CI/CD (GitHub Actions)** — `cargo test`, `cargo clippy`, UI `npm run build` + lint | **2** | **L** | Required check on `main`; cache deps |
 | **Public operator docs** — extend [`RUNNING_A_NODE.md`](./RUNNING_A_NODE.md): seed join, faucet, ports, troubleshooting | **2** | **L** | Link from README; version with release tag |
 | **Monitoring + logs (basic)** — structured logs, optional Prometheus `/metrics` or health dashboard | **2** | **M** — ops blind spot | JSON logs + `journalctl`/DO metrics; alert on seed down |
@@ -625,7 +655,7 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 
 - [ ] ≥1 public seed reachable from internet (documented multiaddr)
 - [ ] Faucet funds test wallet; UI or curl documented
-- [ ] Fresh machine: one-command node + UI against public seed **without** local genesis hack
+- [ ] Fresh machine: `docker compose up` → **node + UI** against public seed **without** local genesis hack
 - [ ] CI green on default branch
 - [ ] Builder can follow `RUNNING_A_NODE.md` and join testnet in under 30 min
 
@@ -659,7 +689,7 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 | Dimension | Before (S4 = Tmail) | After (S4 = Foundation) |
 |-----------|---------------------|-------------------------|
 | **Ship credibility** | Risk: Sovereign OS on dead/local-only L1 | **Public testnet** builders can join Day 1 |
-| **Calendar** | 12–16 wk → ship mid Sep | **14–18 wk** → ship **late Aug – end Sep** |
+| **Calendar** | 12–16 wk → ship mid Sep | **14–18 wk** → ship **2026-09-15** |
 | **Slip** | 1–2 wk | Acceptable vs UI-only embarrassment |
 | **Community** | Internal demo | **Faucet + seed** → onboarding funnel |
 | **Dependency** | Tmail first | **L1 gates Tmail** — correct ordering |
@@ -706,14 +736,14 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 | R6 | Time-lock not true VDF | L | Marketing: “scheduled release”; VDF in 0.1 |
 | R7 | 98.css + React perf | L | Virtualize message lists |
 | R8 | **No L1 Foundation before Tmail** | **H** | **Sprint 4 gate** — do not start S5 until AT-F1 passes |
-| R9 | Faucet drain / Sybil | M | Daily cap per wallet; seed treasury monitor |
-| R10 | Public seed outage | M | 2 seed nodes (geo split); status page |
+| R9 | Faucet drain / Sybil | M | **100 TET/day/IP**; seed treasury monitor |
+| R10 | Public seed SPOF (1 node) | M | **Accepted pre-ship**; add 2nd Hetzner seed when traffic warrants |
 
 ---
 
-# Part C — WHITEPAPER v1.1 reflection (do not edit draft file)
+# Part C — WHITEPAPER v1.1 reflection (historical)
 
-Steve merges manually into [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md).
+**Status v0.3:** Sovereign OS content **merged** into [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md) Part I §13, §11.5, Part III §17.8–17.9, §18.2, §19.1. Below notes pre-merge intent.
 
 ## C.1 Proposed structural change
 
@@ -750,7 +780,7 @@ Steve merges manually into [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.
 
 | Claim | Condition |
 |-------|-----------|
-| Time-lock + burn + anonymous + PQ + 5-cap | Document AT-3..AT-5 pass |
+| Time-lock + burn + anonymous (world-first) | **AT-3, AT-4, AT-5 all pass** (Steve #6) |
 
 ## C.4 §15 Anonymous Mode (outline)
 
@@ -771,7 +801,7 @@ Steve merges manually into [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.
 
 | Phase | Calendar | Deliverables |
 |-------|----------|--------------|
-| **0** | 2026-08–09 | Sovereign OS (this spec) |
+| **0** | **2026-09-15** | Sovereign OS (this spec) |
 | **0.1** | 2026-Q4 | Tmail voice, verifiable timestamp, reply-chain, Browser app |
 | **0.5** | 2026-Q4–2027-Q1 | AI Worker ([`WORKER_MODE_AUDIT.md`](./WORKER_MODE_AUDIT.md)) |
 | **1** | 2027 | η formal, CAAC formal, persistent worker registry |
@@ -805,7 +835,7 @@ Per [`WORKER_MODE_AUDIT.md`](./WORKER_MODE_AUDIT.md) + [`AUDIT_WORKER_REGISTER_A
 
 | Item | Source |
 |------|--------|
-| η(W_i) formal | WP §16.1 |
+| η(W_i) formal | WP §17.1 |
 | CAAC fingerprint formal | [`caac.rs`](../../tet-core/src/vision/caac.rs) |
 | Worker registry persistence | [`worker_network.rs`](../../tet-core/src/worker_network.rs) |
 | Mini-app SDK + third-party signing |
@@ -863,26 +893,34 @@ Per [`WORKER_MODE_AUDIT.md`](./WORKER_MODE_AUDIT.md) + [`AUDIT_WORKER_REGISTER_A
 | **Anonymous escrow** | **1 TET** | **1_000_000** | Minimum stake (Steve recommendation) |
 | File pin / GB / day | (unchanged) | **1_000_000** | Inference — tune at ship |
 
-Settlement: reuse transfer fee split — 20% fee, 50% burn of fee, rest treasury ([`ledger.rs:129-131`](../../tet-core/src/ledger.rs)).
+**Settlement (Steve / WP §11.5):** Tmail/Pin/Anonymous protocol fees → **50% treasury / 50% burn** (aligns transfer maintenance-fee burn narrative; implement in `ledger.rs` at Tmail audit handlers).
+
+Wallet `POST /wallet/transfer` path remains **50% worker pool / 50% burn** on maintenance fee ([`ledger.rs`](../../tet-core/src/ledger.rs)).
 
 Free tier: **100 Tmail/day/wallet** at 1 Stevemon each still negligible; rate-limit by count not price in Phase 0.
 
 ---
 
-# Appendix D — Steve decision checklist
+# Appendix D — Final decisions (locked 2026-05-19)
 
-1. **Time-lock Phase 0:** Accept stake-scheduled (not VDF) with honest UX copy?  
-2. **Burn:** Accept best-effort network burn + disclaimer?  
-3. **Anonymous min stake:** Confirm **1 TET** (1M Stevemon) escrow?  
-4. **98.css legal** — Microsoft trade dress review?  
-5. **Ship window:** **2026-08-31 – 2026-09-30** acceptable (+2 wk vs prior)?  
-6. **World-first claims:** Which AT tests are mandatory for marketing?  
-7. **Worker tab:** Remove entirely vs hidden Easter egg?  
-8. **Third-party node requirement:** Ship docker “one-click node” for all Mac users?  
-9. **Sprint 4 = L1 Foundation:** Confirm vs defer Foundation (Tmail-first risk)?  
-10. **Faucet amount:** Per user per day = **X TET**? (e.g. 100 TET testnet drip)  
-11. **Public seed count:** **1**, **2**, or **3** nodes (geo redundancy)?  
-12. **Docker mandatory scope:** Node only vs node+UI compose for all Mac users?
+All items **resolved** — see §0.5. Implementation and marketing **must** match this table.
+
+| # | Decision |
+|---|----------|
+| 1 | Time-lock = **stake-scheduled** (Phase 0); VDF → Phase 0.1 |
+| 2 | Burn UI = best-effort copy (§A.3.2) |
+| 3 | Anonymous escrow = **1 TET** |
+| 4 | UI legal = **"Inspired by 1990s desktop OS"**; no Microsoft marks |
+| 5 | Ship = **2026-09-15** (freeze **2026-08-31**) |
+| 6 | Marketing = **AT-3 + AT-4 + AT-5** required |
+| 7 | Worker = hidden; **`SHOW_WORKER_TAB=true`** |
+| 8 | One-click Docker = **required** (general users) |
+| 9 | Sprint 4 = **L1 Foundation** |
+| 10 | Faucet = **100 TET / day / IP** |
+| 11 | Seed = **1** pre-ship (Hetzner EU); **2** post-traffic plan |
+| 12 | Docker = **node + UI** compose |
+
+**Open items (post-ship):** File-share fee curve (Phase 0.1); 2nd seed trigger metric (traffic threshold TBD).
 
 ---
 
@@ -892,6 +930,7 @@ Free tier: **100 Tmail/day/wallet** at 1 Stevemon each still negligible; rate-li
 |---------|------|--------|
 | 0.1 | 2026-05-19 | Initial Phase 0 full spec per Steve direction |
 | 0.2 | 2026-05-19 | Sprint 4 = L1 Foundation; S5–S11 shift; ship dates; fee = 1 Stevemon |
+| 0.3 | 2026-05-19 | Steve #1–12 locked; ship 2026-09-15; Appendix V; WP v1.1 sync |
 
 ---
 
@@ -1204,11 +1243,32 @@ Aligns WP v1.1 §7 — no regression to “PQ optional” on main user paths.
 
 | Prior recommendation | This spec |
 |------------------------|-----------|
-| Messages Lite by 2026-06-30 | **Superseded** — L1 Foundation + full Tmail by **2026-08–09** |
+| Messages Lite by 2026-06-30 | **Superseded** — ship **2026-09-15** |
 | `/tet/v1/messages` topic | **`/tet/v1/tmail`** rename |
 | Block plane for gossip | **Unchanged** |
 | TxV1 Message variant | **Deferred** — audit-only fees |
 | ~32 dev-days Messages+Files lite | **~93 dev-days** (incl. 16d Foundation) |
+
+---
+
+# Appendix V — Phase 0 ship checklist (Steve #1–12)
+
+Mark **yes** before public **2026-09-15** announcement. Any **no** → slip ship (Steve: quality > date).
+
+| Chk | # | Gate | Verification |
+|-----|---|------|--------------|
+| [ ] | 1 | Time-lock stake-scheduled shipped | AT-3 pass on public testnet |
+| [ ] | 2 | Burn UI shows locked disclaimer | Copy matches §A.3.2 / Steve #2 |
+| [ ] | 3 | Anonymous 1 TET escrow | AT-5 pass |
+| [ ] | 4 | "Inspired by 1990s desktop OS" in About/README | Legal review sign-off |
+| [ ] | 5 | Ship on or before **2026-09-15** | Freeze **2026-08-31** met |
+| [ ] | 6 | World-first claims | **AT-3 + AT-4 + AT-5** green |
+| [ ] | 7 | Worker hidden default | `SHOW_WORKER_TAB` unset → no Worker in Start |
+| [ ] | 8 | One-click Docker documented | New user guide ≤30 min to OS |
+| [ ] | 9 | Sprint 4 Foundation complete | AT-F1 pass |
+| [ ] | 10 | Faucet 100 TET/day/IP | Abuse test + metrics |
+| [ ] | 11 | 1 public seed (Hetzner EU) live | Bootnode in `RUNNING_A_NODE.md` |
+| [ ] | 12 | `docker compose up` = node + UI | AT-0 on compose stack |
 
 ---
 
