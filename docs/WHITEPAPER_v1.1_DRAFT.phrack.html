@@ -1,0 +1,1045 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>TET Network Issue #1 -- Phrack-Style WP v1.1</title>
+<style>@page {
+  size: letter;
+  margin: 1in 0.75in;
+  @top-center {
+    content: "TET Network Issue #1 -- Phrack-Style WP v1.1";
+    font-family: "Courier New", Courier, "Andale Mono", monospace;
+    font-size: 7pt;
+  }
+  @bottom-center {
+    content: "Phrack-Style WP -- 2026-05-22  |  page " counter(page);
+    font-family: "Courier New", Courier, monospace;
+    font-size: 7pt;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: "Courier New", Courier, "Andale Mono", monospace;
+  font-size: 10pt;
+  line-height: 1.65;
+  color: #000;
+  background: #fff;
+  /* 2-column newspaper; ~28-35 pages at letter margins. Set column-count:1 for ~50+ pages */
+  column-count: 2;
+  column-gap: 1.25em;
+  column-rule: 1px solid #000;
+  max-width: 100%;
+  widows: 3;
+  orphans: 3;
+  margin: 0;
+  padding: 0.2in;
+}
+
+/* Optional CRT mode: uncomment
+body { background: #0a0a0a; color: #33ff33; }
+*/
+
+pre.banner, pre.frame, pre.code, pre.ascii-table, pre.part-banner {
+  font-family: inherit;
+  font-size: inherit;
+  white-space: pre !important;
+  break-inside: avoid;
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+/* Method 1: wide blocks span both columns (Phrack 2-col preserved for prose) */
+.span-all,
+pre.banner,
+pre.frame,
+pre.part-banner,
+p.sep.span-all {
+  column-span: all;
+  -webkit-column-span: all;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.span-all {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+pre.banner { font-size: 7.5pt; margin: 0 0 0.5em; }
+pre.frame { font-size: 7.5pt; margin: 0.8em 0 0.3em; font-weight: bold; }
+pre.part-banner { font-size: inherit; margin: 0.2em 0; text-align: center; }
+
+pre.code {
+  background: #f4f4f4;
+  border-left: 3px solid #000;
+  padding: 0.6em 0.8em;
+  margin: 0.8em 0;
+  line-height: 1.25;
+}
+
+/* Method 2: shrink only when still wider than printable full width */
+pre.wide-ascii,
+pre.code.wide-ascii,
+pre.ascii-table.wide-ascii {
+  font-size: 7pt;
+  line-height: 1.2;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+}
+
+pre.ultra-ascii,
+pre.ascii-table.ultra-ascii,
+pre.code.ultra-ascii {
+  font-size: 5.75pt;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+}
+
+/* §18 comparison tables (~300+ chars): scale to printable full width */
+.ascii-wrap.mega-wrap {
+  column-span: all;
+  -webkit-column-span: all;
+  width: 100%;
+  overflow: hidden;
+  break-inside: avoid;
+  margin: 0.6em 0;
+}
+
+pre.ascii-table.mega-ascii,
+.ascii-wrap.mega-wrap pre {
+  font-size: 5.5pt;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  transform: scaleX(0.245);
+  transform-origin: top left;
+  display: inline-block;
+  width: 408%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+  white-space: pre !important;
+}
+
+pre.code.span-all,
+pre.ascii-table.span-all {
+  overflow-x: visible;
+}
+
+p.sep, p.meta {
+  text-align: center;
+  font-size: 7pt;
+  margin: 0.6em 0;
+  break-inside: avoid;
+}
+
+p.sep.span-all {
+  font-size: 6.5pt;
+  letter-spacing: -0.03em;
+  overflow: hidden;
+}
+
+h1.part {
+  column-span: all;
+  font-size: 11pt;
+  text-align: center;
+  border: double 3px #000;
+  padding: 0.4em;
+  margin: 0.5em 0 0.8em;
+}
+
+h2 {
+  font-size: 10.5pt;
+  margin: 1.2em 0 0.5em;
+  padding-top: 0.6em;
+  break-after: avoid;
+  break-before: page;
+}
+
+h2:first-of-type {
+  break-before: auto;
+}
+
+h3 {
+  font-size: 9pt;
+  margin: 0.65em 0 0.3em;
+}
+
+p.sep.minor {
+  font-size: 6.5pt;
+  margin: 0.35em 0;
+}
+
+h3 .hex {
+  color: #333;
+  font-weight: bold;
+}
+
+p, blockquote, li {
+  margin: 0 0 0.55em;
+  text-align: justify;
+  /* auto hyphens breaks snake_case in plain text (e.g. η(W_i)); code/pre have own rules */
+  hyphens: manual;
+  -webkit-hyphens: manual;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 2px solid #000;
+  padding-left: 0.6em;
+  font-style: italic;
+}
+
+strong { font-weight: bold; }
+
+/* Snake_case / env vars: do not break on underscore (override p { hyphens: auto }) */
+code,
+tt,
+p code,
+li code,
+blockquote code,
+h3 code,
+.footnotes code,
+td code,
+th code {
+  font-size: 0.9em;
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  white-space: pre;
+}
+
+pre.code,
+pre.math,
+pre.identifier-line {
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  white-space: pre !important;
+}
+
+pre.math {
+  background: #f4f4f4;
+  border-left: 3px solid #000;
+  padding: 0.5em 0.8em;
+  margin: 0.6em 0;
+  line-height: 1.3;
+}
+
+pre.identifier-line {
+  font-size: 7pt;
+  overflow-x: visible;
+}
+
+table td,
+table th {
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+}
+
+a.fn-ref { color: #000; text-decoration: underline; }
+
+.footnotes {
+  column-span: all;
+  font-size: 7.5pt;
+  margin-top: 1em;
+  border-top: 1px dashed #000;
+  padding-top: 0.5em;
+}
+
+sup.fn { font-size: 6pt; }
+
+/* ascii-table base size inherited; wide/ultra classes apply per block */
+</style>
+</head>
+<body>
+<pre class="banner span-all">+------------------------------------------------------------------------------+
+|  TET NETWORK Issue #1 -- Phrack-Style WP v1.1                                |
+|  Fluid P2P Compute-Energy Resource Protocol / AI-Native Sovereign Layer 1    |
++------------------------------------------------------------------------------+</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<p class="meta">Phrack-Style WP -- 2026-05-22 | 2-column monospace | hex chapters</p>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<h1 class="part">TET NETWORK</h1>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<pre class="frame span-all">==============================================================================
+|              Fluid P2P Compute–Energy Resource Protocol              |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s0">Fluid P2P Compute–Energy Resource Protocol</h2>
+<pre class="frame span-all">==============================================================================
+|                     AI-Native Sovereign Layer 1                      |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s0">AI-Native Sovereign Layer 1</h2>
+<p><strong>Version:</strong> Whitepaper v1.1 Draft  </p>
+<p><strong>Date:</strong> 2026-05-21  </p>
+<p><strong>Author:</strong> Steve  </p>
+<p><strong>Title:</strong> Founder-Architect, TET Network Project  </p>
+<p><strong>Contact:</strong> yizhenxianshi@gmail.com  </p>
+<p><strong>Status:</strong> Draft for review. Does <strong>not</strong> supersede <a href="../WHITEPAPER.md" class="fn-ref"><code>WHITEPAPER.md</code></a> (Genesis v1.0, 2026-04-28) until merged by explicit commit.   <sup class="fn">[1]</sup></p>
+<p><strong>Implementation references:</strong> <a href="./WHITEPAPER_v1.0_GAPS.md" class="fn-ref"><code>docs/WHITEPAPER_v1.0_GAPS.md</code></a>, <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>docs/SOVEREIGN_OS_PHASE0_SPEC.md</code></a>, <a href="./CODEBASE_OVERVIEW.md" class="fn-ref"><code>docs/CODEBASE_OVERVIEW.md</code></a>, <a href="./STATUS.md" class="fn-ref"><code>docs/STATUS.md</code></a>   <sup class="fn">[2]</sup></p>
+<p><strong>Canonical code:</strong> <code>tet-core/</code> (Rust), <code>tet-network/ui/</code> (Sovereign OS)</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                             Document map                             |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">Document map</h2>
+<pre class="ascii-table span-all ultra-ascii">
++----------------------------------------+------------+-----------------------------------------------------+
+| Part                                  | Sections | Scope                                              |
++----------------------------------------+------------+-----------------------------------------------------+
+| **I — Layer 1 Protocol**              | §1–§13   | L1 mechanics + **Sovereign OS Suite (Phase 0)**    |
+| **II — Layer 2 Applications**         | §14–§16  | Long-horizon primitives (not Phase 0 deliverables) |
+| **III — Open Problems & Comparisons** | §17–§19  | Honest gaps, peer comparison, roadmap              |
++----------------------------------------+------------+-----------------------------------------------------+
+</pre>
+<p><strong>Phase 0 language:</strong> This draft describes a <strong>public testnet / developer preview</strong>, not a production mainnet. Mainnet parameters, REST stability, and economic schedules remain subject to change until explicitly frozen.</p>
+<p class="sep span-all">==============================================================================</p>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<h1 class="part">Part I — Layer 1 Protocol</h1>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<pre class="frame span-all">==============================================================================
+|                       [ 0x01 ] 1. Introduction                       |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">1. Introduction</h2>
+<p>Cloud AI infrastructure today is not a technical necessity; it is a capital structure. A small set of operators price inference, control availability, and impose correlated failure on every downstream application. Blockchains that treat all nodes as identical hardware competitors reproduce the same concentration under a different scarcity token (ASICs or stake).</p>
+<p>TET Network responds at the protocol layer with a single premise: <strong>compute is energy</strong>. Every device that draws electricity can, in principle, contribute verified work or network maintenance. The protocol does not force smartphones to compete under data-center rules. <strong>Context-Aware Adaptive Consensus (CAAC)</strong> assigns roles from hardware reality: high-throughput nodes run <strong>Proof of Compute (PoC)</strong>; constrained edge nodes run <strong>Proof of Relay (PoR)</strong>.</p>
+<p>This whitepaper separates what the <strong>testnet ships today</strong> (Part I) from <strong>research-grade application primitives</strong> (Part II) and from <strong>explicit open problems</strong> (Part III). Critique should target the mechanisms in Part I; Part II is directional intent, not a delivery commitment.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x01.01</span> 1.1 Relation to Genesis v1.0</h3>
+<p>Genesis Draft v1.0 (2026-04-28) mixed near-term L1 mechanics with long-term vision in a single §12. Version 1.1 <strong>restructures</strong> that material:</p>
+<p>- v1.0 §4–§10, §14 → Part I (renumbered)</p>
+<p>- v1.0 §12.5–§12.7 → Part II §13–§15</p>
+<p>- v1.0 §12.1–§12.4 (RaaS, marketplace, agents, DeFi) → summarized under §3.3 (Phase 0/1 binding surface)</p>
+<p>- v1.0 §13 roadmap → §18</p>
+<p>- New: §5 implementation phases for the energy peg; §11 four-slot genesis; §13 Sovereign OS; §17 open problems; §18 comparison; §19 roadmap</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                       [ 0x02 ] 2. Design Goals                       |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">2. Design Goals</h2>
+<p>1. <strong>Post-quantum security from genesis</strong> — ML-DSA (FIPS 204) as the base signature family; hybrid Ed25519 + ML-DSA for wallet transfer auth in Phase 0 (see §7).</p>
+<p>2. <strong>Hardware-adaptive consensus</strong> — CAAC routes PoC vs PoR from measured or attested capability, not a single global puzzle.</p>
+<p>3. <strong>Thermodynamic economic binding</strong> — Token issuance and inference settlement tied to <strong>verified physical compute energy</strong>, not abstract hash puzzles (§5). This is the differentiator vs labor markets (Bittensor) and compute-as-a-service brokers (Gensyn).</p>
+<p>4. <strong>Optimistic execution with cryptographic dispute resolution</strong> — Sovereign Runtime accepts commitments; fraud challenged in ZK-Court (§8).</p>
+<p>5. <strong>Participation without industrial capital</strong> — Edge light clients and PoR roles bound storage and verification cost for consumer hardware (§9).</p>
+<p>6. <strong>Honest documentation</strong> — Where code diverges from prose, §17 records the gap; we do not paper over implementation debt.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                  [ 0x03 ] 3. Architecture Overview                   |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">3. Architecture Overview</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x03.01</span> 3.1 System components</h3>
+<p>The canonical node implementation is <strong><code>tet-core</code></strong> (<code>TET-Core</code> binary):</p>
+<pre class="ascii-table span-all ultra-ascii">
++----------------------+----------------------------------------------------------------------+--------------------------------------------------------+
+| Subsystem           | Primary modules                                                    | Role                                                  |
++----------------------+----------------------------------------------------------------------+--------------------------------------------------------+
+| Ledger              | `ledger.rs`, `genesis.rs`                                          | sled-backed balances, genesis allocation, fees, burns |
+| Consensus / mining  | `consensus.rs`                                                     | Block production, gossip apply, CAAC leader hints     |
+| REST API            | `rest/`                                                            | Axum HTTP surface for wallet, ledger, vision/ZK-Court |
+| P2P (legacy stack)  | `p2p.rs`, `network.rs`                                             | Gossipsub blocks/txs, ledger snapshots                |
+| P2P (Phase 1 stack) | `p2p_network.rs`, `p2p_keystore.rs`                                | libp2p swarm, persistent PeerId                       |
+| Vision / CAAC       | `vision/caac.rs`, `vision/zk_court.rs`, `vision/thermo_genesis.rs` | Roles, disputes, thermodynamic estimates              |
+| ZK                  | `zk_verifier.rs`, `methods/` (RISC0 guest)                         | Receipt verification, challenge pipeline              |
+| Wallet crypto       | `wallet.rs`, `quantum_shield.rs`                                   | BIP39 → Ed25519 + ML-DSA hybrid messages              |
++----------------------+----------------------------------------------------------------------+--------------------------------------------------------+
+</pre>
+<p><strong>Chain binding:</strong> Hybrid signed messages embed <code>chain_id</code> and <code>genesis_hash</code>. The canonical genesis hash is computed in <strong><code>tet-core/src/genesis.rs</code></strong> (single source of truth); <code>ledger.rs</code> and <code>wallet.rs</code> delegate to it.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x03.02</span> 3.2 CAAC + PoC + PoR + ZK-Court (control plane)</h3>
+<pre class="code span-all ascii-figure math">                    ┌─────────────────────────────────────┐
+                    │           TET-Core node              │
+                    │  REST (wallet, ledger, vision)       │
+                    └──────────────┬──────────────────────┘
+                                   │
+         ┌─────────────────────────┼─────────────────────────┐
+         ▼                         ▼                         ▼
+   ┌───────────┐            ┌──────────────┐          ┌─────────────┐
+   │  Ledger   │◄──────────│  Consensus   │─────────►│  libp2p     │
+   │  (sled)   │            │  auto-mine   │          │  gossipsub  │
+   └───────────┘            └──────┬───────┘          └─────────────┘
+                                   │
+                    workload_flag=0 │ workload_flag=1
+                         PoR path  │  PoC + inference
+                                   ▼
+                          ┌────────────────┐
+                          │  ZK-Court      │
+                          │  (RISC0 guest) │
+                          └────────────────┘</pre>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x03.03</span> 3.3 Phase 0 / Phase 1 application surface (binding scope)</h3>
+<p>The following v1.0 §12.1–§12.4 capabilities remain <strong>in scope for testnet and Phase 1</strong>, but are not renumbered as separate whitepaper chapters in v1.1:</p>
+<pre class="ascii-table span-all ultra-ascii">
++----------------------------------------+------------------+-----------------------------------------------------------------------------+
+| Application                           | Phase 0 status | Notes                                                                      |
++----------------------------------------+------------------+-----------------------------------------------------------------------------+
+| Decentralized inference marketplace   | **Partial**    | REST + Sovereign OS UI; thermodynamic pricing via §5 Phase 0 approximation |
+| Enterprise / AI workload transactions | **Partial**    | `workload_flag=1` mempool path                                             |
+| Agent / M2M clients                   | **Partial**    | `tet-agent-sdk/`; Agent-Gate is Part II                                    |
+| Native L2 RaaS                        | **Research**   | Not operational on testnet                                                 |
++----------------------------------------+------------------+-----------------------------------------------------------------------------+
+</pre>
+<p>Part II §13–§15 (World Brain, Sentient Assets, Agent-Gate) remain <strong>explicitly out of Phase 0</strong>.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|     [ 0x04 ] 4. Proof of Compute (PoC) and Proof of Relay (PoR)      |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">4. Proof of Compute (PoC) and Proof of Relay (PoR)</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x04.01</span> 4.1 Proof of Compute (PoC)</h3>
+<p>Nodes with sufficient GPU/CPU throughput are classified as <strong>PoC producers</strong>. They:</p>
+<p>- Execute AI inference or heavy compute tasks off the hot ledger path.</p>
+<p>- Submit cryptographic commitments to results (hashes, journals).</p>
+<p>- Accept optimistic settlement during a <strong>challenge window</strong>; disputes escalate to ZK-Court (§8).</p>
+<p>Rewards scale with <strong>verified thermodynamic work</strong> (§5), not with hash rate on a meaningless puzzle.</p>
+<p><strong>Implementation:</strong> <code>worker_daemon.rs</code>, <code>vision/caac.rs</code>, <code>consensus.rs</code> (AI workload blocks). PoC eligibility uses CAAC worker records and role flags.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x04.02</span> 4.2 Proof of Relay (PoR)</h3>
+<p>Constrained devices (mobile, IoT) participate as <strong>PoR</strong> nodes:</p>
+<p>- Propagate blocks, transactions, and signed ledger snapshots.</p>
+<p>- Perform lightweight ML-DSA / hybrid signature verification.</p>
+<p>- Do <strong>not</strong> execute full inference workloads (<code>workload_flag=1</code> rejected on PoR routing).</p>
+<p>Economic rewards are smaller than PoC but non-zero, preserving the “universal miner” design goal.</p>
+<p><strong>Implementation:</strong> <code>p2p.rs</code> gossip paths, <code>network.rs</code> ledger topic, edge verification in wallet/ledger read paths.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x04.03</span> 4.3 Workload flag (fluid transaction routing)</h3>
+<p>Transactions carry a binary <strong><code>workload_flag</code></strong>:</p>
+<pre class="ascii-table span-all">
++-------+----------------------------------+--------------------------+
+| Flag | Semantics                      | Routed to               |
++-------+----------------------------------+--------------------------+
+| `0`  | Value transfer / maintenance   | PoR-eligible validation |
+| `1`  | AI inference / compute request | PoC producers only      |
++-------+----------------------------------+--------------------------+
+</pre>
+<p>Misrouting flag-1 work to edge nodes is rejected at the protocol layer (v1.0 §6, preserved in implementation via consensus and mempool filters).</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|         [ 0x05 ] 5. Energy Peg — Thermodynamic Reward Model          |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">5. Energy Peg — Thermodynamic Reward Model</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x05.01</span> 5.1 Vision: the Sovereign Peg</h3>
+<p><strong>Claim (strategic):</strong> TET pegs each unit of circulating supply to <strong>verified physical compute energy</strong> through a worker-specific thermodynamic efficiency term <strong>η(W_i)</strong>. Unlike labor-token markets that reward stake-weighted opinions, and unlike pure compute rental APIs that price hours without a chain-level energy conservation law, TET binds issuance to <strong>η(W_i) · C(t_i)</strong> aggregated over verified tasks, normalized by network difficulty <strong>D(t)</strong>.</p>
+<p>The v1.0 continuous-time statement:</p>
+<pre class="code span-all ascii-figure math">R(T) = Σ_{i ∈ verified_tasks(T)} [ η(W_i) · C(t_i) ] / D(t)</pre>
+<p>Where:</p>
+<p>- <strong>η(W_i)</strong> — thermodynamic efficiency of worker *i* (energy out per unit useful compute, or equivalent joules attributed to verified work).</p>
+<p>- <strong>C(t_i)</strong> — network compute price at task time *t_i*.</p>
+<p>- <strong>D(t)</strong> — dynamic difficulty / scarcity regulator (analogous in role to mining difficulty, but tied to compute-energy targets).</p>
+<p><strong>We do not weaken this claim in v1.1.</strong> We document <strong>how each phase approximates η</strong> and where formal η remains open (§17.1).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x05.02</span> 5.2 Formal η(W_i) — deferred</h3>
+<p>A complete definition of <strong>η(W_i)</strong> under adversarial hardware impersonation, cross-vendor GPU counters, and mobile enclave attestations is <strong>not closed in this draft</strong>. §17.1 lists required assumptions. Until then, phases below use <strong>auditable proxies</strong>.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x05.03</span> 5.3 Phase 0 implementation (current testnet)</h3>
+<p><strong>Code path:</strong> <code>tet-core/src/vision/thermo_genesis.rs</code></p>
+<p>The ledger settlement uses a <strong>discrete approximation</strong> aligned with whitepaper §4.2 engineering notes:</p>
+<pre class="code span-all math identifier-line">R_micro = (C_flops / E_joules_per_flop) × Γ × scale</pre>
+<pre class="ascii-table span-all ultra-ascii">
++----------------------+----------------------------------------------------------+----------------------------------------------------------+
+| Symbol              | Meaning                                                | Source                                                  |
++----------------------+----------------------------------------------------------+----------------------------------------------------------+
+| `C_flops`           | Declared inference FLOPs                               | Task / receipt metadata                                 |
+| `E_joules_per_flop` | Energy proxy **E** (J/FLOP), env `TET_JOULES_PER_FLOP` | Operator-tunable default `1e-12`                        |
+| `Γ`                 | Network difficulty                                     | `NetworkDifficulty`, env `TET_NETWORK_DIFFICULTY_GAMMA` |
+| `scale`             | Maps dimensionless ratio → Stevemon micro              | `TET_THERMO_STEVEMON_MICRO_SCALE`                       |
++----------------------+----------------------------------------------------------+----------------------------------------------------------+
+</pre>
+<p><strong>η in Phase 0:</strong> Approximated indirectly via <strong>hardware fingerprint class</strong> (CPU vs GPU vs specialized) in CAAC weighting (<code>vision/caac.rs</code>) and static env efficiency — <strong>not</strong> per-device power telemetry.</p>
+<p><strong>Gap:</strong> This is <strong>(C/E)×Γ</strong>, not the full Σ[η·C]/D integral. The gap is explicit in §17.1 and §17.7 (notation reconciliation).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x05.04</span> 5.4 Phase 1 target</h3>
+<p>- η computed from <strong>CAAC fingerprint + measured compute</strong> (timing micro-tasks, FLOPs/second bands, attested GPU class).</p>
+<p>- Bind optimistic inference receipts to thermodynamic <strong>R_expected</strong> used in slash economics (§12).</p>
+<p>- Unify discrete <code>thermo_genesis</code> outputs with wallet-visible fee displays (§11).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x05.05</span> 5.5 Phase 2 target</h3>
+<p>- η pegged to <strong>hardware-attested power telemetry</strong> (TPM / secure enclave / datacenter PDU APIs where available).</p>
+<p>- Cross-check on-chain R against physical energy invoices for auditability.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x05.06</span> 5.6 AI inference settlement split (related economics)</h3>
+<p>Separate from transfer fees (§11), AI utility settlement in code uses a <strong>50/50</strong> split of thermodynamic <code>R_micro</code> between worker reward and protocol burn (<code>estimate_ai_infer_cost_micro</code>). This is <strong>not</strong> identical to v1.0 §11.2 “50% of all transaction fees burned” wording for every flow — see §17.7 and <code>WHITEPAPER_v1.0_GAPS.md</code> Gap 6 in STATUS.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|         [ 0x06 ] 6. Context-Aware Adaptive Consensus (CAAC)          |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">6. Context-Aware Adaptive Consensus (CAAC)</h2>
+<p>CAAC is the routing and weighting layer that assigns each node an operational role from hardware and network context. v1.0 §4 content is preserved here as the <strong>core working claim</strong> of the project.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x06.01</span> 6.1 Role assignment</h3>
+<p>1. <strong>Probe</strong> — Static and micro-benchmark signals (GPU name, memory, optional timing tasks).</p>
+<p>2. <strong>Classify</strong> — PoC vs PoR vs fallback weights.</p>
+<p>3. <strong>Leader election</strong> — Hash- or weight-based producer selection for block intervals (<code>consensus.rs</code>, CAAC records in ledger).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x06.02</span> 6.2 PoC weight factors</h3>
+<p>High-performance nodes earn higher <strong>CAAC weight</strong> from:</p>
+<p>- Proof-of-capacity signals (GPU tier, memory),</p>
+<p>- Historical latency and availability,</p>
+<p>- Verified inference deliveries (feeds ZK-Court and thermodynamic history).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x06.03</span> 6.3 PoR weight factors</h3>
+<p>Edge nodes earn weight from:</p>
+<p>- Successful gossip propagation,</p>
+<p>- Signature verification throughput,</p>
+<p>- Uptime on relay paths.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x06.04</span> 6.4 Implementation status</h3>
+<pre class="ascii-table span-all">
++-----------------------------------------------+-------------------+
+| Feature                                      | Status           |
++-----------------------------------------------+-------------------+
+| Worker records in ledger                     | **Implemented**  |
+| Static hardware probes                       | **Partial**      |
+| Probabilistic timing fingerprinting (§10)    | **Partial**      |
+| Full autonomous reclassification every epoch | **Open** (§17.5) |
++-----------------------------------------------+-------------------+
+</pre>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                [ 0x07 ] 7. Post-Quantum Cryptography                 |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">7. Post-Quantum Cryptography</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x07.01</span> 7.1 ML-DSA from genesis</h3>
+<p>TET adopts <strong>ML-DSA</strong> (FIPS 204, module-lattice signatures) as the protocol-family PQC scheme. Migration-from-ECDSA is intentionally avoided.</p>
+<p><strong>Implementation:</strong> <code>quantum_shield.rs</code>, <code>tet-pqc-wasm/</code>, Dilithium crates in <code>wallet.rs</code>.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x07.02</span> 7.2 Phase 0 hybrid wallet auth</h3>
+<p>Wallet transfers require <strong>both</strong>:</p>
+<p>- <strong>Ed25519</strong> over a deterministic UTF-8 message (BIP39 seed bytes <code>[0..32]</code> → signing key), and</p>
+<p>- <strong>ML-DSA</strong> over the same message bytes.</p>
+<p>This hybrid path is what Sovereign OS uses for <code>POST /wallet/transfer</code>. See <code>wallet.rs::transfer_hybrid_auth_message_bytes</code> and UI <code>ed25519_tet.ts</code>.</p>
+<p><strong>Chain binding fields</strong> in the message:</p>
+<pre class="code span-all wide-ascii ascii-figure math">tet xfer hybrid v1|chain_id=...|genesis_hash=...|to=...|amount_micro=...|nonce=...|mldsa_pubkey_b64=...</pre>
+<p><code>genesis_hash</code> must match <code>genesis::expected_genesis_hash_from_env()</code> on the node.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x07.03</span> 7.3 Node ML-DSA keystore</h3>
+<p><code>pqc_keystore::ensure_node_mldsa_keystore</code> provisions node-level ML-DSA keys under the DB directory for server-side operations.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x07.04</span> 7.4 Quantum threat model</h3>
+<p>ECDSA-secured chains face retroactive migration risk under Shor-capable adversaries. TET assumes ML-DSA parameter sets aligned with NIST guidance; parameter agility for future standards remains an operational concern, not a Phase 0 blocker.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                [ 0x08 ] 8. ZK-Court (Lazy Evaluation)                |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">8. ZK-Court (Lazy Evaluation)</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x08.01</span> 8.1 Threat addressed</h3>
+<p>A malicious PoC node may submit <strong>fabricated inference</strong> without executing the model. ZK-Court provides <strong>lazy evaluation</strong>: optimistic acceptance during a challenge window, then cryptographic replay.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x08.02</span> 8.2 Mechanism</h3>
+<p>1. PoC records delivery + commitment (<code>vision/zk_court.rs</code>).</p>
+<p>2. Challenge window opens (<code>TET_ZK_COURT_CHALLENGE_MS</code>, default 24h).</p>
+<p>3. Challenger posts bond; pipeline runs <strong>RISC Zero</strong> guest prove when <code>NEXUS_GUEST_ELF</code> is non-empty.</p>
+<p>4. <strong>Guilty</strong> if verified receipt shows journal ≠ commitment.</p>
+<p>5. <strong>Slash</strong> on guilty verdict (§12).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x08.03</span> 8.3 Prover backends</h3>
+<pre class="ascii-table span-all wide-ascii">
++---------------------------------------------+---------------------------------------------+
+| Backend                                    | Status                                     |
++---------------------------------------------+---------------------------------------------+
+| RISC Zero (`methods/`, `worker_daemon.rs`) | **Implemented** (requires built guest ELF) |
+| SP1                                        | **Not integrated** (§17.2)                 |
++---------------------------------------------+---------------------------------------------+
+</pre>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x08.04</span> 8.4 Mainnet safety</h3>
+<p><code>TET_MAINNET=1</code> forbids mock ZK paths (<code>zk_verifier.rs</code>, <code>main.rs</code> panic on <code>TET_ALLOW_MOCK_ZK=1</code>). Dev-only <code>MOCKJ1:</code> / <code>MOCKZC1:</code> prefixes are rejected on mainnet.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x08.05</span> 8.5 REST surface (operator)</h3>
+<p>- <code>POST /v1/vision/zk-court/challenge</code> — full pipeline</p>
+<p>- Params JSON exposes <code>whitepaper_alignment</code> block for operators (<code>WHITEPAPER_v1.0_GAPS.md</code> §6)</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                  [ 0x09 ] 9. Network Layer (libp2p)                  |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">9. Network Layer (libp2p)</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x09.01</span> 9.1 Transport and identity</h3>
+<p>- <strong>Transport:</strong> TCP + Noise XX + Yamux (Phase 1 swarm in <code>p2p_network.rs</code>).</p>
+<p>- <strong>Identity:</strong> Persistent Ed25519 libp2p keypair in <code>libp2p_keypair.bin</code> under DB dir (<code>p2p_keystore.rs</code>). Boot banner logs PeerId for bootnode wiring.</p>
+<p>- <strong>Discovery:</strong> mDNS, Kademlia, identify, autonat, relay (compose-dependent).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x09.02</span> 9.2 Gossip topics (representative)</h3>
+<pre class="ascii-table span-all wide-ascii">
++-----------------------+----------------------------------------------------+
+| Topic constant       | Purpose                                           |
++-----------------------+----------------------------------------------------+
+| `BLOCKS_TOPIC`       | Block propagation (`p2p.rs`)                      |
+| `TXS_TOPIC`          | Transaction gossip                                |
+| `AI_WORKLOAD_TOPIC`  | AI workload announcements                         |
+| `TET_LEDGER_TOPIC`   | Signed ledger snapshot replication (`network.rs`) |
+| `nexus-inference-v1` | Inference gossip (`p2p_network.rs`)               |
++-----------------------+----------------------------------------------------+
+</pre>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x09.03</span> 9.3 Sync and testnet operations</h3>
+<p>Sprint 1 added <strong>chain catch-up</strong> (<code>sync.rs</code>) and sync-gated auto-mine. Multi-node docker compose (<code>tet-core/docker-compose.yml</code>, <code>scripts/start-network.sh</code>) is the recommended Phase 0 operator path. See <code>docs/RUNNING_A_NODE.md</code>.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x09.04</span> 9.4 Cockroach Doctrine (resilience)</h3>
+<p>If data-center PoC clusters fail, PoR mesh continues header propagation and ledger continuity; inference throughput degrades, chain liveness does not halt. This remains a <strong>design property</strong>; planetary-scale PoR counts are not yet demonstrated publicly.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|       [ 0x0A ] 10. Hardware Fingerprinting (Sybil Resistance)        |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">10. Hardware Fingerprinting (Sybil Resistance)</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0A.01</span> 10.1 Attack</h3>
+<p>Adversary claims PoC-class rewards while running low-tier hardware.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0A.02</span> 10.2 Defense (v1.0 §14.2, preserved)</h3>
+<p><strong>Probabilistic hardware fingerprinting:</strong> non-deterministic micro-tasks whose timing distributions are silicon-specific. Emulation must reproduce physical timing at scale.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0A.03</span> 10.3 Implementation</h3>
+<p><code>vision/caac.rs</code> — static probes (GPU name, memory heuristics) and limited micro-benchmark hooks. Full probabilistic schedule is <strong>partial</strong> (§17.5).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0A.04</span> 10.4 Phase 2</h3>
+<p>Integration with secure enclaves (see Part II §15 Agent-Gate pillar 3) for presence proofs without per-request ZK.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                       [ 0x0B ] 11. Tokenomics                        |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s2">11. Tokenomics</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.01</span> 11.1 Supply cap</h3>
+<p><strong>Maximum supply:</strong> <code>10,000,000,000 TET</code> (<code>MAX_SUPPLY_MICRO</code> in <code>ledger.rs</code> / <code>genesis.rs</code>).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.02</span> 11.2 Denomination table</h3>
+<pre class="ascii-table span-all ultra-ascii">
++-----------------------------------+----------------------------------+---------------------------------------+
+| Unit                             | Definition                     | On-chain representation              |
++-----------------------------------+----------------------------------+---------------------------------------+
+| **TET**                          | Human-facing token             | —                                    |
+| **Stevemon**                     | Sub-unit name in code/comments | 1 TET = **10⁶** Stevemon             |
+| **micro-TET / `*_micro` fields** | Integer ledger amounts         | `u64` micro-units (= Stevemon atoms) |
++-----------------------------------+----------------------------------+---------------------------------------+
+</pre>
+<p><strong>REST stability (Phase 0):</strong> Field names may change pre-mainnet (<code>amount_tet</code> as <code>f64</code> vs <code>amount_micro</code> as <code>u64</code> in signing). §17 documents API gaps.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.03</span> 11.3 Genesis four-slot allocation</h3>
+<p>Genesis mint is binding via <code>tet-genesis-v1</code> hash (<code>genesis.rs</code>). Four logical slots:</p>
+<pre class="ascii-table span-all ultra-ascii">
++-----------------------+------------------------------------------------------------------------------+------------------------+------------------------------------------------------------------+
+| Slot                 | Wallet id                                                                  | Share                | Phase 0 mint                                                    |
++-----------------------+------------------------------------------------------------------------------+------------------------+------------------------------------------------------------------+
+| **Worker pool**      | `000…0001` (`WALLET_WORKER_POOL`)                                          | **50%** (5B TET)     | Full tranche to locked system pool                              |
+| **Founder**          | `TET_GENESIS_FOUNDER_WALLET_ID` / `TET_FOUNDER_WALLET` (64-hex Ed25519 id) | **25%** (2.5B TET)   | Credited at genesis; **vesting / unlock schedule open** (§17.3) |
+| **Treasury**         | `TET_TREASURY_ADDRESS` (required 64-hex)                                   | **25%** (2.5B TET)   | Credited at genesis                                             |
+| **Protocol reserve** | `000…0003` (`WALLET_PROTOCOL_RESERVE`)                                     | **0%** (placeholder) | **Zero by design** in Phase 0                                   |
++-----------------------+------------------------------------------------------------------------------+------------------------+------------------------------------------------------------------+
+</pre>
+<p>Legacy sentinel <code>000…0002</code> (<code>WALLET_ECOSYSTEM</code>) receives <strong>no mint</strong> post–Phase 2B; treasury tranche moved to env-configured address (<code>WHITEPAPER_v1.0_GAPS.md</code> §9).</p>
+<p><strong>Repurposing reserve</strong> (non-zero mint or address change) alters <code>genesis_hash</code> → <strong>chain-incompatible</strong> without new genesis ceremony.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.04</span> 11.4 Protocol Reserve purpose (Phase 1+)</h3>
+<p>The reserve slot exists in the hash payload for forward compatibility. Intended uses (governance-defined, not yet allocated):</p>
+<p>- Security bug bounties</p>
+<p>- Emergency operational grants</p>
+<p>- Ecosystem grants approved by on-chain proposal</p>
+<p>- Potential buyback / burn policy (subject to governance)</p>
+<p><strong>Phase 0:</strong> allocation remains <strong>zero</strong> intentionally; nodes still commit <code>reserve_micro=0</code> in genesis hash.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.05</span> 11.5 Sovereign OS micropayments (Phase 0 — Steve decisions locked)</h3>
+<p>Protocol fees for <strong>Tmail</strong> and related Sovereign OS actions (spec: <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a> Appendix C). Amounts are <strong>testnet defaults</strong> until mainnet freeze. <sup class="fn">[3]</sup></p>
+<pre class="ascii-table span-all ultra-ascii">
++-----------------------+-----------------------------+-----------------------------+-------------------------------------------+
+| Action               | Charge                    | Ledger field              | Notes                                    |
++-----------------------+-----------------------------+-----------------------------+-------------------------------------------+
+| **Tmail send**       | **1 Stevemon** (= 1 µTET) | `fee_paid_micro = 1`      | ~free UX; spam gate; Phase 0.1 may raise |
+| **Tmail Pin**        | **1000 Stevemon**         | `pin_stake_micro = 1_000` | Persistent thread beyond 5-msg UI cap    |
+| **Anonymous escrow** | **1 TET**                 | `1_000_000` µTET          | Minimum stake; 24h auto-settle           |
+| **File share / pin** | TBD                       | —                         | Size-dependent fee **Phase 0.1**         |
++-----------------------+-----------------------------+-----------------------------+-------------------------------------------+
+</pre>
+<p><strong>Fee disposition (Tmail/Pin/Anonymous protocol fees):</strong> <strong>50% treasury / 50% burn</strong> — same deflationary story as §11.6, routed to treasury address and burn sink at settlement.</p>
+<p><strong>Faucet (testnet):</strong> <strong>100 TET per day per IP</strong> on public seed — not a protocol fee; operator policy.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.06</span> 11.6 Transfer fee schedule (implemented)</h3>
+<pre class="ascii-table span-all wide-ascii">
++------------------+------------------------------------------+---------------------------------------+
+| Parameter       | Value                                  | Code                                 |
++------------------+------------------------------------------+---------------------------------------+
+| Maintenance fee | **1%** of gross transfer               | `PROTOCOL_MAINTENANCE_FEE_BPS = 100` |
+| Fee split       | **50%** to worker pool, **50%** burned | `ledger.rs` transfer settlement      |
++------------------+------------------------------------------+---------------------------------------+
+</pre>
+<p>Example (Phase 0 E2E): send <code>1,000,000</code> micro (1 TET) → <code>fee_micro = 10,000</code>, <code>net_micro = 990,000</code>.</p>
+<p><strong>Note:</strong> This is the <strong>wallet transfer</strong> path (<code>POST /wallet/transfer</code>). Mempool <code>POST /ledger/transfer</code> uses a different envelope (<code>SignedTxEnvelopeV1</code>).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.07</span> 11.7 Deflationary burn (vision vs transfer path)</h3>
+<p>v1.0 §11.2 states 50% of fees burn under sustained use. Implementation matches this for <strong>standard wallet transfers</strong>. AI inference economics additionally use thermodynamic 50/50 worker/burn split (§5.6). Unified narrative for v1.1 mainnet docs remains <strong>open</strong> (§17.7).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0B.08</span> 11.8 Worker pool emission</h3>
+<p>The 50% worker pool tranche is minted at genesis to a <strong>locked</strong> address without a private key. Ongoing PoC/PoR emissions from pool to producers follow coinbase and settlement rules in <code>ledger.rs</code>. <strong>Emission curve shape</strong> (constant vs decreasing) is <strong>open</strong> (§17.4).</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|             [ 0x0C ] 12. Economic Security (Slash Model)             |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s3">12. Economic Security (Slash Model)</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0C.01</span> 12.1 Lazy-evaluation fraud (ZK-Court)</h3>
+<p>For <strong>proven inference fraud</strong> during the challenge window, the implementation executes:</p>
+<pre class="code math identifier-line">slash_worker_bond_to_ecosystem_all(worker)</pre>
+<p>i.e. <strong>100% of liquid worker bond</strong> is burned to the ecosystem sink. This matches v1.0 §14.1 and §5.1 “confiscation, not a fine.”</p>
+<p><strong>Code:</strong> <code>vision/zk_court.rs</code>, <code>ledger.rs</code></p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0C.02</span> 12.2 Parametric model (other offense classes — Phase 1+)</h3>
+<p>v1.0 §14.3 defines slashable collateral:</p>
+<pre class="code math">S = λ · R_expected</pre>
+<p>with <code>λ</code> default <strong>100</strong> (<code>TET_SLASH_LAMBDA_MULTIPLIER</code>), and <code>R_expected</code> stored on artifacts from settlement.</p>
+<p><strong>v1.1 choice (Option A — honest to code):</strong></p>
+<pre class="ascii-table span-all ultra-ascii">
++----------------------------------------------------------------+-----------------------+---------------------------------------------+
+| Offense class                                                 | Phase 0 rule        | Future                                     |
++----------------------------------------------------------------+-----------------------+---------------------------------------------+
+| ZK-Court inference fraud                                      | **100% bond slash** | Keep                                       |
+| Other Byzantine behaviors (double-sign, invalid blocks, etc.) | Ad hoc / partial    | **Cap at min(bond, λ·R_expected)** Phase 1 |
++----------------------------------------------------------------+-----------------------+---------------------------------------------+
+</pre>
+<p>Today <code>λ</code> and <code>R_expected</code> are <strong>telemetry</strong> for disputes; they do <strong>not</strong> cap ZK-Court slashes. See <code>WHITEPAPER_v1.0_GAPS.md</code> §3.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0C.03</span> 12.3 Rationality argument</h3>
+<p>For fraud with 100% slash, expected gain must be <code>&lt;</code> bond. For future capped offenses, the inequality <code>S &gt; R_expected</code> should be enforced by parameter choice at mainnet freeze.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0C.04</span> 12.4 Founder and treasury operational security</h3>
+<p>Founder premine is subject to unlock policy (§17.3). Treasury address is env-driven for testnet; production treasury migration requires coordinated genesis or transfer policy.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|              [ 0x0D ] 13. Sovereign OS Suite (Phase 0)               |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s3">13. Sovereign OS Suite (Phase 0)</h2>
+<blockquote><strong>Phase 0 deliverable.</strong> Sovereign OS is the user-facing surface of TET Network: not a wallet tab, but a daily-use <strong>desktop environment</strong> backed by <code>tet-core</code> and libp2p. Full technical spec: <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a>.</blockquote>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0D.01</span> 13.1 Philosophy</h3>
+<p>- <strong>TET UI ≠ wallet</strong> — Users live in an OS metaphor (apps, windows, taskbar), not a single “Send Coins” page.</p>
+<p>- <strong>Local-first, node-backed</strong> — Browser talks to the user’s <code>tet-core</code> REST API; libp2p runs in the node, not in the browser.</p>
+<p>- <strong>L1 before apps</strong> — Public testnet (seed, faucet, Docker) ships in <strong>Sprint 4</strong> before Tmail (see §19.1).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0D.02</span> 13.2 Desktop shell — “Inspired by 1990s desktop OS”</h3>
+<p>Visual design uses open <strong>98.css</strong> styling: gray bevel chrome, draggable windows, taskbar, Start menu, boot animation. Marketing and About copy:</p>
+<p><strong>“Inspired by 1990s desktop OS”</strong> — no Microsoft® trademarks; not affiliated with or endorsed by Microsoft.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0D.03</span> 13.3 Core applications (Phase 0)</h3>
+<pre class="ascii-table span-all wide-ascii">
++----------------+--------------------------------------------------------------------------+
+| App           | Role                                                                    |
++----------------+--------------------------------------------------------------------------+
+| **Wallet**    | Hybrid Ed25519 + ML-DSA transfers; genesis-bound auth                   |
+| **Tmail**     | Encrypted messaging (§13.4)                                             |
+| **Files**     | Local mailbox, libp2p P2P transfer, optional paid replication           |
+| **Explorer**  | Block / transaction browse                                              |
+| **Mini-apps** | Calculator (TET/USD/JPY), Clock (block height), Notes (encrypted local) |
++----------------+--------------------------------------------------------------------------+
+</pre>
+<p><strong>Worker</strong> inference UI is <strong>hidden</strong> in Phase 0 (<code>SHOW_WORKER_TAB=true</code> for developers). Productized earn path → Phase 0.5.</p>
+<p><strong>Onboarding:</strong> <code>docker compose up</code> launches <strong>node + UI</strong> (mandatory path for general users).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0D.04</span> 13.4 Tmail — five capabilities</h3>
+<pre class="ascii-table span-all ultra-ascii">
++----+--------------------------+----------------------------------------------------------------------------------------+
+| # | Feature                | Phase 0 mechanism                                                                     |
++----+--------------------------+----------------------------------------------------------------------------------------+
+| 1 | **Basic E2EE**         | X25519 + ML-KEM + ChaCha20-Poly1305 (`tet-core/src/e2ee.rs`)                          |
+| 2 | **Time-lock**          | **Stake-scheduled** `release_at_ms` (nodes enforce decrypt policy); VDF upgrade §17.8 |
+| 3 | **Burn-after-read**    | Read receipt → gossip revoke; **best-effort** (§17.9)                                 |
+| 4 | **Anonymous sender**   | Anchor + ephemeral + RISC0 ownership proof; **1 TET** escrow                          |
+| 5 | **5-msg window + Pin** | UI cap; **1000 Stevemon** stake for persistence                                       |
++----+--------------------------+----------------------------------------------------------------------------------------+
+</pre>
+<p>Gossip topic: <code>/tet/v1/tmail</code> on the block-plane libp2p swarm. Ciphertext is <strong>not</strong> stored on-ledger; fees and audit metadata are.</p>
+<p><strong>Marketing discipline:</strong> Public “world-first” claims for time-lock, burn, and anonymous modes require <strong>acceptance tests AT-3, AT-4, AT-5</strong> on the public testnet (Steve decision).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0D.05</span> 13.5 Anonymous Mode architecture</h3>
+<pre class="code span-all wide-ascii ascii-figure">Anchor wallet (persistent, BIP39)
+    │ fund + escrow (1 TET minimum)
+    ▼
+Ephemeral wallet (per-send/session) ──ZK proof──► &quot;anchor owns ephemeral&quot; (RISC0 guest)
+    │ send Tmail (gossip shows ephemeral only)
+    ▼
+Receiver sees anonymous sender; third parties cannot link to anchor
+    │
+Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre>
+<p>- <strong>24h auto-settle</strong> returns unused escrow to anchor unless dispute.</p>
+<p>- Misuse deterrence: high escrow + ZK-Court slash linkage (§12).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x0D.06</span> 13.6 Phase 0 operations and ship target</h3>
+<pre class="ascii-table span-all ultra-ascii">
++------------------+----------------------------------------------------------------------------------------------------------------------------------+
+| Item            | Policy                                                                                                                          |
++------------------+----------------------------------------------------------------------------------------------------------------------------------+
+| **Ship target** | **2026-09-15** (feature freeze **2026-08-31**, 2-week polish)                                                                   |
+| **Public seed** | **1×** Hetzner EU (~$5/mo) pre-ship; 2nd node when traffic warrants (SPOF accepted)                                             |
+| **Faucet**      | **100 TET / day / IP**                                                                                                          |
+| **Sprint plan** | S4 Foundation → S5 Tmail protocol → S6 E2EE+shell → S7 time-lock/burn/pin → S8 Anonymous+ZK → S9 Files → S10 mini-apps → S11 QA |
++------------------+----------------------------------------------------------------------------------------------------------------------------------+
+</pre>
+<p class="sep span-all">==============================================================================</p>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<h1 class="part">Part II — Layer 2 Applications (Future Vision)</h1>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<blockquote><strong>Not Phase 0 deliverables.</strong> The following sections describe architectural intent. Implementation depends on resolving open problems in federated learning, on-chain inference economics, and machine-to-machine settlement.</blockquote>
+<pre class="frame span-all">==============================================================================
+|         [ 0x0E ] 14. World Brain (Neural State Transitions)          |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s3">14. World Brain (Neural State Transitions)</h2>
+<p>During idle periods, PoC nodes contribute spare compute to <strong>federated fine-tuning</strong> of a shared base model. The chain state becomes a living, tamper-resistant model artifact refined by privacy-preserving edge telemetry.</p>
+<p><strong>Dependencies:</strong> Part I CAAC + ZK-Court operational at scale; privacy and model-governance open problems.</p>
+<p><strong>Status:</strong> research / not implemented.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|          [ 0x0F ] 15. Sentient Assets (Smart Contracts 2.0)          |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s3">15. Sentient Assets (Smart Contracts 2.0)</h2>
+<p>Contracts embed inference over context — wallets that reason about fraud patterns, assets that negotiate price from live ecosystem data — built atop World Brain state transitions.</p>
+<p><strong>Status:</strong> research / not implemented.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|         [ 0x10 ] 16. Agent-Gate (Machine-to-Machine Economy)         |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s3">16. Agent-Gate (Machine-to-Machine Economy)</h2>
+<p>An M2M API gateway imposing <strong>economic friction</strong> on autonomous agent swarms without degrading human UX:</p>
+<p>1. <strong>Invisible UX</strong> — Sovereign OS local agent spends micro-TET in background.</p>
+<p>2. <strong>State channels</strong> — high-frequency agent payments settle net on L1 daily.</p>
+<p>3. <strong>Hardware-enclave PoR</strong> — presence proofs via Secure Enclave / TrustZone without per-request ZK.</p>
+<p><strong>Status:</strong> research / not implemented; overlaps §10 enclave roadmap.</p>
+<p class="sep span-all">==============================================================================</p>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<h1 class="part">Part III — Open Problems and Comparisons</h1>
+<pre class="part-banner span-all">+----------------------------------------------------------------------------+</pre>
+<pre class="frame span-all">==============================================================================
+|                      [ 0x11 ] 17. Open Problems                      |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s3">17. Open Problems</h2>
+<p>Each item is stated bluntly; solutions are not claimed unless noted.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.01</span> 17.1 Formal definition of η(W_i) under adversarial hardware impersonation</h3>
+<p>We lack a closed-form η(W_i) that is simultaneously measurable on commodity hardware, resistant to emulator timing attacks, and composable into R(T). Phase 0 uses (C/E)×Γ proxies. <strong>Status: open.</strong></p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.02</span> 17.2 SP1 prover integration</h3>
+<p>ZK-Court pipeline is RISC Zero–only when ELF is present. SP1 is cited in v1.0 but not wired in <code>zk_verifier.rs</code>. <strong>Status: open</strong> (RISC0 partial).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.03</span> 17.3 Founder unlock schedule (cliff vs linear vest)</h3>
+<p>Founder tranche mints at genesis; much of founder balance may be <strong>locked</strong> in ledger policy. Cliff vs linear vest for mainnet is undecided. <strong>Status: open.</strong></p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.04</span> 17.4 Worker pool emission curve</h3>
+<p>Genesis mints 5B TET to locked pool; ongoing emission rate shape (constant vs decay) not finalized. <strong>Status: open.</strong></p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.05</span> 17.5 CAAC hardware fingerprinting attack model</h3>
+<p>Timing micro-tasks are described; formal security game (emulator, FPGA, cloud GPU posing as mobile) is not written. <strong>Status: open</strong> (implementation partial).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.06</span> 17.6 Cross-chain bridge design (Phase 1 interoperability)</h3>
+<p>No canonical bridge spec for ETH/SOL/BTC custody. <strong>Status: open.</strong></p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.07</span> 17.7 Slash magnitude and economics notation reconciliation</h3>
+<p>§12 documents 100% slash for ZK fraud vs §14.3 λ·R_expected parametric model. AI 50/50 thermodynamic split vs global fee-burn wording differs. <strong>Status: partial</strong> (documented in GAPS doc; code uses Option A).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.08</span> 17.8 Time-lock cryptography upgrade</h3>
+<p><strong>Phase 0:</strong> Time-lock delivery uses <strong>stake-scheduled release</strong> (<code>release_at_ms</code> in signed envelope; nodes refuse early decrypt). Trust is <strong>social/protocol-enforced</strong>, not wall-clock cryptographic.</p>
+<p><strong>Phase 0.1+:</strong> <strong>Verifiable Delay Function (VDF)</strong> or threshold decryption for <strong>trustless</strong> time-lock. Class-group VDF evaluation is research-track (see <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a> §A.2). <sup class="fn">[4]</sup></p>
+<p><strong>Status: open</strong> (VDF); Phase 0 path <strong>implemented by policy</strong>.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.09</span> 17.9 Burn-after-reading cryptographic guarantee</h3>
+<p><strong>Phase 0:</strong> Burn is <strong>best-effort</strong>: cooperating peers delete ciphertext after read-receipt gossip; malicious archivers may retain encrypted blobs. UI copy states this explicitly.</p>
+<p><strong>Phase 1+:</strong> Forward secrecy sessions + cryptographic key destruction proofs; possible CRDT-wide revocation research.</p>
+<p><strong>Status: open</strong> (strong guarantee); Phase 0 path <strong>best-effort</strong>.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.0A</span> 17.10 REST API completeness</h3>
+<p><code>POST /wallet/transfer</code> lacks <code>tx_hash</code> / block confirmation fields; <code>amount_tet</code> f64 vs signed <code>amount_micro</code> u64. <strong>Status: open</strong> (Phase 1).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.0B</span> 17.11 Multi-node sync at public testnet scale</h3>
+<p>Catch-up driver exists; 72h public testnet soak not completed. <strong>Status: partial</strong> (<code>docs/SYNC_ISSUE.md</code>).</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.0C</span> 17.12 Dual genesis_hash class of bugs (resolved 2026-05-20)</h3>
+<p>Wallet vs ledger genesis hash divergence broke all hybrid transfers. Fixed via <code>genesis.rs</code>. <strong>Status: closed</strong> in testnet; recorded as process lesson.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                    [ 0x12 ] 18. Comparison Table                     |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s4">18. Comparison Table</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x12.01</span> 18.1 Layer 1 positioning</h3>
+<p>Factual summary from public project materials (2026-05). Where uncertain: <strong>unknown / not stated</strong>.</p>
+<div class="ascii-wrap mega-wrap">
+<pre class="ascii-table span-all mega-ascii">
++------------------+----------------------------------------------+----------------------------------------------------------------------------+------------------------------------------+------------------------------------------------------------+-----------------------------------+------------------------------+
+| Project         | Consensus                                  | Proof model                                                              | Hardware model                         | Token peg                                                | PQ resistance                   | Layer position              |
++------------------+----------------------------------------------+----------------------------------------------------------------------------+------------------------------------------+------------------------------------------------------------+-----------------------------------+------------------------------+
+| **TET Network** | CAAC (PoC + PoR), L1 testnet               | Optimistic inference + ZK-Court (RISC0); hybrid Ed25519+ML-DSA transfers | Adaptive roles; fingerprinting partial | **Energy/compute peg (η vision; Phase 0 (C/E)×Γ proxy)** | ML-DSA genesis + hybrid wallets | Sovereign L1 + OS UI        |
+| **Bittensor**   | Yuma consensus on subnet miners            | Labor/market proof of intelligence                                       | Subnet-specific miners                 | Labor market pricing (TAO)                               | Not PQ-native at base           | Intelligence marketplace L1 |
+| **Gensyn**      | Compute coordination (rollup-centric docs) | Verifiable ML compute proofs                                             | GPU workers                            | Compute-as-a-service settlement                          | unknown / not stated            | Compute layer / L2-ish      |
+| **Ritual**      | EVM + specialized nodes (public docs)      | On-chain inference orchestration                                         | Node specialization                    | Gas / ETH economic layer                                 | Inherits Ethereum assumptions   | Inference chain / L2        |
+| **Render**      | Solana-adjacent workload network           | Job completion attestations                                              | GPU render farms                       | Work-unit pricing (RENDER)                               | Solana stack                    | Compute marketplace         |
+| **Filecoin**    | Expected consensus + PoRep/PoSt            | Storage proof of replication                                             | Storage hardware                       | Storage market pricing                                   | Not PQ-native                   | Storage layer               |
++------------------+----------------------------------------------+----------------------------------------------------------------------------+------------------------------------------+------------------------------------------------------------+-----------------------------------+------------------------------+
+</pre></div>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x12.02</span> 18.2 Secure messaging vs TET Tmail (Phase 0 target)</h3>
+<p>Differentiates <strong>L1 + messaging</strong> on two axes — not only consensus:</p>
+<pre class="ascii-table span-all ultra-ascii">
++------------------------------------------+----------+-------------------+------------------------+----------------------------+
+| Capability                              | Signal | Telegram        | Session              | **TET Tmail (Phase 0)**   |
++------------------------------------------+----------+-------------------+------------------------+----------------------------+
+| **libp2p / decentralized transport**    | No     | No              | Yes                  | **Yes**                   |
+| **Post-quantum (ML-DSA / ML-KEM path)** | No     | No              | No                   | **Yes**                   |
+| **On-chain fee / audit metadata**       | No     | No              | No                   | **Yes**                   |
+| **Time-lock delivery**                  | No     | No              | No                   | **Yes** (stake-scheduled) |
+| **Network burn-after-read**             | No     | Limited (timer) | No                   | **Yes** (best-effort)     |
+| **ZK anonymous sender + anchor audit**  | No     | No              | Partial (Session ID) | **Yes** (1 TET escrow)    |
++------------------------------------------+----------+-------------------+------------------------+----------------------------+
+</pre>
+<p><strong>Do not over-claim:</strong> Rows assume <strong>2026-09-15</strong> ship targets pass AT-3..AT-5 on public testnet. Until then, table is <strong>design intent</strong>.</p>
+<p><strong>Sources (indicative):</strong> TET — this document + <code>tet-core</code> + <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a>; Signal/Telegram/Session — public product docs. <sup class="fn">[5]</sup></p>
+<p><strong>L1 caveat:</strong> TET testnet does not yet demonstrate planetary PoR scale, SP1 proofs, or closed-form η.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                         [ 0x13 ] 19. Roadmap                         |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s5">19. Roadmap</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x13.01</span> 19.1 Phase 0 — Sovereign OS + public testnet (current)</h3>
+<p><strong>Sprint sequence</strong> (see <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a> §B.1): <sup class="fn">[6]</sup></p>
+<pre class="ascii-table span-all ultra-ascii">
++----------+---------------------------------------------------------------------------------------------------------+
+| Sprint  | Focus                                                                                                  |
++----------+---------------------------------------------------------------------------------------------------------+
+| **S4**  | **L1 Foundation** — 1 public seed (Hetzner EU), faucet 100 TET/day/IP, Docker node+UI, CI/CD, ops docs |
+| **S5**  | Tmail protocol + REST + gossip                                                                         |
+| **S6**  | Tmail E2EE + Win95 shell                                                                               |
+| **S7**  | Time-lock + burn + Pin                                                                                 |
+| **S8**  | Anonymous Mode + ZK guest                                                                              |
+| **S9**  | Files P2P                                                                                              |
+| **S10** | Mini-apps (Calculator, Clock, Notes)                                                                   |
+| **S11** | QA + ship                                                                                              |
++----------+---------------------------------------------------------------------------------------------------------+
+</pre>
+<p><strong>Deliverables:</strong></p>
+<p>- <strong>Ship-able public testnet</strong> (not UI-only): seed, faucet, <code>docker compose up</code></p>
+<p>- <strong>Sovereign OS</strong> (§13): Wallet, Tmail (5 features), Files, mini-apps</p>
+<p>- Thermodynamic pricing <strong>approximation</strong> (§5.3)</p>
+<p>- ML-DSA + Ed25519 hybrid wallets</p>
+<p>- ZK-Court + Anonymous Tmail RISC0 path (dev ELF; CI stub where needed)</p>
+<p><strong>Explicit non-goals:</strong> Part II primitives (§14–§16), mainnet freeze, SP1, cross-chain bridges, productized AI Worker earn (Phase 0.5).</p>
+<p><strong>Target:</strong> <strong>2026-09-15</strong> public Phase 0 ship (feature freeze <strong>2026-08-31</strong>). Operator / builder preview — not financial promotion.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x13.02</span> 19.2 Phase 1 — CAAC + economics hardening</h3>
+<p>- Full CAAC role automation; improved fingerprinting (§17.5)</p>
+<p>- SP1 backend option (§17.2)</p>
+<p>- VDF time-lock (§17.8); stronger burn guarantees (§17.9)</p>
+<p>- Founder vesting + REST API stability (§17.3, §17.10)</p>
+<p>- Capped slash classes using λ·R_expected (§12.2)</p>
+<p>- Optional Protocol Reserve funding via governance (§11.4)</p>
+<p>- 2nd public seed + traffic SPOF mitigation</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x13.03</span> 19.3 Phase 2 — Post-quantum fluid grid</h3>
+<p>- η from attested power telemetry (§5.5)</p>
+<p>- Federated learning / World Brain (§14)</p>
+<p>- Sentient assets + Agent-Gate (§15–§16)</p>
+<p>- Scale-out toward edge participation thesis</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                       [ 0x14 ] 20. Conclusion                        |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s6">20. Conclusion</h2>
+<p>TET Network is not an incremental L1 tweak. It couples <strong>hardware-adaptive consensus</strong>, <strong>post-quantum signatures</strong>, and an <strong>energy-linked issuance philosophy</strong> distinct from labor markets and centralized inference APIs. Version 1.1 makes the structure honest: Part I is what we build and test; Part II is where the protocol could go; Part III is what still requires math, code, or both.</p>
+<p>The testnet exists to find bugs like dual <code>genesis_hash</code> implementations before they become permanent mainnet failures. Engineers who can disprove a mechanism should do so on testnet, not in production.</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                   [ 0x15 ] 21. A Call to Builders                    |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s6">21. A Call to Builders</h2>
+<p>Expertise sought (unchanged in spirit from v1.0):</p>
+<p>- Rust systems programming (consensus, ledger, networking)</p>
+<p>- libp2p at scale</p>
+<p>- zkVM engineering (RISC Zero today; SP1 tomorrow)</p>
+<p>- Applied cryptography (ML-DSA, hybrid protocols)</p>
+<p>- Distributed ML infrastructure</p>
+<p>Technical critique: <strong>yizhenxianshi@gmail.com</strong> (Subject: Core Builder Application)</p>
+<p class="sep span-all">==============================================================================</p>
+<pre class="frame span-all">==============================================================================
+|                       [ 0x16 ] 22. References                        |
+==============================================================================</pre>
+<p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
+<h2 id="s6">22. References</h2>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex"></span> Core consensus and cryptoeconomics</h3>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex"></span> Zero-knowledge and post-quantum cryptography</h3>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex"></span> Decentralized AI and networking</h3>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex"></span> Thermodynamics and hardware security</h3>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex"></span> Implementation annex (non-normative)</h3>
+<p>- <code>tet-core/src/genesis.rs</code> — canonical <code>genesis_hash</code></p>
+<p>- <code>tet-core/src/vision/thermo_genesis.rs</code> — Phase 0 thermodynamic estimate</p>
+<p>- <code>tet-core/src/ledger.rs</code> — fees, burns, genesis allocation</p>
+<p>- <code>docs/WHITEPAPER_v1.0_GAPS.md</code> — v1.0 vs code audit trail</p>
+<p class="sep span-all">==============================================================================</p>
+<p>*End of Whitepaper v1.1 Draft — 2026-05-21*</p>
+<div class="footnotes"><p class="sep span-all">--==[ REFERENCES ]==--</p><ol>
+<li>[1] Nakamoto, S. (2008). *Bitcoin: A Peer-to-Peer Electronic Cash System.*</li>
+<li>[2] Buterin, V. (2014). *Ethereum: A Next-Generation Smart Contract and Decentralized Application Platform.*</li>
+<li>[3] Sompolinsky, Y., &amp; Zohar, A. (2015). *Secure High-Rate Transaction Processing in Bitcoin.*</li>
+<li>[4] Buterin, V., &amp; Griffith, V. (2017). *Casper the Friendly Finality Gadget.*</li>
+<li>[5] Ben-Sasson, E., et al. (2014). *SNARKs for C: Verifying Program Executions Succinctly and in Zero Knowledge.*</li>
+<li>[6] RISC Zero Team. (2023). *RISC Zero zkVM.*</li>
+<li>[7] Succinct Labs. (2024). *SP1 zkVM.*</li>
+<li>[8] NIST. (2024). *FIPS 204: ML-DSA.*</li>
+<li>[9] Rao, Y. (2021). *Bittensor: A Peer-to-Peer Intelligence Market.*</li>
+<li>[10] Borzunov, A., et al. (2022). *Petals: Collaborative Inference and Fine-tuning of Large Models.*</li>
+<li>[11] AI@Meta. (2024). *Llama 3 Model Card.*</li>
+<li>[12] Protocol Labs. (2019). *libp2p.*</li>
+<li>[13] McMahan, B., et al. (2017). *Communication-Efficient Learning of Deep Networks from Decentralized Data.*</li>
+<li>[14] Landauer, R. (1961). *Irreversibility and Heat Generation in the Computing Process.*</li>
+<li>[15] Bennett, C. H. (1982). *The Thermodynamics of Computation.*</li>
+<li>[16] Suh, G. E., &amp; Devadas, S. (2007). *Physical Unclonable Functions for Device Authentication.*</li>
+</ol></div>
+</body>
+</html>
