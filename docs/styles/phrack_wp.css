@@ -1,0 +1,263 @@
+@page {
+  size: letter;
+  margin: 1in 0.75in;
+  @top-center {
+    content: "TET Network Issue #1 -- Phrack-Style WP v1.1";
+    font-family: "Courier New", Courier, "Andale Mono", monospace;
+    font-size: 7pt;
+  }
+  @bottom-center {
+    content: "Phrack-Style WP -- 2026-05-22  |  page " counter(page);
+    font-family: "Courier New", Courier, monospace;
+    font-size: 7pt;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: "Courier New", Courier, "Andale Mono", monospace;
+  font-size: 10pt;
+  line-height: 1.65;
+  color: #000;
+  background: #fff;
+  /* 2-column newspaper; ~28-35 pages at letter margins. Set column-count:1 for ~50+ pages */
+  column-count: 2;
+  column-gap: 1.25em;
+  column-rule: 1px solid #000;
+  max-width: 100%;
+  widows: 3;
+  orphans: 3;
+  margin: 0;
+  padding: 0.2in;
+}
+
+/* Optional CRT mode: uncomment
+body { background: #0a0a0a; color: #33ff33; }
+*/
+
+pre.banner, pre.frame, pre.code, pre.ascii-table, pre.part-banner {
+  font-family: inherit;
+  font-size: inherit;
+  white-space: pre !important;
+  break-inside: avoid;
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+}
+
+/* Method 1: wide blocks span both columns (Phrack 2-col preserved for prose) */
+.span-all,
+pre.banner,
+pre.frame,
+pre.part-banner,
+p.sep.span-all {
+  column-span: all;
+  -webkit-column-span: all;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.span-all {
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+}
+
+pre.banner { font-size: 7.5pt; margin: 0 0 0.5em; }
+pre.frame { font-size: 7.5pt; margin: 0.8em 0 0.3em; font-weight: bold; }
+pre.part-banner { font-size: inherit; margin: 0.2em 0; text-align: center; }
+
+pre.code {
+  background: #f4f4f4;
+  border-left: 3px solid #000;
+  padding: 0.6em 0.8em;
+  margin: 0.8em 0;
+  line-height: 1.25;
+}
+
+/* Method 2: shrink only when still wider than printable full width */
+pre.wide-ascii,
+pre.code.wide-ascii,
+pre.ascii-table.wide-ascii {
+  font-size: 7pt;
+  line-height: 1.2;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+}
+
+pre.ultra-ascii,
+pre.ascii-table.ultra-ascii,
+pre.code.ultra-ascii {
+  font-size: 5.75pt;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+}
+
+/* §18 comparison tables (~300+ chars): scale to printable full width */
+.ascii-wrap.mega-wrap {
+  column-span: all;
+  -webkit-column-span: all;
+  width: 100%;
+  overflow: hidden;
+  break-inside: avoid;
+  margin: 0.6em 0;
+}
+
+pre.ascii-table.mega-ascii,
+.ascii-wrap.mega-wrap pre {
+  font-size: 5.5pt;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+  transform: scaleX(0.245);
+  transform-origin: top left;
+  display: inline-block;
+  width: 408%;
+  max-width: none;
+  margin: 0;
+  padding: 0;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+  white-space: pre !important;
+}
+
+pre.code.span-all,
+pre.ascii-table.span-all {
+  overflow-x: visible;
+}
+
+p.sep, p.meta {
+  text-align: center;
+  font-size: 7pt;
+  margin: 0.6em 0;
+  break-inside: avoid;
+}
+
+p.sep.span-all {
+  font-size: 6.5pt;
+  letter-spacing: -0.03em;
+  overflow: hidden;
+}
+
+h1.part {
+  column-span: all;
+  font-size: 11pt;
+  text-align: center;
+  border: double 3px #000;
+  padding: 0.4em;
+  margin: 0.5em 0 0.8em;
+}
+
+h2 {
+  font-size: 10.5pt;
+  margin: 1.2em 0 0.5em;
+  padding-top: 0.6em;
+  break-after: avoid;
+  break-before: page;
+}
+
+h2:first-of-type {
+  break-before: auto;
+}
+
+h3 {
+  font-size: 9pt;
+  margin: 0.65em 0 0.3em;
+}
+
+p.sep.minor {
+  font-size: 6.5pt;
+  margin: 0.35em 0;
+}
+
+h3 .hex {
+  color: #333;
+  font-weight: bold;
+}
+
+p, blockquote, li {
+  margin: 0 0 0.55em;
+  text-align: justify;
+  /* auto hyphens breaks snake_case in plain text (e.g. η(W_i)); code/pre have own rules */
+  hyphens: manual;
+  -webkit-hyphens: manual;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+blockquote {
+  border-left: 2px solid #000;
+  padding-left: 0.6em;
+  font-style: italic;
+}
+
+strong { font-weight: bold; }
+
+/* Snake_case / env vars: do not break on underscore (override p { hyphens: auto }) */
+code,
+tt,
+p code,
+li code,
+blockquote code,
+h3 code,
+.footnotes code,
+td code,
+th code {
+  font-size: 0.9em;
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  white-space: pre;
+}
+
+pre.code,
+pre.math,
+pre.identifier-line {
+  hyphens: none !important;
+  -webkit-hyphens: none !important;
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  white-space: pre !important;
+}
+
+pre.math {
+  background: #f4f4f4;
+  border-left: 3px solid #000;
+  padding: 0.5em 0.8em;
+  margin: 0.6em 0;
+  line-height: 1.3;
+}
+
+pre.identifier-line {
+  font-size: 7pt;
+  overflow-x: visible;
+}
+
+table td,
+table th {
+  word-break: normal !important;
+  overflow-wrap: normal !important;
+  hyphens: none !important;
+}
+
+a.fn-ref { color: #000; text-decoration: underline; }
+
+.footnotes {
+  column-span: all;
+  font-size: 7.5pt;
+  margin-top: 1em;
+  border-top: 1px dashed #000;
+  padding-top: 0.5em;
+}
+
+sup.fn { font-size: 6pt; }
+
+/* ascii-table base size inherited; wide/ultra classes apply per block */
