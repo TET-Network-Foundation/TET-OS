@@ -253,6 +253,23 @@ table th {
   hyphens: none !important;
 }
 
+table td code,
+table th code {
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+  white-space: pre !important;
+  font-size: 0.9em;
+}
+
+/* Phrack PDF: ascii-table rows are pre text; protect if inline code is emitted */
+.ascii-table code,
+pre.ascii-table code {
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+  white-space: pre !important;
+  font-size: 0.9em;
+}
+
 a.fn-ref { color: #000; text-decoration: underline; }
 
 .footnotes {
@@ -894,6 +911,25 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex">0x11.0C</span> 17.12 Dual genesis_hash class of bugs (resolved 2026-05-20)</h3>
 <p>Wallet vs ledger genesis hash divergence broke all hybrid transfers. Fixed via <code>genesis.rs</code>. <strong>Status: closed</strong> in testnet; recorded as process lesson.</p>
+<p class="sep minor">----------------------------------------</p>
+<h3><span class="hex">0x11.0D</span> 17.13 Mining hardware reuse for AI inference</h3>
+<p>Bitcoin and PoW altcoin networks consume on the order of <strong>~150 TWh annually</strong> (order-of-magnitude industry estimate; exact figure varies by source and year) with <strong>no useful computational output</strong> beyond hash puzzle completion. TET’s CAAC worker model could, in principle, <strong>dual-purpose GPU miners</strong> during low-profit windows to earn <strong>AI inference rewards</strong> on the same hardware class already deployed for PoW.</p>
+<p><strong>Scope (candidates vs excluded):</strong></p>
+<pre class="ascii-table span-all ultra-ascii">
++--------------------------+--------------------------------------------------------------------+-----------------------------------------------------------------+
+| Class                   | Examples                                                         | TET reuse                                                      |
++--------------------------+--------------------------------------------------------------------+-----------------------------------------------------------------+
+| **GPU PoW miners**      | GRIN, Ergo, Ethereum Classic, other general-compute-friendly PoW | **Candidates** for idle-time switching                         |
+| **SHA-256 ASIC miners** | Bitcoin core hashrate                                            | **Excluded** — hardware incompatible with general AI inference |
++--------------------------+--------------------------------------------------------------------+-----------------------------------------------------------------+
+</pre>
+<p><strong>Mechanism (speculative):</strong> idle-time auto-switching between PoW mining and TET worker mode, gated by <strong>real-time profitability oracles</strong> (hashprice vs thermodynamic inference reward <code>R_micro</code>, §5.3) and CAAC role classification (§6).</p>
+<p><strong>Open questions:</strong></p>
+<p>- <strong>Incentive compatibility</strong> — Does switching dominate single-protocol mining in expectation, or does pool lock-in / variance dominate?</p>
+<p>- <strong>Switching latency and cooling</strong> — Thermal cycles and driver reload cost when bouncing between PoW kernels and inference runtimes.</p>
+<p>- <strong>Anti-cheating / fingerprinting</strong> — CAAC hardware attestation (§10) must remain stable across protocol switches; emulator timing games may worsen.</p>
+<p>- <strong>Mining pool economics</strong> — Integration with PPS, FPPS, and stratum-style contracts without violating pool ToS or double-spend of hashrate commitments.</p>
+<p><strong>Status:</strong> research / future direction. <strong>Phase 0 does not ship this.</strong> Phase 1+ exploration only; no commitment to dual-mining productization.</p>
 <p class="sep span-all">==============================================================================</p>
 <pre class="frame span-all">==============================================================================
 |                    [ 0x12 ] 18. Comparison Table                     |

@@ -248,6 +248,23 @@ table th {
   hyphens: none !important;
 }
 
+table td code,
+table th code {
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+  white-space: pre !important;
+  font-size: 0.9em;
+}
+
+/* Phrack PDF: ascii-table rows are pre text; protect if inline code is emitted */
+.ascii-table code,
+pre.ascii-table code {
+  word-break: keep-all !important;
+  overflow-wrap: normal !important;
+  white-space: pre !important;
+  font-size: 0.9em;
+}
+
 a.fn-ref { color: #000; text-decoration: underline; }
 
 .footnotes {

@@ -659,6 +659,28 @@ Catch-up driver exists; 72h public testnet soak not completed. **Status: partial
 
 Wallet vs ledger genesis hash divergence broke all hybrid transfers. Fixed via `genesis.rs`. **Status: closed** in testnet; recorded as process lesson.
 
+### 17.13 Mining hardware reuse for AI inference
+
+Bitcoin and PoW altcoin networks consume on the order of **~150 TWh annually** (order-of-magnitude industry estimate; exact figure varies by source and year) with **no useful computational output** beyond hash puzzle completion. TET’s CAAC worker model could, in principle, **dual-purpose GPU miners** during low-profit windows to earn **AI inference rewards** on the same hardware class already deployed for PoW.
+
+**Scope (candidates vs excluded):**
+
+| Class | Examples | TET reuse |
+|-------|----------|-----------|
+| **GPU PoW miners** | GRIN, Ergo, Ethereum Classic, other general-compute-friendly PoW | **Candidates** for idle-time switching |
+| **SHA-256 ASIC miners** | Bitcoin core hashrate | **Excluded** — hardware incompatible with general AI inference |
+
+**Mechanism (speculative):** idle-time auto-switching between PoW mining and TET worker mode, gated by **real-time profitability oracles** (hashprice vs thermodynamic inference reward `R_micro`, §5.3) and CAAC role classification (§6).
+
+**Open questions:**
+
+- **Incentive compatibility** — Does switching dominate single-protocol mining in expectation, or does pool lock-in / variance dominate?
+- **Switching latency and cooling** — Thermal cycles and driver reload cost when bouncing between PoW kernels and inference runtimes.
+- **Anti-cheating / fingerprinting** — CAAC hardware attestation (§10) must remain stable across protocol switches; emulator timing games may worsen.
+- **Mining pool economics** — Integration with PPS, FPPS, and stratum-style contracts without violating pool ToS or double-spend of hashrate commitments.
+
+**Status:** research / future direction. **Phase 0 does not ship this.** Phase 1+ exploration only; no commitment to dual-mining productization.
+
 ---
 
 ## 18. Comparison Table
