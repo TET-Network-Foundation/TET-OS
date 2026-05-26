@@ -154,7 +154,9 @@ impl InferenceExecutor for OllamaExecutor {
                 model: &model,
                 prompt,
                 stream: false,
-                options: req.max_new_tokens.map(|num_predict| OllamaOptions { num_predict }),
+                options: req
+                    .max_new_tokens
+                    .map(|num_predict| OllamaOptions { num_predict }),
             };
             let started = Instant::now();
             let resp = client
@@ -172,9 +174,9 @@ impl InferenceExecutor for OllamaExecutor {
                     raw.trim()
                 )));
             }
-            let out: OllamaGenerateResp =
-                serde_json::from_str(&raw).context("ollama JSON decode failed")
-                    .map_err(|e| ExecutorError::Backend(e.to_string()))?;
+            let out: OllamaGenerateResp = serde_json::from_str(&raw)
+                .context("ollama JSON decode failed")
+                .map_err(|e| ExecutorError::Backend(e.to_string()))?;
             let text = out.response.unwrap_or_default().trim().to_string();
             let prompt_tokens = out.prompt_eval_count.unwrap_or_else(|| {
                 let est = (prompt.len().saturating_add(3)) / 4;

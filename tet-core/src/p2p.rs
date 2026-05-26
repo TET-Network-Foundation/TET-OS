@@ -12,7 +12,6 @@ use libp2p::identity;
 use libp2p::kad;
 use libp2p::mdns;
 use libp2p::multiaddr::Protocol;
-use std::net::Ipv4Addr;
 use libp2p::noise;
 use libp2p::ping;
 use libp2p::request_response;
@@ -23,17 +22,17 @@ use libp2p::{Multiaddr, PeerId, StreamProtocol};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::error::Error;
+use std::net::Ipv4Addr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::models::NetworkEvent;
 use crate::protocol::SignedTxEnvelopeV1;
 use crate::sync::{
-    block_record_to_remote_gossip, build_chain_hello, build_chain_sync_range_response,
-    set_in_progress_range,
-    CatchUpAction, CatchUpDriverEvent, ChainHello, ChainSyncRangeRequest, ChainSyncRangeResponse,
-    InProgressRangeRequest, SharedBlockSyncBoard, SharedCatchUpDriver, SharedHelloRegistry,
-    CHAIN_SYNC_HELLO_PROTOCOL, CHAIN_SYNC_RANGE_PROTOCOL,
+    CHAIN_SYNC_HELLO_PROTOCOL, CHAIN_SYNC_RANGE_PROTOCOL, CatchUpAction, CatchUpDriverEvent,
+    ChainHello, ChainSyncRangeRequest, ChainSyncRangeResponse, InProgressRangeRequest,
+    SharedBlockSyncBoard, SharedCatchUpDriver, SharedHelloRegistry, block_record_to_remote_gossip,
+    build_chain_hello, build_chain_sync_range_response, set_in_progress_range,
 };
 use std::sync::Arc;
 
@@ -286,9 +285,7 @@ enum Event {
     Kademlia(kad::Event),
     BlockSync(request_response::Event<BlockRequest, BlockResponse>),
     ChainSyncHello(request_response::Event<ChainHello, ChainHello>),
-    ChainSyncRange(
-        request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>,
-    ),
+    ChainSyncRange(request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>),
 }
 
 impl From<mdns::Event> for Event {
@@ -327,9 +324,7 @@ impl From<request_response::Event<ChainHello, ChainHello>> for Event {
     }
 }
 impl From<request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>> for Event {
-    fn from(
-        e: request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>,
-    ) -> Self {
+    fn from(e: request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>) -> Self {
         Self::ChainSyncRange(e)
     }
 }
@@ -663,8 +658,8 @@ fn chain_sync_hello_behaviour() -> request_response::json::Behaviour<ChainHello,
     )
 }
 
-fn chain_sync_range_behaviour(
-) -> request_response::json::Behaviour<ChainSyncRangeRequest, ChainSyncRangeResponse> {
+fn chain_sync_range_behaviour()
+-> request_response::json::Behaviour<ChainSyncRangeRequest, ChainSyncRangeResponse> {
     request_response::json::Behaviour::new(
         [(
             StreamProtocol::new(CHAIN_SYNC_RANGE_PROTOCOL),
@@ -803,10 +798,7 @@ async fn apply_catch_up_blocks(
         )
         .await
         {
-            Ok(crate::consensus::RemoteBlockApplyOutcome::Applied {
-                block_height,
-                ..
-            }) => {
+            Ok(crate::consensus::RemoteBlockApplyOutcome::Applied { block_height, .. }) => {
                 applied += 1;
                 println!(
                     "[P2P-block] ✅ catch-up applied height={} block_id={block_id}",

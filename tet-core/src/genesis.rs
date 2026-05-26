@@ -10,8 +10,7 @@ const GENESIS_TREASURY_SHARE_MICRO: u64 = 2_500_000_000u64 * STEVEMON;
 const GENESIS_PROTOCOL_RESERVE_SHARE_MICRO: u64 = 0;
 
 /// Worker Pool wallet id embedded in genesis hash payload (locked system account).
-const WALLET_WORKER_POOL: &str =
-    "0000000000000000000000000000000000000000000000000000000000000001";
+const WALLET_WORKER_POOL: &str = "0000000000000000000000000000000000000000000000000000000000000001";
 const WALLET_PROTOCOL_RESERVE: &str =
     "0000000000000000000000000000000000000000000000000000000000000003";
 
@@ -92,8 +91,8 @@ pub fn deterministic_genesis_hash_from_parts(
 /// Deterministic genesis hash using founder + treasury from the environment.
 pub fn deterministic_genesis_hash() -> String {
     let founder = expected_genesis_founder_wallet_from_env();
-    let treasury = treasury_address_from_env()
-        .expect("TET_TREASURY_ADDRESS is required for genesis hash");
+    let treasury =
+        treasury_address_from_env().expect("TET_TREASURY_ADDRESS is required for genesis hash");
     deterministic_genesis_hash_from_parts(&founder, &treasury)
 }
 

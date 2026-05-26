@@ -7,8 +7,8 @@ mod chaos;
 mod conductor;
 mod consensus;
 mod e2ee;
-mod genesis;
 mod executor;
+mod genesis;
 mod invariant_tests;
 mod ledger;
 mod marketplace;
@@ -117,8 +117,8 @@ impl StartupConfig {
             .as_deref()
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(true);
-        let p2p_listen = std::env::var("TET_P2P_LISTEN")
-            .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string());
+        let p2p_listen =
+            std::env::var("TET_P2P_LISTEN").unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string());
         let rest_bind = std::env::var("TET_REST_BIND")
             .ok()
             .filter(|s| !s.is_empty())
@@ -344,9 +344,9 @@ async fn main() -> Result<(), AnyErr> {
         None
     };
 
-    if let Err(e) = tet_core::pqc_keystore::ensure_node_mldsa_keystore(std::path::Path::new(
-        &config.db_dir,
-    )) {
+    if let Err(e) =
+        tet_core::pqc_keystore::ensure_node_mldsa_keystore(std::path::Path::new(&config.db_dir))
+    {
         log::warn!("ML-DSA node keystore: {e}");
     } else {
         log::info!("ML-DSA node keystore ready under `{}`", config.db_dir);
@@ -509,10 +509,8 @@ async fn main() -> Result<(), AnyErr> {
 
     // --- Step 5: BlockSyncBoard (REST + auto-mine sync gate) ---
     let block_sync_board = if config.enable_p2p && libp2p_keypair.is_some() {
-        let board = crate::sync::new_block_sync_board(
-            hello_registry.clone(),
-            catch_up_driver.clone(),
-        );
+        let board =
+            crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
         log::info!("[startup] sync board created (per-node Arc<BlockSyncBoard>)");
         Some(board)
     } else {
@@ -523,9 +521,7 @@ async fn main() -> Result<(), AnyErr> {
     let block_p2p_listen = crate::p2p::parse_block_listen_multiaddr(&config.p2p_listen)
         .unwrap_or_else(|e| {
             log::warn!("[p2p][block] {e}; fallback /ip4/0.0.0.0/tcp/0");
-            "/ip4/0.0.0.0/tcp/0"
-                .parse()
-                .expect("fallback listen addr")
+            "/ip4/0.0.0.0/tcp/0".parse().expect("fallback listen addr")
         });
     let gossip_tx = if config.enable_p2p {
         match libp2p_keypair {

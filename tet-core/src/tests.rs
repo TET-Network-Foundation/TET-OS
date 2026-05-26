@@ -2578,8 +2578,7 @@ impl Drop for EnvVarRemoveOnDrop {
 fn ledger_coinbase_allocates_25_50_25_internal_split() {
     let _g = env_lock();
     set_test_env_base();
-    const TREASURY: &str =
-        "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+    const TREASURY: &str = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
     const MINER: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     let ledger = open_temp_ledger();
@@ -2635,10 +2634,8 @@ fn treasury_address_startup_validation() {
     }
     assert!(crate::ledger::treasury_address_from_env().is_err());
 
-    let treasury_a =
-        "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
-    let treasury_b =
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let treasury_a = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+    let treasury_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     unsafe {
         std::env::set_var("TET_TREASURY_ADDRESS", treasury_a);
     }
@@ -3000,7 +2997,13 @@ fn zkcourt_challenge_rejected_after_window_closes() {
         .transfer_no_fee("founder", challenger, 10_000)
         .unwrap();
     crate::vision::zk_court::record_inference_delivered_full(
-        &ledger, "infer-late", "p", "r", 1, worker, 1,
+        &ledger,
+        "infer-late",
+        "p",
+        "r",
+        1,
+        worker,
+        1,
     );
     std::thread::sleep(std::time::Duration::from_millis(5));
     let req = crate::vision::zk_court::ChallengeSubmitReq {
@@ -3008,8 +3011,7 @@ fn zkcourt_challenge_rejected_after_window_closes() {
         challenger_wallet_id: challenger.to_string(),
         reason: "late".to_string(),
     };
-    let err = crate::vision::zk_court::submit_challenge(&ledger, &req)
-        .unwrap_err();
+    let err = crate::vision::zk_court::submit_challenge(&ledger, &req).unwrap_err();
     assert!(err.contains("challenge window closed"), "got: {err}");
     unsafe {
         std::env::remove_var("TET_ZK_COURT_CHALLENGE_MS");
@@ -3298,8 +3300,8 @@ fn test_p2p_keystore_persistence() {
 mod block_sync {
     use super::{env_lock, rest_state_for_tests, set_test_env_base};
     use libp2p::Multiaddr;
-    use std::sync::atomic::{AtomicU16, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicU16, Ordering};
     use std::time::{Duration, Instant};
     use tokio::sync::Mutex;
     use tokio::task::JoinHandle;
@@ -3557,16 +3559,14 @@ mod block_sync {
         (height, block_id, state_root)
     }
 
-    async fn wait_strict_tip_match(
-        ledgers: &[Arc<crate::ledger::Ledger>],
-        timeout: Duration,
-    ) {
+    async fn wait_strict_tip_match(ledgers: &[Arc<crate::ledger::Ledger>], timeout: Duration) {
         let deadline = Instant::now() + timeout;
         loop {
             let snaps: Vec<_> = ledgers.iter().map(|l| tip_triplet(l.as_ref())).collect();
-            let all_match = snaps.first().map(|first| {
-                first.0 > 0 && snaps.iter().all(|s| s == first)
-            }) == Some(true);
+            let all_match = snaps
+                .first()
+                .map(|first| first.0 > 0 && snaps.iter().all(|s| s == first))
+                == Some(true);
             if all_match {
                 return;
             }
@@ -3587,7 +3587,10 @@ mod block_sync {
 
         let n1 = spawn_node(None, true).await;
         mine_n(&n1.state, 10).await;
-        assert!(n1.ledger.block_height().unwrap_or(0) >= 10, "node1 should reach height 10");
+        assert!(
+            n1.ledger.block_height().unwrap_or(0) >= 10,
+            "node1 should reach height 10"
+        );
 
         let boot = n1.boot_multiaddr.clone();
         let n2 = spawn_node(Some(&boot), false).await;
@@ -3719,14 +3722,8 @@ mod block_sync {
         let ledger2 = Arc::new(crate::ledger::Ledger::open(db2.to_str().unwrap()).unwrap());
         ledger2.init_genesis_founder_premine_from_env().unwrap();
         let _ = ledger2.apply_genesis_allocation("founder");
-        let (state2, board2, _, swarm2) = start_block_swarm_on_ledger(
-            ledger2.clone(),
-            &db_dir2,
-            Some(&boot),
-            false,
-            0,
-        )
-        .await;
+        let (state2, board2, _, swarm2) =
+            start_block_swarm_on_ledger(ledger2.clone(), &db_dir2, Some(&boot), false, 0).await;
         assert_ne!(Arc::as_ptr(&n1.block_sync_board), Arc::as_ptr(&board2));
         assert!(
             sync_gate_active(&board2, ledger2.as_ref()).await,
@@ -3852,7 +3849,12 @@ mod block_sync {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
 
-        wait_min_height(&n3.ledger, target.saturating_sub(1), Duration::from_secs(30)).await;
+        wait_min_height(
+            &n3.ledger,
+            target.saturating_sub(1),
+            Duration::from_secs(30),
+        )
+        .await;
         assert_state_roots_match(&[n2.ledger.clone(), n3.ledger.clone()]);
 
         // Node1 rejoins and catches up from Node2 (respawn allowed for dead bootnode only).
@@ -3885,8 +3887,14 @@ mod block_sync {
         wait_strict_tip_match(&ledgers, Duration::from_secs(5)).await;
         assert_state_roots_match(&ledgers);
         let (_, tip_id, tip_root) = tip_triplet(&n1.ledger);
-        assert!(tip_id.starts_with("0x"), "expected hex tip block_id, got {tip_id}");
-        assert!(tip_root.starts_with("0x"), "expected hex state_root, got {tip_root}");
+        assert!(
+            tip_id.starts_with("0x"),
+            "expected hex tip block_id, got {tip_id}"
+        );
+        assert!(
+            tip_root.starts_with("0x"),
+            "expected hex state_root, got {tip_root}"
+        );
 
         stop(&[n1, n2, n3]);
     }

@@ -15,11 +15,9 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
     //   Cors → default body limit → global rate limit → routes.
     // CORS must stay outermost so preflight and `Access-Control-*` apply before auth/rate-limit.
     let app = axum::Router::new()
-        .route("/", axum::routing::get(super::handlers::pages::get_index))
-        // Marketing home (/) is strictly separated from the operator app (/app).
         .route(
-            "/app",
-            axum::routing::get(super::handlers::pages::get_worker_app),
+            "/",
+            axum::routing::get(super::handlers::pages::get_core_root),
         )
         // Keep the legacy core UI accessible at a non-root path.
         .route("/core", axum::routing::get(super::handlers::ui::get_ui))
@@ -30,19 +28,6 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
         .route(
             "/execute",
             axum::routing::post(super::handlers::logs::post_execute),
-        )
-        // Back-compat for old deep links from early builds.
-        .route(
-            "/worker_dashboard.html",
-            axum::routing::get(super::handlers::pages::get_worker_app_redirect),
-        )
-        .route(
-            "/founder",
-            axum::routing::get(super::handlers::pages::get_founder_terminal),
-        )
-        .route(
-            "/assets/founder_terminal.js",
-            axum::routing::get(super::handlers::assets::get_founder_terminal_js),
         )
         .route(
             "/assets/wallet_client_bundled.js",

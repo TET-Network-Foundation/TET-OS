@@ -676,11 +676,8 @@ pub fn spawn_auto_miner(
                     "[consensus] auto-mine routing: node_id={} is not POC; preserving AI workload mempool and mining coinbase-only block",
                     local_node_id
                 );
-                if crate::sync::auto_mine_blocked_by_sync(
-                    block_sync_board.as_ref(),
-                    &state.ledger,
-                )
-                .await
+                if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+                    .await
                 {
                     continue;
                 }
@@ -756,7 +753,10 @@ fn caac_block_weight(ledger: &Ledger, producer_id: &str) -> u64 {
 ///
 /// Height 1 blocks anchor to implicit genesis (no `BlockRecordV1` at height 0).
 /// Height ≥ 2 uses the canonical block at `height - 1`, with chain-tip fallback.
-fn parent_block_id_for_height(ledger: &Ledger, block_height: u64) -> Result<Option<String>, String> {
+fn parent_block_id_for_height(
+    ledger: &Ledger,
+    block_height: u64,
+) -> Result<Option<String>, String> {
     if block_height == 0 {
         return Ok(None);
     }
@@ -789,8 +789,8 @@ fn resolve_parent_block_id(
         let t = p.trim().to_string();
         if t.is_empty() { None } else { Some(t) }
     });
-    let expected = parent_block_id_for_height(ledger, block_height)
-        .map_err(RemoteBlockApplyError::Ledger)?;
+    let expected =
+        parent_block_id_for_height(ledger, block_height).map_err(RemoteBlockApplyError::Ledger)?;
     match (explicit, expected) {
         (Some(got), Some(ref exp)) if got != *exp => Err(RemoteBlockApplyError::Rejected(format!(
             "parent_block_id mismatch expected={exp} received={got}"

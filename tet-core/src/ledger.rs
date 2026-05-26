@@ -87,9 +87,8 @@ pub fn normalize_treasury_address(raw: &str) -> Result<String, LedgerError> {
 
 /// Required at node startup; no silent fallback.
 pub fn treasury_address_from_env() -> Result<String, LedgerError> {
-    let raw = std::env::var("TET_TREASURY_ADDRESS").map_err(|_| {
-        LedgerError::Invalid("TET_TREASURY_ADDRESS is required".into())
-    })?;
+    let raw = std::env::var("TET_TREASURY_ADDRESS")
+        .map_err(|_| LedgerError::Invalid("TET_TREASURY_ADDRESS is required".into()))?;
     normalize_treasury_address(&raw)
 }
 
@@ -4240,9 +4239,9 @@ impl Ledger {
             pool_bal, GENESIS_WORKER_POOL_SHARE_MICRO,
             "FATAL: system-locked pool balance mismatch after genesis"
         );
-        let treasury_bal = self
-            .balance_micro(&treasury_wallet_id)
-            .unwrap_or_else(|e| panic!("FATAL: could not read treasury balance after genesis: {e}"));
+        let treasury_bal = self.balance_micro(&treasury_wallet_id).unwrap_or_else(|e| {
+            panic!("FATAL: could not read treasury balance after genesis: {e}")
+        });
         assert_eq!(
             treasury_bal, GENESIS_TREASURY_SHARE_MICRO,
             "FATAL: treasury balance mismatch after genesis"
@@ -4297,7 +4296,10 @@ impl Ledger {
     }
 
     /// Startup guard: env treasury must match ledger meta when genesis already applied.
-    pub fn validate_treasury_address_at_startup(&self, env_treasury: &str) -> Result<(), LedgerError> {
+    pub fn validate_treasury_address_at_startup(
+        &self,
+        env_treasury: &str,
+    ) -> Result<(), LedgerError> {
         let env = normalize_treasury_address(env_treasury)?;
         if let Some(stored) = self.treasury_wallet_id_stored()? {
             if stored != env {

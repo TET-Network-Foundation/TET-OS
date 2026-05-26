@@ -1,7 +1,7 @@
 //! Persistent libp2p identity (`libp2p_keypair.bin`) under the sled DB directory.
 
-use libp2p::identity::Keypair;
 use libp2p::PeerId;
+use libp2p::identity::Keypair;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
