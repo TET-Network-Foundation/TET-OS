@@ -39,3 +39,42 @@ dist/
 deploy/secrets/
 tet-wallet*.json
 test-ledger/
+
+# Additional runtime artifacts (added 2026-05-26)
+tet_ledger.json
+**/tet_ledger.json
+tet-recipient-wallet.json
+**/*-wallet.json
+**/wallet*.json
+secret_founder_terminal.html
+**/secret_founder_terminal.html
+10000000000
+*.raw
+node_mldsa65_*
+
+
+# Additional runtime artifacts (added 2026-05-26)
+tet_ledger.json
+**/tet_ledger.json
+tet-recipient-wallet.json
+**/*-wallet.json
+**/wallet*.json
+secret_founder_terminal.html
+**/secret_founder_terminal.html
+10000000000
+*.raw
+node_mldsa65_*
+
+
+# Additional runtime artifacts (added 2026-05-26)
+tet_ledger.json
+**/tet_ledger.json
+tet-recipient-wallet.json
+**/*-wallet.json
+**/wallet*.json
+secret_founder_terminal.html
+**/secret_founder_terminal.html
+10000000000
+*.raw
+node_mldsa65_*
+
