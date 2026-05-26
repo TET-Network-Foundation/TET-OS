@@ -1,57 +1,16 @@
-use axum::{
-    Json,
-    extract::State,
-    http::StatusCode,
-    response::{Html, IntoResponse},
-};
+use axum::{Json, extract::State, http::StatusCode, response::IntoResponse};
 
 use crate::rest::RestState;
 
-pub async fn get_index() -> impl IntoResponse {
-    let csp = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; \
-script-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'";
+pub async fn get_core_root() -> impl IntoResponse {
     (
-        [
-            ("content-security-policy", csp),
-            ("x-content-type-options", "nosniff"),
-            ("x-frame-options", "DENY"),
-            ("referrer-policy", "no-referrer"),
-        ],
-        Html(include_str!("../../index.html")),
-    )
-}
-
-pub async fn get_worker_app() -> impl IntoResponse {
-    let csp = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; \
-script-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self' http://127.0.0.1:5791; img-src 'self' data:; style-src 'self' 'unsafe-inline'";
-    (
-        [
-            ("content-security-policy", csp),
-            ("x-content-type-options", "nosniff"),
-            ("x-frame-options", "DENY"),
-            ("referrer-policy", "no-referrer"),
-        ],
-        Html(include_str!("../../../../worker_dashboard.html")),
-    )
-}
-
-pub async fn get_worker_app_redirect() -> impl IntoResponse {
-    (StatusCode::MOVED_PERMANENTLY, [("location", "/app")], "").into_response()
-}
-
-pub async fn get_founder_terminal() -> impl IntoResponse {
-    let csp = "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; object-src 'none'; \
-script-src 'self'; connect-src 'self' http://127.0.0.1:5010 http://127.0.0.1:5791; img-src 'self' data:; \
-style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; \
-font-src 'self' https://fonts.gstatic.com data:;";
-    (
-        [
-            ("content-security-policy", csp),
-            ("x-content-type-options", "nosniff"),
-            ("x-frame-options", "DENY"),
-            ("referrer-policy", "no-referrer"),
-        ],
-        Html(include_str!("../../secret_founder_terminal.html")),
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "service": "tet-core",
+            "version": env!("CARGO_PKG_VERSION"),
+            "ok": true,
+            "endpoints": "/health, /ledger/state, /v1/..."
+        })),
     )
 }
 

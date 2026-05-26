@@ -500,7 +500,9 @@ impl P2pClient {
 /// - Identity: ephemeral Ed25519 keypair generated locally at boot (Phase 1).
 /// - Transport: TCP (tokio) + Noise (XX) + Yamux.
 /// - Behaviour: NexusBehaviour = Kademlia + Gossipsub (discovery + broadcast).
-pub fn build_basic_swarm(keypair: identity::Keypair) -> Result<(Swarm<NexusBehaviour>, PeerId), AnyErr> {
+pub fn build_basic_swarm(
+    keypair: identity::Keypair,
+) -> Result<(Swarm<NexusBehaviour>, PeerId), AnyErr> {
     let peer_id = PeerId::from(keypair.public());
 
     let tcp_transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
@@ -1253,8 +1255,8 @@ pub fn start_p2p_node(
     ledger: Arc<crate::ledger::Ledger>,
     keypair: identity::Keypair,
 ) -> anyhow::Result<(P2pClient, tokio::task::JoinHandle<()>)> {
-    let (mut swarm, _peer_id) = build_basic_swarm(keypair)
-        .map_err(|e| anyhow::anyhow!("build_basic_swarm failed: {e}"))?;
+    let (mut swarm, _peer_id) =
+        build_basic_swarm(keypair).map_err(|e| anyhow::anyhow!("build_basic_swarm failed: {e}"))?;
     let listen: Multiaddr = std::env::var("TET_P2P_LISTEN")
         .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string())
         .parse()

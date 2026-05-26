@@ -296,15 +296,22 @@ pub fn plan_catch_up_range_request(local_height: u64, peer_height: u64) -> Chain
 pub enum CatchUpPhase {
     #[default]
     Idle,
-    Requesting { peer_id: String },
+    Requesting {
+        peer_id: String,
+    },
 }
 
 /// Events fed into [`CatchUpDriver`] from the block-plane swarm loop.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CatchUpDriverEvent {
     Triggered,
-    RangeFailed { peer_id: String, reason: String },
-    PeerRemoved { peer_id: String },
+    RangeFailed {
+        peer_id: String,
+        reason: String,
+    },
+    PeerRemoved {
+        peer_id: String,
+    },
     BatchApplied {
         peer_id: String,
         applied: usize,
@@ -421,11 +428,7 @@ impl CatchUpDriver {
         }
     }
 
-    fn start_request(
-        &mut self,
-        registry: &SyncHelloRegistry,
-        local_height: u64,
-    ) -> CatchUpAction {
+    fn start_request(&mut self, registry: &SyncHelloRegistry, local_height: u64) -> CatchUpAction {
         let Some((peer_id, peer_height)) = registry.best_sync_peer(local_height, &self.blacklist)
         else {
             return if registry.any_peer_ahead(local_height) {
@@ -441,11 +444,7 @@ impl CatchUpDriver {
         CatchUpAction::SendRangeRequest { peer_id, request }
     }
 
-    fn try_continue(
-        &mut self,
-        registry: &SyncHelloRegistry,
-        local_height: u64,
-    ) -> CatchUpAction {
+    fn try_continue(&mut self, registry: &SyncHelloRegistry, local_height: u64) -> CatchUpAction {
         if !registry.any_peer_ahead(local_height) {
             return CatchUpAction::ClearCatchUpTriggered;
         }
@@ -514,8 +513,7 @@ pub fn peer_tip_conflicts_with_local(
     registry.peers.values().any(|r| {
         r.hello.block_height == local_height
             && ((!r.hello.state_root.is_empty() && r.hello.state_root != local_state_root)
-                || (!r.hello.tip_block_id.is_empty()
-                    && r.hello.tip_block_id != local_tip_block_id))
+                || (!r.hello.tip_block_id.is_empty() && r.hello.tip_block_id != local_tip_block_id))
     })
 }
 
@@ -526,14 +524,7 @@ pub fn compute_ledger_sync_status(
     driver: &CatchUpDriver,
     in_progress: Option<&InProgressRangeRequest>,
 ) -> LedgerSyncStatus {
-    compute_ledger_sync_status_with_local_tip(
-        local_height,
-        "",
-        "",
-        registry,
-        driver,
-        in_progress,
-    )
+    compute_ledger_sync_status_with_local_tip(local_height, "", "", registry, driver, in_progress)
 }
 
 /// Like [`compute_ledger_sync_status`] but `has_bootnodes` is explicit (unit tests).
@@ -587,12 +578,8 @@ pub fn compute_ledger_sync_status_with_local_tip_and_bootnodes(
     let catch_up_triggered = registry.catch_up_triggered();
     let awaiting_first_hello =
         has_bootnodes && registry.peer_count() == 0 && !is_bootnode_from_env();
-    let tip_conflict = peer_tip_conflicts_with_local(
-        local_height,
-        local_state_root,
-        local_tip_block_id,
-        registry,
-    );
+    let tip_conflict =
+        peer_tip_conflicts_with_local(local_height, local_state_root, local_tip_block_id, registry);
     let (best_peer_id, best_peer_height) = registry
         .best_peer_overall()
         .unwrap_or_else(|| (String::new(), local_height));
@@ -762,10 +749,7 @@ pub async fn auto_mine_blocked_by_sync(
 pub fn build_chain_hello(ledger: &Ledger) -> Result<ChainHello, LedgerError> {
     let block_height = ledger.block_height()?;
     let state_root = ledger.compute_state_root();
-    let tip_block_id = ledger
-        .chain_tip()?
-        .map(|t| t.block_id)
-        .unwrap_or_default();
+    let tip_block_id = ledger.chain_tip()?.map(|t| t.block_id).unwrap_or_default();
     Ok(ChainHello {
         chain_id: crate::ledger::chain_id_from_env(),
         block_height,
@@ -1234,13 +1218,11 @@ mod tests {
             from_height: 1,
             to_height: 5,
         };
-        let status = compute_ledger_sync_status_with_bootnodes(0, &reg, &driver, Some(&in_prog), false);
+        let status =
+            compute_ledger_sync_status_with_bootnodes(0, &reg, &driver, Some(&in_prog), false);
         assert!(!status.synced);
         assert!(status.sync.active);
-        assert_eq!(
-            status.sync.in_progress_request,
-            Some(in_prog)
-        );
+        assert_eq!(status.sync.in_progress_request, Some(in_prog));
     }
 
     #[test]
@@ -1258,13 +1240,7 @@ mod tests {
         );
         let driver = CatchUpDriver::default();
         let status = compute_ledger_sync_status_with_local_tip_and_bootnodes(
-            5,
-            "r",
-            "b5",
-            &reg,
-            &driver,
-            None,
-            false,
+            5, "r", "b5", &reg, &driver, None, false,
         );
         assert!(status.synced);
         assert_eq!(status.sync.lag_blocks, 0);

@@ -32,14 +32,6 @@ pub async fn get_tet_sdk_node_mjs() -> impl IntoResponse {
     )
 }
 
-pub async fn get_founder_terminal_js() -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [("content-type", "application/javascript; charset=utf-8")],
-        include_str!("../../founder_terminal.js"),
-    )
-}
-
 pub async fn get_wallet_client_bundled_js() -> impl IntoResponse {
     (
         StatusCode::OK,

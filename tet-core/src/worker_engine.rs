@@ -34,7 +34,10 @@ fn env_u128(name: &str, default: u128) -> u128 {
 }
 
 /// Run a real local inference via the configured executor.
-pub async fn run_local_inference(prompt: &str, model: &str) -> anyhow::Result<LocalInferenceMetrics> {
+pub async fn run_local_inference(
+    prompt: &str,
+    model: &str,
+) -> anyhow::Result<LocalInferenceMetrics> {
     let p = prompt.trim();
     if p.is_empty() {
         return Err(anyhow!("prompt required"));
