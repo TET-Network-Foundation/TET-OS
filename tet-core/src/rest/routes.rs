@@ -19,8 +19,6 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             "/",
             axum::routing::get(super::handlers::pages::get_core_root),
         )
-        // Keep the legacy core UI accessible at a non-root path.
-        .route("/core", axum::routing::get(super::handlers::ui::get_ui))
         .route(
             "/logs",
             axum::routing::get(super::handlers::logs::get_logs_sse),
@@ -40,14 +38,6 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
         .route(
             "/assets/ui.js",
             axum::routing::get(super::handlers::assets::get_ui_js),
-        )
-        .route(
-            "/assets/nexus_wasm.js",
-            axum::routing::get(super::handlers::ui::get_nexus_wasm_js),
-        )
-        .route(
-            "/assets/nexus_wasm_bg.wasm",
-            axum::routing::get(super::handlers::ui::get_nexus_wasm_bg_wasm),
         )
         .route(
             "/assets/tet_sdk.js",

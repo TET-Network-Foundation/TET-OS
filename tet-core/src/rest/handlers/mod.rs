@@ -14,7 +14,6 @@ pub mod pages;
 pub mod phase4;
 pub mod system;
 pub mod telemetry;
-pub mod ui;
 pub mod vision;
 pub mod wallet;
 pub mod worker;
