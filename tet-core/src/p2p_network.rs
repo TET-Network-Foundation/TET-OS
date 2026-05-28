@@ -1257,13 +1257,14 @@ pub fn start_p2p_node(
 ) -> anyhow::Result<(P2pClient, tokio::task::JoinHandle<()>)> {
     let (mut swarm, _peer_id) =
         build_basic_swarm(keypair).map_err(|e| anyhow::anyhow!("build_basic_swarm failed: {e}"))?;
-    let listen: Multiaddr = std::env::var("TET_P2P_LISTEN")
-        .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string())
+    let listen: Multiaddr = std::env::var("TET_NEXUS_P2P_LISTEN")
+        .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/4003".to_string())
         .parse()
-        .map_err(|e| anyhow::anyhow!("listen multiaddr parse failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("TET_NEXUS_P2P_LISTEN multiaddr parse failed: {e}"))?;
     // Start listening immediately (real networking side-effect).
     let _ = listen_on(&mut swarm, listen.clone())
-        .map_err(|e| anyhow::anyhow!("listen_on failed: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("TET_NEXUS_P2P_LISTEN listen_on failed: {e}"))?;
+    log::info!("[p2p][nexus] bound listen={listen}");
 
     // Phase 4.3: Also listen on WebRTC-direct (UDP) using the same port as TCP, when specified.
     // Example: /ip4/0.0.0.0/tcp/8002 -> /ip4/0.0.0.0/udp/8002/webrtc-direct
@@ -1279,17 +1280,19 @@ pub fn start_p2p_node(
                 .map_err(|e| anyhow::anyhow!("webrtc listen multiaddr parse failed: {e}"))?;
             match swarm.listen_on(webrtc_listen.clone()) {
                 Ok(_) => {
-                    log::info!("[p2p][webrtc] listening addr={webrtc_listen}");
+                    log::info!("[p2p][nexus][webrtc] bound listen={webrtc_listen}");
                     ok = true;
                     break;
                 }
                 Err(e) => {
-                    log::warn!("[p2p][webrtc] listen_on failed addr={webrtc_listen} err={e:?}");
+                    log::error!(
+                        "[p2p][nexus][webrtc] listen_on failed addr={webrtc_listen} err={e:?}"
+                    );
                 }
             }
         }
         if !ok {
-            log::error!("[p2p][webrtc] failed to bind any UDP port for webrtc-direct");
+            log::error!("[p2p][nexus][webrtc] failed to bind any UDP port for webrtc-direct");
         }
     }
 
