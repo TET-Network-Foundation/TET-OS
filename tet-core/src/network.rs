@@ -206,11 +206,14 @@ impl NetworkManager {
             libp2p::swarm::Config::with_tokio_executor(),
         );
 
-        let listen: Multiaddr = std::env::var("TET_P2P_LISTEN")
-            .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string())
+        let listen: Multiaddr = std::env::var("TET_LEDGER_P2P_LISTEN")
+            .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/4005".to_string())
             .parse()
-            .map_err(|e| format!("listen multiaddr parse failed: {e}"))?;
-        swarm.listen_on(listen)?;
+            .map_err(|e| format!("TET_LEDGER_P2P_LISTEN multiaddr parse failed: {e}"))?;
+        swarm
+            .listen_on(listen.clone())
+            .map_err(|e| format!("TET_LEDGER_P2P_LISTEN listen_on failed: {e}"))?;
+        log::info!("[p2p][ledger] bound listen={listen}");
 
         let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
         Ok(Self {

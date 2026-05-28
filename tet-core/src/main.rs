@@ -118,7 +118,7 @@ impl StartupConfig {
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(true);
         let p2p_listen =
-            std::env::var("TET_P2P_LISTEN").unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/0".to_string());
+            std::env::var("TET_P2P_LISTEN").unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/4001".to_string());
         let rest_bind = std::env::var("TET_REST_BIND")
             .ok()
             .filter(|s| !s.is_empty())
@@ -561,9 +561,15 @@ async fn main() -> Result<(), AnyErr> {
         );
     }
 
+    let nexus_listen = std::env::var("TET_NEXUS_P2P_LISTEN")
+        .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/4003".to_string());
+    let ledger_listen = std::env::var("TET_LEDGER_P2P_LISTEN")
+        .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/4005".to_string());
     log::info!(
-        "[startup] 3 swarms spawned network={swarm_network} p2p_network={swarm_p2p_network} block_plane={swarm_block} block_listen={block_p2p_listen} p2p_listen={}",
-        config.p2p_listen
+        "[startup] 3 swarms spawned network={swarm_network} p2p_network={swarm_p2p_network} block_plane={swarm_block} block_listen={block_p2p_listen} block_listen_env=TET_P2P_LISTEN={} nexus_listen_env=TET_NEXUS_P2P_LISTEN={} ledger_listen_env=TET_LEDGER_P2P_LISTEN={}",
+        config.p2p_listen,
+        nexus_listen,
+        ledger_listen
     );
 
     let addr: SocketAddr = config.rest_bind.parse()?;
