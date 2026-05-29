@@ -572,6 +572,14 @@ async fn main() -> Result<(), AnyErr> {
         ledger_listen
     );
 
+    let chain_hello_interval_sec =
+        std::env::var("TET_CHAIN_HELLO_INTERVAL_SEC").unwrap_or_else(|_| "15".to_string());
+    let blacklist_ttl_sec =
+        std::env::var("TET_BLACKLIST_TTL_SEC").unwrap_or_else(|_| "300".to_string());
+    log::info!(
+        "[startup] catch-up tuning TET_CHAIN_HELLO_INTERVAL_SEC={chain_hello_interval_sec} (0=disabled) TET_BLACKLIST_TTL_SEC={blacklist_ttl_sec} (0=never-expire)"
+    );
+
     let addr: SocketAddr = config.rest_bind.parse()?;
 
     let (log_tx, _log_rx) = broadcast::channel::<String>(100);

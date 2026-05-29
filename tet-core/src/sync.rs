@@ -330,17 +330,36 @@ pub enum CatchUpAction {
     ClearCatchUpTriggered,
 }
 
+/// Current wall-clock time in milliseconds (saturating into `u64`).
+fn now_ms() -> u64 {
+    crate::worker_network::now_ms().min(u128::from(u64::MAX)) as u64
+}
+
+/// Catch-up peer blacklist TTL in seconds (D1). `0` = never expire (legacy behavior).
+fn blacklist_ttl_sec_from_env() -> u64 {
+    std::env::var("TET_BLACKLIST_TTL_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(300)
+}
+
 /// In-memory catch-up state machine (B.3b). Driven from `p2p.rs` swarm events + tick.
 #[derive(Debug, Default)]
 pub struct CatchUpDriver {
     phase: CatchUpPhase,
-    blacklist: HashSet<String>,
+    /// peer_id -> blacklist timestamp (ms). Entries expire after `blacklist_ttl_ms` (D1).
+    blacklist: HashMap<String, u64>,
+    /// Blacklist TTL in ms. `0` = never expire (legacy behavior; used by `default()`).
+    blacklist_ttl_ms: u64,
 }
 
 pub type SharedCatchUpDriver = Arc<Mutex<CatchUpDriver>>;
 
 pub fn new_catch_up_driver() -> SharedCatchUpDriver {
-    Arc::new(Mutex::new(CatchUpDriver::default()))
+    Arc::new(Mutex::new(CatchUpDriver {
+        blacklist_ttl_ms: blacklist_ttl_sec_from_env().saturating_mul(1000),
+        ..Default::default()
+    }))
 }
 
 impl CatchUpDriver {
@@ -353,7 +372,7 @@ impl CatchUpDriver {
     }
 
     pub fn blacklist_peer(&mut self, peer_id: impl Into<String>) {
-        self.blacklist.insert(peer_id.into());
+        self.blacklist.insert(peer_id.into(), now_ms());
     }
 
     pub fn unblacklist_peer(&mut self, peer_id: &str) {
@@ -361,7 +380,27 @@ impl CatchUpDriver {
     }
 
     pub fn is_blacklisted(&self, peer_id: &str) -> bool {
-        self.blacklist.contains(peer_id)
+        self.blacklist.contains_key(peer_id)
+    }
+
+    /// Prune TTL-expired blacklist entries and return the still-active set (D1).
+    /// `blacklist_ttl_ms == 0` disables expiry (legacy behavior).
+    fn active_blacklist(&mut self) -> HashSet<String> {
+        if self.blacklist_ttl_ms > 0 {
+            let now = now_ms();
+            let ttl = self.blacklist_ttl_ms;
+            let expired: Vec<String> = self
+                .blacklist
+                .iter()
+                .filter(|(_, at)| now.saturating_sub(**at) > ttl)
+                .map(|(peer, _)| peer.clone())
+                .collect();
+            for peer in expired {
+                self.blacklist.remove(&peer);
+                println!("[P2P-block] ⏳ blacklist expired peer={peer}");
+            }
+        }
+        self.blacklist.keys().cloned().collect()
     }
 
     pub fn handle(
@@ -396,7 +435,7 @@ impl CatchUpDriver {
                 }
                 self.phase = CatchUpPhase::Idle;
                 if failed || applied == 0 {
-                    self.blacklist.insert(peer_id);
+                    self.blacklist.insert(peer_id, now_ms());
                     return self.try_continue(registry, local_height);
                 }
                 if !registry.any_peer_ahead(local_height) {
@@ -412,7 +451,7 @@ impl CatchUpDriver {
                 ) {
                     self.phase = CatchUpPhase::Idle;
                 }
-                self.blacklist.insert(peer_id);
+                self.blacklist.insert(peer_id, now_ms());
                 self.try_continue(registry, local_height)
             }
             CatchUpDriverEvent::PeerRemoved { peer_id } => {
@@ -429,7 +468,9 @@ impl CatchUpDriver {
     }
 
     fn start_request(&mut self, registry: &SyncHelloRegistry, local_height: u64) -> CatchUpAction {
-        let Some((peer_id, peer_height)) = registry.best_sync_peer(local_height, &self.blacklist)
+        let active_blacklist = self.active_blacklist();
+        let Some((peer_id, peer_height)) =
+            registry.best_sync_peer(local_height, &active_blacklist)
         else {
             return if registry.any_peer_ahead(local_height) {
                 CatchUpAction::None
