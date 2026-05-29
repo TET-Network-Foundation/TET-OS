@@ -379,6 +379,14 @@ fn bootnode_redial_sec_from_env() -> u64 {
         .unwrap_or(30)
 }
 
+/// Periodic chain_hello resend interval in seconds (Option A). `0` disables resend.
+fn chain_hello_interval_sec_from_env() -> u64 {
+    std::env::var("TET_CHAIN_HELLO_INTERVAL_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(15)
+}
+
 fn listen_bound_loopback(listen: &Multiaddr) -> bool {
     listen
         .iter()
@@ -1225,6 +1233,8 @@ async fn run_mdns_ping_swarm(
     let mut blacklisted_peers = BoundedPeerBlacklist::from_env();
     let mut pending_catch_up_range: HashMap<request_response::OutboundRequestId, PeerId> =
         HashMap::new();
+    let chain_hello_interval_ms = chain_hello_interval_sec_from_env().saturating_mul(1000);
+    let mut last_chain_hello_sent_at: HashMap<PeerId, u64> = HashMap::new();
     let mut catch_up_interval = tokio::time::interval(Duration::from_secs(1));
     catch_up_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -1252,6 +1262,37 @@ async fn run_mdns_ping_swarm(
                     &mut pending_catch_up_range,
                 )
                 .await;
+                if chain_hello_interval_ms > 0 {
+                    let now = now_ms();
+                    let local = *swarm.local_peer_id();
+                    let due_peers: Vec<PeerId> = swarm
+                        .connected_peers()
+                        .cloned()
+                        .filter(|p| *p != local)
+                        .filter(|p| {
+                            last_chain_hello_sent_at
+                                .get(p)
+                                .map(|t| now.saturating_sub(*t) >= chain_hello_interval_ms)
+                                .unwrap_or(true)
+                        })
+                        .collect();
+                    for peer in due_peers {
+                        match build_chain_hello(ledger.as_ref()) {
+                            Ok(our_hello) => {
+                                swarm
+                                    .behaviour_mut()
+                                    .chain_sync_hello
+                                    .send_request(&peer, our_hello);
+                                bootnode_watch.on_hello_sent(peer);
+                                last_chain_hello_sent_at.insert(peer, now);
+                                println!("[P2P-block] 🔁 chain_hello periodic resend to {peer}");
+                            }
+                            Err(e) => {
+                                log::warn!("[p2p][block] periodic chain_hello build failed: {e}");
+                            }
+                        }
+                    }
+                }
             }
             maybe_msg = publish_rx.recv() => {
                 let now = now_ms();
@@ -1671,6 +1712,7 @@ async fn run_mdns_ping_swarm(
                                 .chain_sync_hello
                                 .send_request(&peer_id, our_hello);
                             bootnode_watch.on_hello_sent(peer_id);
+                            last_chain_hello_sent_at.insert(peer_id, now_ms());
                             println!("[P2P-block] 👋 chain_hello sent to {peer_id}");
                         }
                         Err(e) => {
@@ -1682,6 +1724,7 @@ async fn run_mdns_ping_swarm(
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                 log::warn!("[p2p][mdns] disconnected peer_id={peer_id} cause={cause:?}");
                 dialing.remove(&peer_id);
+                last_chain_hello_sent_at.remove(&peer_id);
                 if bootnode_watch.is_bootnode(&peer_id) && !bootnode_watch.is_dead(&peer_id) {
                     bootnode_watch.mark_bootnode_dead(peer_id);
                     catch_up_driver
