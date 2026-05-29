@@ -179,7 +179,6 @@ Hard fork. Acceptable now (Phase 0 testnet).
 
 ## Final Update: 2026-05-29 night — ROOT CAUSE CONFIRMED
 
-[内容、前 message 参照]
 
 ## Resolution: 2026-05-30 ~02:30 — Block_id V2 schema implemented
 
