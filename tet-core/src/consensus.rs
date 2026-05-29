@@ -367,12 +367,42 @@ pub fn block_id_for_hashes(tx_hashes: &[String]) -> String {
     )
 }
 
-pub fn block_id_for_block(block_height: u64, tx_hashes: &[String]) -> String {
-    let payload = format!("{block_height}:{}", tx_hashes.join(","));
-    format!(
-        "0x{}",
-        hex::encode(sha2::Sha256::digest(payload.as_bytes()))
-    )
+/// Canonical zero parent block id (hex of `[0u8; 32]`) used for the genesis
+/// block (height 1) where no parent exists.
+pub const GENESIS_ZERO_PARENT_BLOCK_ID: &str =
+    "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+/// Compute the consensus block id (V2 schema, Phase 0 testnet hard fork).
+///
+/// `block_id = SHA256("TET_BLOCK_ID_V2|" || height || parent || state_root || tx_hashes || producer)`
+///
+/// The `TET_BLOCK_ID_V2|` domain-separation prefix guarantees no collision with
+/// the legacy V1 schema and leaves room for a future V3. Empty/blank
+/// `parent_block_id` is normalized to the zero parent hash (genesis).
+pub fn block_id_for_block(
+    block_height: u64,
+    parent_block_id: &str,
+    state_root: &str,
+    tx_hashes: &[String],
+    producer_id: &str,
+) -> String {
+    let parent = if parent_block_id.trim().is_empty() {
+        GENESIS_ZERO_PARENT_BLOCK_ID
+    } else {
+        parent_block_id
+    };
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"TET_BLOCK_ID_V2|");
+    hasher.update(block_height.to_le_bytes());
+    hasher.update(b"|parent=");
+    hasher.update(parent.as_bytes());
+    hasher.update(b"|state=");
+    hasher.update(state_root.as_bytes());
+    hasher.update(b"|txs=");
+    hasher.update(tx_hashes.join(",").as_bytes());
+    hasher.update(b"|producer=");
+    hasher.update(producer_id.as_bytes());
+    format!("0x{}", hex::encode(hasher.finalize()))
 }
 
 pub fn block_contains_ai_workload(txs: &[SignedTxEnvelopeV1]) -> bool {
@@ -914,7 +944,13 @@ pub fn validate_and_record_backfill_candidate(
         }
         tx_hashes.push(tx_hash);
     }
-    let expected_block_id = block_id_for_block(block_height, &tx_hashes);
+    let expected_block_id = block_id_for_block(
+        block_height,
+        parent_block_id.as_deref().unwrap_or(""),
+        &state_root,
+        &tx_hashes,
+        producer_id.as_str(),
+    );
     if expected_block_id != block_id {
         return Err(RemoteBlockApplyError::Rejected(format!(
             "block_id mismatch expected={expected_block_id} received={block_id}"
@@ -1166,8 +1202,21 @@ async fn mine_coinbase_only_block_as(
     let next_height = state.ledger.block_height().unwrap_or(0).saturating_add(1);
     let parent_block_id = parent_block_id_for_height(&state.ledger, next_height)
         .map_err(|e| MineError::BadRequest(e))?;
-    let block_id = block_id_for_block(next_height, &tx_hashes);
     let reward = reward_for_block(&txs).map_err(MineError::Unauthorized)?;
+    // block_id (V2) commits to the post-block state_root, so it must be computed
+    // before the block is applied. Preview the state_root non-destructively; the
+    // value returned by apply_consensus_block_batch below is identical.
+    let preview_state_root = state
+        .ledger
+        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro)
+        .map_err(|e| MineError::BadRequest(e.to_string()))?;
+    let block_id = block_id_for_block(
+        next_height,
+        parent_block_id.as_deref().unwrap_or(""),
+        &preview_state_root,
+        &tx_hashes,
+        &producer_id,
+    );
     let undo = state
         .ledger
         .prepare_block_undo(
@@ -1270,13 +1319,22 @@ pub async fn mine_pending_block_as(
     let next_height = state.ledger.block_height().unwrap_or(0).saturating_add(1);
     let parent_block_id = parent_block_id_for_height(&state.ledger, next_height)
         .map_err(|e| MineError::BadRequest(e))?;
-    let block_id = block_id_for_block(next_height, &tx_hashes);
     validate_zk_task_claims(&state.ledger, &txs).map_err(MineError::Unauthorized)?;
     let reward = reward_for_block(&txs).map_err(MineError::Unauthorized)?;
-    state
+    // block_id (V2) commits to the post-block state_root, so it must be computed
+    // before the block is applied. Preview the state_root non-destructively; the
+    // value returned by apply_consensus_block_batch below is identical.
+    let preview_state_root = state
         .ledger
         .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro)
         .map_err(|e| MineError::BadRequest(e.to_string()))?;
+    let block_id = block_id_for_block(
+        next_height,
+        parent_block_id.as_deref().unwrap_or(""),
+        &preview_state_root,
+        &tx_hashes,
+        &producer_id,
+    );
     let undo = state
         .ledger
         .prepare_block_undo(
@@ -1438,7 +1496,13 @@ pub async fn apply_remote_block_from_gossip(
         tx_hashes.push(tx_hash);
     }
 
-    let expected_block_id = block_id_for_block(block_height, &tx_hashes);
+    let expected_block_id = block_id_for_block(
+        block_height,
+        parent_block_id.as_deref().unwrap_or(""),
+        &state_root,
+        &tx_hashes,
+        producer_id.as_str(),
+    );
     if expected_block_id != block_id {
         return Err(RemoteBlockApplyError::Rejected(format!(
             "block_id mismatch expected={expected_block_id} received={block_id}"
