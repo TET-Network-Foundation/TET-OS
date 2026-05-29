@@ -133,3 +133,100 @@ control surfaces is a design smell that will cause unpredictable
 behavior at scale.
 
 Must address before public testnet.
+
+## Final Update: 2026-05-29 night — ROOT CAUSE CONFIRMED
+
+### Investigation 3 (Cursor forensic, fact-based)
+
+Cursor explicitly retracted previous hypotheses with evidence:
+- Retraction 1 (JSON re-injection): WRONG. load_snapshot_if_present 
+  doesn't restore height (ledger.rs:3415-3436). Mac applied 15848 
+  individual blocks (log evidence).
+- Retraction 2 (dev_faucet): WRONG. TET_DEV_FAUCET_MICRO unset in 
+  startup env. local-wallet=1.58B is from normal P2P credit (VPS 
+  producer_id="local-wallet" coinbase credited via consensus.rs:1530).
+
+### Confirmed root cause: block_id design flaw
+
+**Code: consensus.rs:370-376**block_id = SHA256(height || tx_hashes)
+
+- Excludes: parent_block_id, state_root, producer, reward
+- For empty coinbase blocks (no txs): block_id depends ONLY on height
+- Two divergent chains at same height produce IDENTICAL block_id
+- Parent linkage check passes
+- Divergence detected only at tip state_root check (consensus.rs:1527-1538)
+
+### Evidence
+
+- Mac successfully applied 15848 blocks from VPS range
+- block 15849 perpetually rejected: state_root mismatch
+- expected (Mac calc) 0xeb3e24e596 vs received (VPS) 0xd36df16799
+- consensus.rs:1415-1538 tip-path has NO reorg recovery
+
+### Phase 0 ship status: CRITICAL
+
+This is chain consensus design flaw. Must fix BEFORE 2026-09-15 
+mainnet launch. After mainnet, chain immutable, fix impossible 
+without full reset.
+
+### Fix design (Option A)
+
+Add parent_block_id and state_root to block_id calculation:block_id = SHA256(height || parent_block_id || state_root || tx_hashes)
+
+Hard fork. Acceptable now (Phase 0 testnet).
+
+### Started implementation: 2026-05-30 ~00:15 (overriding 2:00 commitment)
+
+## Final Update: 2026-05-29 night — ROOT CAUSE CONFIRMED
+
+[内容、前 message 参照]
+
+## Resolution: 2026-05-30 ~02:30 — Block_id V2 schema implemented
+
+### Fix: block_id schema V2 (hard fork)
+
+New signature (consensus.rs):
+block_id_for_block(
+height: u64,
+parent_block_id: &str,    // empty/blank normalized to zero-hash for genesis
+state_root: &str,
+tx_hashes: &[String],
+producer_id: &str,
+) -> String
+
+Hash computation:
+SHA256("TET_BLOCK_ID_V2|" +
+height(LE8) +
+"|parent="+parent +
+"|state="+state_root +
+"|txs="+tx_hashes +
+"|producer="+producer)
+
+Domain tag "TET_BLOCK_ID_V2|" guarantees no collision with V1.
+
+### Genesis handling
+- GENESIS_ZERO_PARENT_BLOCK_ID = "0x00...00" (32 zero bytes hex)
+- Empty/blank parent normalized to zero-hash
+
+### Mining order change (required)
+- Old: state apply → state_root → block_id (without state_root)
+- New: state preview (non-destructive) → state_root → block_id (with state_root) → undo → apply
+- Uses compute_state_root_after_remote_block for preview
+
+### Changes
+- consensus.rs: 1 definition + 4 production callsites
+- tests.rs: 10 test callsites (all auto-correct via re-calculation)
+
+### Build/test
+- cargo build --release: PASS
+- cargo test: 101/101 PASS (1 known flaky test unrelated)
+
+### Hard fork required
+- All existing chain data invalid (block_id values change)
+- VPS DB + Mac DB + /tmp/tet_ledger.json must be deleted
+- Genesis from scratch
+
+### Phase 0 ship status
+This fix MUST be in place before mainnet (2026-09-15).
+After Phase 1 mainnet, this change becomes impossible.
+Window for fix: NOW. ✅ Fixed.

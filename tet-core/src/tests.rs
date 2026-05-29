@@ -408,7 +408,6 @@ async fn remote_block_rejects_non_leader_producer() {
         crate::ledger::STEVEMON,
     );
     let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
-    let block_id = crate::consensus::block_id_for_block(1, &[tx_hash]);
     let reward = crate::consensus::reward_for_block(std::slice::from_ref(&env)).unwrap();
     let state_root = ledger
         .compute_state_root_after_remote_block(
@@ -425,6 +424,13 @@ async fn remote_block_rejects_non_leader_producer() {
         .as_str()
         .to_string();
     let non_leader = if leader == "alice" { "bob" } else { "alice" }.to_string();
+    let block_id = crate::consensus::block_id_for_block(
+        1,
+        "",
+        &state_root,
+        std::slice::from_ref(&tx_hash),
+        &non_leader,
+    );
 
     let res = crate::consensus::apply_remote_block_from_gossip(
         ledger,
@@ -709,7 +715,6 @@ async fn remote_ai_workload_rejects_non_poc_producer() {
         crate::protocol::WorkloadFlag::AiInference.as_u8(),
     );
     let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
-    let block_id = crate::consensus::block_id_for_block(1, &[tx_hash]);
     let reward = crate::consensus::reward_for_block(std::slice::from_ref(&env)).unwrap();
     let state_root = ledger
         .compute_state_root_after_remote_block(
@@ -718,6 +723,13 @@ async fn remote_ai_workload_rejects_non_poc_producer() {
             reward.total_reward_micro,
         )
         .unwrap();
+    let block_id = crate::consensus::block_id_for_block(
+        1,
+        "",
+        &state_root,
+        std::slice::from_ref(&tx_hash),
+        "alice",
+    );
 
     let res = crate::consensus::apply_remote_block_from_gossip(
         ledger,
@@ -829,7 +841,13 @@ async fn same_height_fork_choice_reports_remote_winner_without_reorg() {
     );
     let reward = crate::consensus::reward_for_block(std::slice::from_ref(&env)).unwrap();
     let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
-    let remote_block_id = crate::consensus::block_id_for_block(1, &[tx_hash]);
+    let remote_block_id = crate::consensus::block_id_for_block(
+        1,
+        "",
+        "0xnot-checked-for-same-height",
+        std::slice::from_ref(&tx_hash),
+        "alice",
+    );
     ledger.set_block_height_if_newer(1).unwrap();
     ledger
         .record_block_summary(1, "zzzz-local-block", "0xlocal", 1)
@@ -1238,10 +1256,11 @@ async fn gossip_applied_block_parent_block_id_chains_to_previous() {
     let txs: Vec<crate::protocol::SignedTxEnvelopeV1> = Vec::new();
     let reward = crate::consensus::reward_for_block(&txs).unwrap();
     let tx_hashes: Vec<String> = Vec::new();
-    let block_id = crate::consensus::block_id_for_block(2, &tx_hashes);
     let state_root = ledger
         .compute_state_root_after_remote_block(&txs, "alice", reward.total_reward_micro)
         .unwrap();
+    let block_id =
+        crate::consensus::block_id_for_block(2, &b1.block_id, &state_root, &tx_hashes, "alice");
 
     let applied = crate::consensus::apply_remote_block_from_gossip(
         ledger.clone(),
@@ -1293,10 +1312,10 @@ async fn remote_coinbase_only_block_applies_and_advances_height() {
 
     let txs = Vec::new();
     let reward = crate::consensus::reward_for_block(&txs).unwrap();
-    let block_id = crate::consensus::block_id_for_block(1, &[]);
     let state_root = ledger
         .compute_state_root_after_remote_block(&txs, "alice", reward.total_reward_micro)
         .unwrap();
+    let block_id = crate::consensus::block_id_for_block(1, "", &state_root, &[], "alice");
     let pool_before = ledger
         .balance_micro(crate::ledger::WALLET_SYSTEM_WORKER_POOL)
         .unwrap();
@@ -1660,7 +1679,6 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
         receipt_b64.clone(),
     );
     let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
-    let block_id = crate::consensus::block_id_for_block(1, &[tx_hash]);
 
     let ledger = std::sync::Arc::new(open_temp_ledger());
     ledger.init_genesis_founder_premine_from_env().unwrap();
@@ -1692,6 +1710,13 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
             reward.total_reward_micro,
         )
         .unwrap();
+    let block_id = crate::consensus::block_id_for_block(
+        1,
+        "",
+        &state_root,
+        std::slice::from_ref(&tx_hash),
+        "alice",
+    );
 
     let tampered = crate::consensus::apply_remote_block_from_gossip(
         ledger.clone(),
@@ -1724,7 +1749,13 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
     let mismatch_env =
         signed_zk_env_with_task_for_tests(&words, &wallet_id, task_id, mismatch_b64, receipt_b64);
     let mismatch_hash = crate::consensus::tx_hash_for_env(&mismatch_env).unwrap();
-    let mismatch_block_id = crate::consensus::block_id_for_block(1, &[mismatch_hash]);
+    let mismatch_block_id = crate::consensus::block_id_for_block(
+        1,
+        "",
+        &state_root,
+        std::slice::from_ref(&mismatch_hash),
+        "alice",
+    );
     let mismatch = crate::consensus::apply_remote_block_from_gossip(
         ledger,
         state.mempool.clone(),
@@ -1885,7 +1916,6 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
 
     let branch_tx = signed_transfer_env_for_tests(&words_a, &a, &c, 2_000);
     let branch_hash = crate::consensus::tx_hash_for_env(&branch_tx).unwrap();
-    let branch_id = crate::consensus::block_id_for_block(1, std::slice::from_ref(&branch_hash));
     let branch_reward =
         crate::consensus::reward_for_block(std::slice::from_ref(&branch_tx)).unwrap();
 
@@ -1904,6 +1934,13 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
         .apply_block_reward("producer-b", branch_reward.total_reward_micro, 1)
         .unwrap();
     let branch_root = branch_ledger.compute_state_root();
+    let branch_id = crate::consensus::block_id_for_block(
+        1,
+        "",
+        &branch_root,
+        std::slice::from_ref(&branch_hash),
+        "producer-b",
+    );
 
     ledger
         .record_block_record(&crate::ledger::BlockRecordV1 {
@@ -1980,9 +2017,6 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
 
     let branch_tx = signed_transfer_env_for_tests(&words_a, &a, &c, 2_000);
     let branch_hash = crate::consensus::tx_hash_for_env(&branch_tx).unwrap();
-    let parent_block_id =
-        crate::consensus::block_id_for_block(1, std::slice::from_ref(&branch_hash));
-    let child_block_id = crate::consensus::block_id_for_block(2, &[]);
     let parent_reward =
         crate::consensus::reward_for_block(std::slice::from_ref(&branch_tx)).unwrap();
     let child_reward = crate::consensus::reward_for_block(&[]).unwrap();
@@ -2002,10 +2036,24 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         .apply_block_reward("local-wallet", parent_reward.total_reward_micro, 1)
         .unwrap();
     let parent_state_root = branch_ledger.compute_state_root();
+    let parent_block_id = crate::consensus::block_id_for_block(
+        1,
+        "",
+        &parent_state_root,
+        std::slice::from_ref(&branch_hash),
+        "local-wallet",
+    );
     branch_ledger
         .apply_block_reward("local-wallet", child_reward.total_reward_micro, 2)
         .unwrap();
     let child_state_root = branch_ledger.compute_state_root();
+    let child_block_id = crate::consensus::block_id_for_block(
+        2,
+        &parent_block_id,
+        &child_state_root,
+        &[],
+        "local-wallet",
+    );
 
     let child = crate::consensus::RemoteBlockGossip {
         block_height: 2,
