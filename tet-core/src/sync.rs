@@ -713,8 +713,19 @@ pub async fn ledger_sync_status(
     board: &SharedBlockSyncBoard,
     ledger: &crate::ledger::Ledger,
 ) -> LedgerSyncStatus {
-    let local_height = ledger.block_height().unwrap_or(0);
     let local_state_root = ledger.compute_state_root();
+    ledger_sync_status_with_state_root(board, ledger, &local_state_root).await
+}
+
+/// Like [`ledger_sync_status`] but reuses a `local_state_root` the caller has
+/// already computed (e.g. off the async runtime via `spawn_blocking`). This
+/// avoids a second O(N) `compute_state_root` pass within the same request.
+pub async fn ledger_sync_status_with_state_root(
+    board: &SharedBlockSyncBoard,
+    ledger: &crate::ledger::Ledger,
+    local_state_root: &str,
+) -> LedgerSyncStatus {
+    let local_height = ledger.block_height().unwrap_or(0);
     let local_tip_block_id = ledger
         .chain_tip()
         .ok()
@@ -726,7 +737,7 @@ pub async fn ledger_sync_status(
     let driver = board.catch_up_driver.lock().await;
     compute_ledger_sync_status_with_local_tip(
         local_height,
-        &local_state_root,
+        local_state_root,
         &local_tip_block_id,
         &reg,
         &driver,

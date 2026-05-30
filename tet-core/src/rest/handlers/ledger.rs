@@ -893,9 +893,19 @@ pub async fn get_ledger_state(State(state): State<RestState>) -> impl IntoRespon
         mp.len()
     };
     let block_height = state.ledger.block_height().unwrap_or(0);
-    let state_root = state.ledger.compute_state_root();
+    // compute_state_root is an O(N) sled scan + decrypt; run it on the blocking
+    // pool so a large ledger cannot starve the async runtime workers (REST hang).
+    let state_root = {
+        let ledger = state.ledger.clone();
+        tokio::task::spawn_blocking(move || ledger.compute_state_root())
+            .await
+            .unwrap_or_default()
+    };
     let ledger_sync = match &state.block_sync_board {
-        Some(board) => crate::sync::ledger_sync_status(board, &state.ledger).await,
+        Some(board) => {
+            crate::sync::ledger_sync_status_with_state_root(board, &state.ledger, &state_root)
+                .await
+        }
         None => crate::sync::LedgerSyncStatus::default_when_no_p2p(block_height),
     };
     (
