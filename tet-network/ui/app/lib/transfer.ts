@@ -20,16 +20,24 @@ import { u8ToStdBase64 } from "./ai_infer_hybrid";
 /** Default protocol maintenance fee (1%) — mirrors tet-core `PROTOCOL_MAINTENANCE_FEE_BPS`. */
 export const TRANSFER_FEE_BPS = 100;
 
+/** Transaction body union (mirrors tet-core `protocol::TxV1`, internally tagged via `kind`). */
+export type TxBodyV1 =
+  | {
+      kind: "transfer";
+      from_wallet: string;
+      to_wallet: string;
+      amount_micro: number;
+      fee_bps: number;
+    }
+  | {
+      kind: "initial_airdrop";
+      wallet_id: string;
+    };
+
 /** Hybrid-signed transaction envelope (mirrors tet-core `protocol::SignedTxEnvelopeV1`). */
 export type SignedTxEnvelopeV1 = {
   v: 1;
-  tx: {
-    kind: "transfer";
-    from_wallet: string;
-    to_wallet: string;
-    amount_micro: number;
-    fee_bps: number;
-  };
+  tx: TxBodyV1;
   sig: {
     ed25519_pubkey_hex: string;
     ed25519_sig_b64: string;
@@ -47,6 +55,21 @@ export type WalletTransferAcceptedResp = {
   from_wallet_id: string;
   to_wallet_id: string;
   amount_micro: number;
+};
+
+/**
+ * `POST /ledger/initial_airdrop/claim` response. `202 Accepted` carries `status: "pending"` with a
+ * `tx_hash` (claim queued + gossiped); `200 OK` with `status: "already_claimed"` is an idempotent
+ * no-op for a wallet that has already received its welcome airdrop.
+ */
+export type InitialAirdropAcceptedResp = {
+  ok: boolean;
+  status: string;
+  outcome?: string;
+  tx_hash: string;
+  wallet_id?: string;
+  welcome_airdrop_micro?: number;
+  welcome_airdrop_tet?: number;
 };
 
 /** `GET /wallet/nonce/:wallet` response (kept for compatibility; not required by the envelope path). */
@@ -137,6 +160,56 @@ export async function buildTransferEnvelope(
     },
     sig: {
       ed25519_pubkey_hex: from,
+      ed25519_sig_b64,
+      mldsa_pubkey_b64: sess.mldsa44_pubkey_b64,
+      mldsa_sig_b64,
+    },
+    attestation: { platform: "", report_b64: "" },
+  };
+}
+
+/**
+ * Canonical serde JSON for `TxV1::InitialAirdrop` (internally tagged via `#[serde(tag = "kind")]`).
+ * Field order is normative and MUST byte-match tet-core `serde_json::to_string(&TxV1::InitialAirdrop { .. })`.
+ */
+export function initialAirdropTxCanonicalJson(walletId: string): string {
+  return `{"kind":"initial_airdrop","wallet_id":"${walletId}"}`;
+}
+
+/**
+ * Build a hybrid-signed welcome-airdrop claim envelope (requires an unlocked wallet session).
+ *
+ * Mirrors {@link buildTransferEnvelope}: the canonical message is
+ * `tet tx v1|chain_id=..|genesis_hash=..|mldsa=<pk>|tx=<canonical-json>`, signed with the wallet's
+ * own Ed25519 + ML-DSA keys (one claim per wallet). The node enqueues + gossips the claim and the
+ * worker-pool → wallet credit is applied by every node once a producer mines it.
+ */
+export async function buildInitialAirdropEnvelope(
+  walletIdHex64: string,
+  baseUrl?: string,
+): Promise<SignedTxEnvelopeV1> {
+  const sess = requireHybridSignerSession();
+  const w = walletIdHex64.trim().toLowerCase();
+  if (w !== sess.walletIdHex64) {
+    throw new Error("Wallet mismatch: session signer does not match claim wallet.");
+  }
+
+  const txCanonical = initialAirdropTxCanonicalJson(w);
+  const msg = await transferEnvelopeAuthMessageBytes(
+    txCanonical,
+    sess.mldsa44_pubkey_b64,
+    baseUrl,
+  );
+
+  const edSig = await Promise.resolve(sess.signEd25519(msg));
+  const ed25519_sig_b64 = u8ToStdBase64(edSig);
+  const mldsa_sig_b64 = await mldsa44SignDeterministic(sess.mldsa44_keypair_b64, msg);
+
+  return {
+    v: 1,
+    tx: { kind: "initial_airdrop", wallet_id: w },
+    sig: {
+      ed25519_pubkey_hex: w,
       ed25519_sig_b64,
       mldsa_pubkey_b64: sess.mldsa44_pubkey_b64,
       mldsa_sig_b64,

@@ -51,6 +51,18 @@ pub enum TxV1 {
         to_wallet: String,
         amount_micro: u64,
     },
+    /// One-time welcome airdrop claim routed through consensus.
+    ///
+    /// Credits [`crate::ledger::FAUCET_INITIAL_AIRDROP_MICRO_PER_USER`] from
+    /// [`crate::ledger::WALLET_SYSTEM_WORKER_POOL`] to `wallet_id`, applied deterministically
+    /// by every node at block-apply time. Network-wide dedup is by transaction hash: the tx body
+    /// is `wallet_id` only, so its hash is unique per wallet and a second claim is a no-op
+    /// (the per-tx applied marker is already set). Replaces the legacy off-chain
+    /// `Ledger::claim_initial_airdrop` direct mutation, which forked non-producer nodes.
+    InitialAirdrop {
+        /// 64-hex Ed25519 verifying key (wallet id) receiving the welcome airdrop.
+        wallet_id: String,
+    },
     /// Enterprise demand-side inference request (B2B).
     ///
     /// The canonical signature message binds authorization to:

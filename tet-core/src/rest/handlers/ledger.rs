@@ -11,9 +11,8 @@ use std::net::SocketAddr;
 use crate::{
     attestation::AttestationReport,
     ledger::{
-        ADMIN_REST_FAUCET_MAX_AMOUNT_MICRO, AdminRestFaucetOutcome, BlockSummary,
-        InitialAirdropClaimOutcome, MAX_SUPPLY_MICRO, MIN_WORKER_STAKE_MICRO, STEVEMON,
-        TxIndexRecordV1,
+        ADMIN_REST_FAUCET_MAX_AMOUNT_MICRO, AdminRestFaucetOutcome, BlockSummary, MAX_SUPPLY_MICRO,
+        MIN_WORKER_STAKE_MICRO, STEVEMON, TxIndexRecordV1,
     },
     protocol::{SignedTxEnvelopeV1, TxV1},
     rest::{
@@ -315,102 +314,79 @@ async fn get_genesis_1k_status_impl(
     }
 }
 
+/// `POST /ledger/initial_airdrop/claim` — one-time welcome airdrop routed through consensus.
+///
+/// Accepts a hybrid-signed [`SignedTxEnvelopeV1`] carrying a [`TxV1::InitialAirdrop`]. The flow
+/// mirrors `POST /wallet/transfer` (Fix 1): verify the hybrid signature (`verify_envelope_v1`) →
+/// no-op if this wallet already claimed (per-tx applied marker) → enqueue into the mempool →
+/// gossip to peers so any producer can mine it → return `202 Accepted` with the pending `tx_hash`.
+///
+/// The credit (worker pool → wallet) is applied deterministically by every node at block-apply
+/// time, so unlike the legacy off-chain `Ledger::claim_initial_airdrop` direct mutation, a claim
+/// can no longer credit only the local node and fork the chain. **No `x-api-key`.**
 async fn post_initial_airdrop_claim_impl(
     State(state): State<RestState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let _guard = state.genesis_1k_lock.lock().await;
-    let w = headers
-        .get("x-tet-wallet-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
+    Json(env): Json<SignedTxEnvelopeV1>,
+) -> axum::response::Response {
+    if env.v != 1 {
+        return (StatusCode::BAD_REQUEST, "unsupported envelope version").into_response();
+    }
+    // Hybrid signature verification (Ed25519 + ML-DSA) — shared, unchanged logic.
+    if let Err(e) = verify_envelope_v1(&env) {
+        return (StatusCode::UNAUTHORIZED, e).into_response();
+    }
+    let TxV1::InitialAirdrop { wallet_id } = env.tx.clone() else {
+        return (StatusCode::BAD_REQUEST, "expected initial_airdrop tx").into_response();
+    };
+    let w = wallet_id.trim().to_ascii_lowercase();
     if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
-        return (StatusCode::BAD_REQUEST, "missing/invalid x-tet-wallet-id").into_response();
+        return (StatusCode::BAD_REQUEST, "wallet must be 64 hex chars").into_response();
     }
-    let mldsa_pk_b64 = headers
-        .get("x-tet-mldsa-pubkey-b64")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    let sig_b64 = headers
-        .get("x-tet-ed25519-sig-b64")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    let mldsa_sig_b64 = headers
-        .get("x-tet-mldsa-sig-b64")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    if sig_b64.is_empty() {
+    // The envelope must be signed by the claimant wallet itself (one claim per wallet).
+    if env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase() != w {
         return (
             StatusCode::UNAUTHORIZED,
-            "missing x-tet-ed25519-sig-b64 (hybrid initial airdrop claim)",
+            "signer wallet must equal claim wallet_id",
         )
             .into_response();
     }
-    if mldsa_pk_b64.is_empty() || mldsa_sig_b64.is_empty() {
+    let tx_hash = match crate::consensus::tx_hash_for_env(&env) {
+        Ok(h) => h,
+        Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
+    };
+    // Idempotent: once a wallet's airdrop tx is settled into a block, re-claims are a no-op
+    // (the tx body is the wallet id only, so its hash is unique per wallet).
+    if state.ledger.is_tx_applied(&tx_hash).unwrap_or(false) {
         return (
-            StatusCode::UNAUTHORIZED,
-            "missing x-tet-mldsa-pubkey-b64 or x-tet-mldsa-sig-b64 (hybrid initial airdrop claim)",
-        )
-            .into_response();
-    }
-    let msg = crate::wallet::initial_airdrop_claim_hybrid_auth_message_bytes(&w, mldsa_pk_b64);
-    if let Err(e) = crate::quantum_shield::verify_ed25519(&w, sig_b64, &msg) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            format!("invalid initial airdrop claim ed25519 signature: {e}"),
-        )
-            .into_response();
-    }
-    if let Err(e) = crate::wallet::verify_mldsa_b64(mldsa_pk_b64, mldsa_sig_b64, &msg) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            format!("invalid initial airdrop claim ml-dsa signature: {e}"),
-        )
-            .into_response();
-    }
-    match state.ledger.claim_initial_airdrop(&w) {
-        Ok(InitialAirdropClaimOutcome::Granted { credited_micro }) => (
             StatusCode::OK,
             Json(serde_json::json!({
                 "ok": true,
-                "outcome": "granted",
-                "welcome_airdrop_micro": credited_micro,
-                "welcome_airdrop_tet": crate::ledger::FAUCET_INITIAL_AIRDROP_TET_PER_USER,
-            })),
-        )
-            .into_response(),
-        Ok(InitialAirdropClaimOutcome::AlreadyClaimed) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
+                "status": "already_claimed",
                 "outcome": "already_claimed",
+                "tx_hash": tx_hash,
             })),
         )
-            .into_response(),
-        Ok(InitialAirdropClaimOutcome::CapReached) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "outcome": "cap_reached",
-            })),
-        )
-            .into_response(),
-        Ok(InitialAirdropClaimOutcome::PoolInsufficient) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "ok": false,
-                "outcome": "pool_insufficient",
-                "message": "Worker pool balance too low for welcome airdrop.",
-            })),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+            .into_response();
     }
+    if let Err(e) = state.enqueue_mempool_tx(env.clone()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
+    }
+    // Propagate the pending claim so any producer node can include it in a block.
+    state.broadcast_mempool_tx(&env).await;
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "status": "pending",
+            "outcome": "pending",
+            "tx_hash": tx_hash,
+            "wallet_id": w,
+            "welcome_airdrop_micro": crate::ledger::FAUCET_INITIAL_AIRDROP_MICRO_PER_USER,
+            "welcome_airdrop_tet": crate::ledger::FAUCET_INITIAL_AIRDROP_TET_PER_USER,
+        })),
+    )
+        .into_response()
 }
 
 async fn post_genesis_1k_claim_impl(
@@ -831,6 +807,9 @@ async fn post_tx_submit_impl(
         TxV1::Transfer { .. } => post_transfer_enveloped_impl(State(state), headers, Json(env))
             .await
             .into_response(),
+        TxV1::InitialAirdrop { .. } => post_initial_airdrop_claim_impl(State(state), Json(env))
+            .await
+            .into_response(),
         TxV1::GenesisBridge { .. } => {
             post_genesis_bridge_enveloped_impl(State(state), headers, Json(env))
                 .await
@@ -1228,9 +1207,9 @@ pub async fn post_genesis_1k_claim(
 
 pub async fn post_initial_airdrop_claim(
     State(state): State<RestState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    post_initial_airdrop_claim_impl(State(state), headers).await
+    Json(env): Json<SignedTxEnvelopeV1>,
+) -> axum::response::Response {
+    post_initial_airdrop_claim_impl(State(state), Json(env)).await
 }
 
 async fn post_ledger_worker_bond_stake_impl(

@@ -493,6 +493,7 @@ pub fn compute_reward_for_block(txs: &[SignedTxEnvelopeV1]) -> Result<u64, Strin
     for env in txs {
         match &env.tx {
             TxV1::Transfer { .. } => {}
+            TxV1::InitialAirdrop { .. } => {}
             TxV1::VerifyZkProof {
                 task_id: _,
                 image_id,
@@ -1311,6 +1312,25 @@ pub async fn mine_pending_block_as(
         std::mem::take(&mut *mp)
     };
 
+    // Drop within-block duplicates and any tx already settled into a prior canonical block.
+    // This mirrors the receiver-side duplicate-tx rejection in `apply_remote_block_from_gossip`
+    // and guarantees the previewed state_root equals the post-apply state_root (a re-included,
+    // already-applied balance tx would otherwise be credited by the preview but skipped on apply).
+    let txs: Vec<SignedTxEnvelopeV1> = {
+        let mut seen = HashSet::with_capacity(txs.len());
+        let mut kept = Vec::with_capacity(txs.len());
+        for env in txs {
+            let h = tx_hash_for_env(&env).map_err(MineError::Unauthorized)?;
+            if !seen.insert(h.clone()) {
+                continue;
+            }
+            if state.ledger.is_tx_applied(&h).unwrap_or(false) {
+                continue;
+            }
+            kept.push(env);
+        }
+        kept
+    };
     let tx_hashes: Vec<String> = txs
         .iter()
         .map(tx_hash_for_env)
