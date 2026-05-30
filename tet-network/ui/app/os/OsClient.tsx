@@ -31,14 +31,13 @@ import {
   getWorkerStats,
   normalizeWalletId64,
   postEnterpriseInference,
-  fetchWalletTransferNonce,
   postInitialAirdropClaim,
   postWalletTransfer,
   STEVEMON_PER_TET,
   tetCoreUrl,
 } from "../lib/tet_core_http";
 import {
-  buildSignedWalletTransfer,
+  buildTransferEnvelope,
   userFacingTransferError,
 } from "../lib/transfer";
 import { fetchWorkerCockpit, microTetToTet, type WorkerCockpitJson } from "../lib/worker_cockpit";
@@ -298,7 +297,7 @@ export default function NexusOS() {
   const [sendMessage, setSendMessage] = useState("");
   const [sendingTx, setSendingTx] = useState(false);
   const [sendTransferPhase, setSendTransferPhase] = useState<
-    "idle" | "signing" | "submitting" | "confirmed" | "failed"
+    "idle" | "signing" | "submitting" | "pending" | "confirmed" | "failed"
   >("idle");
   const [sendTransferUserMsg, setSendTransferUserMsg] = useState<string>("");
   const [isSignerReady, setIsSignerReady] = useState(false);
@@ -1294,31 +1293,15 @@ export default function NexusOS() {
     setSendTransferPhase("signing");
 
     try {
-      const nonceRes = await fetchWalletTransferNonce(baseUrl, from);
-      if (!nonceRes.ok || !nonceRes.data) {
-        const err = userFacingTransferError(nonceRes.status, nonceRes.text);
-        setSendTransferPhase("failed");
-        setSendTransferUserMsg(err);
-        appendLedger([`Send Coins: nonce fetch failed — ${err}`]);
-        console.error("[Send Coins] GET /wallet/nonce failed", nonceRes);
-        return;
-      }
-      const nonce = nonceRes.data.next_nonce;
-      if (!Number.isFinite(nonce) || nonce <= 0) {
-        setSendTransferPhase("failed");
-        setSendTransferUserMsg("Node returned an invalid transfer nonce.");
-        appendLedger(["Send Coins: invalid next_nonce from node"]);
-        return;
-      }
-
-      const signed = await buildSignedWalletTransfer(from, to, amtStv, nonce, baseUrl);
+      const env = await buildTransferEnvelope(from, to, amtStv, baseUrl);
       setSendTransferPhase("submitting");
       appendLedger([
-        `[Send Coins] POST /wallet/transfer · nonce ${nonce} · gross ${formatStevemonToTetDisplay(amtStv)} TET → ${to.slice(0, 12)}…`,
+        `[Send Coins] POST /wallet/transfer · gross ${formatStevemonToTetDisplay(amtStv)} TET → ${to.slice(0, 12)}…`,
       ]);
 
-      const res = await postWalletTransfer(baseUrl, signed.body);
-      if (!res.ok || !res.data) {
+      const res = await postWalletTransfer(baseUrl, env);
+      // 202 Accepted: tx is queued + gossiped; it commits once a producer mines it.
+      if (!res.ok || !res.data?.tx_hash) {
         const err = userFacingTransferError(res.status, res.text);
         setSendTransferPhase("failed");
         setSendTransferUserMsg(err);
@@ -1327,17 +1310,48 @@ export default function NexusOS() {
         return;
       }
 
-      const { net_micro, fee_micro } = res.data;
-      setSendTransferPhase("confirmed");
+      const txHash = res.data.tx_hash;
+      setSendTransferPhase("pending");
       setSendTransferUserMsg(
-        `Sent ${formatStevemonToTetDisplay(BigInt(net_micro))} TET (fee ${formatStevemonToTetDisplay(BigInt(fee_micro))} TET).`,
+        `Transaction pending (${txHash.slice(0, 10)}…). Waiting for block confirmation…`,
       );
       appendLedger([
-        `[Send Coins] OK · net ${net_micro.toLocaleString("en-US")} µ · fee ${fee_micro.toLocaleString("en-US")} µ`,
-        `  to ${res.data.to_wallet_id.slice(0, 16)}…`,
+        `[Send Coins] queued + gossiped · tx ${txHash.slice(0, 18)}… · awaiting block inclusion`,
       ]);
       if (msg) {
         appendLedger([`[Memo] "${msg}" (local note only — not sent on-chain).`]);
+      }
+
+      // Poll the tx index until a producer mines the tx into a block (or we time out).
+      const CONFIRM_TIMEOUT_MS = 30_000;
+      const POLL_INTERVAL_MS = 3_000;
+      const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+      let confirmedHeight: number | null = null;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+        const txRes = await fetchExplorerTx(baseUrl, txHash);
+        if (txRes.ok && txRes.data?.found) {
+          confirmedHeight = txRes.data.block_height;
+          break;
+        }
+      }
+
+      if (confirmedHeight != null) {
+        setSendTransferPhase("confirmed");
+        setSendTransferUserMsg(
+          `Confirmed in block ${confirmedHeight}. Sent ${formatStevemonToTetDisplay(amtStv)} TET (1% fee applied).`,
+        );
+        appendLedger([
+          `[Send Coins] ✅ confirmed in block ${confirmedHeight} · tx ${txHash.slice(0, 18)}…`,
+        ]);
+      } else {
+        // Still pending: not an error — no producer has mined it yet.
+        setSendTransferUserMsg(
+          `Still pending after 30s (tx ${txHash.slice(0, 10)}…). It will commit once a producer mines it.`,
+        );
+        appendLedger([
+          `[Send Coins] ⏳ not yet mined after 30s · tx ${txHash.slice(0, 18)}… (will confirm later)`,
+        ]);
       }
 
       const bal = await getLedgerMeBalanceMicro(baseUrl, from);

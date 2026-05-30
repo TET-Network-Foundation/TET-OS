@@ -12,9 +12,9 @@ import { getHybridSignerSession } from "./hybrid_signer_session";
 import { type LedgerState, parseLedgerState } from "./ledger_state";
 import { mldsa44SignDeterministic } from "./pqc";
 import type {
+  SignedTxEnvelopeV1,
+  WalletTransferAcceptedResp,
   WalletTransferNonceResp,
-  WalletTransferResp,
-  WalletTransferSignedReq,
 } from "./transfer";
 
 /** @deprecated Use `SyncUiState` from `ledger_state.ts` (ledger sync gate). */
@@ -481,15 +481,19 @@ export async function fetchWalletTransferNonce(
   );
 }
 
-/** Hybrid-signed transfer (immediate ledger commit). Prefer over enveloped `POST /ledger/transfer`. */
+/**
+ * Submit a hybrid-signed transfer envelope. Returns `202 Accepted` with a pending `tx_hash`;
+ * the transfer is committed only after a producer mines it into a block. Poll
+ * {@link fetchExplorerTx} with the returned `tx_hash` to detect block inclusion.
+ */
 export async function postWalletTransfer(
   baseUrl: string,
-  body: WalletTransferSignedReq,
-): Promise<{ ok: boolean; data?: WalletTransferResp; status: number; text?: string }> {
-  return fetchJson<WalletTransferResp>(tetCoreUrl(baseUrl, "/wallet/transfer"), {
+  env: SignedTxEnvelopeV1,
+): Promise<{ ok: boolean; data?: WalletTransferAcceptedResp; status: number; text?: string }> {
+  return fetchJson<WalletTransferAcceptedResp>(tetCoreUrl(baseUrl, "/wallet/transfer"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(body),
+    body: JSON.stringify(env),
   });
 }
 

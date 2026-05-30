@@ -166,6 +166,21 @@ impl RestState {
         mp.push(env);
         Ok(evicted)
     }
+
+    /// Best-effort broadcast of a pending mempool tx to peers over the block-plane
+    /// gossip (`txs` topic), so that any producer node can include it in a block.
+    ///
+    /// This never mutates a ledger; it only propagates the signed envelope. Peers
+    /// re-verify the hybrid signature before enqueuing into their own mempool.
+    pub async fn broadcast_mempool_tx(&self, env: &SignedTxEnvelopeV1) {
+        let Some(tx) = self.gossip_tx.as_ref() else {
+            return;
+        };
+        let event = crate::models::NetworkEvent::TxBroadcast { env: env.clone() };
+        if let Ok(json) = serde_json::to_string(&event) {
+            let _ = tx.send(json).await;
+        }
+    }
 }
 
 #[derive(Debug)]

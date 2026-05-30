@@ -40,4 +40,14 @@ pub enum NetworkEvent {
         to_wallet: String,
         amount_micro: u64,
     },
+
+    /// A pending (not-yet-mined) signed transaction broadcast to peers so that
+    /// any producer node can include it in a block.
+    ///
+    /// Receivers MUST verify the envelope and enqueue it into their local mempool
+    /// only — this event never mutates the ledger directly. Replaces the legacy
+    /// signature-less `LedgerGossip::TransferAnnounce` notify (which peers ignored).
+    TxBroadcast {
+        env: SignedTxEnvelopeV1,
+    },
 }

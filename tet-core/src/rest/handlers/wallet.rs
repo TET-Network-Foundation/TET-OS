@@ -1,9 +1,9 @@
 use crate::{
     attestation::{AttestationReport, verify_attestation_report},
-    ledger::{LedgerError, MAX_SUPPLY_MICRO, STEVEMON, WORKER_MIN_STAKE_MICRO},
+    ledger::{MAX_SUPPLY_MICRO, STEVEMON, WORKER_MIN_STAKE_MICRO},
     protocol::{SignedTxEnvelopeV1, TxV1},
     rest::{
-        RestState, WalletRecoverReq, WalletSlashReq, WalletStakeSignedReq, WalletTransferSignedReq,
+        RestState, WalletRecoverReq, WalletSlashReq, WalletStakeSignedReq,
         helpers::{require_admin_bearer, std_lock, verify_envelope_v1},
     },
 };
@@ -15,7 +15,6 @@ use axum::{
 };
 
 use axum::http::StatusCode;
-use serde::Serialize;
 
 async fn post_signer_link_impl(
     State(state): State<RestState>,
@@ -147,114 +146,82 @@ async fn get_wallet_transfer_nonce_impl(
     }
 }
 
-/// `POST /wallet/transfer` — hybrid-signed transfer (Ed25519 + ML-DSA) with monotonic `nonce` (replay-safe).
-/// **No `x-api-key`.** Both signatures cover `tet xfer hybrid v1|...` (see `wallet::transfer_hybrid_auth_message_bytes`).
+/// `POST /wallet/transfer` — hybrid-signed transfer routed through consensus.
+///
+/// Accepts a [`SignedTxEnvelopeV1`] carrying a [`TxV1::Transfer`]. The flow is:
+/// verify hybrid signature (Ed25519 + ML-DSA via `verify_envelope_v1`) → balance precheck →
+/// enqueue into the local mempool → gossip to peers (`txs` topic) so any producer can mine it.
+/// **No `x-api-key`.**
+///
+/// Unlike the legacy direct-mutation path, this never touches `balances` directly: the envelope
+/// is re-verified and applied deterministically by every node at block-apply time
+/// (`tx_hash_for_env` → `verify_envelope_v1`), so a Send Coins call can no longer create a
+/// local-only fork. Returns `202 Accepted` with the pending `tx_hash`.
 async fn post_wallet_transfer_impl(
     State(state): State<RestState>,
-    Json(req): Json<WalletTransferSignedReq>,
+    Json(env): Json<SignedTxEnvelopeV1>,
 ) -> axum::response::Response {
-    const MAX_ADDR_CHARS: usize = 256;
-    const MAX_SIG_HEX_CHARS: usize = 200;
-    const MAX_B64_FIELD: usize = 32_768;
-    if req.from_address.len() > MAX_ADDR_CHARS
-        || req.to_address.len() > MAX_ADDR_CHARS
-        || req.signature.len() > MAX_SIG_HEX_CHARS
-        || req.mldsa_pubkey_b64.len() > MAX_B64_FIELD
-        || req.mldsa_signature_b64.len() > MAX_B64_FIELD
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            "from_address, to_address, signature, or PQC fields exceed maximum length",
-        )
-            .into_response();
+    if env.v != 1 {
+        return (StatusCode::BAD_REQUEST, "unsupported envelope version").into_response();
     }
-    let from = req.from_address.trim().to_ascii_lowercase();
-    let to = req.to_address.trim().to_ascii_lowercase();
+    // Hybrid signature verification (Ed25519 + ML-DSA) — shared, unchanged logic.
+    if let Err(e) = verify_envelope_v1(&env) {
+        return (StatusCode::UNAUTHORIZED, e).into_response();
+    }
+    let TxV1::Transfer {
+        from_wallet,
+        to_wallet,
+        amount_micro,
+        fee_bps: _,
+    } = env.tx.clone()
+    else {
+        return (StatusCode::BAD_REQUEST, "expected transfer tx").into_response();
+    };
+    let from = from_wallet.trim().to_ascii_lowercase();
+    let to = to_wallet.trim().to_ascii_lowercase();
     if from.len() != 64 || !from.chars().all(|c| c.is_ascii_hexdigit()) {
         return (
             StatusCode::BAD_REQUEST,
-            "from_address must be 64 hex characters (Ed25519 verifying key)",
+            "from_wallet must be 64 hex characters (Ed25519 verifying key)",
         )
             .into_response();
     }
     if to.is_empty() {
-        return (StatusCode::BAD_REQUEST, "to_address required").into_response();
+        return (StatusCode::BAD_REQUEST, "to_wallet required").into_response();
     }
     if from == to {
         return (StatusCode::BAD_REQUEST, "cannot transfer to self").into_response();
     }
-    if req.nonce == 0 {
-        return (
-            StatusCode::BAD_REQUEST,
-            "nonce must be greater than last committed nonce",
-        )
-            .into_response();
-    }
-    if !req.amount_tet.is_finite() || req.amount_tet <= 0.0 {
-        return (StatusCode::BAD_REQUEST, "invalid amount").into_response();
-    }
-    let amount_micro = (req.amount_tet * STEVEMON as f64).round().max(0.0) as u64;
     if amount_micro == 0 || amount_micro > MAX_SUPPLY_MICRO {
         return (StatusCode::BAD_REQUEST, "invalid amount").into_response();
     }
-    match state.ledger.transfer_with_fee_attested_dual_verified(
-        from.as_str(),
-        to.as_str(),
-        amount_micro,
-        Some(100),
-        None,
-        Some(req.nonce),
-        &req.signature,
-        &req.mldsa_pubkey_b64,
-        &req.mldsa_signature_b64,
-    ) {
-        Ok((net_micro, fee_micro)) => {
-            if let Some(tx) = state.p2p_tx.as_ref()
-                && let Ok(bytes) =
-                    serde_json::to_vec(&crate::network::LedgerGossip::TransferAnnounce {
-                        signer_wallet_id: from.clone(),
-                        from_peer_id: from.clone(),
-                        to_peer_id: to.clone(),
-                        amount_micro,
-                        fee_micro,
-                        ed25519_sig_b64: None,
-                        mldsa_pubkey_b64: None,
-                        mldsa_sig_b64: None,
-                    })
-            {
-                let _ = tx.send(bytes);
-            }
-            #[derive(Serialize)]
-            struct WalletTransferResp {
-                from_wallet_id: String,
-                to_wallet_id: String,
-                amount_micro: u64,
-                net_micro: u64,
-                fee_micro: u64,
-            }
-            (
-                StatusCode::OK,
-                Json(WalletTransferResp {
-                    from_wallet_id: from.clone(),
-                    to_wallet_id: to,
-                    amount_micro,
-                    net_micro,
-                    fee_micro,
-                }),
-            )
-                .into_response()
-        }
-        Err(LedgerError::InsufficientFunds) => {
-            (StatusCode::BAD_REQUEST, "Insufficient funds").into_response()
-        }
-        Err(LedgerError::AttestationRequired) => (
-            StatusCode::FORBIDDEN,
-            "wallet transfers require attestation in this environment",
-        )
-            .into_response(),
-        Err(LedgerError::HybridSigRejected(msg)) => (StatusCode::UNAUTHORIZED, msg).into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
+    // Precheck only (no DB mutation): reject obvious insufficient-funds before queueing.
+    let spendable = state.ledger.spendable_balance_micro_now(&from).unwrap_or(0);
+    if spendable < amount_micro {
+        return (StatusCode::BAD_REQUEST, "Insufficient funds").into_response();
     }
+    let tx_hash = match crate::consensus::tx_hash_for_env(&env) {
+        Ok(h) => h,
+        Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
+    };
+    if let Err(e) = state.enqueue_mempool_tx(env.clone()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
+    }
+    // Propagate the pending tx so any producer node can include it in a block.
+    state.broadcast_mempool_tx(&env).await;
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "status": "pending",
+            "tx_hash": tx_hash,
+            "from_wallet_id": from,
+            "to_wallet_id": to,
+            "amount_micro": amount_micro,
+        })),
+    )
+        .into_response()
 }
 
 async fn post_wallet_stake_impl(
@@ -373,9 +340,9 @@ pub async fn get_wallet_transfer_nonce(
 
 pub async fn post_wallet_transfer(
     State(state): State<RestState>,
-    Json(req): Json<WalletTransferSignedReq>,
+    Json(env): Json<SignedTxEnvelopeV1>,
 ) -> axum::response::Response {
-    post_wallet_transfer_impl(State(state), Json(req)).await
+    post_wallet_transfer_impl(State(state), Json(env)).await
 }
 
 pub async fn post_wallet_stake(
