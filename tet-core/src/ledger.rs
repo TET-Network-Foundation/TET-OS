@@ -3303,10 +3303,10 @@ impl Ledger {
 
     pub fn open(path: &str) -> Result<Self, LedgerError> {
         let db = sled::open(path)?;
-        let snapshot_dir = std::path::Path::new(path)
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+        // Keep the JSON snapshot *inside* the DB dir (TET_DB_DIR) so that deleting
+        // the DB also removes the snapshot (clean-restart correctness). sled opens
+        // `path` as a directory, so relative snapshot files live alongside the DB.
+        let snapshot_dir = std::path::PathBuf::from(path);
 
         // Default posture: if an encryption key is provided, we treat encryption as strict unless explicitly disabled.
         let has_key = std::env::var("TET_DB_KEY_B64")
