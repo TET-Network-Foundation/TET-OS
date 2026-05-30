@@ -576,8 +576,12 @@ async fn main() -> Result<(), AnyErr> {
         std::env::var("TET_CHAIN_HELLO_INTERVAL_SEC").unwrap_or_else(|_| "15".to_string());
     let blacklist_ttl_sec =
         std::env::var("TET_BLACKLIST_TTL_SEC").unwrap_or_else(|_| "300".to_string());
+    let idle_timeout_sec =
+        std::env::var("TET_IDLE_TIMEOUT_SEC").unwrap_or_else(|_| "300".to_string());
+    let kad_bootstrap_interval_sec =
+        std::env::var("TET_KAD_BOOTSTRAP_INTERVAL_SEC").unwrap_or_else(|_| "60".to_string());
     log::info!(
-        "[startup] catch-up tuning TET_CHAIN_HELLO_INTERVAL_SEC={chain_hello_interval_sec} (0=disabled) TET_BLACKLIST_TTL_SEC={blacklist_ttl_sec} (0=never-expire)"
+        "[startup] catch-up tuning TET_CHAIN_HELLO_INTERVAL_SEC={chain_hello_interval_sec} (0=disabled) TET_BLACKLIST_TTL_SEC={blacklist_ttl_sec} (0=never-expire) TET_IDLE_TIMEOUT_SEC={idle_timeout_sec} (0=infinite) TET_KAD_BOOTSTRAP_INTERVAL_SEC={kad_bootstrap_interval_sec} (0=disabled)"
     );
 
     let addr: SocketAddr = config.rest_bind.parse()?;

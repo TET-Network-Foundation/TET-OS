@@ -387,6 +387,35 @@ fn chain_hello_interval_sec_from_env() -> u64 {
         .unwrap_or(15)
 }
 
+/// Swarm idle-connection timeout (Fix 1). libp2p 0.55 defaults this to
+/// `Duration::ZERO`, which closes a connection the moment no behaviour requests
+/// keep-alive — the root cause of the idle isolation bug. `TET_IDLE_TIMEOUT_SEC`
+/// overrides it (default 300s, `0` = effectively infinite).
+fn idle_timeout_from_env() -> Duration {
+    let secs = std::env::var("TET_IDLE_TIMEOUT_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(300);
+    if secs == 0 {
+        // "Infinite" without risking timer Instant overflow: ~10 years.
+        Duration::from_secs(60 * 60 * 24 * 3650)
+    } else {
+        Duration::from_secs(secs)
+    }
+}
+
+/// Periodic Kademlia bootstrap re-trigger interval in seconds (Fix 2).
+/// `TET_KAD_BOOTSTRAP_INTERVAL_SEC` (default 60, `0` = disabled). Bootstrap is
+/// otherwise only run once at startup, so a node that loses all peers can never
+/// recover its routing table ("No known peers"). Re-running is harmless when the
+/// table is empty (Kademlia skips internally).
+fn kad_bootstrap_interval_sec_from_env() -> u64 {
+    std::env::var("TET_KAD_BOOTSTRAP_INTERVAL_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(60)
+}
+
 fn listen_bound_loopback(listen: &Multiaddr) -> bool {
     listen
         .iter()
@@ -531,9 +560,14 @@ impl BootnodeWatch {
         for peer in self.bootnode_ids.clone() {
             if self.dead.contains(&peer) {
                 let last = self.last_redial_at.get(&peer).copied().unwrap_or(0);
-                if now.saturating_sub(last) >= redial_ms {
-                    if let Some(addr) = self.bootnode_dial_addrs.get(&peer) {
-                        let _ = swarm.dial(addr.clone());
+                let due = now.saturating_sub(last) >= redial_ms;
+                // Fix 3: skip if already connected or a dial is in flight, to avoid
+                // overlapping dials to the same endpoint (AddrInUse / os error 48).
+                let in_flight = swarm.is_connected(&peer) || dialing.contains(&peer);
+                if due && !in_flight {
+                    if let Some(addr) = self.bootnode_dial_addrs.get(&peer).cloned() {
+                        dialing.insert(peer);
+                        let _ = swarm.dial(addr);
                         self.last_redial_at.insert(peer, now);
                         println!("[P2P-block] 🔁 bootnode re-dial attempt: {peer}");
                     }
@@ -1134,12 +1168,15 @@ async fn run_mdns_ping_swarm(
         chain_sync_hello: chain_sync_hello_behaviour(),
         chain_sync_range: chain_sync_range_behaviour(),
     };
+    let idle_timeout = idle_timeout_from_env();
     let mut swarm = Swarm::new(
         transport,
         behaviour,
         peer_id,
-        libp2p::swarm::Config::with_tokio_executor(),
+        libp2p::swarm::Config::with_tokio_executor()
+            .with_idle_connection_timeout(idle_timeout),
     );
+    println!("[P2P-block] idle_connection_timeout set to {idle_timeout:?}");
 
     println!("[P2P] My Peer ID: {}", swarm.local_peer_id());
     log::info!("[P2P] My Peer ID: {}", swarm.local_peer_id());
@@ -1235,6 +1272,8 @@ async fn run_mdns_ping_swarm(
         HashMap::new();
     let chain_hello_interval_ms = chain_hello_interval_sec_from_env().saturating_mul(1000);
     let mut last_chain_hello_sent_at: HashMap<PeerId, u64> = HashMap::new();
+    let kad_bootstrap_interval_ms = kad_bootstrap_interval_sec_from_env().saturating_mul(1000);
+    let mut last_kad_bootstrap_at: u64 = now_ms();
     let mut catch_up_interval = tokio::time::interval(Duration::from_secs(1));
     catch_up_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -1289,6 +1328,22 @@ async fn run_mdns_ping_swarm(
                             }
                             Err(e) => {
                                 log::warn!("[p2p][block] periodic chain_hello build failed: {e}");
+                            }
+                        }
+                    }
+                }
+                if kad_bootstrap_interval_ms > 0 {
+                    let now = now_ms();
+                    if now.saturating_sub(last_kad_bootstrap_at) >= kad_bootstrap_interval_ms {
+                        last_kad_bootstrap_at = now;
+                        match swarm.behaviour_mut().kademlia.bootstrap() {
+                            Ok(_) => {
+                                log::debug!("[p2p][kad] periodic bootstrap re-triggered");
+                            }
+                            Err(e) => {
+                                // Empty routing table ("No known peers") is expected
+                                // and harmless until a peer is (re)connected.
+                                log::debug!("[p2p][kad] periodic bootstrap skipped: {e:?}");
                             }
                         }
                     }
