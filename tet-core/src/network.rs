@@ -38,16 +38,6 @@ pub enum LedgerGossip {
         mldsa_pubkey_b64: Option<String>,
         mldsa_sig_b64: Option<String>,
     },
-    TransferAnnounce {
-        signer_wallet_id: String,
-        from_peer_id: String,
-        to_peer_id: String,
-        amount_micro: u64,
-        fee_micro: u64,
-        ed25519_sig_b64: Option<String>,
-        mldsa_pubkey_b64: Option<String>,
-        mldsa_sig_b64: Option<String>,
-    },
     /// Signed full `tet_ledger.json` snapshot (v1 JSON bytes), for Passive Guardians.
     StateSnapshotSigned {
         sha256_hex: String,
@@ -71,58 +61,30 @@ fn verify_p2p_hybrid(m: &LedgerGossip) -> bool {
             ed25519_sig_b64,
         )
         .is_ok(),
-        LedgerGossip::TransferAnnounce { .. } | LedgerGossip::ProofAnnounce { .. } => {
-            let (signer, preimage, ed, pk, ps) = match m {
-                LedgerGossip::TransferAnnounce {
-                    signer_wallet_id,
-                    from_peer_id,
-                    to_peer_id,
-                    amount_micro,
-                    fee_micro: _,
-                    ed25519_sig_b64,
-                    mldsa_pubkey_b64,
-                    mldsa_sig_b64,
-                } => {
-                    let msg = format!(
-                        "tet-p2p-v1|transfer_announce|signer={}|from={}|to={}|amount_micro={}",
-                        signer_wallet_id, from_peer_id, to_peer_id, amount_micro
-                    );
-                    (
-                        signer_wallet_id.as_str(),
-                        msg,
-                        ed25519_sig_b64.as_deref(),
-                        mldsa_pubkey_b64.as_deref(),
-                        mldsa_sig_b64.as_deref(),
-                    )
-                }
-                LedgerGossip::ProofAnnounce {
-                    signer_wallet_id,
-                    id,
-                    hash_sha256_hex,
-                    ed25519_sig_b64,
-                    mldsa_pubkey_b64,
-                    mldsa_sig_b64,
-                } => {
-                    let msg = format!(
-                        "tet-p2p-v1|proof_announce|signer={}|id={}|hash={}",
-                        signer_wallet_id, id, hash_sha256_hex
-                    );
-                    (
-                        signer_wallet_id.as_str(),
-                        msg,
-                        ed25519_sig_b64.as_deref(),
-                        mldsa_pubkey_b64.as_deref(),
-                        mldsa_sig_b64.as_deref(),
-                    )
-                }
-                LedgerGossip::StateSnapshotSigned { .. } => unreachable!(),
-            };
+        LedgerGossip::ProofAnnounce {
+            signer_wallet_id,
+            id,
+            hash_sha256_hex,
+            ed25519_sig_b64,
+            mldsa_pubkey_b64,
+            mldsa_sig_b64,
+        } => {
+            let msg = format!(
+                "tet-p2p-v1|proof_announce|signer={}|id={}|hash={}",
+                signer_wallet_id, id, hash_sha256_hex
+            );
+            let (signer, ed, pk, ps) = (
+                signer_wallet_id.as_str(),
+                ed25519_sig_b64.as_deref(),
+                mldsa_pubkey_b64.as_deref(),
+                mldsa_sig_b64.as_deref(),
+            );
             // Enforce PQC signatures (ML-DSA-44) for all gossip when PQC is active.
             // Any missing or invalid signature is rejected.
             if pk.is_none() || ps.is_none() {
                 return false;
             }
-            crate::quantum_shield::verify_hybrid(signer, ed, pk, ps, preimage.as_bytes()).is_ok()
+            crate::quantum_shield::verify_hybrid(signer, ed, pk, ps, msg.as_bytes()).is_ok()
         }
     }
 }
@@ -321,10 +283,6 @@ impl NetworkManager {
                                         match m {
                                             LedgerGossip::ProofAnnounce { signer_wallet_id, id, hash_sha256_hex, .. } => {
                                                 eprintln!("[p2p][ledger] proof id={id} hash={}", &hash_sha256_hex[..hash_sha256_hex.len().min(12)]);
-                                                let _ = signer_wallet_id;
-                                            }
-                                            LedgerGossip::TransferAnnounce { from_peer_id, to_peer_id, amount_micro, fee_micro, signer_wallet_id, .. } => {
-                                                eprintln!("[p2p][ledger] xfer {from_peer_id}->{to_peer_id} amt={amount_micro} fee={fee_micro}");
                                                 let _ = signer_wallet_id;
                                             }
                                             LedgerGossip::StateSnapshotSigned {

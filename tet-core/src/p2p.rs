@@ -1030,7 +1030,9 @@ fn network_event_topics(
             }
             topics
         }
-        Ok(NetworkEvent::TransferExecuted { .. }) | Ok(NetworkEvent::FaucetExecuted { .. }) => {
+        Ok(NetworkEvent::TransferExecuted { .. })
+        | Ok(NetworkEvent::FaucetExecuted { .. })
+        | Ok(NetworkEvent::TxBroadcast { .. }) => {
             vec![txs_topic.clone()]
         }
         Err(_) => vec![txs_topic.clone()],
@@ -1893,6 +1895,9 @@ async fn run_mdns_ping_swarm(
                                     event_id, to_wallet, amount_micro
                                 );
                             }
+                            NetworkEvent::TxBroadcast { .. } => {
+                                println!("[P2P] 📨 MEMPOOL TX GOSSIP RECEIVED");
+                            }
                             other => {
                                 println!("[P2P] 🔄 STATE SYNC DETECTED: {:?}", other);
                             }
@@ -2061,6 +2066,35 @@ async fn run_mdns_ping_swarm(
                                             "[P2P] ❌ REMOTE BLOCK REJECTED: {}",
                                             e.message()
                                         );
+                                    }
+                                }
+                            }
+                            NetworkEvent::TxBroadcast { env } => {
+                                // Pending mempool tx from a peer: verify the hybrid signature
+                                // and enqueue locally so a producer can mine it. Never mutate
+                                // the ledger here.
+                                match crate::consensus::tx_hash_for_env(&env) {
+                                    Ok(tx_hash) => {
+                                        let mut mp = mempool.lock().await;
+                                        let dup = mp.iter().any(|e| {
+                                            crate::consensus::tx_hash_for_env(e)
+                                                .map(|h| h == tx_hash)
+                                                .unwrap_or(false)
+                                        });
+                                        if dup {
+                                            println!(
+                                                "[P2P] ⏭️ MEMPOOL TX ALREADY QUEUED tx_hash={tx_hash}"
+                                            );
+                                        } else {
+                                            mp.push(env);
+                                            println!(
+                                                "[P2P] ✅ MEMPOOL TX ENQUEUED tx_hash={tx_hash} mempool_len={}",
+                                                mp.len()
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!("[P2P] ❌ MEMPOOL TX REJECTED (bad signature): {e}");
                                     }
                                 }
                             }
