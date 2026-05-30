@@ -481,8 +481,24 @@ export default function NexusOS() {
     void (async () => {
       try {
         const r = await postInitialAirdropClaim(baseUrl, wid);
-        if (cancelled || !r.ok || r.outcome !== "granted") return;
-        triggerWelcomeAirdropNotice();
+        if (cancelled || !r.ok) return;
+        // 200 already_claimed: the wallet already holds its welcome airdrop — nothing to announce.
+        if (r.outcome === "already_claimed") return;
+        // 202 pending: claim is queued + gossiped. Poll the tx index until a producer mines it
+        // into a block, then announce. (The credit is applied by consensus, not locally.)
+        if (!r.txHash) return;
+        const CONFIRM_TIMEOUT_MS = 30_000;
+        const POLL_INTERVAL_MS = 3_000;
+        const deadline = Date.now() + CONFIRM_TIMEOUT_MS;
+        while (!cancelled && Date.now() < deadline) {
+          await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
+          if (cancelled) return;
+          const txRes = await fetchExplorerTx(baseUrl, r.txHash);
+          if (txRes.ok && txRes.data?.found) {
+            if (!cancelled) triggerWelcomeAirdropNotice();
+            return;
+          }
+        }
       } catch {
         // ignore (offline / CORS)
       }

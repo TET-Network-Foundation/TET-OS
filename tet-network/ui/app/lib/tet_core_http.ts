@@ -2,7 +2,6 @@
 
 import {
   buildAiInferHybridHeaders,
-  buildInitialAirdropClaimHybridHeaders,
   flopsBigIntToJsonNumber,
   sha256HexUtf8,
   u8ToStdBase64,
@@ -11,10 +10,12 @@ import { expectedChainBinding } from "./chain_binding";
 import { getHybridSignerSession } from "./hybrid_signer_session";
 import { type LedgerState, parseLedgerState } from "./ledger_state";
 import { mldsa44SignDeterministic } from "./pqc";
-import type {
-  SignedTxEnvelopeV1,
-  WalletTransferAcceptedResp,
-  WalletTransferNonceResp,
+import {
+  buildInitialAirdropEnvelope,
+  type InitialAirdropAcceptedResp,
+  type SignedTxEnvelopeV1,
+  type WalletTransferAcceptedResp,
+  type WalletTransferNonceResp,
 } from "./transfer";
 
 /** @deprecated Use `SyncUiState` from `ledger_state.ts` (ledger sync gate). */
@@ -543,18 +544,25 @@ export async function getVisionNetworkConfig(
 
 const INITIAL_AIRDROP_CLAIM_PATHS = ["/v1/vision/ledger/initial_airdrop/claim", "/ledger/initial_airdrop/claim"] as const;
 
-/** POST welcome airdrop (1,000 TET once per wallet, first 10k users). Hybrid headers required. */
+/**
+ * Submit the one-time welcome-airdrop claim (1,000 TET) through consensus. Builds a hybrid-signed
+ * `SignedTxEnvelopeV1` (`TxV1::InitialAirdrop`) and POSTs it; the node verifies the signature,
+ * enqueues the claim into the mempool, and gossips it to peers. Returns `202 Accepted` with a
+ * pending `tx_hash` (the credit lands once a producer mines it), or `200 OK` with
+ * `outcome: "already_claimed"` for a wallet that already received its airdrop. Poll
+ * {@link fetchExplorerTx} with the returned `tx_hash` to detect block inclusion.
+ */
 export async function postInitialAirdropClaim(
   baseUrl: string,
   walletId64: string,
-): Promise<{ ok: boolean; outcome?: string; status: number; text?: string }> {
+): Promise<{ ok: boolean; outcome?: string; txHash?: string; status: number; text?: string }> {
   const wid = normalizeWalletId64(walletId64);
   if (!wid) {
     return { ok: false, status: 400, text: "wallet_id must be 64 hex chars" };
   }
-  let hybrid: Record<string, string>;
+  let env: SignedTxEnvelopeV1;
   try {
-    hybrid = await buildInitialAirdropClaimHybridHeaders(wid, baseUrl);
+    env = await buildInitialAirdropEnvelope(wid, baseUrl);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, status: 401, text: msg };
@@ -564,14 +572,10 @@ export async function postInitialAirdropClaim(
   let lastText: string | undefined;
   for (const path of INITIAL_AIRDROP_CLAIM_PATHS) {
     const url = tetCoreUrl(baseUrl, path);
-    const r = await fetchJson<Record<string, unknown>>(url, {
+    const r = await fetchJson<InitialAirdropAcceptedResp>(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-tet-wallet-id": wid,
-        ...hybrid,
-      },
-      body: "{}",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(env),
     });
     lastStatus = r.status;
     lastText = r.text;
@@ -579,9 +583,12 @@ export async function postInitialAirdropClaim(
     if (!r.ok) {
       return { ok: false, status: r.status, text: r.text };
     }
-    const d = r.data;
-    const outcome = d && typeof d === "object" && typeof d.outcome === "string" ? d.outcome : undefined;
-    return { ok: true, outcome, status: r.status };
+    return {
+      ok: true,
+      outcome: r.data?.outcome ?? r.data?.status,
+      txHash: r.data?.tx_hash,
+      status: r.status,
+    };
   }
   return { ok: false, status: lastStatus, text: lastText ?? "not found" };
 }

@@ -592,6 +592,7 @@ impl Ledger {
             crate::protocol::TxV1::SignerLink { .. } => "signer_link",
             crate::protocol::TxV1::FoundingMemberEnroll { .. } => "founding_member_enroll",
             crate::protocol::TxV1::Transfer { .. } => "transfer",
+            crate::protocol::TxV1::InitialAirdrop { .. } => "initial_airdrop",
             crate::protocol::TxV1::GenesisBridge { .. } => "genesis_bridge",
             crate::protocol::TxV1::EnterpriseInference { .. } => "enterprise_inference",
             crate::protocol::TxV1::VerifyZkProof { .. } => "verify_zk_proof",
@@ -676,6 +677,15 @@ impl Ledger {
                     if !task_id.trim().is_empty() {
                         meta_keys.push(Self::ai_workload_tx_meta_key(task_id));
                     }
+                }
+                crate::protocol::TxV1::InitialAirdrop { wallet_id } => {
+                    // Airdrop debits the worker pool and credits the recipient, and bumps the
+                    // recipient counter + per-tx applied marker. Capture all of them so a reorg
+                    // restores the pre-block balances, count, and dedup state exactly.
+                    balance_keys.push(WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec());
+                    balance_keys.push(wallet_id.trim().to_ascii_lowercase().into_bytes());
+                    meta_keys.push(Self::remote_tx_applied_meta_key(tx_hash));
+                    meta_keys.push(META_FAUCET_INITIAL_RECIPIENTS_COUNT.to_vec());
                 }
                 _ => {}
             }
@@ -1335,6 +1345,8 @@ impl Ledger {
             balances.insert(k.to_vec(), u64::from_le_bytes(arr));
         }
 
+        let mut airdrop_count = self.meta_u64_or_zero(META_FAUCET_INITIAL_RECIPIENTS_COUNT)?;
+
         for env in txs {
             match &env.tx {
                 crate::protocol::TxV1::Transfer {
@@ -1382,6 +1394,17 @@ impl Ledger {
                 }
                 crate::protocol::TxV1::VerifyZkProof { .. } => {}
                 crate::protocol::TxV1::EnterpriseInference { .. } => {}
+                crate::protocol::TxV1::InitialAirdrop { wallet_id } => {
+                    // Preview the airdrop credit. The miner drops already-settled airdrop txs
+                    // before building a block, so honest blocks never re-credit; this previewed
+                    // root therefore matches the post-apply root computed in
+                    // `apply_consensus_block_batch`.
+                    self.apply_initial_airdrop_to_balance_map(
+                        &mut balances,
+                        wallet_id,
+                        &mut airdrop_count,
+                    )?;
+                }
                 _ => {
                     return Err(LedgerError::Invalid(
                         "unsupported tx in remote block".into(),
@@ -1405,6 +1428,65 @@ impl Ledger {
             .as_deref()
             .map(bytes_to_u64)
             .unwrap_or(0))
+    }
+
+    /// `true` if a transaction with this hash has already been settled into a canonical block
+    /// (its per-tx applied marker exists). Used by the miner to drop already-settled txs from a
+    /// candidate block, which keeps the previewed and post-apply state roots identical.
+    pub fn is_tx_applied(&self, tx_hash: &str) -> Result<bool, LedgerError> {
+        Ok(self
+            .meta
+            .get(Self::remote_tx_applied_meta_key(tx_hash))?
+            .is_some())
+    }
+
+    /// Deterministic balance effect of a single [`crate::protocol::TxV1::InitialAirdrop`] claim
+    /// against an in-memory balances map (worker pool → `wallet_id`).
+    ///
+    /// Returns `Ok(true)` when credited, `Ok(false)` when skipped by policy (recipient cap reached
+    /// or worker pool too low), and `Err` for a malformed/reserved wallet (which aborts block apply
+    /// identically on every node). `airdrop_count` is the running recipient counter; the caller
+    /// seeds it from [`META_FAUCET_INITIAL_RECIPIENTS_COUNT`] and persists it after a credit.
+    ///
+    /// Both `compute_state_root_after_remote_block` (preview) and `apply_consensus_block_batch`
+    /// (commit) call this so the two state roots are byte-identical.
+    fn apply_initial_airdrop_to_balance_map(
+        &self,
+        balances: &mut BTreeMap<Vec<u8>, u64>,
+        wallet_id: &str,
+        airdrop_count: &mut u64,
+    ) -> Result<bool, LedgerError> {
+        let w = wallet_id.trim().to_ascii_lowercase();
+        if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(LedgerError::Invalid(
+                "airdrop wallet must be 64 hex chars".into(),
+            ));
+        }
+        if w == WALLET_SYSTEM_WORKER_POOL
+            || w == WALLET_DEX_TREASURY
+            || w == WALLET_PROTOCOL_RESERVE
+            || w == WALLET_ECOSYSTEM
+            || w == self.ai_burn_wallet()
+        {
+            return Err(LedgerError::Invalid(
+                "reserved wallet cannot claim initial airdrop".into(),
+            ));
+        }
+        if *airdrop_count >= FAUCET_INITIAL_AIRDROP_MAX_RECIPIENTS {
+            return Ok(false);
+        }
+        let amt = FAUCET_INITIAL_AIRDROP_MICRO_PER_USER;
+        let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
+        let pool_cur = balances.get(&pool_k).copied().unwrap_or(0);
+        if pool_cur < amt {
+            return Ok(false);
+        }
+        let w_k = w.into_bytes();
+        balances.insert(pool_k, pool_cur - amt);
+        let wb = balances.get(&w_k).copied().unwrap_or(0);
+        balances.insert(w_k, wb.saturating_add(amt));
+        *airdrop_count = airdrop_count.saturating_add(1);
+        Ok(true)
     }
 
     pub fn apply_consensus_block_batch(
@@ -1433,6 +1515,8 @@ impl Ledger {
         let mut total_supply = self.meta_u64_or_zero(META_TOTAL_SUPPLY)?;
         let mut total_burned = self.meta_u64_or_zero(META_TOTAL_BURNED)?;
         let mut fee_total = self.meta_u64_or_zero(META_FEE_TOTAL)?;
+        let mut airdrop_count = self.meta_u64_or_zero(META_FAUCET_INITIAL_RECIPIENTS_COUNT)?;
+        let mut airdrop_credited = false;
         let mut dirty_balances = BTreeSet::<Vec<u8>>::new();
         let mut meta_batch = sled::Batch::default();
 
@@ -1571,12 +1655,37 @@ impl Ledger {
                         meta_batch.insert(task_key, self.encrypt_value(&bytes)?);
                     }
                 }
+                crate::protocol::TxV1::InitialAirdrop { wallet_id } => {
+                    let applied_k = Self::remote_tx_applied_meta_key(tx_hash);
+                    // Per-tx applied marker == per-wallet once-ever dedup (the tx body is the
+                    // wallet id only). Skip if already credited in a prior canonical block.
+                    if self.meta.get(&applied_k)?.is_some() {
+                        continue;
+                    }
+                    if self.apply_initial_airdrop_to_balance_map(
+                        &mut balances,
+                        wallet_id,
+                        &mut airdrop_count,
+                    )? {
+                        dirty_balances.insert(WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec());
+                        dirty_balances.insert(wallet_id.trim().to_ascii_lowercase().into_bytes());
+                        meta_batch.insert(applied_k, self.encrypt_value(b"1")?);
+                        airdrop_credited = true;
+                    }
+                }
                 _ => {
                     return Err(LedgerError::Invalid(
                         "unsupported tx in consensus block".into(),
                     ));
                 }
             }
+        }
+
+        if airdrop_credited {
+            meta_batch.insert(
+                META_FAUCET_INITIAL_RECIPIENTS_COUNT,
+                self.encrypt_value(&u64_to_bytes(airdrop_count))?,
+            );
         }
 
         Self::apply_block_reward_to_balance_map(&mut balances, producer_id, reward_micro)?;
