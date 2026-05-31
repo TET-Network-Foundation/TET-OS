@@ -1,4 +1,5 @@
 use crate::protocol::SignedTxEnvelopeV1;
+use crate::tmail::envelope::TmailEnvelopeV1;
 use serde::{Deserialize, Serialize};
 
 /// Network-wide state sync events carried over libp2p gossipsub.
@@ -49,5 +50,14 @@ pub enum NetworkEvent {
     /// signature-less `LedgerGossip::TransferAnnounce` notify (which peers ignored).
     TxBroadcast {
         env: SignedTxEnvelopeV1,
+    },
+
+    /// A Tmail Basic E2EE envelope gossiped to peers (spec §A.1).
+    ///
+    /// Tmail is **off-ledger**: receivers MUST verify the hybrid signature and may buffer the
+    /// envelope for the receiver (node-local TTL store, next task), but it never mutates the
+    /// ledger and is never re-broadcast on receipt.
+    TmailGossip {
+        envelope: TmailEnvelopeV1,
     },
 }

@@ -9,6 +9,7 @@ pub mod pqc_keystore;
 pub mod protocol;
 pub mod quantum_shield;
 pub mod tet_worker;
+pub mod tmail;
 pub mod wallet;
 pub mod worker_ai;
 pub mod worker_config;

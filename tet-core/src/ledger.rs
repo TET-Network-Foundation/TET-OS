@@ -1981,6 +1981,9 @@ impl Ledger {
             // Mempool-only broadcast: enqueued by the P2P layer, never applied to the
             // ledger here. Returning `Ok(false)` keeps `apply_remote_event` idempotent.
             crate::models::NetworkEvent::TxBroadcast { .. } => Ok(false),
+            // Tmail envelopes are off-ledger (gossip + node buffer only). They are handled in the
+            // p2p event loop and never reach the ledger; this arm only keeps the match exhaustive.
+            crate::models::NetworkEvent::TmailGossip { .. } => Ok(false),
         }
     }
 

@@ -28,6 +28,7 @@ mod replication;
 mod rest;
 mod sync;
 mod tee_compute;
+mod tmail;
 mod updater;
 mod vision;
 mod wallet;
