@@ -181,6 +181,22 @@ impl RestState {
             let _ = tx.send(json).await;
         }
     }
+
+    /// Broadcast a Tmail Basic E2EE envelope to peers over the `/tet/v1/tmail` gossip plane.
+    ///
+    /// Same wiring as [`broadcast_mempool_tx`]: serialize a [`crate::models::NetworkEvent`] and push
+    /// it onto the gossip channel. Tmail is off-ledger — this never touches the mempool or ledger.
+    pub async fn broadcast_tmail(&self, env: &crate::tmail::envelope::TmailEnvelopeV1) {
+        let Some(tx) = self.gossip_tx.as_ref() else {
+            return;
+        };
+        let event = crate::models::NetworkEvent::TmailGossip {
+            envelope: env.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&event) {
+            let _ = tx.send(json).await;
+        }
+    }
 }
 
 #[derive(Debug)]

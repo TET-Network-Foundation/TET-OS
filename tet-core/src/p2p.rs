@@ -332,6 +332,8 @@ impl From<request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>
 pub const BLOCKS_TOPIC: &str = "/tet/v1/blocks";
 pub const TXS_TOPIC: &str = "/tet/v1/txs";
 pub const AI_WORKLOAD_TOPIC: &str = "/tet/v1/ai-workload";
+/// Tmail Basic E2EE gossip plane (spec §A.1). Always subscribed, like blocks/txs.
+pub const TMAIL_TOPIC: &str = "/tet/v1/tmail";
 #[deprecated(note = "Use sharded /tet/v1/* topics")]
 pub const GLOBAL_STATE_TOPIC: &str = "tet-global-state";
 pub const DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES: usize = 128 * 1024;
@@ -1018,6 +1020,7 @@ fn network_event_topics(
     blocks_topic: &gossipsub::IdentTopic,
     txs_topic: &gossipsub::IdentTopic,
     ai_topic: &gossipsub::IdentTopic,
+    tmail_topic: &gossipsub::IdentTopic,
 ) -> Vec<gossipsub::IdentTopic> {
     match serde_json::from_str::<NetworkEvent>(msg) {
         Ok(NetworkEvent::BlockMined { txs, .. }) => {
@@ -1029,6 +1032,9 @@ fn network_event_topics(
                 topics.push(ai_topic.clone());
             }
             topics
+        }
+        Ok(NetworkEvent::TmailGossip { .. }) => {
+            vec![tmail_topic.clone()]
         }
         Ok(NetworkEvent::TransferExecuted { .. })
         | Ok(NetworkEvent::FaucetExecuted { .. })
@@ -1126,7 +1132,7 @@ async fn run_mdns_ping_swarm(
         invalid_message_deliveries_decay: 0.88,
         ..Default::default()
     };
-    for topic in [BLOCKS_TOPIC, TXS_TOPIC, AI_WORKLOAD_TOPIC] {
+    for topic in [BLOCKS_TOPIC, TXS_TOPIC, AI_WORKLOAD_TOPIC, TMAIL_TOPIC] {
         score_params.topics.insert(
             gossipsub::IdentTopic::new(topic).hash(),
             topic_scoring.clone(),
@@ -1186,6 +1192,7 @@ async fn run_mdns_ping_swarm(
     let blocks_topic = gossipsub::IdentTopic::new(BLOCKS_TOPIC);
     let txs_topic = gossipsub::IdentTopic::new(TXS_TOPIC);
     let ai_workload_topic = gossipsub::IdentTopic::new(AI_WORKLOAD_TOPIC);
+    let tmail_topic = gossipsub::IdentTopic::new(TMAIL_TOPIC);
     swarm
         .behaviour_mut()
         .gossipsub
@@ -1196,6 +1203,11 @@ async fn run_mdns_ping_swarm(
         .gossipsub
         .subscribe(&txs_topic)
         .expect("Failed to subscribe to txs topic");
+    swarm
+        .behaviour_mut()
+        .gossipsub
+        .subscribe(&tmail_topic)
+        .expect("Failed to subscribe to tmail topic");
     let wants_ai_workload = local_node_wants_ai_workload();
     let ai_workload_topic_hash = ai_workload_topic.hash();
     if wants_ai_workload {
@@ -1208,7 +1220,7 @@ async fn run_mdns_ping_swarm(
     } else {
         println!("[P2P] PoR mode: not subscribing to AI workload topic");
     }
-    println!("[P2P] Subscribed to sharded topics: {BLOCKS_TOPIC}, {TXS_TOPIC}");
+    println!("[P2P] Subscribed to sharded topics: {BLOCKS_TOPIC}, {TXS_TOPIC}, {TMAIL_TOPIC}");
 
     if let Ok(external) = std::env::var("TET_EXTERNAL_ADDR")
         && !external.trim().is_empty()
@@ -1365,7 +1377,7 @@ async fn run_mdns_ping_swarm(
                         );
                         continue;
                     }
-                    let topics = network_event_topics(&msg, &blocks_topic, &txs_topic, &ai_workload_topic);
+                    let topics = network_event_topics(&msg, &blocks_topic, &txs_topic, &ai_workload_topic, &tmail_topic);
                     for topic in topics {
                         match swarm
                             .behaviour_mut()
@@ -1898,6 +1910,9 @@ async fn run_mdns_ping_swarm(
                             NetworkEvent::TxBroadcast { .. } => {
                                 println!("[P2P] 📨 MEMPOOL TX GOSSIP RECEIVED");
                             }
+                            NetworkEvent::TmailGossip { .. } => {
+                                println!("[P2P] 📧 TMAIL GOSSIP RECEIVED");
+                            }
                             other => {
                                 println!("[P2P] 🔄 STATE SYNC DETECTED: {:?}", other);
                             }
@@ -2095,6 +2110,24 @@ async fn run_mdns_ping_swarm(
                                     }
                                     Err(e) => {
                                         println!("[P2P] ❌ MEMPOOL TX REJECTED (bad signature): {e}");
+                                    }
+                                }
+                            }
+                            NetworkEvent::TmailGossip { envelope } => {
+                                // Tmail Basic E2EE envelope from a peer: verify the hybrid signature
+                                // only. The envelope is off-ledger; the node-local TTL buffer (store)
+                                // is the next task — for now we log and drop after verification.
+                                match crate::tmail::envelope::verify_tmail_envelope_v1(&envelope) {
+                                    Ok(()) => {
+                                        println!(
+                                            "[P2P] ✅ TMAIL ENVELOPE VERIFIED msg_id={} sender={} receiver={} (store: TODO next task)",
+                                            envelope.msg_id,
+                                            envelope.sender_wallet_id,
+                                            envelope.receiver_wallet_id
+                                        );
+                                    }
+                                    Err(e) => {
+                                        println!("[P2P] ❌ TMAIL ENVELOPE REJECTED: {e}");
                                     }
                                 }
                             }
