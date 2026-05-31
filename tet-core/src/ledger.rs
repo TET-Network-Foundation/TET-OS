@@ -3416,6 +3416,15 @@ impl Ledger {
         (pool_micro, burn_micro)
     }
 
+    /// Clone of the underlying sled `Db` handle (cheap; `Db` is `Arc`-backed).
+    ///
+    /// Used by side stores that need to live in the **same** sled database so that deleting
+    /// `TET_DB_DIR` also clears them (clean-restart correctness). The Tmail node buffer
+    /// ([`crate::tmail::store::TmailStore`]) opens its own trees on this handle.
+    pub fn sled_db(&self) -> sled::Db {
+        self.db.clone()
+    }
+
     pub fn open(path: &str) -> Result<Self, LedgerError> {
         let db = sled::open(path)?;
         // Keep the JSON snapshot *inside* the DB dir (TET_DB_DIR) so that deleting

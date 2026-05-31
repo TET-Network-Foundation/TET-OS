@@ -5,6 +5,8 @@
 //! node store / REST endpoints are added in later tasks.
 //!
 //! Design invariant: Tmail ciphertext is **never** written to the ledger — envelopes only travel over
-//! libp2p gossip (`/tet/v1/tmail`) and a node-local buffer (next task).
+//! libp2p gossip (`/tet/v1/tmail`) and a node-local TTL buffer ([`store::TmailStore`]).
 
 pub mod envelope;
+pub mod keys;
+pub mod store;

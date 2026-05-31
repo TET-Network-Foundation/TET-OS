@@ -213,6 +213,23 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             "/ai/infer_signed",
             axum::routing::post(super::handlers::ai::post_ai_infer_signed),
         )
+        // ---------------- Sovereign OS: Tmail (off-ledger messaging, spec §A.1) ----------------
+        .route(
+            "/tmail/send",
+            axum::routing::post(super::handlers::tmail::post_tmail_send),
+        )
+        .route(
+            "/tmail/inbox/:wallet_id",
+            axum::routing::get(super::handlers::tmail::get_tmail_inbox),
+        )
+        // GET = lookup, PUT/POST = register/refresh (role-decoupled, spec §A.1.4). A param segment
+        // is used (not a static `/register`) to avoid an axum/matchit static-vs-param conflict.
+        .route(
+            "/tmail/keys/:wallet_id",
+            axum::routing::get(super::handlers::tmail::get_tmail_keys)
+                .put(super::handlers::tmail::put_tmail_keys)
+                .post(super::handlers::tmail::put_tmail_keys),
+        )
         .route(
             "/explorer/events",
             axum::routing::get(super::handlers::ledger::get_explorer_events),

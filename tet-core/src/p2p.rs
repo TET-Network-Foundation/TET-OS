@@ -1054,6 +1054,7 @@ pub fn start_mdns_ping_swarm(
     hello_registry: SharedHelloRegistry,
     catch_up_driver: SharedCatchUpDriver,
     block_sync_board: SharedBlockSyncBoard,
+    tmail_store: Arc<crate::tmail::store::TmailStore>,
 ) -> Result<(mpsc::Sender<String>, tokio::task::JoinHandle<()>), AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
     let join = tokio::spawn(async move {
@@ -1066,6 +1067,7 @@ pub fn start_mdns_ping_swarm(
             hello_registry,
             catch_up_driver,
             block_sync_board,
+            tmail_store,
         )
         .await
         {
@@ -1087,6 +1089,7 @@ async fn run_mdns_ping_swarm(
     hello_registry: SharedHelloRegistry,
     catch_up_driver: SharedCatchUpDriver,
     block_sync_board: SharedBlockSyncBoard,
+    tmail_store: Arc<crate::tmail::store::TmailStore>,
 ) -> Result<(), AnyErr> {
     let peer_id = PeerId::from(keypair.public());
     log::info!("[P2P] My Peer ID: {peer_id}");
@@ -2114,18 +2117,29 @@ async fn run_mdns_ping_swarm(
                                 }
                             }
                             NetworkEvent::TmailGossip { envelope } => {
-                                // Tmail Basic E2EE envelope from a peer: verify the hybrid signature
-                                // only. The envelope is off-ledger; the node-local TTL buffer (store)
-                                // is the next task — for now we log and drop after verification.
+                                // Tmail Basic E2EE envelope from a peer: verify the hybrid signature,
+                                // then buffer it in the node-local TTL store for the offline receiver.
+                                // The envelope is off-ledger and is never re-broadcast on receipt.
                                 match crate::tmail::envelope::verify_tmail_envelope_v1(&envelope) {
-                                    Ok(()) => {
-                                        println!(
-                                            "[P2P] ✅ TMAIL ENVELOPE VERIFIED msg_id={} sender={} receiver={} (store: TODO next task)",
-                                            envelope.msg_id,
-                                            envelope.sender_wallet_id,
-                                            envelope.receiver_wallet_id
-                                        );
-                                    }
+                                    Ok(()) => match tmail_store.store_tmail(&envelope) {
+                                        Ok(true) => {
+                                            println!(
+                                                "[P2P] ✅ TMAIL ENVELOPE STORED msg_id={} sender={} receiver={}",
+                                                envelope.msg_id,
+                                                envelope.sender_wallet_id,
+                                                envelope.receiver_wallet_id
+                                            );
+                                        }
+                                        Ok(false) => {
+                                            println!(
+                                                "[P2P] ⏭️ TMAIL ENVELOPE ALREADY STORED msg_id={}",
+                                                envelope.msg_id
+                                            );
+                                        }
+                                        Err(e) => {
+                                            println!("[P2P] ❌ TMAIL STORE FAILED: {e}");
+                                        }
+                                    },
                                     Err(e) => {
                                         println!("[P2P] ❌ TMAIL ENVELOPE REJECTED: {e}");
                                     }
