@@ -17,6 +17,7 @@ import {
   type WalletTransferAcceptedResp,
   type WalletTransferNonceResp,
 } from "./transfer";
+import type { TmailEnvelopeV1, TmailKeyRegistrationV1 } from "./tmail";
 
 /** @deprecated Use `SyncUiState` from `ledger_state.ts` (ledger sync gate). */
 export type ChainConnectionStatus = "connecting" | "synced" | "disconnected";
@@ -591,6 +592,87 @@ export async function postInitialAirdropClaim(
     };
   }
   return { ok: false, status: lastStatus, text: lastText ?? "not found" };
+}
+
+// ───────────────────────────── Tmail (Sovereign OS Messages) ─────────────────────────────
+
+export type TmailSendAcceptedResp = {
+  ok?: boolean;
+  msg_id: string;
+  status: string;
+};
+
+export type TmailInboxResp = {
+  wallet_id: string;
+  count: number;
+  messages: TmailEnvelopeV1[];
+};
+
+export type TmailKeysGetResp = {
+  ok?: boolean;
+  registration?: TmailKeyRegistrationV1 | null;
+};
+
+export type TmailKeysPutResp = {
+  ok?: boolean;
+  wallet_id: string;
+  registered_at_ms: number;
+};
+
+/** POST /tmail/send — relay a hybrid-signed E2EE envelope; `202 Accepted` on success. */
+export async function postTmailSend(
+  baseUrl: string,
+  env: TmailEnvelopeV1,
+): Promise<{ ok: boolean; data?: TmailSendAcceptedResp; status: number; text?: string }> {
+  return fetchJson<TmailSendAcceptedResp>(tetCoreUrl(baseUrl, "/tmail/send"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(env),
+  });
+}
+
+/** GET /tmail/inbox/:wallet_id — buffered envelopes addressed to `walletId64` (newest first). */
+export async function getTmailInbox(
+  baseUrl: string,
+  walletId64: string,
+  limit = 50,
+): Promise<{ ok: boolean; data?: TmailInboxResp; status: number; text?: string }> {
+  const wid = normalizeWalletId64(walletId64);
+  if (!wid) return { ok: false, status: 400, text: "wallet_id must be 64 hex chars" };
+  return fetchJson<TmailInboxResp>(
+    tetCoreUrl(baseUrl, `/tmail/inbox/${wid}`, { limit: String(Math.max(1, Math.floor(limit))) }),
+  );
+}
+
+/**
+ * GET /tmail/keys/:wallet_id — published KEM public keys for a wallet.
+ * Returns `registration: null` with `status: 404` when the wallet has not registered yet.
+ */
+export async function getTmailKeys(
+  baseUrl: string,
+  walletId64: string,
+): Promise<{ ok: boolean; registration: TmailKeyRegistrationV1 | null; status: number; text?: string }> {
+  const wid = normalizeWalletId64(walletId64);
+  if (!wid) return { ok: false, registration: null, status: 400, text: "wallet_id must be 64 hex chars" };
+  const r = await fetchJson<TmailKeysGetResp>(tetCoreUrl(baseUrl, `/tmail/keys/${wid}`));
+  if (r.status === 404) return { ok: true, registration: null, status: 404 };
+  if (!r.ok) return { ok: false, registration: null, status: r.status, text: r.text };
+  return { ok: true, registration: r.data?.registration ?? null, status: r.status };
+}
+
+/** PUT /tmail/keys/:wallet_id — publish (or rotate) the wallet's hybrid-signed KEM public keys. */
+export async function putTmailKeys(
+  baseUrl: string,
+  walletId64: string,
+  registration: TmailKeyRegistrationV1,
+): Promise<{ ok: boolean; data?: TmailKeysPutResp; status: number; text?: string }> {
+  const wid = normalizeWalletId64(walletId64);
+  if (!wid) return { ok: false, status: 400, text: "wallet_id must be 64 hex chars" };
+  return fetchJson<TmailKeysPutResp>(tetCoreUrl(baseUrl, `/tmail/keys/${wid}`), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(registration),
+  });
 }
 
 export async function postAiInfer(
