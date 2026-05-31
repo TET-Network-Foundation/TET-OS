@@ -54,6 +54,9 @@ fn open_temp_ledger() -> crate::ledger::Ledger {
 
 fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate::rest::RestState {
     let (log_tx, _log_rx) = tokio::sync::broadcast::channel::<String>(64);
+    let tmail = std::sync::Arc::new(
+        crate::tmail::store::TmailStore::open(&ledger.sled_db()).expect("tmail store"),
+    );
     crate::rest::RestState {
         ledger,
         solana: std::sync::Arc::new(crate::ledger::solana_client::NexusSolanaClient::devnet()),
@@ -62,6 +65,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         gossip_tx: None,
         block_sync_board: None,
         mempool: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        tmail,
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
         )),
@@ -3428,6 +3432,9 @@ mod block_sync {
         let block_sync_board =
             crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
 
+        let tmail_store = std::sync::Arc::new(
+            crate::tmail::store::TmailStore::open(&ledger.sled_db()).expect("tmail store"),
+        );
         let (gossip_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
             mempool,
@@ -3436,6 +3443,7 @@ mod block_sync {
             hello_registry,
             catch_up_driver,
             block_sync_board.clone(),
+            tmail_store,
         )
         .expect("block swarm");
 

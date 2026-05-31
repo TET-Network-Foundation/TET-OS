@@ -47,6 +47,8 @@ pub struct RestState {
     pub block_sync_board: Option<crate::sync::SharedBlockSyncBoard>,
     /// In-memory pending transactions (Phase 2 mempool).
     pub mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    /// Tmail node-local TTL buffer + key directory (off-ledger; spec §A.1).
+    pub tmail: Arc<crate::tmail::store::TmailStore>,
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,
     pub workers: Arc<StdMutex<WorkerRegistry>>,
     pub e2ee_jobs: Arc<StdMutex<E2eeJobQueue>>,
