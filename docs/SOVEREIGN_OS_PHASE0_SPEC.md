@@ -1273,3 +1273,98 @@ Mark **yes** before public **2026-09-15** announcement. Any **no** → slip ship
 ---
 
 *End of specification. No code changes. No git commit.*
+---
+
+## §B.3 TNS (TET Naming Service)
+
+**Status**: Phase 0.5 candidate feature
+**Originally proposed**: 2026-06-02 by Steve (founder), during Phase 0 cross-region Tmail verification day
+**Scope**: Human-readable identity layer on top of wallet IDs
+**Integration**: Tmail, File Sharing, AI Worker, Anonymous mode
+
+### §B.3.1 Motivation
+
+Wallet IDs are 64-character hex strings. This is unmemorable, unspoken, and unshareable — the single biggest UX barrier to Sovereign OS mainstream adoption.
+
+TNS provides:
+1. Native names (e.g., alice.tmail) for on-chain identity
+2. DNS bridge for existing domain owners (steve@tetnetwork.org resolves to wallet)
+3. Multi-app identity — one name across Tmail, Files, AI Worker
+4. Anonymous-compatible — can pair with B.2 Anonymous Tmail
+
+### §B.3.2 Naming Format
+
+Format A: Native — name.tmail (lowercase, 3-32 chars, Unicode support Phase 0.5+)
+Format B: DNS bridge — localpart@domain (existing domain via TXT record + optional on-chain pin)
+
+### §B.3.3 Architecture
+
+On-chain registry tx types:
+- tns_register_v1, tns_renew_v1, tns_transfer_v1, tns_update_v1, tns_dispute_v1
+
+DNS bridge: domain owner adds TXT _tet-wallet.domain with wallet + signature. Optional on-chain pin via tns_dns_pin_v1.
+
+### §B.3.4 Economic Model
+
+Tier 1 (5+ chars): 1 TET stake + 0.01 TET/yr
+Tier 2 (3-4 chars): 10 TET stake + 0.1 TET/yr, Dutch auction
+Tier 3 (1-2 chars): reserved at genesis, treasury auction Phase 1+
+Tier 4 (trademark): 100 TET stake + 1 TET/yr, verification required
+Tier 5 (DNS bridge): 1 TET/yr per domain
+
+Burn: 50% of renewal fees burned, 50% Treasury.
+
+### §B.3.5 Anti-squatting
+
+Identical / homograph blocked. Trademark via ZK-Court §14.1. Inactive >180 days no message + >365 days no renewal → public auction. Punycode normalization.
+
+### §B.3.6 Multi-app Identity
+
+Single TNS name identity across: Tmail, File Sharing (alice.tmail/files/cid), AI Worker registration, Address Book, Anonymous Tmail (ZK proof of name ownership).
+
+### §B.3.7 Privacy
+
+Public registry default. Private resolution via ZK proof (RISC0) for journalism / whistleblower use case.
+
+### §B.3.8 Tmail UI Integration
+
+Compose: type "alice" → auto-complete alice.tmail (verified ✓) → backend resolves to wallet ID + KEM pub → E2EE flow → user never sees raw 64-hex.
+
+### §B.3.9 REST API
+
+GET /tns/resolve/:name → wallet_id + kem_pub + verified + expires_at
+GET /tns/lookup/:wallet_id → name | null
+GET /tns/dns/:domain → wallet_id + dns_verified
+POST /tns/register, /tns/renew, /tns/transfer, /tns/dispute
+GET /tns/auctions
+
+### §B.3.10 Implementation Phasing
+
+Phase 0.5a (Oct-Nov 2026): on-chain registry, resolution cache, REST API, Tmail UI auto-complete, 5+ char minimum
+Phase 0.5b (Dec 2026): DNS bridge, short name auction, ZK-Court disputes, File Sharing integration
+Phase 1 (2027 Q1): AI Worker registration, avatar CIDs, mobile
+Phase 2 (2027 Q2-Q3): Anonymous TNS (ZK), ENS bridge, Unicode
+
+### §B.3.11 Open Problems
+
+1. DNS hijacking → on-chain pin
+2. Squatting → ZK-Court + time-based release
+3. Short name pricing → Dutch auction
+4. ENS migration → Phase 2 bridge with proof-of-control
+5. Unicode → Punycode + visual confusion detection
+
+### §B.3.12 Competitive Position
+
+vs ENS: Ethereum-bound, payment-first; TNS is TET-native, messaging-first, multi-app
+vs Unstoppable: marketing-heavy, limited utility; TNS has real utility
+vs DNS: trusted authority; TNS self-sovereign, on-chain
+
+### §B.3.13 Differentiator
+
+TNS is not just naming. It is Sovereign Identity — the missing layer in Web3 that bundles addressing with post-quantum messaging, file sharing, AI compute, and anonymous-but-verifiable communication into a single human-readable handle.
+
+ENS solves "send 0.1 ETH to vitalik.eth". TNS solves "send your story to nytimes.tmail anonymously, have them verify it's a legitimate journalist, and ensure quantum-safe end-to-end encryption" — all from one name.
+
+Bridge between Web2 familiarity and Web3 sovereignty.
+
+_End §B.3 TNS_
