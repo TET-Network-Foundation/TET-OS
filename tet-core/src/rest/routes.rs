@@ -230,6 +230,32 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
                 .put(super::handlers::tmail::put_tmail_keys)
                 .post(super::handlers::tmail::put_tmail_keys),
         )
+        // ---------------- Sovereign OS: File Sharing (off-ledger, Phase 0 spec) ----------------
+        // NOTE: param segments live under static sub-prefixes (`inbox`/`fetch`/`item`) so they never
+        // sit as a sibling of the static `upload`/`announce` routes — avoids the axum/matchit
+        // static-vs-param conflict (same reason Tmail uses `/tmail/keys/:wallet_id`).
+        .route(
+            "/files/upload",
+            axum::routing::post(super::handlers::files::post_files_upload)
+                // Allow the 5 MiB encrypted body (+multipart overhead); overrides the global limit.
+                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/files/announce",
+            axum::routing::post(super::handlers::files::post_files_announce),
+        )
+        .route(
+            "/files/inbox/:wallet_id",
+            axum::routing::get(super::handlers::files::get_files_inbox),
+        )
+        .route(
+            "/files/fetch/:file_id",
+            axum::routing::get(super::handlers::files::get_files_fetch),
+        )
+        .route(
+            "/files/item/:file_id",
+            axum::routing::delete(super::handlers::files::delete_files),
+        )
         .route(
             "/explorer/events",
             axum::routing::get(super::handlers::ledger::get_explorer_events),

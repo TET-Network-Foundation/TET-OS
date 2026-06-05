@@ -1984,6 +1984,9 @@ impl Ledger {
             // Tmail envelopes are off-ledger (gossip + node buffer only). They are handled in the
             // p2p event loop and never reach the ledger; this arm only keeps the match exhaustive.
             crate::models::NetworkEvent::TmailGossip { .. } => Ok(false),
+            // File Sharing announce envelopes are off-ledger (gossip + node buffer only). Handled in
+            // the p2p event loop; this arm only keeps the match exhaustive.
+            crate::models::NetworkEvent::FileAnnounce { .. } => Ok(false),
         }
     }
 

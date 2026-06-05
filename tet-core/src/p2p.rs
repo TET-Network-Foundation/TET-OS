@@ -1021,6 +1021,7 @@ fn network_event_topics(
     txs_topic: &gossipsub::IdentTopic,
     ai_topic: &gossipsub::IdentTopic,
     tmail_topic: &gossipsub::IdentTopic,
+    files_topic: &gossipsub::IdentTopic,
 ) -> Vec<gossipsub::IdentTopic> {
     match serde_json::from_str::<NetworkEvent>(msg) {
         Ok(NetworkEvent::BlockMined { txs, .. }) => {
@@ -1036,6 +1037,9 @@ fn network_event_topics(
         Ok(NetworkEvent::TmailGossip { .. }) => {
             vec![tmail_topic.clone()]
         }
+        Ok(NetworkEvent::FileAnnounce { .. }) => {
+            vec![files_topic.clone()]
+        }
         Ok(NetworkEvent::TransferExecuted { .. })
         | Ok(NetworkEvent::FaucetExecuted { .. })
         | Ok(NetworkEvent::TxBroadcast { .. }) => {
@@ -1046,6 +1050,7 @@ fn network_event_topics(
 }
 
 /// Start a libp2p swarm task and return a Sender you can use to publish gossip messages.
+#[allow(clippy::too_many_arguments)]
 pub fn start_mdns_ping_swarm(
     ledger: Arc<crate::ledger::Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
@@ -1055,6 +1060,7 @@ pub fn start_mdns_ping_swarm(
     catch_up_driver: SharedCatchUpDriver,
     block_sync_board: SharedBlockSyncBoard,
     tmail_store: Arc<crate::tmail::store::TmailStore>,
+    file_store: Arc<crate::files::storage::FileStore>,
 ) -> Result<(mpsc::Sender<String>, tokio::task::JoinHandle<()>), AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
     let join = tokio::spawn(async move {
@@ -1068,6 +1074,7 @@ pub fn start_mdns_ping_swarm(
             catch_up_driver,
             block_sync_board,
             tmail_store,
+            file_store,
         )
         .await
         {
@@ -1080,6 +1087,7 @@ pub fn start_mdns_ping_swarm(
 
 /// Run the block-plane libp2p swarm (gossip + chain-sync RPC).
 /// Listens on `listen` (typically `TET_P2P_LISTEN` from `main.rs`).
+#[allow(clippy::too_many_arguments)]
 async fn run_mdns_ping_swarm(
     ledger: Arc<crate::ledger::Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
@@ -1090,6 +1098,7 @@ async fn run_mdns_ping_swarm(
     catch_up_driver: SharedCatchUpDriver,
     block_sync_board: SharedBlockSyncBoard,
     tmail_store: Arc<crate::tmail::store::TmailStore>,
+    file_store: Arc<crate::files::storage::FileStore>,
 ) -> Result<(), AnyErr> {
     let peer_id = PeerId::from(keypair.public());
     log::info!("[P2P] My Peer ID: {peer_id}");
@@ -1135,7 +1144,13 @@ async fn run_mdns_ping_swarm(
         invalid_message_deliveries_decay: 0.88,
         ..Default::default()
     };
-    for topic in [BLOCKS_TOPIC, TXS_TOPIC, AI_WORKLOAD_TOPIC, TMAIL_TOPIC] {
+    for topic in [
+        BLOCKS_TOPIC,
+        TXS_TOPIC,
+        AI_WORKLOAD_TOPIC,
+        TMAIL_TOPIC,
+        crate::files::FILES_ANNOUNCE_TOPIC,
+    ] {
         score_params.topics.insert(
             gossipsub::IdentTopic::new(topic).hash(),
             topic_scoring.clone(),
@@ -1196,6 +1211,7 @@ async fn run_mdns_ping_swarm(
     let txs_topic = gossipsub::IdentTopic::new(TXS_TOPIC);
     let ai_workload_topic = gossipsub::IdentTopic::new(AI_WORKLOAD_TOPIC);
     let tmail_topic = gossipsub::IdentTopic::new(TMAIL_TOPIC);
+    let files_announce_topic = gossipsub::IdentTopic::new(crate::files::FILES_ANNOUNCE_TOPIC);
     swarm
         .behaviour_mut()
         .gossipsub
@@ -1211,6 +1227,11 @@ async fn run_mdns_ping_swarm(
         .gossipsub
         .subscribe(&tmail_topic)
         .expect("Failed to subscribe to tmail topic");
+    swarm
+        .behaviour_mut()
+        .gossipsub
+        .subscribe(&files_announce_topic)
+        .expect("Failed to subscribe to files announce topic");
     let wants_ai_workload = local_node_wants_ai_workload();
     let ai_workload_topic_hash = ai_workload_topic.hash();
     if wants_ai_workload {
@@ -1380,7 +1401,7 @@ async fn run_mdns_ping_swarm(
                         );
                         continue;
                     }
-                    let topics = network_event_topics(&msg, &blocks_topic, &txs_topic, &ai_workload_topic, &tmail_topic);
+                    let topics = network_event_topics(&msg, &blocks_topic, &txs_topic, &ai_workload_topic, &tmail_topic, &files_announce_topic);
                     for topic in topics {
                         match swarm
                             .behaviour_mut()
@@ -1916,6 +1937,9 @@ async fn run_mdns_ping_swarm(
                             NetworkEvent::TmailGossip { .. } => {
                                 println!("[P2P] 📧 TMAIL GOSSIP RECEIVED");
                             }
+                            NetworkEvent::FileAnnounce { .. } => {
+                                println!("[P2P] 📎 FILE ANNOUNCE RECEIVED");
+                            }
                             other => {
                                 println!("[P2P] 🔄 STATE SYNC DETECTED: {:?}", other);
                             }
@@ -2142,6 +2166,36 @@ async fn run_mdns_ping_swarm(
                                     },
                                     Err(e) => {
                                         println!("[P2P] ❌ TMAIL ENVELOPE REJECTED: {e}");
+                                    }
+                                }
+                            }
+                            NetworkEvent::FileAnnounce { envelope } => {
+                                // File Sharing announce from a peer: verify the hybrid signature, then
+                                // buffer the envelope metadata in the node-local store so the offline
+                                // receiver can list it. The encrypted body is pulled separately
+                                // (REST). Off-ledger; never re-broadcast on receipt.
+                                match crate::files::verify_file_envelope_v1(&envelope) {
+                                    Ok(()) => match file_store.store_meta(&envelope) {
+                                        Ok(true) => {
+                                            println!(
+                                                "[P2P] ✅ FILE ENVELOPE STORED file_id={} sender={} receiver={}",
+                                                envelope.file_id,
+                                                envelope.sender_wallet_id,
+                                                envelope.receiver_wallet_id
+                                            );
+                                        }
+                                        Ok(false) => {
+                                            println!(
+                                                "[P2P] ⏭️ FILE ENVELOPE ALREADY STORED file_id={}",
+                                                envelope.file_id
+                                            );
+                                        }
+                                        Err(e) => {
+                                            println!("[P2P] ❌ FILE META STORE FAILED: {e}");
+                                        }
+                                    },
+                                    Err(e) => {
+                                        println!("[P2P] ❌ FILE ENVELOPE REJECTED: {e}");
                                     }
                                 }
                             }

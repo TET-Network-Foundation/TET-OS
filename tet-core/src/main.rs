@@ -8,6 +8,7 @@ mod conductor;
 mod consensus;
 mod e2ee;
 mod executor;
+mod files;
 mod genesis;
 mod invariant_tests;
 mod ledger;
@@ -486,6 +487,32 @@ async fn main() -> Result<(), AnyErr> {
         });
     }
 
+    // File Sharing node-local blob/meta/inbox store (off-ledger; Phase 0 spec). Same lifecycle as
+    // the Tmail buffer: opened on the ledger's sled Db, with a background 30-day TTL reaper.
+    let file_store = Arc::new(
+        crate::files::storage::FileStore::open(&ledger.sled_db())
+            .map_err(|e| -> AnyErr { Box::new(std::io::Error::other(format!("{e}"))) })?,
+    );
+    {
+        let prune_interval_sec = std::env::var("TET_FILES_PRUNE_INTERVAL_SEC")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(300);
+        let prune_store = file_store.clone();
+        tokio::spawn(async move {
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(prune_interval_sec));
+            loop {
+                tick.tick().await;
+                let removed = prune_store.prune_expired();
+                if removed > 0 {
+                    log::info!("[files] pruned {removed} expired file(s)");
+                }
+            }
+        });
+    }
+
     // --- Step 4: P2P swarms (network, p2p_network, block-plane) ---
     let mut swarm_network = false;
     let mut swarm_p2p_network = false;
@@ -565,6 +592,7 @@ async fn main() -> Result<(), AnyErr> {
                         .clone()
                         .expect("block_sync_board required when block swarm starts"),
                     tmail_store.clone(),
+                    file_store.clone(),
                 ) {
                     Ok((tx, _swarm_jh)) => {
                         swarm_block = true;
@@ -626,6 +654,7 @@ async fn main() -> Result<(), AnyErr> {
         block_sync_board: block_sync_board.clone(),
         mempool,
         tmail: tmail_store,
+        files: file_store,
         http_ratelimit: Arc::new(tokio::sync::Mutex::new(HttpRateLimit::new(config.http_rps))),
         workers: Arc::new(StdMutex::new(WorkerRegistry::default())),
         e2ee_jobs: Arc::new(StdMutex::new(crate::rest::E2eeJobQueue::default())),

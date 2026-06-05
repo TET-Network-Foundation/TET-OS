@@ -4,6 +4,7 @@ pub mod assets;
 pub mod b2b;
 pub mod dex;
 pub mod enterprise;
+pub mod files;
 pub mod founder;
 pub mod founding;
 pub mod ledger;

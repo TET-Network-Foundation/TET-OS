@@ -57,6 +57,9 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
     let tmail = std::sync::Arc::new(
         crate::tmail::store::TmailStore::open(&ledger.sled_db()).expect("tmail store"),
     );
+    let files = std::sync::Arc::new(
+        crate::files::storage::FileStore::open(&ledger.sled_db()).expect("file store"),
+    );
     crate::rest::RestState {
         ledger,
         solana: std::sync::Arc::new(crate::ledger::solana_client::NexusSolanaClient::devnet()),
@@ -66,6 +69,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         block_sync_board: None,
         mempool: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
         tmail,
+        files,
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
         )),
@@ -3435,6 +3439,9 @@ mod block_sync {
         let tmail_store = std::sync::Arc::new(
             crate::tmail::store::TmailStore::open(&ledger.sled_db()).expect("tmail store"),
         );
+        let file_store = std::sync::Arc::new(
+            crate::files::storage::FileStore::open(&ledger.sled_db()).expect("file store"),
+        );
         let (gossip_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
             mempool,
@@ -3444,6 +3451,7 @@ mod block_sync {
             catch_up_driver,
             block_sync_board.clone(),
             tmail_store,
+            file_store,
         )
         .expect("block swarm");
 
@@ -3953,5 +3961,466 @@ mod block_sync {
         );
 
         stop(&[n1, n2, n3]);
+    }
+}
+
+// =================================================================================================
+// File Sharing — Phase 0 (spec docs/PHASE_0_FILE_SHARING_SPEC.md)
+// =================================================================================================
+
+struct FileTestWallet {
+    wallet_id: String,
+    ed: SigningKey,
+    mldsa: dilithium::MlDsaKeyPair,
+    mldsa_pub_b64: String,
+}
+
+fn file_test_wallet() -> FileTestWallet {
+    let ed = SigningKey::generate(&mut rand_core::OsRng);
+    let wallet_id = hex::encode(ed.verifying_key().to_bytes());
+    let mut seed = [0u8; 32];
+    rand_core::OsRng.fill_bytes(&mut seed);
+    let mldsa = dilithium::MlDsaKeyPair::generate_deterministic(dilithium::ML_DSA_44, &seed);
+    let mldsa_pub_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa.public_key());
+    FileTestWallet {
+        wallet_id,
+        ed,
+        mldsa,
+        mldsa_pub_b64,
+    }
+}
+
+fn file_empty_sig() -> crate::files::FileHybridSig {
+    crate::files::FileHybridSig {
+        ed25519_pubkey_hex: String::new(),
+        ed25519_sig_b64: String::new(),
+        mldsa_pubkey_b64: String::new(),
+        mldsa_sig_b64: String::new(),
+    }
+}
+
+fn file_sign_hybrid(w: &FileTestWallet, msg: &[u8]) -> crate::files::FileHybridSig {
+    let ed_sig = w.ed.sign(msg);
+    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes());
+    let mldsa_sig = crate::wallet::mldsa44_sign_deterministic(&w.mldsa, msg).unwrap();
+    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_sig);
+    crate::files::FileHybridSig {
+        ed25519_pubkey_hex: w.wallet_id.clone(),
+        ed25519_sig_b64: ed_sig_b64,
+        mldsa_pubkey_b64: w.mldsa_pub_b64.clone(),
+        mldsa_sig_b64,
+    }
+}
+
+fn file_dummy_e2ee() -> crate::files::FileE2eeBlock {
+    crate::files::FileE2eeBlock {
+        v: 1,
+        scheme: crate::files::FILE_E2EE_SCHEME.to_string(),
+        client_ephemeral_pub_b64: "AA==".to_string(),
+        receiver_x25519_pub_b64: "AA==".to_string(),
+        receiver_mlkem_pub_b64: "AA==".to_string(),
+        mlkem_ciphertext_b64: "AA==".to_string(),
+        filename_nonce_b64: "AA==".to_string(),
+        mime_nonce_b64: "AA==".to_string(),
+        body_nonce_b64: "AA==".to_string(),
+    }
+}
+
+/// Build a hybrid-signed `FileEnvelopeV1` whose `file_sha256` matches `blob`.
+fn build_signed_file_envelope(
+    sender: &FileTestWallet,
+    receiver_wallet_id: &str,
+    blob: &[u8],
+    created_at_ms: u64,
+) -> crate::files::FileEnvelopeV1 {
+    let mut env = crate::files::FileEnvelopeV1 {
+        v: 1,
+        kind: crate::files::FILE_ENVELOPE_KIND.to_string(),
+        file_id: uuid::Uuid::new_v4(),
+        sender_wallet_id: sender.wallet_id.clone(),
+        receiver_wallet_id: receiver_wallet_id.to_string(),
+        file_size: blob.len() as u64,
+        file_sha256: crate::files::sha256_hex(blob),
+        filename_encrypted_b64: "ZmlsZW5hbWU=".to_string(),
+        mime_type_encrypted_b64: "bWltZQ==".to_string(),
+        storage_node: "12D3KooWStorageNodeTest".to_string(),
+        fee_micro: crate::files::FILE_FEE_MICRO,
+        created_at_ms,
+        ttl_ms: 0,
+        e2ee: file_dummy_e2ee(),
+        hybrid_sig: file_empty_sig(),
+    };
+    let msg = crate::files::file_envelope_preimage_v1(&env, &sender.mldsa_pub_b64);
+    env.hybrid_sig = file_sign_hybrid(sender, &msg);
+    env
+}
+
+fn file_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn new_file_store() -> (crate::ledger::Ledger, crate::files::storage::FileStore) {
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    let store = crate::files::storage::FileStore::open(&db).expect("file store open");
+    (ledger, store)
+}
+
+#[test]
+fn file_preimage_is_deterministic() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, b"hello world", 1_000);
+    let a = crate::files::file_envelope_preimage_v1(&env, &alice.mldsa_pub_b64);
+    let b = crate::files::file_envelope_preimage_v1(&env, &alice.mldsa_pub_b64);
+    assert_eq!(a, b);
+    let s = String::from_utf8(a).unwrap();
+    assert!(s.starts_with("tet file envelope v1|chain_id="));
+    assert!(s.contains("|size=11|"));
+}
+
+#[test]
+fn file_preimage_changes_with_fields() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let mut env = build_signed_file_envelope(&alice, &bob.wallet_id, b"abc", 1_000);
+    let base = crate::files::file_envelope_preimage_v1(&env, &alice.mldsa_pub_b64);
+    env.file_size = 999;
+    let changed = crate::files::file_envelope_preimage_v1(&env, &alice.mldsa_pub_b64);
+    assert_ne!(base, changed);
+}
+
+#[test]
+fn file_envelope_verify_ok() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, b"payload-bytes", 1_000);
+    crate::files::verify_file_envelope_v1(&env).expect("valid envelope must verify");
+}
+
+#[test]
+fn file_envelope_verify_rejects_tampered_sha256() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let mut env = build_signed_file_envelope(&alice, &bob.wallet_id, b"payload", 1_000);
+    // Different but well-formed hash → preimage diverges → signature must fail.
+    env.file_sha256 = "ab".repeat(32);
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env),
+        Err(crate::files::FileEnvelopeError::Signature(_))
+    ));
+}
+
+#[test]
+fn file_envelope_verify_rejects_wrong_signer() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let mallory = file_test_wallet();
+    let bob = file_test_wallet();
+    let mut env = build_signed_file_envelope(&alice, &bob.wallet_id, b"payload", 1_000);
+    // Claim a different signer than sender_wallet_id.
+    env.hybrid_sig.ed25519_pubkey_hex = mallory.wallet_id.clone();
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env),
+        Err(crate::files::FileEnvelopeError::SignerMismatch)
+    ));
+}
+
+#[test]
+fn file_envelope_verify_rejects_bad_version_and_kind() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let mut env = build_signed_file_envelope(&alice, &bob.wallet_id, b"x", 1_000);
+    env.v = 2;
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env),
+        Err(crate::files::FileEnvelopeError::UnsupportedVersion(2))
+    ));
+    let mut env2 = build_signed_file_envelope(&alice, &bob.wallet_id, b"x", 1_000);
+    env2.kind = "not_a_file".to_string();
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env2),
+        Err(crate::files::FileEnvelopeError::Kind(_))
+    ));
+}
+
+#[test]
+fn file_envelope_verify_rejects_size_out_of_range() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let mut env = build_signed_file_envelope(&alice, &bob.wallet_id, b"x", 1_000);
+    env.file_size = 0;
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env),
+        Err(crate::files::FileEnvelopeError::SizeOutOfRange { .. })
+    ));
+    env.file_size = crate::files::MAX_FILE_BODY_BYTES + 1;
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env),
+        Err(crate::files::FileEnvelopeError::SizeOutOfRange { .. })
+    ));
+}
+
+#[test]
+fn file_envelope_verify_rejects_bad_wallet_id() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let mut env = build_signed_file_envelope(&alice, "not-64-hex", b"x", 1_000);
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env),
+        Err(crate::files::FileEnvelopeError::InvalidWalletId)
+    ));
+    // Also re-sign so the only fault is the receiver id, not the signature.
+    let msg = crate::files::file_envelope_preimage_v1(&env, &alice.mldsa_pub_b64);
+    env.hybrid_sig = file_sign_hybrid(&alice, &msg);
+    assert!(matches!(
+        crate::files::verify_file_envelope_v1(&env),
+        Err(crate::files::FileEnvelopeError::InvalidWalletId)
+    ));
+}
+
+#[test]
+fn file_delete_request_sign_verify_ok() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let mut req = crate::files::FileDeleteRequestV1 {
+        file_id: uuid::Uuid::new_v4(),
+        sender_wallet_id: alice.wallet_id.clone(),
+        created_at_ms: 42,
+        hybrid_sig: file_empty_sig(),
+    };
+    let msg = crate::files::file_delete_preimage_v1(&req, &alice.mldsa_pub_b64);
+    req.hybrid_sig = file_sign_hybrid(&alice, &msg);
+    crate::files::verify_file_delete_request_v1(&req).expect("valid delete must verify");
+}
+
+#[test]
+fn file_delete_request_rejects_wrong_signer() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let mallory = file_test_wallet();
+    let mut req = crate::files::FileDeleteRequestV1 {
+        file_id: uuid::Uuid::new_v4(),
+        sender_wallet_id: alice.wallet_id.clone(),
+        created_at_ms: 42,
+        hybrid_sig: file_empty_sig(),
+    };
+    let msg = crate::files::file_delete_preimage_v1(&req, &mallory.mldsa_pub_b64);
+    req.hybrid_sig = file_sign_hybrid(&mallory, &msg);
+    assert!(matches!(
+        crate::files::verify_file_delete_request_v1(&req),
+        Err(crate::files::FileDeleteError::SignerMismatch)
+    ));
+}
+
+#[test]
+fn file_store_put_get_roundtrip() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let (_ledger, store) = new_file_store();
+    let blob = b"the actual encrypted bytes".to_vec();
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, &blob, file_now_ms());
+    assert!(store.store_with_blob(&env, &blob).unwrap());
+    let fid = env.file_id.to_string();
+    assert_eq!(store.get_blob(&fid).unwrap(), blob);
+    let meta = store.get_meta(&fid).expect("meta present");
+    assert_eq!(meta.file_id, env.file_id);
+}
+
+#[test]
+fn file_store_rejects_sha256_mismatch() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let (_ledger, store) = new_file_store();
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, b"correct", 1_000);
+    // Upload a different blob than the envelope's sha256 commits to.
+    assert!(matches!(
+        store.store_with_blob(&env, b"WRONG"),
+        Err(crate::files::storage::FileStoreError::Sha256Mismatch { .. })
+    ));
+}
+
+#[test]
+fn file_store_rejects_oversize_blob() {
+    let _g = env_lock();
+    set_test_env_base();
+    // Shrink the cap for this test so we don't allocate 5 MiB.
+    unsafe {
+        std::env::set_var("TET_FILES_MAX_BODY_BYTES", "16");
+    }
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let (_ledger, store) = new_file_store();
+    let blob = vec![7u8; 64];
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, &blob, 1_000);
+    assert!(matches!(
+        store.store_with_blob(&env, &blob),
+        Err(crate::files::storage::FileStoreError::BlobTooLarge { .. })
+    ));
+    unsafe {
+        std::env::remove_var("TET_FILES_MAX_BODY_BYTES");
+    }
+}
+
+#[test]
+fn file_store_inbox_newest_first_and_dedup() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let (_ledger, store) = new_file_store();
+    let now = file_now_ms();
+    let e1 = build_signed_file_envelope(&alice, &bob.wallet_id, b"first", now);
+    let e2 = build_signed_file_envelope(&alice, &bob.wallet_id, b"second", now + 1_000);
+    assert!(store.store_meta(&e1).unwrap());
+    assert!(store.store_meta(&e2).unwrap());
+    // Idempotent: storing the same file_id again is a no-op.
+    assert!(!store.store_meta(&e1).unwrap());
+    let inbox = store.get_inbox(&bob.wallet_id, 10);
+    assert_eq!(inbox.len(), 2);
+    assert_eq!(inbox[0].file_id, e2.file_id, "newest first");
+    assert_eq!(inbox[1].file_id, e1.file_id);
+}
+
+#[test]
+fn file_store_expiry_hides_entries() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let (_ledger, store) = new_file_store();
+    let blob = b"expiring".to_vec();
+    // created far in the past with a 1 ms ttl → already expired.
+    let mut env = build_signed_file_envelope(&alice, &bob.wallet_id, &blob, 1);
+    env.ttl_ms = 1;
+    // Re-sign because we mutated ttl... ttl is not in the preimage, so signature still valid, but
+    // store_with_blob does not verify the signature — it only checks size + sha256.
+    store.store_with_blob(&env, &blob).unwrap();
+    assert!(store.get_inbox(&bob.wallet_id, 10).is_empty());
+    assert!(store.get_blob(&env.file_id.to_string()).is_none());
+    let removed = store.prune_expired();
+    assert!(removed >= 1);
+}
+
+#[test]
+fn file_store_delete_removes_all() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let (_ledger, store) = new_file_store();
+    let blob = b"to-delete".to_vec();
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, &blob, file_now_ms());
+    store.store_with_blob(&env, &blob).unwrap();
+    let fid = env.file_id.to_string();
+    assert!(store.delete_file(&fid));
+    assert!(store.get_blob(&fid).is_none());
+    assert!(store.get_meta(&fid).is_none());
+    assert!(store.get_inbox(&bob.wallet_id, 10).is_empty());
+    // Deleting again reports not-existed.
+    assert!(!store.delete_file(&fid));
+}
+
+#[test]
+fn file_two_node_send_receive_flow() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let (_ledger_a, node_a) = new_file_store();
+    let (_ledger_b, node_b) = new_file_store();
+
+    // Sender uploads (store blob + meta) and "announces".
+    let blob = b"cross-node encrypted body".to_vec();
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, &blob, file_now_ms());
+    assert!(node_a.store_with_blob(&env, &blob).unwrap());
+
+    // Receiver node ingests the gossiped announce: verify then buffer meta.
+    crate::files::verify_file_envelope_v1(&env).expect("announce must verify on receiver");
+    assert!(node_b.store_meta(&env).unwrap());
+
+    // Receiver lists the inbox and locates the file (meta only — no blob yet).
+    let inbox = node_b.get_inbox(&bob.wallet_id, 10);
+    assert_eq!(inbox.len(), 1);
+    assert_eq!(inbox[0].file_id, env.file_id);
+    let fid = env.file_id.to_string();
+    assert!(node_b.get_blob(&fid).is_none(), "receiver has no blob yet");
+
+    // Body transfer (Phase 0 = REST fetch from storage_node) simulated: pull from A, verify digest.
+    let fetched = node_a.get_blob(&fid).expect("storage node serves the blob");
+    assert_eq!(crate::files::sha256_hex(&fetched), env.file_sha256);
+    node_b.put_blob(&env, &fetched).expect("receiver stores fetched blob");
+    assert_eq!(node_b.get_blob(&fid).unwrap(), blob);
+}
+
+#[test]
+fn file_fee_split_constants_sum_to_full() {
+    assert_eq!(
+        crate::files::FEE_SPLIT_TREASURY_BPS
+            + crate::files::FEE_SPLIT_STORAGE_BPS
+            + crate::files::FEE_SPLIT_BURN_BPS,
+        10_000
+    );
+    assert_eq!(crate::files::FILE_FEE_MICRO, 1000);
+}
+
+#[test]
+fn file_fetch_response_helpers() {
+    let id = uuid::Uuid::new_v4();
+    let nf = crate::files::FileFetchResponse::not_found(id);
+    assert!(!nf.found);
+    let blob = b"abc".to_vec();
+    let ok = crate::files::FileFetchResponse::from_blob(id, &blob);
+    assert!(ok.found);
+    assert_eq!(ok.file_sha256, crate::files::sha256_hex(&blob));
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(ok.blob_b64.as_bytes())
+            .unwrap(),
+        blob
+    );
+}
+
+#[test]
+fn file_announce_network_event_roundtrips_json() {
+    let _g = env_lock();
+    set_test_env_base();
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let env = build_signed_file_envelope(&alice, &bob.wallet_id, b"json", 1_000);
+    let event = crate::models::NetworkEvent::FileAnnounce {
+        envelope: env.clone(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: crate::models::NetworkEvent = serde_json::from_str(&json).unwrap();
+    match back {
+        crate::models::NetworkEvent::FileAnnounce { envelope } => {
+            assert_eq!(envelope.file_id, env.file_id);
+            crate::files::verify_file_envelope_v1(&envelope).expect("verify after json roundtrip");
+        }
+        _ => panic!("expected FileAnnounce"),
     }
 }
