@@ -27,14 +27,12 @@ import {
   getLedgerMeWalletInferenceBurnMicro,
   getVisionCaacProfile,
   getVisionNetworkConfig,
-  getTmailInbox,
-  getTmailKeys,
   getVisionPqcStatus,
+  getTmailKeys,
   getWorkerStats,
   normalizeWalletId64,
   postEnterpriseInference,
   postInitialAirdropClaim,
-  postTmailSend,
   postWalletTransfer,
   putTmailKeys,
   STEVEMON_PER_TET,
@@ -44,14 +42,6 @@ import {
   buildTransferEnvelope,
   userFacingTransferError,
 } from "../lib/transfer";
-import {
-  buildTmailEnvelopeV1,
-  buildTmailKeyRegistrationV1,
-  decryptTmailEnvelope,
-  type TmailEnvelopeV1,
-} from "../lib/tmail";
-import { deriveTmailKeysFromMnemonic, type TmailKemKeys } from "../lib/tmail_keys";
-import { b64ToBytes } from "../lib/encoding";
 import { fetchWorkerCockpit, microTetToTet, type WorkerCockpitJson } from "../lib/worker_cockpit";
 import { GENESIS_FOUNDER_WALLET_ID_HEX } from "../lib/genesis_wallet";
 import {
@@ -73,6 +63,9 @@ import {
   normalizePubkeyHex,
   useIncomingMessages,
 } from "../lib/useIncomingMessages";
+import MessagesPanel from "./MessagesPanel";
+import { deriveTmailKeysFromMnemonic, buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
+import { setTmailKeySession, getTmailKeySession } from "../lib/tmail_session";
 
 type TabId =
   | "Transactions"
@@ -83,14 +76,6 @@ type TabId =
   | "AI Task Terminal"
   | "Explorer"
   | "Worker";
-
-/** A received Tmail envelope after client-side E2EE decryption (newest-first in the UI). */
-type DecryptedTmail = {
-  msgId: string;
-  sender: string;
-  sentAtMs: number;
-  plaintext: string;
-};
 type MenuId = "File" | "Options" | "Help" | null;
 type AiChatMessage = {
   id: string;
@@ -304,6 +289,8 @@ export default function NexusOS() {
   /** sr25519 public key hex for Founder. */
   /** Founder sr25519 → 64-char lowercase hex `wallet_id` for REST (no `0x`; matches ledger API). */
   const [founderWalletIdHex64, setFounderWalletIdHex64] = useState<string>("—");
+  // Wallet id whose Tmail KEM keys are derived + held in the session (triggers auto-register).
+  const [tmailKeysWallet, setTmailKeysWallet] = useState<string | null>(null);
 
   // txs + address book
   const [txs, setTxs] = useState<TxRowV0[]>([]);
@@ -322,25 +309,6 @@ export default function NexusOS() {
   >("idle");
   const [sendTransferUserMsg, setSendTransferUserMsg] = useState<string>("");
   const [isSignerReady, setIsSignerReady] = useState(false);
-
-  // Messages (Tmail Basic E2EE) — KEM keys are derived locally from the mnemonic on unlock.
-  const [tmailKeys, setTmailKeys] = useState<TmailKemKeys | null>(null);
-  const tmailKeysRef = useRef<TmailKemKeys | null>(null);
-  const [tmailRecipient, setTmailRecipient] = useState("");
-  const [tmailBody, setTmailBody] = useState("");
-  const [tmailSending, setTmailSending] = useState(false);
-  const [tmailComposeMsg, setTmailComposeMsg] = useState("");
-  const [tmailInbox, setTmailInbox] = useState<DecryptedTmail[]>([]);
-  const [tmailShowAll, setTmailShowAll] = useState(false);
-  const [tmailKeysRegisteredAtMs, setTmailKeysRegisteredAtMs] = useState<number | null>(null);
-  const [tmailKeyStatus, setTmailKeyStatus] = useState<
-    "unknown" | "registering" | "registered" | "unregistered" | "error"
-  >("unknown");
-  /** Guards the one-shot auto-register per wallet (keyed by wallet_id). */
-  const tmailAutoRegisteredRef = useRef<string>("");
-
-  const TMAIL_BODY_MAX = 4096;
-  const TMAIL_INBOX_VISIBLE = 5;
 
   const MIN_SEND_MICRO = 1_000n; // 0.001 TET
 
@@ -552,6 +520,40 @@ export default function NexusOS() {
     setIsSignerReady(walletGate === "ready");
   }, [walletGate]);
 
+  // Auto-register this wallet's Tmail KEM keys on unlock (once per wallet) so peers can mail it and
+  // the Messages tab is send-ready before it is even opened. No-op if already registered.
+  useEffect(() => {
+    if (walletGate !== "ready") return;
+    const wid = normalizeWalletId64(tmailKeysWallet ?? "");
+    if (!wid) return;
+    const ks = getTmailKeySession();
+    if (!ks || ks.walletIdHex64 !== wid) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const existing = await getTmailKeys(baseUrl, wid);
+        if (cancelled) return;
+        if (existing.ok && existing.registration) return; // already published
+        if (!existing.ok && existing.status !== 404) return; // transient/offline — retry on next unlock
+        const reg = await buildTmailKeyRegistrationV1({
+          x25519_pub: ks.x25519_pub,
+          mlkem_pub: ks.mlkem_pub,
+          baseUrl,
+        });
+        if (cancelled) return;
+        const r = await putTmailKeys(baseUrl, wid, reg);
+        if (!cancelled && r.ok) {
+          appendLedger(["[Tmail] Messaging keys registered (X25519 + ML-KEM-768)."]);
+        }
+      } catch {
+        // ignore (offline / CORS) — Status section offers a manual Register button.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [walletGate, tmailKeysWallet, baseUrl]);
+
   async function applyUnlockedHybridSessionFromMnemonic(mnemonicNorm: string) {
     await pqcInit();
     const phrase = mnemonicNorm.trim().toLowerCase().replace(/\s+/g, " ");
@@ -569,22 +571,27 @@ export default function NexusOS() {
       mldsa44_pubkey_b64: pqc.pubkey_b64,
       displayAddress: `${wid.slice(0, 10)}…${wid.slice(-6)}`,
     });
-    // Tmail messaging keys are derived from the same mnemonic (local-only; only the public keys
-    // are later published to the node key directory).
-    try {
-      const kem = await deriveTmailKeysFromMnemonic(phrase);
-      tmailKeysRef.current = kem;
-      setTmailKeys(kem);
-    } catch {
-      tmailKeysRef.current = null;
-      setTmailKeys(null);
-    }
     setFounderWalletIdHex64(wid);
     setActiveAccountAddress(`${wid.slice(0, 10)}…${wid.slice(-8)}`);
     if (wid !== GENESIS_FOUNDER_WALLET_ID_HEX) {
       appendLedger([
         "[INFO] Active wallet_id differs from default genesis dev key — use this Wallet ID on tet-core (faucet / mint) for balances.",
       ]);
+    }
+    try {
+      const km = await deriveTmailKeysFromMnemonic(phrase);
+      setTmailKeySession({
+        walletIdHex64: wid,
+        x25519_sk: km.x25519_sk,
+        x25519_pub: km.x25519_pub,
+        mlkem_sk: km.mlkem_sk,
+        mlkem_pub: km.mlkem_pub,
+      });
+      setTmailKeysWallet(wid);
+    } catch {
+      // Non-fatal: Messages tab stays disabled until KEM keys derive successfully.
+      setTmailKeySession(null);
+      setTmailKeysWallet(null);
     }
     setWalletGate("ready");
     setWalletUnlockOpen(false);
@@ -608,9 +615,6 @@ export default function NexusOS() {
       mldsa44_pubkey_b64: u.mldsa44_pubkey_b64,
       displayAddress: `${wid.slice(0, 10)}…${wid.slice(-6)}`,
     });
-    // Vault wallets don't expose the mnemonic, so Tmail KEM keys can't be derived here.
-    tmailKeysRef.current = null;
-    setTmailKeys(null);
     setFounderWalletIdHex64(wid);
     setActiveAccountAddress(`${wid.slice(0, 10)}…${wid.slice(-8)}`);
     setWalletGate("ready");
@@ -708,16 +712,10 @@ export default function NexusOS() {
 
   function lockWalletSession() {
     setHybridSignerSession(null);
+    setTmailKeySession(null);
+    setTmailKeysWallet(null);
     welcomeAirdropShownRef.current = false;
     setWelcomeAirdropBanner(null);
-    // Drop Tmail key material + decrypted messages from memory on lock.
-    tmailKeysRef.current = null;
-    setTmailKeys(null);
-    tmailAutoRegisteredRef.current = "";
-    setTmailInbox([]);
-    setTmailKeysRegisteredAtMs(null);
-    setTmailKeyStatus("unknown");
-    setTmailComposeMsg("");
     setWalletGate("locked");
     setFounderWalletIdHex64("—");
     setActiveAccountAddress("—");
@@ -726,178 +724,6 @@ export default function NexusOS() {
     setWalletUnlockErr("");
     setWalletUnlockOpen(true);
     appendLedger(["[Wallet] Locked — hybrid signing cleared for this tab."]);
-  }
-
-  // ───────────────────────── Messages (Tmail Basic E2EE) ─────────────────────────
-
-  /** Publish the unlocked wallet's derived KEM public keys (hybrid-signed) to the node directory. */
-  const registerTmailKeysNow = useCallback(async (): Promise<boolean> => {
-    const sess = getHybridSignerSession();
-    const kem = tmailKeysRef.current;
-    if (!sess || !kem) return false;
-    const wid = sess.walletIdHex64;
-    try {
-      setTmailKeyStatus("registering");
-      const reg = await buildTmailKeyRegistrationV1(wid, kem, baseUrl);
-      const res = await putTmailKeys(baseUrl, wid, reg);
-      if (res.ok) {
-        setTmailKeysRegisteredAtMs(res.data?.registered_at_ms ?? reg.registered_at_ms);
-        setTmailKeyStatus("registered");
-        return true;
-      }
-      setTmailKeyStatus("error");
-      appendLedger([`[Messages] key registration failed — HTTP ${res.status}`]);
-      return false;
-    } catch (e: unknown) {
-      setTmailKeyStatus("error");
-      appendLedger([`[Messages] key registration error — ${e instanceof Error ? e.message : String(e)}`]);
-      return false;
-    }
-  }, [baseUrl]);
-
-  // On unlock: check the directory once; if unregistered (404), auto-publish the KEM public keys so
-  // that other wallets can send before this user ever opens the Messages tab.
-  useEffect(() => {
-    if (walletGate !== "ready" || !tmailKeys) return;
-    const sess = getHybridSignerSession();
-    if (!sess) return;
-    const wid = sess.walletIdHex64;
-    if (tmailAutoRegisteredRef.current === wid) return;
-    tmailAutoRegisteredRef.current = wid;
-    let cancelled = false;
-    void (async () => {
-      const existing = await getTmailKeys(baseUrl, wid);
-      if (cancelled) return;
-      if (existing.registration) {
-        setTmailKeysRegisteredAtMs(existing.registration.registered_at_ms);
-        setTmailKeyStatus("registered");
-        return;
-      }
-      if (existing.status === 404) {
-        setTmailKeyStatus("unregistered");
-        const ok = await registerTmailKeysNow();
-        if (!cancelled && ok) {
-          appendLedger(["[Messages] Messaging keys published to the node directory."]);
-        }
-      } else {
-        setTmailKeyStatus("error");
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [walletGate, tmailKeys, baseUrl, registerTmailKeysNow]);
-
-  // Inbox polling (5s) while the Messages tab is open + wallet ready. Decrypts each envelope with the
-  // receiver's local KEM keys; envelopes that don't decrypt (not for us / corrupt) are skipped.
-  useEffect(() => {
-    if (tab !== "Messages" || walletGate !== "ready" || !tmailKeys) return;
-    const sess = getHybridSignerSession();
-    if (!sess) return;
-    const wid = sess.walletIdHex64;
-    let cancelled = false;
-
-    const poll = async () => {
-      const res = await getTmailInbox(baseUrl, wid, 50);
-      if (cancelled || !res.ok || !res.data) return;
-      const kem = tmailKeysRef.current;
-      if (!kem) return;
-      const decrypted: DecryptedTmail[] = [];
-      for (const env of res.data.messages as TmailEnvelopeV1[]) {
-        try {
-          const plaintext = await decryptTmailEnvelope(env, kem);
-          decrypted.push({
-            msgId: env.msg_id,
-            sender: env.sender_wallet_id,
-            sentAtMs: env.sent_at_ms,
-            plaintext,
-          });
-        } catch {
-          // Not addressed to us or corrupt — skip silently.
-        }
-      }
-      if (cancelled) return;
-      decrypted.sort((a, b) => b.sentAtMs - a.sentAtMs);
-      setTmailInbox(decrypted);
-    };
-
-    void poll();
-    const id = window.setInterval(() => void poll(), 5000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(id);
-    };
-  }, [tab, walletGate, tmailKeys, baseUrl]);
-
-  /** Compose flow: fetch recipient KEM keys → encrypt + hybrid-sign → POST /tmail/send. */
-  async function sendTmailMessage() {
-    const sess = getHybridSignerSession();
-    if (!sess) {
-      setTmailComposeMsg("Unlock your wallet before sending a message.");
-      return;
-    }
-    if (!tmailKeysRef.current) {
-      setTmailComposeMsg("Messaging keys unavailable for this wallet (vault wallets can't message yet).");
-      return;
-    }
-    const recipient = normalizeWalletId64(tmailRecipient);
-    if (!recipient) {
-      setTmailComposeMsg("Recipient must be a 64-hex wallet ID.");
-      return;
-    }
-    if (recipient === sess.walletIdHex64) {
-      setTmailComposeMsg("Cannot send a message to yourself.");
-      return;
-    }
-    const body = tmailBody;
-    if (!body.trim()) {
-      setTmailComposeMsg("Message body is empty.");
-      return;
-    }
-    if (new TextEncoder().encode(body).length > TMAIL_BODY_MAX) {
-      setTmailComposeMsg(`Message too long (max ${TMAIL_BODY_MAX} bytes).`);
-      return;
-    }
-
-    setTmailSending(true);
-    setTmailComposeMsg("Looking up recipient keys…");
-    try {
-      const keys = await getTmailKeys(baseUrl, recipient);
-      if (!keys.registration) {
-        setTmailComposeMsg(
-          keys.status === 404
-            ? "Recipient hasn't registered messaging keys yet."
-            : `Could not load recipient keys (HTTP ${keys.status}).`,
-        );
-        return;
-      }
-      setTmailComposeMsg("Encrypting + signing…");
-      const env = await buildTmailEnvelopeV1({
-        senderWalletIdHex64: sess.walletIdHex64,
-        receiverWalletIdHex64: recipient,
-        plaintextUtf8: body,
-        receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
-        receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
-        baseUrl,
-      });
-      const res = await postTmailSend(baseUrl, env);
-      if (res.ok || res.status === 202) {
-        setTmailComposeMsg(`Sent (msg_id: ${env.msg_id.slice(0, 8)}…).`);
-        setTmailBody("");
-        appendLedger([`[Messages] Encrypted message sent → ${recipient.slice(0, 12)}…`]);
-      } else if (res.status === 409) {
-        setTmailComposeMsg("Already sent (duplicate msg_id).");
-      } else {
-        setTmailComposeMsg(`Send failed (HTTP ${res.status}).`);
-        appendLedger([`[Messages] send failed — HTTP ${res.status}: ${res.text ?? ""}`]);
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setTmailComposeMsg(`Send error — ${msg}`);
-      appendLedger([`[Messages] send error — ${msg}`]);
-    } finally {
-      setTmailSending(false);
-    }
   }
 
   function persistTxRows(rows: TxRowV0[]) {
@@ -2327,128 +2153,14 @@ export default function NexusOS() {
               </div>
             </div>
           ) : tab === "Messages" ? (
-            <div className={`${outset} ${panel} p-3 flex flex-col gap-3`}>
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
-                <span className="text-sm font-bold text-black">Sovereign Messages — E2EE (Tmail)</span>
-                <span className="text-[10px] font-mono font-bold text-black tracking-wide">
-                  [X25519 + ML-KEM + ChaCha20]
-                </span>
-              </div>
-
-              {/* A. Compose */}
-              <div className={`${inset} bg-[#c0c0c0] p-2`}>
-                <div className="text-xs font-semibold text-black mb-1">Compose</div>
-                <label className="block text-[11px] text-black/80 mb-0.5">Recipient wallet ID (64 hex)</label>
-                <input
-                  type="text"
-                  spellCheck={false}
-                  value={tmailRecipient}
-                  onChange={(e) => setTmailRecipient(e.target.value)}
-                  placeholder="0000…"
-                  className={`${inset} w-full bg-white px-1.5 py-1 text-xs font-mono text-black mb-2`}
-                />
-                <label className="block text-[11px] text-black/80 mb-0.5">
-                  Message ({new TextEncoder().encode(tmailBody).length}/{TMAIL_BODY_MAX} bytes)
-                </label>
-                <textarea
-                  value={tmailBody}
-                  onChange={(e) => setTmailBody(e.target.value)}
-                  rows={4}
-                  placeholder="Your end-to-end encrypted message…"
-                  className={`${inset} w-full bg-white px-1.5 py-1 text-xs font-mono text-black resize-y`}
-                />
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    disabled={tmailSending || walletGate !== "ready" || !tmailKeys}
-                    className={`${winBtn} bg-[#c0c0c0] px-3 py-1 text-xs text-black disabled:opacity-50`}
-                    onClick={() => void sendTmailMessage()}
-                  >
-                    {tmailSending ? "Sending…" : "Send Encrypted Message"}
-                  </button>
-                  {tmailComposeMsg ? (
-                    <span className="text-[11px] text-black/80 break-words">{tmailComposeMsg}</span>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* B. Inbox */}
-              <div className={`${inset} bg-[#c0c0c0] p-2`}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-xs font-semibold text-black">Inbox (decrypted on this device)</span>
-                  <span className="text-[10px] font-mono text-black/60">{tmailInbox.length} msg</span>
-                </div>
-                {!tmailKeys ? (
-                  <div className="text-[11px] text-black/55 p-2">
-                    Messaging keys unavailable for this wallet type.
-                  </div>
-                ) : tmailInbox.length === 0 ? (
-                  <div className="text-[11px] text-black/55 p-2">
-                    No messages yet (polling every 5s while this tab is open).
-                  </div>
-                ) : (
-                  <div className="flex flex-col gap-1.5">
-                    {(tmailShowAll ? tmailInbox : tmailInbox.slice(0, TMAIL_INBOX_VISIBLE)).map((m) => (
-                      <div
-                        key={m.msgId}
-                        className={`${outset} bg-white px-2 py-1.5 text-black`}
-                      >
-                        <div className="flex flex-wrap items-baseline justify-between gap-2 text-[10px] font-mono text-black/60">
-                          <span className="break-all">from {m.sender.slice(0, 16)}…</span>
-                          <span>{new Date(m.sentAtMs).toLocaleString()}</span>
-                        </div>
-                        <div className="text-xs whitespace-pre-wrap break-words [overflow-wrap:anywhere] mt-0.5">
-                          {m.plaintext}
-                        </div>
-                      </div>
-                    ))}
-                    {tmailInbox.length > TMAIL_INBOX_VISIBLE ? (
-                      <button
-                        type="button"
-                        className={`${winBtn} bg-[#c0c0c0] px-2 py-0.5 text-xs text-black self-start`}
-                        onClick={() => setTmailShowAll((v) => !v)}
-                      >
-                        {tmailShowAll
-                          ? "Show fewer"
-                          : `Show older (${tmailInbox.length - TMAIL_INBOX_VISIBLE} hidden)`}
-                      </button>
-                    ) : null}
-                  </div>
-                )}
-              </div>
-
-              {/* C. Status */}
-              <div className={`${inset} bg-[#c0c0c0] p-2`}>
-                <div className="text-xs font-semibold text-black mb-1">Messaging Keys</div>
-                {!tmailKeys ? (
-                  <div className="text-[11px] text-black/55">
-                    This wallet type does not expose a mnemonic, so messaging keys can&apos;t be derived.
-                  </div>
-                ) : tmailKeyStatus === "registered" && tmailKeysRegisteredAtMs ? (
-                  <div className="text-[11px] text-black/80">
-                    Keys registered at: {new Date(tmailKeysRegisteredAtMs).toLocaleString()}
-                  </div>
-                ) : tmailKeyStatus === "registering" ? (
-                  <div className="text-[11px] text-black/80">Publishing keys…</div>
-                ) : (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[11px] text-black/80">
-                      {tmailKeyStatus === "error"
-                        ? "Key registration failed."
-                        : "Your messaging keys are not registered yet."}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={walletGate !== "ready"}
-                      className={`${winBtn} bg-[#c0c0c0] px-3 py-1 text-xs text-black disabled:opacity-50`}
-                      onClick={() => void registerTmailKeysNow()}
-                    >
-                      Register your messaging keys
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
+            <MessagesPanel
+              key={founderWalletIdHex64}
+              outset={outset}
+              inset={inset}
+              winBtn={winBtn}
+              baseUrl={baseUrl}
+              myWalletId={founderWalletIdHex64}
+            />
           ) : tab === "Address Book" ? (
             <AddressBookPanel
               outset={outset}
