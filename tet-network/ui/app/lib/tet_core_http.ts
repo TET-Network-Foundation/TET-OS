@@ -19,6 +19,7 @@ import {
 } from "./transfer";
 import type { TmailEnvelopeV1 } from "./tmail";
 import type { TmailKeyRegistrationV1 } from "./tmail_keys";
+import type { FileDeleteRequestV1, FileEnvelopeV1 } from "./files";
 
 /** @deprecated Use `SyncUiState` from `ledger_state.ts` (ledger sync gate). */
 export type ChainConnectionStatus = "connecting" | "synced" | "disconnected";
@@ -902,4 +903,125 @@ export async function putTmailKeys(
   );
   if (!r.ok) return { ok: false, status: r.status, text: r.text };
   return { ok: true, status: r.status, registeredAtMs: r.data?.registered_at_ms ?? registration.registered_at_ms };
+}
+
+/* ------------------------------------------------------------------------- *
+ * File Sharing (Sovereign OS Files) — off-ledger E2EE file transfer REST client.
+ * Endpoints mirror tet-core `src/rest/handlers/files.rs`.
+ * ------------------------------------------------------------------------- */
+
+export type FilesUploadResult = {
+  ok: boolean;
+  status: number;
+  fileId?: string;
+  storageNode?: string;
+  text?: string;
+};
+
+/**
+ * `POST /files/upload` — multipart (`envelope` JSON field + `body` encrypted blob). The node verifies
+ * the envelope, checks `sha256(body) == file_sha256` + size cap, stores blob+meta+inbox, and gossips
+ * the announce. Returns `202 { file_id, storage_node }`.
+ */
+export async function postFilesUpload(
+  baseUrl: string,
+  envelope: FileEnvelopeV1,
+  bodyCiphertext: Uint8Array,
+): Promise<FilesUploadResult> {
+  const url = tetCoreUrl(baseUrl, "/files/upload");
+  try {
+    const form = new FormData();
+    form.append("envelope", JSON.stringify(envelope));
+    // Copy into a fresh ArrayBuffer-backed view so Blob gets clean bytes regardless of the source.
+    const blob = new Blob([bodyCiphertext.slice()], { type: "application/octet-stream" });
+    form.append("body", blob, `${envelope.file_id}.bin`);
+    const r = await fetch(url, { method: "POST", body: form, headers: { Accept: "application/json" } });
+    const text = await r.text();
+    if (!r.ok) return { ok: false, status: r.status, text };
+    try {
+      const data = JSON.parse(text) as { file_id?: string; storage_node?: string };
+      return { ok: true, status: r.status, fileId: data.file_id ?? envelope.file_id, storageNode: data.storage_node };
+    } catch {
+      return { ok: true, status: r.status, fileId: envelope.file_id };
+    }
+  } catch (e: unknown) {
+    return { ok: false, status: 0, text: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export type FilesAnnounceResult = { ok: boolean; status: number; fileId?: string; text?: string };
+
+/** `POST /files/announce` — verify + gossip a file envelope (metadata only, no blob). */
+export async function postFilesAnnounce(baseUrl: string, envelope: FileEnvelopeV1): Promise<FilesAnnounceResult> {
+  const r = await fetchJson<{ ok?: boolean; file_id?: string }>(tetCoreUrl(baseUrl, "/files/announce"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(envelope),
+  });
+  if (!r.ok) return { ok: false, status: r.status, text: r.text };
+  return { ok: true, status: r.status, fileId: r.data?.file_id ?? envelope.file_id };
+}
+
+export type FilesInboxResult = {
+  ok: boolean;
+  status: number;
+  files: FileEnvelopeV1[];
+  count: number;
+  text?: string;
+};
+
+/**
+ * `GET /files/inbox/:wallet_id?limit=N` — non-expired file envelopes addressed to `wallet_id`,
+ * newest first. Envelopes carry encrypted filename/MIME; the caller decrypts with its KEM keys.
+ */
+export async function getFilesInbox(baseUrl: string, walletId: string, limit = 50): Promise<FilesInboxResult> {
+  const wid = normalizeWalletId64(walletId);
+  if (!wid) return { ok: false, status: 400, files: [], count: 0, text: "wallet_id must be 64 hex chars" };
+  const clamped = Math.max(1, Math.min(200, Math.floor(limit)));
+  const r = await fetchJson<{ ok?: boolean; count?: number; files?: FileEnvelopeV1[] }>(
+    tetCoreUrl(baseUrl, `/files/inbox/${wid}`, { limit: String(clamped) }),
+  );
+  if (!r.ok) return { ok: false, status: r.status, files: [], count: 0, text: r.text };
+  const files = Array.isArray(r.data?.files) ? r.data!.files! : [];
+  return { ok: true, status: r.status, files, count: files.length };
+}
+
+export type FilesFetchResult = { ok: boolean; status: number; bytes?: Uint8Array; text?: string };
+
+/** `GET /files/fetch/:file_id` — return the encrypted blob bytes (octet-stream), or an error. */
+export async function getFilesFetch(baseUrl: string, fileId: string): Promise<FilesFetchResult> {
+  const id = fileId.trim();
+  const url = tetCoreUrl(baseUrl, `/files/fetch/${encodeURIComponent(id)}`);
+  try {
+    const r = await fetch(url, { headers: { Accept: "application/octet-stream" } });
+    if (!r.ok) {
+      const text = await r.text().catch(() => "");
+      return { ok: false, status: r.status, text };
+    }
+    const buf = await r.arrayBuffer();
+    return { ok: true, status: r.status, bytes: new Uint8Array(buf) };
+  } catch (e: unknown) {
+    return { ok: false, status: 0, text: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+export type FilesDeleteResult = { ok: boolean; status: number; deleted?: boolean; text?: string };
+
+/** `DELETE /files/item/:file_id` — sender-only cancel; body is a hybrid-signed delete request. */
+export async function deleteFilesItem(
+  baseUrl: string,
+  fileId: string,
+  req: FileDeleteRequestV1,
+): Promise<FilesDeleteResult> {
+  const id = fileId.trim();
+  const r = await fetchJson<{ ok?: boolean; deleted?: boolean }>(
+    tetCoreUrl(baseUrl, `/files/item/${encodeURIComponent(id)}`),
+    {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(req),
+    },
+  );
+  if (!r.ok) return { ok: false, status: r.status, text: r.text };
+  return { ok: true, status: r.status, deleted: r.data?.deleted ?? true };
 }
