@@ -1,3 +1,4 @@
+use crate::files::FileEnvelopeV1;
 use crate::protocol::SignedTxEnvelopeV1;
 use crate::tmail::envelope::TmailEnvelopeV1;
 use serde::{Deserialize, Serialize};
@@ -59,5 +60,15 @@ pub enum NetworkEvent {
     /// ledger and is never re-broadcast on receipt.
     TmailGossip {
         envelope: TmailEnvelopeV1,
+    },
+
+    /// A File Sharing announce envelope gossiped to peers (spec `PHASE_0_FILE_SHARING_SPEC.md` §6).
+    ///
+    /// Off-ledger, mirroring [`NetworkEvent::TmailGossip`]: receivers MUST verify the hybrid
+    /// signature and may buffer the envelope metadata (node-local store), but it never mutates the
+    /// ledger and is never re-broadcast on receipt. The encrypted body is **not** carried here — it
+    /// is pulled separately (REST `GET /files/fetch/:file_id`).
+    FileAnnounce {
+        envelope: FileEnvelopeV1,
     },
 }

@@ -49,6 +49,8 @@ pub struct RestState {
     pub mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     /// Tmail node-local TTL buffer + key directory (off-ledger; spec §A.1).
     pub tmail: Arc<crate::tmail::store::TmailStore>,
+    /// File Sharing node-local blob/meta/inbox store (off-ledger; spec `PHASE_0_FILE_SHARING_SPEC.md`).
+    pub files: Arc<crate::files::storage::FileStore>,
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,
     pub workers: Arc<StdMutex<WorkerRegistry>>,
     pub e2ee_jobs: Arc<StdMutex<E2eeJobQueue>>,
@@ -193,6 +195,20 @@ impl RestState {
             return;
         };
         let event = crate::models::NetworkEvent::TmailGossip {
+            envelope: env.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&event) {
+            let _ = tx.send(json).await;
+        }
+    }
+
+    /// Broadcast a File Sharing announce envelope to peers over the `/tet/v1/files/announce` gossip
+    /// plane. Same wiring as [`broadcast_tmail`]; off-ledger, body not carried.
+    pub async fn broadcast_file_announce(&self, env: &crate::files::FileEnvelopeV1) {
+        let Some(tx) = self.gossip_tx.as_ref() else {
+            return;
+        };
+        let event = crate::models::NetworkEvent::FileAnnounce {
             envelope: env.clone(),
         };
         if let Ok(json) = serde_json::to_string(&event) {
