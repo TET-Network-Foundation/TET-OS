@@ -1,6 +1,6 @@
 "use client";
 
-/* eslint-disable react-hooks/set-state-in-effect, react-hooks/static-components, @typescript-eslint/no-explicit-any */
+/* eslint-disable react-hooks/set-state-in-effect, @typescript-eslint/no-explicit-any */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
@@ -42,7 +42,7 @@ import {
   buildTransferEnvelope,
   userFacingTransferError,
 } from "../lib/transfer";
-import { fetchWorkerCockpit, microTetToTet, type WorkerCockpitJson } from "../lib/worker_cockpit";
+import { fetchWorkerCockpit, type WorkerCockpitJson } from "../lib/worker_cockpit";
 import { GENESIS_FOUNDER_WALLET_ID_HEX } from "../lib/genesis_wallet";
 import {
   changeInAppWalletPin,
@@ -64,19 +64,28 @@ import {
   useIncomingMessages,
 } from "../lib/useIncomingMessages";
 import MessagesPanel from "./MessagesPanel";
+import TransactionsPanel from "./tabs/TransactionsPanel";
+import AddressBookPanel from "./tabs/AddressBookPanel";
+import SendCoinsPanel from "./tabs/SendCoinsPanel";
+import AITaskTerminalPanel from "./tabs/AITaskTerminalPanel";
+import ExplorerPanel from "./tabs/ExplorerPanel";
+import WorkerPanel from "./tabs/WorkerPanel";
+import InboxReceivePanel from "./tabs/InboxReceivePanel";
+import Win95Window from "./components/Win95Window";
+import Win95TabBar from "./components/Win95TabBar";
+import Win95Menu from "./components/Win95Menu";
 import { deriveTmailKeysFromMnemonic, buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { setTmailKeySession, getTmailKeySession } from "../lib/tmail_session";
 
 type TabId =
-  | "Transactions"
+  | "AI Task Terminal"
   | "Send Coins"
-  | "Inbox / Receive"
+  | "Receive Coins"
   | "Messages"
   | "Address Book"
-  | "AI Task Terminal"
+  | "Transactions"
   | "Explorer"
   | "Worker";
-type MenuId = "File" | "Options" | "Help" | null;
 type AiChatMessage = {
   id: string;
   role: "user" | "assistant";
@@ -142,24 +151,9 @@ function formatStevemonToTetDisplay(stv: bigint): string {
   return `${whole.toLocaleString("en-US")}.${fracStr}`;
 }
 
-function shortHash(s: string, head = 10, tail = 8): string {
-  if (!s) return "—";
-  if (s.length <= head + tail + 3) return s;
-  return `${s.slice(0, head)}…${s.slice(-tail)}`;
-}
-
 function normalizeHexInput(raw: string): string {
   const s = raw.trim().toLowerCase();
   return s.startsWith("0x") ? s.slice(2) : s;
-}
-
-function formatWorkerTet(micro: number): string {
-  const tet = microTetToTet(micro);
-  return `${tet.toLocaleString("en-US", { maximumFractionDigits: tet >= 100 ? 2 : 6 })} TET`;
-}
-
-function formatTflops(v: number): string {
-  return `${(Number.isFinite(v) ? v : 0).toLocaleString("en-US", { maximumFractionDigits: 1 })} TFLOPS`;
 }
 
 /** Stevemon → TET with full 6 fractional digits (comma whole part). Sub-cent amounts stay visible. */
@@ -214,12 +208,10 @@ export default function NexusOS() {
   const winBtn =
     "rounded-none border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] select-none active:border-t-[#808080] active:border-l-[#808080] active:border-b-white active:border-r-white active:translate-x-px active:translate-y-px";
 
-  const [menuOpen, setMenuOpen] = useState<MenuId>(null);
   const [tab, setTab] = useState<TabId>("AI Task Terminal");
   const [desktopViewport, setDesktopViewport] = useState(() =>
     typeof window === "undefined" ? true : window.matchMedia("(min-width: 768px)").matches,
   );
-  const menuBarRef = useRef<HTMLDivElement | null>(null);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
@@ -381,33 +373,12 @@ export default function NexusOS() {
   );
 
   useEffect(() => {
-    if (!menuOpen) return;
-    function onDocMouseDown(e: MouseEvent) {
-      const root = menuBarRef.current;
-      const t = e.target as Node | null;
-      if (!root || !t) return;
-      if (!root.contains(t)) setMenuOpen(null);
-    }
-    document.addEventListener("mousedown", onDocMouseDown);
-    return () => document.removeEventListener("mousedown", onDocMouseDown);
-  }, [menuOpen]);
-
-  useEffect(() => {
     const mq = window.matchMedia("(min-width: 768px)");
     const sync = () => setDesktopViewport(mq.matches);
     sync();
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
-
-  const anyModalOpen =
-    aboutOpen ||
-    manualOpen ||
-    backupOpen ||
-    changePinOpen ||
-    networkOpen ||
-    whitepaperOpen ||
-    walletUnlockOpen;
 
   function closeChangePin() {
     setChangePinOpen(false);
@@ -1236,77 +1207,6 @@ export default function NexusOS() {
     el.scrollTop = el.scrollHeight;
   }, [aiChatMessages, aiTaskSubmitting]);
 
-  function TabButton(props: { id: TabId }) {
-    const active = tab === props.id;
-    return (
-      <button
-        type="button"
-        onClick={() => setTab(props.id)}
-        className={[
-          "rounded-none border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] px-3 py-1 text-sm select-none",
-          active
-            ? "bg-[#D4D0C8] relative top-[1px] z-10 border-b-[#D4D0C8]"
-            : "bg-[#C0C0C0] border-b-[#808080]",
-          "focus-visible:outline focus-visible:outline-1 focus-visible:outline-dotted focus-visible:outline-black focus-visible:outline-offset-2",
-        ].join(" ")}
-      >
-        <span
-          className={
-            active ? "outline outline-1 outline-dotted outline-black outline-offset-[2px] px-0.5" : undefined
-          }
-        >
-          {props.id}
-        </span>
-      </button>
-    );
-  }
-
-  function MenuButton(props: { id: Exclude<MenuId, null> }) {
-    const open = menuOpen === props.id;
-    const hotkey = props.id[0];
-    const rest = props.id.slice(1);
-    return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setMenuOpen(open ? null : props.id);
-        }}
-        className={[
-          "px-2 py-0.5 text-sm select-none",
-          open ? "bg-[#000080] text-white" : "",
-        ].join(" ")}
-      >
-        <span className="underline underline-offset-2">{hotkey}</span>
-        <span>{rest}</span>
-      </button>
-    );
-  }
-
-  function MenuDropdown(props: { id: Exclude<MenuId, null>; items: { label: string; onClick: () => void }[] }) {
-    if (menuOpen !== props.id) return null;
-    return (
-      <div
-        className={`${outset} absolute mt-1 ${panel} text-sm z-50`}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        {props.items.map((it) => (
-          <button
-            key={it.label}
-            type="button"
-            onClick={() => {
-              setMenuOpen(null);
-              it.onClick();
-            }}
-            className="block w-full text-left px-4 py-1"
-          >
-            {it.label}
-          </button>
-        ))}
-      </div>
-    );
-  }
-
   async function onSendCoins() {
     if (sendingTx) return;
     setSendTransferUserMsg("");
@@ -1640,84 +1540,6 @@ export default function NexusOS() {
           ? "Processing…"
           : "Send";
 
-  const sendCoinsFields = (
-    <div className="space-y-2 text-sm">
-      <div className="flex items-center gap-2">
-        <span className="w-20">From:</span>
-        <span
-          className={`${inset} flex-1 ${field} px-2 py-1 text-xs font-mono text-black/80 truncate`}
-          title={founderWalletIdHex64}
-        >
-          {normalizeWalletId64(founderWalletIdHex64) || "—"}
-        </span>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="w-20">Pay To:</span>
-        <input
-          value={sendTo}
-          onChange={(e) => setSendTo(e.target.value)}
-          className={`${inset} flex-1 ${field} px-2 py-1 text-sm font-mono outline-none`}
-        />
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="w-20">Amount:</span>
-        <input
-          value={sendAmountTet}
-          onChange={(e) => setSendAmountTet(e.target.value)}
-          className={`${inset} w-40 ${field} px-2 py-1 text-sm font-mono outline-none`}
-          placeholder="0.001"
-        />
-        <span className="text-sm">TET</span>
-        {sendAmountStevemonDisplay ? (
-          <span className="text-xs text-black/70">{sendAmountStevemonDisplay}</span>
-        ) : null}
-      </div>
-      {sendFeeBreakdown ? (
-        <div className="text-xs text-black/75 pl-[5.5rem] leading-snug">
-          Net to recipient: {formatStevemonToTetDisplay(sendFeeBreakdown.netToRecipient)} TET · Fee (1%):{" "}
-          {formatStevemonToTetDisplay(sendFeeBreakdown.feeTotal)} TET (½ founder · ½ burn)
-        </div>
-      ) : null}
-      <div className="flex items-start gap-2">
-        <span className="w-20 pt-1">Message:</span>
-        <div className="flex-1">
-          <input
-            value={sendMessage}
-            onChange={(e) => setSendMessage(e.target.value.slice(0, 64))}
-            maxLength={64}
-            className={`${inset} w-full ${field} px-2 py-1 text-sm outline-none`}
-            placeholder="(Optional local note, not on-chain)"
-          />
-          <div className="mt-1 text-xs text-black/70">{sendMessage.length} / 64</div>
-        </div>
-      </div>
-      {sendTransferUserMsg ? (
-        <div
-          className={`text-xs pl-[5.5rem] leading-snug ${
-            sendTransferPhase === "confirmed"
-              ? "text-[#0b5c2e] font-medium"
-              : sendTransferPhase === "failed"
-                ? "text-red-800 font-medium"
-                : "text-black/75"
-          }`}
-          role="status"
-        >
-          {sendTransferUserMsg}
-        </div>
-      ) : null}
-      <div className="pt-2">
-        <button
-          type="button"
-          disabled={sendingTx || !isSignerReady}
-          onClick={() => void onSendCoins()}
-          className={`${winBtn} ${panel} px-4 py-1 text-sm max-w-full text-left ${sendingTx ? "text-xs" : ""}`}
-        >
-          {sendTransferButtonLabel}
-        </button>
-      </div>
-    </div>
-  );
-
   if (!desktopViewport) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-black px-6 font-mono text-[#39ff88]">
@@ -1732,17 +1554,6 @@ export default function NexusOS() {
     <main
       className="min-h-screen bg-[#D6D4CE] text-black font-mono"
     >
-      {menuOpen || anyModalOpen ? (
-        <div
-          className="fixed inset-0 z-30"
-          onMouseDown={() => {
-            if (aboutOpen) return;
-            if (manualOpen) return;
-            setMenuOpen(null);
-          }}
-          aria-hidden="true"
-        />
-      ) : null}
       {/* Main window frame (slightly rounded) */}
       <div
         className={`m-2 rounded-sm ${face} border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] overflow-hidden h-[calc(100vh-16px)] flex flex-col`}
@@ -1869,83 +1680,73 @@ export default function NexusOS() {
         </div>
 
         {/* Header + menus */}
-        <div className={`px-2 py-1 text-sm ${face} relative z-50`} ref={menuBarRef}>
+        <div className={`px-2 py-1 text-sm ${face} relative z-50`}>
           <div className="mt-0.5 flex items-center gap-1 relative">
-            <MenuButton id="File" />
-            <MenuButton id="Options" />
-            <MenuButton id="Help" />
-
-            <div className="relative">
-              <MenuDropdown
-                id="File"
-                items={[
-                  {
-                    label: "Wallet…",
-                    onClick: () => {
-                      setWalletUnlockErr("");
-                      setWalletUnlockOpen(true);
-                    },
+            <Win95Menu
+              label="File"
+              items={[
+                {
+                  label: "Wallet…",
+                  onClick: () => {
+                    setWalletUnlockErr("");
+                    setWalletUnlockOpen(true);
                   },
-                  { label: "Backup Wallet", onClick: () => setBackupOpen(true) },
-                  {
-                    label: "Lock wallet",
-                    onClick: () => {
-                      lockWalletSession();
-                    },
+                },
+                { label: "Backup Wallet", onClick: () => setBackupOpen(true) },
+                {
+                  label: "Lock wallet",
+                  onClick: () => {
+                    lockWalletSession();
                   },
-                  {
-                    label: "Exit",
-                    onClick: () => {
-                      setHybridSignerSession(null);
-                      clearSession();
-                      router.push("/");
-                    },
+                },
+                {
+                  label: "Exit",
+                  onClick: () => {
+                    setHybridSignerSession(null);
+                    clearSession();
+                    router.push("/");
                   },
-                ]}
-              />
-            </div>
-            <div className="relative">
-              <MenuDropdown
-                id="Options"
-                items={[
-                  {
-                    label: "Change PIN",
-                    onClick: () => {
-                      setPinCur("");
-                      setPinNew("");
-                      setPinNew2("");
-                      setPinErr("");
-                      setPinOk("");
-                      setChangePinOpen(true);
-                    },
+                },
+              ]}
+            />
+            <Win95Menu
+              label="Options"
+              items={[
+                {
+                  label: "Change PIN",
+                  onClick: () => {
+                    setPinCur("");
+                    setPinNew("");
+                    setPinNew2("");
+                    setPinErr("");
+                    setPinOk("");
+                    setChangePinOpen(true);
                   },
-                  { label: "Network Settings", onClick: () => setNetworkOpen(true) },
-                ]}
-              />
-            </div>
-            <div className="relative">
-              <MenuDropdown
-                id="Help"
-                items={[
-                  {
-                    label: "How to Use TET",
-                    onClick: () => {
-                      setManualOpen(true);
-                    },
+                },
+                { label: "Network Settings", onClick: () => setNetworkOpen(true) },
+              ]}
+            />
+            <Win95Menu
+              label="Help"
+              items={[
+                {
+                  label: "How to Use TET",
+                  onClick: () => {
+                    setManualOpen(true);
                   },
-                  {
-                    label: "About TET v0.1",
-                    onClick: () => {
-                      setAboutOpen(true);
-                    },
+                },
+                {
+                  label: "About TET v0.1",
+                  onClick: () => {
+                    setAboutOpen(true);
                   },
-                  {
-                    label: "TET Network Whitepaper",
-                    onClick: () => setWhitepaperOpen(true),
-                  },
-                ]}
-              />
-            </div>
+                },
+                {
+                  label: "TET Network Whitepaper",
+                  onClick: () => setWhitepaperOpen(true),
+                },
+              ]}
+            />
 
             <div className="ml-auto">
               <button
@@ -1963,16 +1764,20 @@ export default function NexusOS() {
         </div>
 
         {/* Tabs */}
-        <div className="flex items-end gap-1 px-2 pt-2 overflow-x-auto">
-          <TabButton id="Transactions" />
-          <TabButton id="Send Coins" />
-          <TabButton id="Inbox / Receive" />
-          <TabButton id="Messages" />
-          <TabButton id="Address Book" />
-          <TabButton id="AI Task Terminal" />
-          <TabButton id="Explorer" />
-          <TabButton id="Worker" />
-        </div>
+        <Win95TabBar
+          tabs={[
+            { id: "AI Task Terminal" },
+            { id: "Send Coins" },
+            { id: "Receive Coins" },
+            { id: "Messages" },
+            { id: "Address Book" },
+            { id: "Transactions" },
+            { id: "Explorer" },
+            { id: "Worker" },
+          ]}
+          activeTab={tab}
+          onChange={(id) => setTab(id as TabId)}
+        />
 
         {/* Main layout — scroll above status bar; bottom padding so SEND PROMPT clears the bar */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 px-3 pt-2 pb-28 md:pb-32 flex-1 min-h-0 overflow-y-auto overscroll-y-contain">
@@ -2018,140 +1823,52 @@ export default function NexusOS() {
 
           <div className="min-h-0 space-y-3">
           {tab === "Transactions" ? (
-            <div className={`${outset} ${panel} p-3`}>
-              <div className="text-sm mb-2 flex flex-wrap items-center gap-2">
-                <span>Recent Transactions</span>
-                <button
-                  type="button"
-                  onClick={() => clearTxHistoryStorage()}
-                  className={`${winBtn} ${panel} px-2 py-0.5 text-xs`}
-                >
-                  Clear history
-                </button>
-              </div>
-              <div className={`${inset} ${field} p-2 text-sm`}>
-                <table className="w-full border-collapse text-sm">
-                  <thead>
-                    <tr>
-                      <th className="text-left font-normal pb-1">Date</th>
-                      <th className="text-left font-normal pb-1">Type</th>
-                      <th className="text-left font-normal pb-1">Address</th>
-                      <th className="text-left font-normal pb-1">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="font-mono text-xs">
-                    {txHistory.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="py-2 font-sans text-sm">
-                          (no transactions)
-                        </td>
-                      </tr>
-                    ) : (
-                      txHistory.slice(0, 30).map((r, idx) => (
-                        <tr key={idx}>
-                          <td className="pr-3 py-0.5 font-sans text-xs">{r.date}</td>
-                          <td className="pr-3 py-0.5">{r.type}</td>
-                          <td className="pr-3 py-0.5">{r.address}</td>
-                          <td className="py-0.5">
-                            <div>{r.amount}</div>
-                          </td>
-                        </tr>
-                      ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <TransactionsPanel rows={txHistory} onClear={clearTxHistoryStorage} />
           ) : tab === "Send Coins" ? (
-            <div className={`${outset} ${panel} p-3`}>
-              <div className="text-sm mb-2">Send Coins</div>
-              {sendCoinsFields}
-            </div>
-          ) : tab === "Inbox / Receive" ? (
-            <div
-              className={`${outset} rounded-none border-2 border-t-white border-l-white border-b-[#404040] border-r-[#404040] bg-[#c0c0c0] p-2 flex flex-col flex-1 min-h-0 min-w-0`}
-            >
-              <div className="flex flex-wrap items-baseline justify-between gap-2 mb-2 px-0.5">
-                <span className="text-sm font-bold text-black">Outlook Express — Inbox (simulated)</span>
-                <span className="text-[10px] font-mono font-bold text-black tracking-wide">[ZK VERIFIED]</span>
-              </div>
-
-              <div className="mb-2 shrink-0 border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] bg-[#c0c0c0] p-2">
-                <div className="text-xs font-semibold text-black mb-1">Receive Coins (My Address)</div>
-                <div className="text-[11px] text-black/80 mb-1">L1 SS58 — share with senders for memo transfers.</div>
-                <div className={`${inset} bg-[#FFFFFF] px-1.5 py-1 text-xs font-mono text-black break-all`}>
-                  {activeAccountAddress}
-                </div>
-                <div className="mt-2">
-                  <button
-                    type="button"
-                    className={`${winBtn} bg-[#c0c0c0] px-3 py-1 text-xs text-black`}
-                    onClick={() => {
-                      void (async () => {
-                        try {
-                          await navigator.clipboard.writeText(activeAccountAddress);
-                          setInboxAddressCopied(true);
-                          window.setTimeout(() => setInboxAddressCopied(false), 2200);
-                        } catch {
-                          appendLedger(["Inbox: clipboard unavailable"]);
-                        }
-                      })();
-                    }}
-                  >
-                    {inboxAddressCopied ? "[OK] Copied" : "Copy address"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex flex-col flex-1 min-h-[min(52vh,420px)] min-w-0">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-1 px-0.5 shrink-0">
-                  <span className="text-xs font-semibold text-black">Inbox (Messages)</span>
-                  <button
-                    type="button"
-                    className={`${winBtn} bg-[#c0c0c0] px-2 py-0.5 text-xs text-black`}
-                    onClick={() => clearInboxForRecipient(activeIdentityPubkeyNorm)}
-                  >
-                    Clear inbox
-                  </button>
-                </div>
-                <div
-                  className={`${inset} flex-1 min-h-0 overflow-auto bg-[#FFFFFF] border-2 border-t-[#808080] border-l-[#808080] border-b-white border-r-white`}
-                >
-                  <table className="w-full border-collapse text-xs font-mono text-black">
-                    <thead>
-                      <tr className="bg-[#c0c0c0] border-b-2 border-[#808080] text-left">
-                        <th className="font-normal p-1.5 border-r border-[#808080] w-[130px]">Received</th>
-                        <th className="font-normal p-1.5 border-r border-[#808080] min-w-[100px]">From</th>
-                        <th className="font-normal p-1.5 border-r border-[#808080] w-[100px]">Amount</th>
-                        <th className="font-normal p-1.5">Message</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {inboxForIdentity.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="p-3 text-sm font-sans text-black/55 align-top">
-                            No incoming MemoSent events for this identity yet (live while OS is open).
-                          </td>
-                        </tr>
-                      ) : (
-                        inboxForIdentity.map((m) => (
-                          <tr key={m.id} className="border-b border-[#d0d0d0] align-top">
-                            <td className="p-1.5 whitespace-nowrap align-top text-[11px]">
-                              {new Date(m.receivedAtMs).toLocaleString()}
-                            </td>
-                            <td className="p-1.5 align-top break-all text-[11px]">{m.fromSs58}</td>
-                            <td className="p-1.5 whitespace-nowrap align-top">{m.grossTetDisplay} TET</td>
-                            <td className="p-1.5 align-top break-words [overflow-wrap:anywhere] text-[11px]">
-                              {m.memo || "—"}
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
+            <SendCoinsPanel
+              fromWalletId={founderWalletIdHex64}
+              fromWalletDisplay={normalizeWalletId64(founderWalletIdHex64)}
+              payTo={sendTo}
+              onPayToChange={setSendTo}
+              amount={sendAmountTet}
+              onAmountChange={setSendAmountTet}
+              amountStevemonDisplay={sendAmountStevemonDisplay}
+              feeBreakdown={
+                sendFeeBreakdown
+                  ? {
+                      netToRecipient: formatStevemonToTetDisplay(sendFeeBreakdown.netToRecipient),
+                      feeTotal: formatStevemonToTetDisplay(sendFeeBreakdown.feeTotal),
+                    }
+                  : null
+              }
+              memo={sendMessage}
+              onMemoChange={(v) => setSendMessage(v.slice(0, 64))}
+              userMessage={sendTransferUserMsg}
+              phase={sendTransferPhase}
+              sending={sendingTx}
+              signerReady={isSignerReady}
+              buttonLabel={sendTransferButtonLabel}
+              onSend={() => void onSendCoins()}
+              contacts={addrBook}
+            />
+          ) : tab === "Receive Coins" ? (
+            <InboxReceivePanel
+              address={activeAccountAddress}
+              addressCopied={inboxAddressCopied}
+              onCopyAddress={() => {
+                void (async () => {
+                  try {
+                    await navigator.clipboard.writeText(activeAccountAddress);
+                    setInboxAddressCopied(true);
+                    window.setTimeout(() => setInboxAddressCopied(false), 2200);
+                  } catch {
+                    appendLedger(["Inbox: clipboard unavailable"]);
+                  }
+                })();
+              }}
+              onClearInbox={() => clearInboxForRecipient(activeIdentityPubkeyNorm)}
+              messages={inboxForIdentity}
+            />
           ) : tab === "Messages" ? (
             <MessagesPanel
               key={founderWalletIdHex64}
@@ -2162,345 +1879,62 @@ export default function NexusOS() {
               myWalletId={founderWalletIdHex64}
             />
           ) : tab === "Address Book" ? (
-            <AddressBookPanel
-              outset={outset}
-              inset={inset}
-              winBtn={winBtn}
-              entries={addrBook}
-              onAdd={onAddAddress}
-            />
+            <AddressBookPanel contacts={addrBook} onAdd={onAddAddress} />
           ) : tab === "AI Task Terminal" ? (
-            <div className={`${outset} ${panel} p-2 flex h-[min(72vh,700px)] min-h-[520px] flex-col overflow-hidden`}>
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-2 px-1">
-                <div>
-                  <div className="text-sm font-semibold text-black">TET-Network Chat</div>
-                  <div className="text-[11px] text-black/60">
-                    Ask naturally. Distributed compute, proof, and settlement happen behind the scenes.
-                  </div>
-                </div>
-                <div className={`${inset} ${field} px-2 py-1 text-[11px] font-mono text-black/70`}>
-                  Block {bestNumber == null ? "—" : bestNumber.toLocaleString("en-US")} · Workers {statusWorkers ?? "—"}
-                </div>
-              </div>
-
-              <div
-                ref={aiChatScrollRef}
-                className={`${inset} flex-1 min-h-0 overflow-y-auto overscroll-contain bg-[#f5f3ea] p-3 text-sm`}
-              >
-                <div className="mx-auto flex max-w-3xl flex-col gap-3">
-                  {aiChatMessages.map((m) => {
-                    const isUser = m.role === "user";
-                    return (
-                      <div key={m.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-                        <div
-                          className={[
-                            "max-w-[86%] whitespace-pre-wrap break-words rounded-2xl px-4 py-3 shadow-sm",
-                            isUser
-                              ? "bg-[#000080] text-white rounded-br-sm"
-                              : m.status === "error"
-                                ? "bg-[#fff1f1] text-[#7a1010] border border-[#d28a8a] rounded-bl-sm"
-                                : "bg-white text-black border border-black/10 rounded-bl-sm",
-                          ].join(" ")}
-                        >
-                          <div className="mb-1 text-[10px] font-mono opacity-65">
-                            {isUser ? "You" : "TET-Network"} · {m.ts > 0 ? new Date(m.ts).toLocaleTimeString() : "ready"}
-                          </div>
-                          <div className="leading-relaxed">{m.text}</div>
-                          {m.status === "queued" ? (
-                            <div className="mt-2 text-[11px] font-mono text-[#0b5c2e]">
-                              L1 accepted · proof settlement pending
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-
-                  {aiTaskSubmitting ? (
-                    <div className="flex justify-start">
-                      <div className="max-w-[86%] rounded-2xl rounded-bl-sm border border-[#00a0a0]/30 bg-white px-4 py-3 text-black shadow-sm">
-                        <div className="mb-2 text-[10px] font-mono text-black/55">TET-Network</div>
-                        <div className="space-y-1.5 font-mono text-xs">
-                          <div className="flex items-center gap-2">
-                            <span className="h-2 w-2 animate-pulse rounded-full bg-[#000080]" />
-                            Waiting for Network Compute...
-                          </div>
-                          <div className="flex items-center gap-2 text-black/70">
-                            <span className="h-2 w-2 animate-pulse rounded-full bg-[#008080] [animation-delay:160ms]" />
-                            Dispatching to worker mesh...
-                          </div>
-                          <div className="flex items-center gap-2 text-black/60">
-                            <span className="h-2 w-2 animate-pulse rounded-full bg-[#0b5c2e] [animation-delay:320ms]" />
-                            ZK Proving...
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void onSubmitAiTaskRequest();
-                }}
-                className={`${outset} ${panel} mt-2 shrink-0 p-2`}
-              >
-                <div className="flex items-end gap-2">
-                  <textarea
-                    value={aiTaskPrompt}
-                    onChange={(e) => setAiTaskPrompt(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && !e.shiftKey) {
-                        e.preventDefault();
-                        void onSubmitAiTaskRequest();
-                      }
-                    }}
-                    rows={2}
-                    disabled={aiTaskSubmitting}
-                    className={`${inset} ${field} min-h-[3rem] flex-1 resize-none px-3 py-2 text-sm outline-none`}
-                    placeholder="Message TET-Network..."
-                  />
-                  <button
-                    type="submit"
-                    disabled={
-                      aiTaskSubmitting || !isSignerReady || aiEscrowEstimateStevemon <= 0n || aiTaskPrompt.trim().length === 0
-                    }
-                    className={`${winBtn} ${panel} px-4 py-3 text-sm font-semibold disabled:opacity-50 disabled:active:translate-x-0 disabled:active:translate-y-0`}
-                  >
-                    {aiTaskSubmitting ? "Sending..." : "Send"}
-                  </button>
-                </div>
-                <div className="mt-1 flex flex-wrap items-center justify-between gap-2 text-[10px] text-black/50">
-                  <span>
-                    {isSignerReady ? "Wallet ready" : "Unlock wallet from File -> Wallet"} · Shift+Enter for newline
-                  </span>
-                  <span className="font-mono">
-                    {stringToU8a(aiTaskPrompt).length} / {AI_PROMPT_MAX_BYTES} bytes
-                    {lastAiDemandTaskId ? ` · last task ${lastAiDemandTaskId.slice(0, 12)}...` : ""}
-                  </span>
-                </div>
-              </form>
-            </div>
+            <AITaskTerminalPanel
+              chatScrollRef={aiChatScrollRef}
+              bestNumber={bestNumber}
+              statusWorkers={statusWorkers}
+              messages={aiChatMessages}
+              submitting={aiTaskSubmitting}
+              onSubmit={() => void onSubmitAiTaskRequest()}
+              prompt={aiTaskPrompt}
+              onPromptChange={setAiTaskPrompt}
+              signerReady={isSignerReady}
+              sendDisabled={
+                aiTaskSubmitting || !isSignerReady || aiEscrowEstimateStevemon <= 0n || aiTaskPrompt.trim().length === 0
+              }
+              promptBytes={stringToU8a(aiTaskPrompt).length}
+              promptMaxBytes={AI_PROMPT_MAX_BYTES}
+              lastTaskId={lastAiDemandTaskId}
+            />
           ) : tab === "Explorer" ? (
-            <div className={`${outset} ${panel} p-3 flex flex-col min-h-[min(74vh,620px)]`}>
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <div>
-                  <div className="text-sm font-semibold text-black">TET Explorer</div>
-                  <div className="text-[11px] text-black/65 mt-0.5 font-mono">
-                    Unified OS window · blocks, tx hashes, and workload proofs stay inside TET-OS.
-                  </div>
-                </div>
-                <div className="text-[11px] font-mono text-black/65">Core: {baseUrl}</div>
-              </div>
-              <form onSubmit={(e) => void onExplorerSearch(e)} className="mb-3 flex flex-col gap-2 sm:flex-row">
-                <input
-                  value={explorerQuery}
-                  onChange={(e) => setExplorerQuery(e.target.value)}
-                  className={`${inset} ${field} min-w-0 flex-1 px-2 py-1 text-sm font-mono outline-none`}
-                  placeholder="Block height or 64-hex tx hash"
-                />
-                <button type="submit" disabled={explorerLoading} className={`${winBtn} ${panel} px-3 py-1 text-sm font-semibold`}>
-                  {explorerLoading ? "Searching…" : "Search"}
-                </button>
-              </form>
-              {explorerErr ? <div className="mb-2 text-sm font-mono text-red-800">{explorerErr}</div> : null}
-              <div className={`${inset} ${field} flex-1 min-h-0 overflow-auto p-2`}>
-                {explorerBlock ? (
-                  <div className="space-y-3 text-sm">
-                    <div className="font-semibold">Block #{explorerBlock.block.height}</div>
-                    <div className="grid grid-cols-1 gap-2 text-xs font-mono md:grid-cols-2">
-                      <div className={`${inset} bg-white p-2 break-all`}>block_id: {explorerBlock.block.block_id}</div>
-                      <div className={`${inset} bg-white p-2 break-all`}>state_root: {explorerBlock.block.state_root}</div>
-                      <div className={`${inset} bg-white p-2`}>tx_count: {explorerBlock.block.tx_count}</div>
-                      <div className={`${inset} bg-white p-2`}>
-                        time: {explorerBlock.block.ts_ms ? new Date(explorerBlock.block.ts_ms).toLocaleString() : "—"}
-                      </div>
-                    </div>
-                    <div className="font-semibold">Transactions</div>
-                    {explorerBlock.txs.length === 0 ? (
-                      <div className="text-sm text-black/55">(coinbase-only block)</div>
-                    ) : (
-                      <table className="w-full border-collapse text-xs font-mono">
-                        <tbody>
-                          {explorerBlock.txs.map((tx) => (
-                            <tr key={tx.hash} className="border-b border-black/10 align-top">
-                              <td className="py-1 pr-2">#{tx.tx_index}</td>
-                              <td className="py-1 pr-2 font-semibold">{tx.tx_kind}</td>
-                              <td className="py-1 break-all">{shortHash(tx.hash, 14, 10)}</td>
-                              <td className="py-1 pl-2 text-right">{tx.workload_flag === 1 ? "AI" : "STD"}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    )}
-                  </div>
-                ) : explorerTx ? (
-                  <div className="space-y-3 text-sm">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-semibold">Transaction</span>
-                      <span className={`${inset} bg-white px-2 py-0.5 text-xs font-mono`}>{explorerTx.tx_kind}</span>
-                      <span className={`${inset} bg-white px-2 py-0.5 text-xs font-mono`}>
-                        {explorerTx.workload_flag === 1 ? "AI workload" : "standard"}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2 text-xs font-mono md:grid-cols-2">
-                      <div className={`${inset} bg-white p-2 break-all`}>hash: {explorerTx.hash}</div>
-                      <div className={`${inset} bg-white p-2`}>block: #{explorerTx.block_height}</div>
-                      <div className={`${inset} bg-white p-2`}>index: {explorerTx.tx_index}</div>
-                      <div className={`${inset} bg-white p-2 break-all`}>signer: {explorerTx.signer_wallet}</div>
-                    </div>
-                    <pre className={`${inset} bg-white p-2 max-h-72 overflow-auto text-[11px] whitespace-pre-wrap break-words`}>
-                      {JSON.stringify(explorerTx.tx, null, 2)}
-                    </pre>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      <div className={`${outset} ${panel} p-2`}>
-                        <div className="text-[11px] uppercase tracking-wide text-black/60">Latest Height</div>
-                        <div className="mt-1 text-2xl font-mono font-bold">#{latestBlocks[0]?.height ?? "—"}</div>
-                      </div>
-                      <div className={`${outset} ${panel} p-2`}>
-                        <div className="text-[11px] uppercase tracking-wide text-black/60">Total Supply</div>
-                        <div
-                          className="mt-1 truncate text-lg font-mono font-bold"
-                          title={totalSupplyStevemon != null ? `${formatStevemonToTetFullDisplay(totalSupplyStevemon)} TET` : totalSupply}
-                        >
-                          {totalSupplyStevemon != null ? formatStevemonToTetCompact(totalSupplyStevemon) : totalSupply} TET
-                        </div>
-                      </div>
-                      <div className={`${outset} ${panel} p-2`}>
-                        <div className="text-[11px] uppercase tracking-wide text-black/60">Worker Pool</div>
-                        <div
-                          className="mt-1 truncate text-lg font-mono font-bold"
-                          title={workerPoolBalanceStevemon !== null ? `${formatStevemonToTetFullDisplay(workerPoolBalanceStevemon)} TET` : undefined}
-                        >
-                          {workerPoolBalanceStevemon !== null ? `${formatStevemonToTetCompact(workerPoolBalanceStevemon)} TET` : "—"}
-                        </div>
-                      </div>
-                    </div>
-                    <table className="w-full border-collapse text-xs font-mono">
-                      <thead>
-                        <tr className="border-b-2 border-[#808080] text-left">
-                          <th className="py-1 pr-2 font-normal">Height</th>
-                          <th className="py-1 pr-2 font-normal">Block ID</th>
-                          <th className="py-1 pr-2 font-normal">State Root</th>
-                          <th className="py-1 text-right font-normal">Tx</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {latestBlocks.length === 0 ? (
-                          <tr>
-                            <td colSpan={4} className="py-3 text-sm text-black/55">
-                              No blocks yet.
-                            </td>
-                          </tr>
-                        ) : (
-                          latestBlocks.map((b) => (
-                            <tr key={`${b.height}-${b.block_id}`} className="border-b border-black/10">
-                              <td className="py-1 pr-2 font-bold">#{b.height}</td>
-                              <td className="py-1 pr-2 break-all">{shortHash(b.block_id)}</td>
-                              <td className="py-1 pr-2 break-all">{shortHash(b.state_root ?? "")}</td>
-                              <td className="py-1 text-right">{b.tx_count}</td>
-                            </tr>
-                          ))
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            </div>
+            <ExplorerPanel
+              baseUrl={baseUrl}
+              query={explorerQuery}
+              onQueryChange={setExplorerQuery}
+              onSearch={(e) => void onExplorerSearch(e)}
+              loading={explorerLoading}
+              error={explorerErr}
+              block={explorerBlock}
+              tx={explorerTx}
+              recentBlocks={latestBlocks}
+              totalSupplyDisplay={totalSupplyStevemon != null ? formatStevemonToTetCompact(totalSupplyStevemon) : totalSupply}
+              totalSupplyTitle={
+                totalSupplyStevemon != null ? `${formatStevemonToTetFullDisplay(totalSupplyStevemon)} TET` : totalSupply
+              }
+              workerPoolDisplay={
+                workerPoolBalanceStevemon !== null ? `${formatStevemonToTetCompact(workerPoolBalanceStevemon)} TET` : "—"
+              }
+              workerPoolTitle={
+                workerPoolBalanceStevemon !== null
+                  ? `${formatStevemonToTetFullDisplay(workerPoolBalanceStevemon)} TET`
+                  : undefined
+              }
+            />
           ) : tab === "Worker" ? (
-            <div className={`${outset} ${panel} p-3`}>
-              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                <div>
-                  <div className="text-sm font-semibold text-black">Worker</div>
-                  <div className="text-[11px] text-black/65 mt-0.5 font-mono">
-                    Mainnet miner console merged into the TET-OS desktop.
-                  </div>
-                </div>
-                <div className={`${inset} ${field} px-2 py-1 text-xs font-mono`}>
-                  CAAC: {networkCaacLine}
-                </div>
-              </div>
-              {workerCockpitErr ? <div className="mb-2 text-sm font-mono text-red-800">{workerCockpitErr}</div> : null}
-              <div className={`${inset} ${field} p-2 text-xs font-mono break-all mb-3`}>
-                Wallet: {normalizeWalletId64(founderWalletIdHex64) || "unlock required"} · Refresh: 5s
-                {workerCockpitUpdatedAt ? ` · Last pulse: ${new Date(workerCockpitUpdatedAt).toLocaleTimeString()}` : ""}
-                {workerCockpitLoading ? " · syncing…" : ""}
-              </div>
-              <button
-                type="button"
-                onClick={onStartMiningGpu}
-                className={[
-                  "mb-3 w-full rounded-none border-2 px-3 py-3 text-left font-mono",
-                  "border-t-white border-l-white border-b-[#404040] border-r-[#404040]",
-                  "bg-[#101010] text-[#d7d7d7]",
-                  "shadow-[inset_0_0_0_1px_rgba(0,255,128,0.18)] active:border-t-[#404040] active:border-l-[#404040] active:border-b-white active:border-r-white active:translate-x-px active:translate-y-px",
-                ].join(" ")}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="text-base font-bold tracking-[0.08em]">Start Mining (GPU)</span>
-                  <span className={miningOn ? "animate-pulse text-[#39ff88]" : "text-[#9a9a9a]"}>
-                    {miningOn ? "[ WORKER ONLINE ]" : "[ ARM WORKER ]"}
-                  </span>
-                </div>
-                <div className="mt-1 text-xs text-[#9a9a9a]">
-                  Opens the local daemon channel for AI workload routing, proof generation, and L1 settlement.
-                </div>
-              </button>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <div className={`${outset} ${panel} p-3`}>
-                  <div className="text-[11px] uppercase tracking-wide text-black/60">Live Balance</div>
-                  <div className="mt-1 text-2xl font-mono font-bold">
-                    {workerCockpit ? formatWorkerTet(workerCockpit.balance_micro) : "0 TET"}
-                  </div>
-                </div>
-                <div className={`${outset} ${panel} p-3`}>
-                  <div className="text-[11px] uppercase tracking-wide text-black/60">Estimated Rewards</div>
-                  <div className="mt-1 text-2xl font-mono font-bold">
-                    {workerCockpit ? formatWorkerTet(workerCockpit.estimated_total_rewards_micro) : "0 TET"}
-                  </div>
-                </div>
-                <div className={`${outset} ${panel} p-3`}>
-                  <div className="text-[11px] uppercase tracking-wide text-black/60">AI Tasks Cleared</div>
-                  <div className="mt-1 text-2xl font-mono font-bold">{workerCockpit?.processed_task_count ?? 0}</div>
-                </div>
-                <div className={`${outset} ${panel} p-3`}>
-                  <div className="text-[11px] uppercase tracking-wide text-black/60">ZK Proof Wins</div>
-                  <div className="mt-1 text-2xl font-mono font-bold">{workerCockpit?.zk_success_count ?? 0}</div>
-                </div>
-              </div>
-              <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
-                <div className={`${inset} ${field} p-2 text-sm`}>
-                  <div className="font-semibold mb-1">Daemon Status</div>
-                  <div className="font-mono text-xs">
-                    state: {workerCockpit?.daemon.enabled ? "RUNNING" : "OFF"} · queue:{" "}
-                    {workerCockpit?.daemon.current_task_count ?? 0} tasks · poll: {workerCockpit?.daemon.poll_ms ?? 0}ms
-                  </div>
-                </div>
-                <div className={`${inset} ${field} p-2 text-sm`}>
-                  <div className="font-semibold mb-1">Hardware Power</div>
-                  <div className="font-mono text-xs">
-                    {workerCockpit ? formatTflops(workerCockpit.hardware.tflops_est) : "0 TFLOPS"} · CPU{" "}
-                    {workerCockpit?.hardware.cpu_logical_cores ?? 0} · RAM{" "}
-                    {workerCockpit ? `${(workerCockpit.hardware.ram_total_bytes / 1024 ** 3).toFixed(1)}GiB` : "0GiB"} ·{" "}
-                    {workerCockpit?.hardware.gpu_detected ? `GPU ${workerCockpit.hardware.gpu_hint}` : "CPU proving"}
-                  </div>
-                </div>
-              </div>
-              <label className="mt-3 flex items-center gap-2 text-sm select-none">
-                <input type="checkbox" checked={miningOn} onChange={(e) => setMiningOn(e.target.checked)} />
-                Local worker runtime enabled
-              </label>
-              <div className="mt-2 text-sm mb-1">Worker Log</div>
-              <div className={`${inset} ${field} p-2 h-[24vh] overflow-auto text-xs font-mono whitespace-pre text-black`}>
-                {miningLog.join("\n")}
-              </div>
-            </div>
+            <WorkerPanel
+              caacLine={networkCaacLine}
+              error={workerCockpitErr}
+              walletLabel={normalizeWalletId64(founderWalletIdHex64)}
+              updatedAt={workerCockpitUpdatedAt}
+              loading={workerCockpitLoading}
+              onStartMining={onStartMiningGpu}
+              miningOn={miningOn}
+              onMiningToggle={setMiningOn}
+              cockpit={workerCockpit}
+              log={miningLog}
+            />
           ) : null}
           </div>
           </section>
@@ -2559,32 +1993,20 @@ export default function NexusOS() {
       </div>
 
       {walletUnlockOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-4 py-6"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
+        // `hideClose` mirrors the legacy "Required" state: when the device already has a wallet
+        // and it's locked, the unlock window is mandatory (no X, no backdrop dismiss). Title stays
+        // dynamic to preserve the original create-vs-unlock wording.
+        <Win95Window
+          title={persistedWalletKind === "none" ? "Wallet — local signing (PQC)" : "Enter PIN to Unlock"}
+          onClose={() => setWalletUnlockOpen(false)}
+          hideClose={walletGate === "locked" && persistedWalletKind !== "none"}
+          badge="Required"
+          closeOnBackdrop={false}
+          width="56rem"
+          className="space-y-3 text-sm text-black"
         >
-          <div className="w-full max-w-4xl max-h-[min(92vh,720px)] overflow-y-auto rounded-sm bg-[#D6D4CE] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] shadow-lg">
-            <div className="flex items-center justify-between bg-[#000080] px-2 py-1 text-white font-bold">
-              <div className="text-sm">
-                {persistedWalletKind === "none" ? "Wallet — local signing (PQC)" : "Enter PIN to Unlock"}
-              </div>
-              {walletGate === "locked" && persistedWalletKind !== "none" ? (
-                <span className="text-[10px] font-normal text-white/80 px-1">Required</span>
-              ) : (
-                <button
-                  type="button"
-                  className={`${winBtn} bg-[#DAD8D2] px-2 py-0 text-sm leading-none`}
-                  onClick={() => setWalletUnlockOpen(false)}
-                  aria-label="Close"
-                >
-                  X
-                </button>
-              )}
-            </div>
-            <div className="p-3 space-y-3 text-sm text-black">
-              {walletUnlockErr ? (
+          <>
+            {walletUnlockErr ? (
                 <div className="rounded border border-red-300 bg-red-50 px-2 py-1.5 text-xs font-mono text-red-900">
                   {walletUnlockErr}
                 </div>
@@ -2741,32 +2163,18 @@ export default function NexusOS() {
                   </button>
                 </div>
               )}
-            </div>
-          </div>
-        </div>
+          </>
+        </Win95Window>
       ) : null}
 
       {aboutOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-6"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
+        <Win95Window
+          title="About TET v0.1"
+          onClose={() => setAboutOpen(false)}
+          width="48rem"
+          closeOnBackdrop={false}
         >
-          <div className="w-full max-w-3xl rounded-sm bg-[#D6D4CE] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] overflow-hidden">
-            <div className="flex items-center justify-between bg-[#000080] px-2 py-1 text-white font-bold [text-rendering:optimizeSpeed] [-webkit-font-smoothing:auto]">
-              <div className="text-sm">About TET v0.1</div>
-              <button
-                type="button"
-                className={`${winBtn} bg-[#DAD8D2] px-2 py-0 text-sm leading-none`}
-                onClick={() => setAboutOpen(false)}
-                aria-label="Close"
-              >
-                X
-              </button>
-            </div>
-            <div className="p-3">
-              <div className={`${inset} ${field} p-3 h-[52vh] overflow-auto text-xs font-mono whitespace-pre-wrap text-black leading-relaxed`}>
+          <div className={`${inset} ${field} p-3 h-[52vh] overflow-auto text-xs font-mono whitespace-pre-wrap text-black leading-relaxed`}>
 {`TET Network v0.1
 Thermodynamic Execution Tree
 
@@ -2783,38 +2191,23 @@ Execution model:
 - Burn accounting turns compute into permanent supply pressure.
 
 This is not a demo console. It is the operator shell for TET-Core.`}
-              </div>
-              <div className="flex justify-end pt-3">
-                <button type="button" className={`${winBtn} bg-[#DAD8D2] px-6 py-1 text-sm`} onClick={() => setAboutOpen(false)}>
-                  OK
-                </button>
-              </div>
-            </div>
           </div>
-        </div>
+          <div className="flex justify-end pt-3">
+            <button type="button" className={`${winBtn} bg-[#DAD8D2] px-6 py-1 text-sm`} onClick={() => setAboutOpen(false)}>
+              OK
+            </button>
+          </div>
+        </Win95Window>
       ) : null}
 
       {manualOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-6"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
+        <Win95Window
+          title="TET Network - User Manual"
+          onClose={() => setManualOpen(false)}
+          width="48rem"
+          closeOnBackdrop={false}
         >
-          <div className="w-full max-w-3xl rounded-sm bg-[#D4D0C8] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] overflow-hidden">
-            <div className="flex items-center justify-between bg-[#000080] px-2 py-1 text-white font-bold [text-rendering:optimizeSpeed] [-webkit-font-smoothing:auto]">
-              <div className="text-sm">TET Network - User Manual</div>
-              <button
-                type="button"
-                className={`${winBtn} bg-[#DAD8D2] px-2 py-0 text-sm leading-none`}
-                onClick={() => setManualOpen(false)}
-                aria-label="Close"
-              >
-                X
-              </button>
-            </div>
-            <div className="p-3 bg-[#D4D0C8]">
-              <div className={`${inset} bg-white p-3 h-[52vh] overflow-auto text-xs font-mono whitespace-pre-wrap text-black leading-relaxed`}>
+          <div className={`${inset} bg-white p-3 h-[52vh] overflow-auto text-xs font-mono whitespace-pre-wrap text-black leading-relaxed`}>
 {`TET NETWORK v0.1 - OPERATOR MANUAL
 
 1. WALLET / KEY MATERIAL
@@ -2833,88 +2226,58 @@ Explorer reads blocks, transaction hashes, state roots, and workload flags direc
 Transfers use the same wallet identity and ledger binding rules. Every state-changing action is nonce-bound and chain-bound to prevent replay across histories.
 
 TET-OS is a desktop operator shell for the Thermodynamic Execution Tree.`}
-              </div>
-              <div className="flex justify-end pt-3">
-                <button type="button" className={`${winBtn} bg-[#DAD8D2] px-6 py-1 text-sm`} onClick={() => setManualOpen(false)}>
-                  OK
-                </button>
-              </div>
-            </div>
           </div>
-        </div>
+          <div className="flex justify-end pt-3">
+            <button type="button" className={`${winBtn} bg-[#DAD8D2] px-6 py-1 text-sm`} onClick={() => setManualOpen(false)}>
+              OK
+            </button>
+          </div>
+        </Win95Window>
       ) : null}
 
       {backupOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-6"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
+        <Win95Window
+          title="Wallet Backup"
+          onClose={() => setBackupOpen(false)}
+          width="32rem"
+          closeOnBackdrop={false}
+          className="p-4"
         >
-          <div className="w-full max-w-lg rounded-sm bg-[#D4D0C8] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] overflow-hidden">
-            <div className="flex items-center justify-between bg-[#000080] px-2 py-1 text-white font-bold [text-rendering:optimizeSpeed] [-webkit-font-smoothing:auto]">
-              <div className="text-sm">Wallet Backup</div>
-              <button
-                type="button"
-                className={`${winBtn} bg-[#DAD8D2] px-2 py-0 text-sm leading-none`}
-                onClick={() => setBackupOpen(false)}
-                aria-label="Close"
-              >
-                X
-              </button>
+          <div className="flex gap-3 items-start">
+            <div
+              className="w-10 h-10 bg-[#DAD8D2] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] flex items-center justify-center"
+              aria-hidden="true"
+            >
+              <div className="w-0 h-0 border-l-[8px] border-r-[8px] border-b-[14px] border-l-transparent border-r-transparent border-b-black relative top-[-1px]" />
             </div>
-            <div className="p-4 bg-[#D4D0C8]">
-              <div className="flex gap-3 items-start">
-                <div
-                  className={[
-                    "w-10 h-10 bg-[#DAD8D2] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] flex items-center justify-center",
-                  ].join(" ")}
-                  aria-hidden="true"
-                >
-                  <div className="w-0 h-0 border-l-[8px] border-r-[8px] border-b-[14px] border-l-transparent border-r-transparent border-b-black relative top-[-1px]" />
-                </div>
-                <div className="text-sm">
-                  wallet.dat has been securely saved to your local machine. Please keep your 12-word mnemonic safe.
-                </div>
-              </div>
-              <div className="flex justify-end pt-4">
-                <button
-                  type="button"
-                  className={`${winBtn} bg-[#DAD8D2] px-8 py-1 text-sm`}
-                  onClick={() => setBackupOpen(false)}
-                >
-                  OK
-                </button>
-              </div>
+            <div className="text-sm">
+              wallet.dat has been securely saved to your local machine. Please keep your 12-word mnemonic safe.
             </div>
           </div>
-        </div>
+          <div className="flex justify-end pt-4">
+            <button
+              type="button"
+              className={`${winBtn} bg-[#DAD8D2] px-8 py-1 text-sm`}
+              onClick={() => setBackupOpen(false)}
+            >
+              OK
+            </button>
+          </div>
+        </Win95Window>
       ) : null}
 
       {changePinOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-6"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
+        <Win95Window
+          title="Change PIN"
+          onClose={() => closeChangePin()}
+          width="32rem"
+          closeOnBackdrop={false}
+          className="p-4"
         >
-          <div className="w-full max-w-lg rounded-sm bg-[#D4D0C8] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] overflow-hidden">
-            <div className="flex items-center justify-between bg-[#000080] px-2 py-1 text-white font-bold [text-rendering:optimizeSpeed] [-webkit-font-smoothing:auto]">
-              <div className="text-sm">Change PIN</div>
-              <button
-                type="button"
-                className={`${winBtn} bg-[#DAD8D2] px-2 py-0 text-sm leading-none`}
-                onClick={() => closeChangePin()}
-                aria-label="Close"
-              >
-                X
-              </button>
-            </div>
-            <div className="p-4 bg-[#D4D0C8]">
-              <div className={`${inset} bg-white p-2 text-xs font-mono text-black/75`}>
-                Re-encrypts the local wallet vault. Active session keys remain loaded until the wallet is locked or the page is closed.
-              </div>
-              <div className="mt-3 space-y-3 text-sm font-mono">
+          <div className={`${inset} bg-white p-2 text-xs font-mono text-black/75`}>
+            Re-encrypts the local wallet vault. Active session keys remain loaded until the wallet is locked or the page is closed.
+          </div>
+          <div className="mt-3 space-y-3 text-sm font-mono">
                 <div className="grid grid-cols-[140px_1fr] items-center gap-2">
                   <div>Current PIN</div>
                   <input
@@ -2970,31 +2333,17 @@ TET-OS is a desktop operator shell for the Thermodynamic Execution Tree.`}
                   Cancel
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
+        </Win95Window>
       ) : null}
 
       {networkOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-6"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
+        <Win95Window
+          title="Network Configuration"
+          onClose={() => setNetworkOpen(false)}
+          width="36rem"
+          closeOnBackdrop={false}
+          className="p-4"
         >
-          <div className="w-full max-w-xl rounded-sm bg-[#D4D0C8] border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] overflow-hidden">
-            <div className="flex items-center justify-between bg-[#000080] px-2 py-1 text-white font-bold [text-rendering:optimizeSpeed] [-webkit-font-smoothing:auto]">
-              <div className="text-sm">Network Configuration</div>
-              <button
-                type="button"
-                className={`${winBtn} bg-[#DAD8D2] px-2 py-0 text-sm leading-none`}
-                onClick={() => setNetworkOpen(false)}
-                aria-label="Close"
-              >
-                X
-              </button>
-            </div>
-            <div className="p-4 bg-[#D4D0C8]">
               <div className="space-y-3 text-sm">
                 <div className="grid grid-cols-[170px_1fr] items-center gap-2">
                   <div>TET-Core REST</div>
@@ -3023,138 +2372,54 @@ TET-OS is a desktop operator shell for the Thermodynamic Execution Tree.`}
                   OK
                 </button>
               </div>
-            </div>
-          </div>
-        </div>
+        </Win95Window>
       ) : null}
 
       {whitepaperOpen ? (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center px-6 py-6"
-          onMouseDown={(e) => e.stopPropagation()}
-          role="dialog"
-          aria-modal="true"
+        // Notepad.exe joke preserved via the "Whitepaper.txt - Notepad" window title; the inner
+        // client area stays a pure-white monospace, word-wrap-only, vertically scrollable text box
+        // with the classic Win9x scrollbar. (Frame chrome is now the shared Win95Window outset bevel.)
+        <Win95Window
+          title="Whitepaper.txt - Notepad"
+          onClose={() => setWhitepaperOpen(false)}
+          width="48rem"
+          closeOnBackdrop={false}
+          className="p-2"
         >
-          {/* Notepad.exe-style shell: deep Win98 bevel */}
-          <div className="w-full min-w-0 max-w-3xl max-h-[min(92vh,780px)] flex flex-col rounded-none bg-[#c0c0c0] border-[3px] border-t-white border-l-white border-b-[#404040] border-r-[#404040] shadow-[2px_2px_0_#00000026] overflow-hidden">
-            <div className="flex items-center justify-between gap-2 bg-[#000080] px-2 py-1 text-white font-bold [text-rendering:optimizeSpeed] [-webkit-font-smoothing:auto] shrink-0">
-              <div className="text-sm truncate min-w-0 pr-2">Whitepaper.txt — TET Network v0.1</div>
-              <button
-                type="button"
-                className={`${winBtn} shrink-0 bg-[#c0c0c0] px-2 py-0 text-sm leading-none text-black`}
-                onClick={() => setWhitepaperOpen(false)}
-                aria-label="Close whitepaper"
-              >
-                X
-              </button>
-            </div>
-            <div className="p-2 bg-[#c0c0c0] flex flex-col flex-1 min-h-0 min-w-0 border-t border-[#dfdfdf]">
-              {/* Sunken client area = pure white like Notepad; word-wrap only, never horizontal scroll */}
-              <div
-                className={[
-                  inset,
-                  "flex-1 min-h-0 min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-[3px] py-[2px]",
-                  "bg-[#FFFFFF] text-black",
-                  "text-[13px] leading-[1.22] tracking-normal",
-                  "[font-smooth:none] [-webkit-font-smoothing:none] [-moz-osx-font-smoothing:unset]",
-                  "[scrollbar-width:thin] [scrollbar-color:#808080_#d4d0c8]",
-                  "[&::-webkit-scrollbar]:w-[14px] [&::-webkit-scrollbar-track]:bg-[#d4d0c8]",
-                  "[&::-webkit-scrollbar-thumb]:rounded-none [&::-webkit-scrollbar-thumb]:border-2 [&::-webkit-scrollbar-thumb]:border-t-white [&::-webkit-scrollbar-thumb]:border-l-white [&::-webkit-scrollbar-thumb]:border-b-[#808080] [&::-webkit-scrollbar-thumb]:border-r-[#808080] [&::-webkit-scrollbar-thumb]:bg-[#c0c0c0]",
-                ].join(" ")}
-                style={{
-                  fontFamily: '"Courier New", Courier, "MS Gothic", monospace',
-                  textRendering: "auto",
-                }}
-              >
-                <pre className="m-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-[inherit] text-[inherit] select-text overflow-x-hidden">
-                  {TET_WHITEPAPER_FULL_TEXT}
-                </pre>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 shrink-0">
-                <a
-                  href="/tet-network-whitepaper.pdf"
-                  download="tet-network-whitepaper.pdf"
-                  className={`${winBtn} inline-flex items-center gap-1 bg-[#c0c0c0] px-3 py-1 text-sm text-black no-underline`}
-                >
-                  Download Full PDF
-                </a>
-                <button type="button" className={`${winBtn} bg-[#c0c0c0] px-8 py-1 text-sm text-black`} onClick={() => setWhitepaperOpen(false)}>
-                  OK
-                </button>
-              </div>
-            </div>
+          <div
+            className={[
+              inset,
+              "h-[min(78vh,680px)] min-w-0 max-w-full overflow-y-auto overflow-x-hidden px-[3px] py-[2px]",
+              "bg-[#FFFFFF] text-black",
+              "text-[13px] leading-[1.22] tracking-normal",
+              "[font-smooth:none] [-webkit-font-smoothing:none] [-moz-osx-font-smoothing:unset]",
+              "[scrollbar-width:thin] [scrollbar-color:#808080_#d4d0c8]",
+              "[&::-webkit-scrollbar]:w-[14px] [&::-webkit-scrollbar-track]:bg-[#d4d0c8]",
+              "[&::-webkit-scrollbar-thumb]:rounded-none [&::-webkit-scrollbar-thumb]:border-2 [&::-webkit-scrollbar-thumb]:border-t-white [&::-webkit-scrollbar-thumb]:border-l-white [&::-webkit-scrollbar-thumb]:border-b-[#808080] [&::-webkit-scrollbar-thumb]:border-r-[#808080] [&::-webkit-scrollbar-thumb]:bg-[#c0c0c0]",
+            ].join(" ")}
+            style={{
+              fontFamily: '"Courier New", Courier, "MS Gothic", monospace',
+              textRendering: "auto",
+            }}
+          >
+            <pre className="m-0 max-w-full whitespace-pre-wrap break-words [overflow-wrap:anywhere] font-[inherit] text-[inherit] select-text overflow-x-hidden">
+              {TET_WHITEPAPER_FULL_TEXT}
+            </pre>
           </div>
-        </div>
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+            <a
+              href="/tet-network-whitepaper.pdf"
+              download="tet-network-whitepaper.pdf"
+              className={`${winBtn} inline-flex items-center gap-1 bg-[#c0c0c0] px-3 py-1 text-sm text-black no-underline`}
+            >
+              Download Full PDF
+            </a>
+            <button type="button" className={`${winBtn} bg-[#c0c0c0] px-8 py-1 text-sm text-black`} onClick={() => setWhitepaperOpen(false)}>
+              OK
+            </button>
+          </div>
+        </Win95Window>
       ) : null}
     </main>
   );
 }
-
-function AddressBookPanel(props: {
-  outset: string;
-  inset: string;
-  winBtn: string;
-  entries: AddressBookEntryV0[];
-  onAdd: (label: string, addr: string) => void;
-}) {
-  const [label, setLabel] = useState("");
-  const [addr, setAddr] = useState("");
-
-  return (
-    <div className={`${props.outset} bg-[#DAD8D2] p-3`}>
-      <div className="text-sm mb-2">Address Book</div>
-      <div className="space-y-2 text-sm">
-        <div className="flex items-center gap-2">
-          <span className="w-16">Label:</span>
-          <input value={label} onChange={(e) => setLabel(e.target.value)} className={`${props.inset} flex-1 bg-[#F9F9F6] px-2 py-1 text-sm outline-none`} />
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="w-16">Address:</span>
-          <input value={addr} onChange={(e) => setAddr(e.target.value)} className={`${props.inset} flex-1 bg-[#F9F9F6] px-2 py-1 text-sm font-mono outline-none`} />
-        </div>
-        <div className="pt-1">
-          <button
-            type="button"
-            className={`${props.winBtn} bg-[#DAD8D2] px-4 py-1 text-sm`}
-            onClick={() => {
-              props.onAdd(label, addr);
-              setLabel("");
-              setAddr("");
-            }}
-          >
-            Add
-          </button>
-        </div>
-      </div>
-
-      <div className="mt-3 text-sm mb-1">Entries</div>
-      <div className={`${props.inset} bg-[#F9F9F6] p-2 text-sm`}>
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr>
-              <th className="text-left font-normal pb-1">Label</th>
-              <th className="text-left font-normal pb-1">Address</th>
-            </tr>
-          </thead>
-          <tbody className="font-mono text-xs">
-            {props.entries.length === 0 ? (
-              <tr>
-                <td colSpan={2} className="py-2 font-sans text-sm">
-                  (empty)
-                </td>
-              </tr>
-            ) : (
-              props.entries.map((e) => (
-                <tr key={`${e.label}:${e.created_at_ms}`}>
-                  <td className="pr-4 py-0.5">{e.label}</td>
-                  <td className="py-0.5">{e.address}</td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
