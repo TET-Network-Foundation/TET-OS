@@ -71,6 +71,7 @@ import AITaskTerminalPanel from "./tabs/AITaskTerminalPanel";
 import ExplorerPanel from "./tabs/ExplorerPanel";
 import WorkerPanel from "./tabs/WorkerPanel";
 import InboxReceivePanel from "./tabs/InboxReceivePanel";
+import FilesPanel from "./tabs/FilesPanel";
 import Win95Window from "./components/Win95Window";
 import Win95TabBar from "./components/Win95TabBar";
 import Win95Menu from "./components/Win95Menu";
@@ -82,6 +83,7 @@ type TabId =
   | "Send Coins"
   | "Receive Coins"
   | "Messages"
+  | "Files"
   | "Address Book"
   | "Transactions"
   | "Explorer"
@@ -1770,6 +1772,7 @@ export default function NexusOS() {
             { id: "Send Coins" },
             { id: "Receive Coins" },
             { id: "Messages" },
+            { id: "Files" },
             { id: "Address Book" },
             { id: "Transactions" },
             { id: "Explorer" },
@@ -1877,6 +1880,13 @@ export default function NexusOS() {
               winBtn={winBtn}
               baseUrl={baseUrl}
               myWalletId={founderWalletIdHex64}
+            />
+          ) : tab === "Files" ? (
+            <FilesPanel
+              key={founderWalletIdHex64}
+              baseUrl={baseUrl}
+              myWalletId={founderWalletIdHex64}
+              contacts={addrBook}
             />
           ) : tab === "Address Book" ? (
             <AddressBookPanel contacts={addrBook} onAdd={onAddAddress} />
