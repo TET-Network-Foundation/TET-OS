@@ -27,6 +27,7 @@ mod quantum_shield;
 mod render_farm;
 mod replication;
 mod rest;
+mod swarm_health;
 mod sync;
 mod tee_compute;
 mod tmail;
@@ -578,6 +579,8 @@ async fn main() -> Result<(), AnyErr> {
             log::warn!("[p2p][block] {e}; fallback /ip4/0.0.0.0/tcp/0");
             "/ip4/0.0.0.0/tcp/0".parse().expect("fallback listen addr")
         });
+    // Liveness beacon for the block-plane swarm loop (feeds the systemd watchdog + /health/swarm).
+    let swarm_health = crate::swarm_health::SwarmHealth::new();
     let gossip_tx = if config.enable_p2p {
         match libp2p_keypair {
             Some(kp) => {
@@ -593,9 +596,15 @@ async fn main() -> Result<(), AnyErr> {
                         .expect("block_sync_board required when block swarm starts"),
                     tmail_store.clone(),
                     file_store.clone(),
+                    swarm_health.clone(),
                 ) {
                     Ok((tx, _swarm_jh)) => {
                         swarm_block = true;
+                        // Systemd watchdog: restarts the unit if the block-plane loop stalls,
+                        // before a heavy-work stall can cascade into an OS-level TCP wedge.
+                        let stall_ms = crate::swarm_health::stall_threshold_ms_from_env();
+                        let _watchdog =
+                            crate::swarm_health::spawn_watchdog(swarm_health.clone(), stall_ms);
                         Some(tx)
                     }
                     Err(e) => {
@@ -652,6 +661,7 @@ async fn main() -> Result<(), AnyErr> {
         p2p_client: nexus_p2p_client,
         gossip_tx,
         block_sync_board: block_sync_board.clone(),
+        swarm_health: Some(swarm_health.clone()),
         mempool,
         tmail: tmail_store,
         files: file_store,

@@ -1049,6 +1049,80 @@ fn network_event_topics(
     }
 }
 
+/// Offload a heavy, read-only [`build_chain_hello`] (full O(N) balance scan for the state root) onto a
+/// blocking thread so it never stalls the swarm event loop (root cause of the 2026-06 wedges).
+async fn build_chain_hello_offloaded(
+    ledger: &Arc<crate::ledger::Ledger>,
+) -> Result<ChainHello, crate::ledger::LedgerError> {
+    let ledger = ledger.clone();
+    match tokio::task::spawn_blocking(move || build_chain_hello(ledger.as_ref())).await {
+        Ok(res) => res,
+        Err(join) => Err(crate::ledger::LedgerError::Invalid(format!(
+            "chain_hello blocking task failed: {join}"
+        ))),
+    }
+}
+
+/// Like [`build_chain_hello_offloaded`] but always yields a [`ChainHello`], applying the same
+/// best-effort fallback the inline responder used — and crucially running the fallback's
+/// `compute_state_root` (also O(N)) on the blocking pool too.
+async fn build_chain_hello_resilient(ledger: &Arc<crate::ledger::Ledger>) -> ChainHello {
+    let ledger = ledger.clone();
+    tokio::task::spawn_blocking(move || {
+        build_chain_hello(ledger.as_ref()).unwrap_or_else(|e| {
+            log::warn!("[p2p][chain-sync] hello build failed: {e}");
+            ChainHello {
+                chain_id: crate::ledger::chain_id_from_env(),
+                block_height: ledger.block_height().unwrap_or(0),
+                tip_block_id: String::new(),
+                state_root: ledger.compute_state_root(),
+            }
+        })
+    })
+    .await
+    .unwrap_or_else(|join| {
+        log::warn!("[p2p][chain-sync] hello task panicked: {join}");
+        ChainHello {
+            chain_id: crate::ledger::chain_id_from_env(),
+            block_height: 0,
+            tip_block_id: String::new(),
+            state_root: String::new(),
+        }
+    })
+}
+
+/// Offload the heavy, read-only [`build_chain_sync_range_response`] (reads/decrypts up to 100 blocks)
+/// onto a blocking thread so the swarm loop keeps accepting connections while it runs.
+async fn build_chain_sync_range_response_offloaded(
+    ledger: &Arc<crate::ledger::Ledger>,
+    request: &ChainSyncRangeRequest,
+) -> Option<ChainSyncRangeResponse> {
+    let ledger = ledger.clone();
+    let request = request.clone();
+    match tokio::task::spawn_blocking(move || {
+        build_chain_sync_range_response(ledger.as_ref(), &request)
+    })
+    .await
+    {
+        Ok(resp) => Some(resp),
+        Err(join) => {
+            log::warn!("[p2p][chain-sync] range build task failed: {join}");
+            None
+        }
+    }
+}
+
+/// Offload a single read-only block lookup ([`Ledger::block_record_by_id`]) onto a blocking thread.
+async fn block_record_by_id_offloaded(
+    ledger: &Arc<crate::ledger::Ledger>,
+    block_id: String,
+) -> Option<crate::ledger::BlockRecordV1> {
+    let ledger = ledger.clone();
+    tokio::task::spawn_blocking(move || ledger.block_record_by_id(&block_id).ok().flatten())
+        .await
+        .unwrap_or(None)
+}
+
 /// Start a libp2p swarm task and return a Sender you can use to publish gossip messages.
 #[allow(clippy::too_many_arguments)]
 pub fn start_mdns_ping_swarm(
@@ -1061,6 +1135,7 @@ pub fn start_mdns_ping_swarm(
     block_sync_board: SharedBlockSyncBoard,
     tmail_store: Arc<crate::tmail::store::TmailStore>,
     file_store: Arc<crate::files::storage::FileStore>,
+    swarm_health: crate::swarm_health::SharedSwarmHealth,
 ) -> Result<(mpsc::Sender<String>, tokio::task::JoinHandle<()>), AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
     let join = tokio::spawn(async move {
@@ -1075,6 +1150,7 @@ pub fn start_mdns_ping_swarm(
             block_sync_board,
             tmail_store,
             file_store,
+            swarm_health,
         )
         .await
         {
@@ -1099,6 +1175,7 @@ async fn run_mdns_ping_swarm(
     block_sync_board: SharedBlockSyncBoard,
     tmail_store: Arc<crate::tmail::store::TmailStore>,
     file_store: Arc<crate::files::storage::FileStore>,
+    swarm_health: crate::swarm_health::SharedSwarmHealth,
 ) -> Result<(), AnyErr> {
     let peer_id = PeerId::from(keypair.public());
     log::info!("[P2P] My Peer ID: {peer_id}");
@@ -1315,6 +1392,12 @@ async fn run_mdns_ping_swarm(
     let mut catch_up_interval = tokio::time::interval(Duration::from_secs(1));
     catch_up_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        // Liveness beacon: every loop iteration stamps the health beacon so the systemd watchdog
+        // (see `crate::swarm_health`) and `/health/swarm` can detect a stalled loop. The
+        // `catch_up_interval` (1s) guarantees a tick even when the network is idle.
+        swarm_health.tick(crate::swarm_health::now_ms());
+        swarm_health.set_connected_peers(swarm.connected_peers().count());
+        swarm_health.set_listeners(swarm.listeners().count());
         tokio::select! {
             _ = catch_up_interval.tick() => {
                 bootnode_watch
@@ -1353,16 +1436,22 @@ async fn run_mdns_ping_swarm(
                                 .unwrap_or(true)
                         })
                         .collect();
-                    for peer in due_peers {
-                        match build_chain_hello(ledger.as_ref()) {
+                    if !due_peers.is_empty() {
+                        // Build the hello once (heavy O(N) state-root scan, offloaded) and reuse it
+                        // for every due peer instead of re-scanning the ledger per peer.
+                        match build_chain_hello_offloaded(&ledger).await {
                             Ok(our_hello) => {
-                                swarm
-                                    .behaviour_mut()
-                                    .chain_sync_hello
-                                    .send_request(&peer, our_hello);
-                                bootnode_watch.on_hello_sent(peer);
-                                last_chain_hello_sent_at.insert(peer, now);
-                                println!("[P2P-block] 🔁 chain_hello periodic resend to {peer}");
+                                for peer in due_peers {
+                                    swarm
+                                        .behaviour_mut()
+                                        .chain_sync_hello
+                                        .send_request(&peer, our_hello.clone());
+                                    bootnode_watch.on_hello_sent(peer);
+                                    last_chain_hello_sent_at.insert(peer, now);
+                                    println!(
+                                        "[P2P-block] 🔁 chain_hello periodic resend to {peer}"
+                                    );
+                                }
                             }
                             Err(e) => {
                                 log::warn!("[p2p][block] periodic chain_hello build failed: {e}");
@@ -1499,18 +1588,7 @@ async fn run_mdns_ping_swarm(
                         &mut pending_catch_up_range,
                     )
                     .await;
-                    let response = match build_chain_hello(ledger.as_ref()) {
-                        Ok(h) => h,
-                        Err(e) => {
-                            log::warn!("[p2p][chain-sync] hello build failed: {e}");
-                            ChainHello {
-                                chain_id: crate::ledger::chain_id_from_env(),
-                                block_height: ledger.block_height().unwrap_or(0),
-                                tip_block_id: String::new(),
-                                state_root: ledger.compute_state_root(),
-                            }
-                        }
-                    };
+                    let response = build_chain_hello_resilient(&ledger).await;
                     let _ = swarm
                         .behaviour_mut()
                         .chain_sync_hello
@@ -1556,20 +1634,22 @@ async fn run_mdns_ping_swarm(
                         },
                     ..
                 } => {
-                    let response =
-                        build_chain_sync_range_response(ledger.as_ref(), &request);
-                    println!(
-                        "[P2P-block] ↩️ CHAIN_SYNC RANGE peer={} req {}..{} → blocks={} actual_to={}",
-                        peer,
-                        request.from_height,
-                        request.to_height,
-                        response.blocks.len(),
-                        response.to_height
-                    );
-                    let _ = swarm
-                        .behaviour_mut()
-                        .chain_sync_range
-                        .send_response(channel, response);
+                    if let Some(response) =
+                        build_chain_sync_range_response_offloaded(&ledger, &request).await
+                    {
+                        println!(
+                            "[P2P-block] ↩️ CHAIN_SYNC RANGE peer={} req {}..{} → blocks={} actual_to={}",
+                            peer,
+                            request.from_height,
+                            request.to_height,
+                            response.blocks.len(),
+                            response.to_height
+                        );
+                        let _ = swarm
+                            .behaviour_mut()
+                            .chain_sync_range
+                            .send_response(channel, response);
+                    }
                 }
                 request_response::Event::Message {
                     peer,
@@ -1627,10 +1707,8 @@ async fn run_mdns_ping_swarm(
                             },
                         ..
                     } => {
-                        let block = ledger
-                            .block_record_by_id(&request.block_id)
-                            .ok()
-                            .flatten();
+                        let block =
+                            block_record_by_id_offloaded(&ledger, request.block_id.clone()).await;
                         let _ = swarm.behaviour_mut().block_sync.send_response(
                             channel,
                             BlockResponse {
@@ -1798,7 +1876,7 @@ async fn run_mdns_ping_swarm(
                         .behaviour_mut()
                         .gossipsub
                         .add_explicit_peer(&peer_id);
-                    match build_chain_hello(ledger.as_ref()) {
+                    match build_chain_hello_offloaded(&ledger).await {
                         Ok(our_hello) => {
                             swarm
                                 .behaviour_mut()
