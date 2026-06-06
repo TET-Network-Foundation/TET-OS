@@ -67,6 +67,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         p2p_client: None,
         gossip_tx: None,
         block_sync_board: None,
+        swarm_health: None,
         mempool: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
         tmail,
         files,
@@ -1466,6 +1467,53 @@ fn state_root_changes_on_1_micro_difference() {
     let r1 = ledger1.compute_state_root();
     let r2 = ledger2.compute_state_root();
     assert_ne!(r1, r2);
+}
+
+/// Fix A correctness: offloading the heavy chain-hello build (state-root scan) onto a blocking
+/// thread via `spawn_blocking` must yield a result byte-identical to the direct, inline call.
+/// This mirrors the pattern `p2p.rs` now uses to keep the swarm event loop unblocked.
+#[tokio::test]
+async fn chain_hello_offload_matches_direct() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    let direct = crate::sync::build_chain_hello(ledger.as_ref()).expect("direct hello");
+
+    let l2 = ledger.clone();
+    let offloaded =
+        tokio::task::spawn_blocking(move || crate::sync::build_chain_hello(l2.as_ref()))
+            .await
+            .expect("join")
+            .expect("offloaded hello");
+
+    assert_eq!(direct, offloaded);
+
+    // State root specifically must be stable when computed off-thread.
+    let l3 = ledger.clone();
+    let root_off = tokio::task::spawn_blocking(move || l3.compute_state_root())
+        .await
+        .expect("join");
+    assert_eq!(direct.state_root, root_off);
+}
+
+/// `SwarmHealth` integrates with the same `now_ms` clock used by the swarm loop and watchdog:
+/// a freshly-ticked beacon is healthy, and one whose last tick is older than the threshold is not.
+#[tokio::test]
+async fn swarm_health_beacon_detects_stall() {
+    let health = crate::swarm_health::SwarmHealth::new();
+    assert!(!health.started());
+
+    let now = crate::swarm_health::now_ms();
+    health.tick(now);
+    assert!(health.started());
+    assert!(health.is_healthy(now, 90_000));
+
+    // Simulate a stalled loop: last tick far in the past relative to "now".
+    assert!(!health.is_healthy(now + 120_000, 90_000));
+    assert_eq!(health.since_last_tick_ms(now + 5_000), Some(5_000));
 }
 
 #[tokio::test]
@@ -3452,6 +3500,7 @@ mod block_sync {
             block_sync_board.clone(),
             tmail_store,
             file_store,
+            crate::swarm_health::SwarmHealth::new(),
         )
         .expect("block swarm");
 

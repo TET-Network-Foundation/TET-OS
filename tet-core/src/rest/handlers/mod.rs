@@ -7,6 +7,7 @@ pub mod enterprise;
 pub mod files;
 pub mod founder;
 pub mod founding;
+pub mod health;
 pub mod ledger;
 pub mod logs;
 pub mod metrics;

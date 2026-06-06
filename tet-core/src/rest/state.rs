@@ -45,6 +45,8 @@ pub struct RestState {
     pub gossip_tx: Option<mpsc::Sender<String>>,
     /// Per-node block-plane sync board (`None` when P2P / block swarm is disabled).
     pub block_sync_board: Option<crate::sync::SharedBlockSyncBoard>,
+    /// Liveness beacon for the block-plane swarm event loop (`None` when block swarm is disabled).
+    pub swarm_health: Option<crate::swarm_health::SharedSwarmHealth>,
     /// In-memory pending transactions (Phase 2 mempool).
     pub mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     /// Tmail node-local TTL buffer + key directory (off-ledger; spec §A.1).

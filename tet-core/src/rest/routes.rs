@@ -64,6 +64,10 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::get(super::handlers::metrics::get_metrics),
         )
         .route(
+            "/health/swarm",
+            axum::routing::get(super::handlers::health::get_health_swarm),
+        )
+        .route(
             "/wallet/mnemonic/new",
             axum::routing::get(super::handlers::wallet::get_wallet_mnemonic_new)
                 .post(super::handlers::wallet::post_wallet_new),
