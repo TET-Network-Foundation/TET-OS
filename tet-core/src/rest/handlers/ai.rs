@@ -659,16 +659,14 @@ pub async fn post_ai_infer(
         return r;
     }
 
-    let welcome_airdrop_micro = match state.ledger.claim_initial_airdrop(&wallet) {
-        Ok(crate::ledger::InitialAirdropClaimOutcome::Granted { credited_micro }) => {
-            Some(credited_micro)
-        }
-        Ok(_) => None,
-        Err(e) => {
-            log::debug!("[faucet] initial airdrop claim skipped: {e}");
-            None
-        }
-    };
+    // Consensus fix: `/ai/infer` must NOT grant the welcome airdrop via the off-chain
+    // `Ledger::claim_initial_airdrop` direct mutation. That call credits balances only on the node
+    // serving the request, forking non-producer nodes' state root (see protocol.rs `InitialAirdrop`
+    // and commit 2ce9024 "Initial Airdrop consensus-grade"). The airdrop is now a hybrid-signed,
+    // wallet-initiated `TxV1::InitialAirdrop` claim settled in a block on every node
+    // (`POST /ledger/initial_airdrop/claim`). A server cannot sign that tx for the user, so this
+    // handler simply never mutates balances off-chain; new wallets claim the airdrop first.
+    let welcome_airdrop_micro: Option<u64> = None;
 
     // Phase 5.2 + Phase 1 ledger: minimum Stevemon on Sled (spam gate).
     // Use raw `balances` tree balance — same source as GET /ledger/me — not `spendable_balance_micro_now`

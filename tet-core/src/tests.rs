@@ -3307,6 +3307,96 @@ fn initial_faucet_airdrop_grants_once_and_second_call_is_already_claimed() {
     );
 }
 
+/// Regression for the AI airdrop consensus bug: the legacy off-chain `claim_initial_airdrop`
+/// (which `/ai/infer` used to call) credits balances only on the node that runs it, forking that
+/// node's state root away from the rest of the network. This test pins WHY that call was removed
+/// from request handlers — it must never run in the inference path.
+#[test]
+fn welcome_airdrop_offchain_claim_forks_node_state_root() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let n1 = open_temp_ledger();
+    n1.init_genesis_founder_premine_from_env().unwrap();
+    n1.apply_genesis_allocation("founder").unwrap();
+    let n2 = open_temp_ledger();
+    n2.init_genesis_founder_premine_from_env().unwrap();
+    n2.apply_genesis_allocation("founder").unwrap();
+
+    // Identical genesis => identical consensus state root.
+    assert_eq!(n1.compute_state_root(), n2.compute_state_root());
+
+    // Off-chain claim on n1 only (the removed `/ai/infer` behavior) forks the state root.
+    let user = "a".repeat(64);
+    n1.claim_initial_airdrop(&user).unwrap();
+    assert_ne!(
+        n1.compute_state_root(),
+        n2.compute_state_root(),
+        "off-chain airdrop on one node forks consensus state root; it must not run in handlers"
+    );
+}
+
+/// The consensus airdrop path is node-agnostic: the same hybrid-signed `TxV1::InitialAirdrop`,
+/// previewed on two independent-but-identical ledgers, yields the SAME post-block state root (and a
+/// root distinct from genesis, i.e. it does credit). This is the property the fix relies on — the
+/// airdrop is applied deterministically by every node at block-apply time, not off-chain.
+#[test]
+fn welcome_airdrop_consensus_tx_predicts_same_root_on_all_nodes() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let n1 = open_temp_ledger();
+    n1.init_genesis_founder_premine_from_env().unwrap();
+    n1.apply_genesis_allocation("founder").unwrap();
+    let n2 = open_temp_ledger();
+    n2.init_genesis_founder_premine_from_env().unwrap();
+    n2.apply_genesis_allocation("founder").unwrap();
+    let genesis_root = n1.compute_state_root();
+    assert_eq!(genesis_root, n2.compute_state_root());
+
+    // Build a hybrid-signed InitialAirdrop claim for a fresh wallet.
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let wallet_id = w.address_hex.to_ascii_lowercase();
+    let tx = crate::protocol::TxV1::InitialAirdrop {
+        wallet_id: wallet_id.clone(),
+    };
+    let tx_bytes = serde_json::to_vec(&tx).unwrap();
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words).unwrap();
+    let mldsa_pubkey_b64 =
+        base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let ed_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(ed_sk.sign(tx_bytes.as_slice()).to_bytes().as_slice());
+    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(
+        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap(),
+    );
+    let env = crate::protocol::SignedTxEnvelopeV1 {
+        v: 1,
+        tx,
+        sig: crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: wallet_id.clone(),
+            ed25519_sig_b64: ed_sig_b64,
+            mldsa_pubkey_b64,
+            mldsa_sig_b64,
+        },
+        attestation: crate::protocol::AttestationV1 {
+            platform: "test".to_string(),
+            report_b64: String::new(),
+        },
+    };
+
+    // Same tx previewed as a block on both nodes => same predicted root, distinct from genesis.
+    let r1 = n1
+        .compute_state_root_after_remote_block(std::slice::from_ref(&env), "", 0)
+        .unwrap();
+    let r2 = n2
+        .compute_state_root_after_remote_block(std::slice::from_ref(&env), "", 0)
+        .unwrap();
+    assert_eq!(r1, r2, "consensus airdrop must predict identically on all nodes");
+    assert_ne!(r1, genesis_root, "consensus airdrop must actually credit the wallet");
+}
+
 #[test]
 fn admin_rest_faucet_once_per_wallet_and_ip_rl() {
     let _g = env_lock();

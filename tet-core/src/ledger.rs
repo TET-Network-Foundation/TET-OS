@@ -4763,6 +4763,14 @@ impl Ledger {
     /// One-time **1,000 TET** transfer from [`WALLET_SYSTEM_WORKER_POOL`] to `wallet_id`, for the first
     /// [`FAUCET_INITIAL_AIRDROP_MAX_RECIPIENTS`] distinct wallets. All checks and updates run in **one** sled transaction
     /// (counter + recipient marker + balances) so double-claim and cap races are impossible.
+    ///
+    /// DEPRECATED — off-chain direct mutation. This credits balances only on the node that runs it,
+    /// which forks non-producer nodes' state root. It has been removed from all request handlers
+    /// (consensus-grade fix, commit 2ce9024); the welcome airdrop now flows through consensus as a
+    /// hybrid-signed [`crate::protocol::TxV1::InitialAirdrop`] settled in a block on every node.
+    /// Retained only for the legacy unit tests that pin the historical balance effect; do NOT call
+    /// this from any handler or consensus path.
+    #[allow(dead_code)]
     pub fn claim_initial_airdrop(
         &self,
         wallet_id: &str,
