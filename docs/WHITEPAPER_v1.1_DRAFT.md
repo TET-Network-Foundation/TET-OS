@@ -681,6 +681,47 @@ Bitcoin and PoW altcoin networks consume on the order of **~150 TWh annually** (
 
 **Status:** research / future direction. **Phase 0 does not ship this.** Phase 1+ exploration only; no commitment to dual-mining productization.
 
+### 17.14 Browser-embedded node architecture
+
+Most L1s (Bitcoin, Ethereum) gate participation on running external node software. Because the Sovereign OS shell (§13) already runs entirely in the browser, an open question is whether a **light TET node** can run **in-tab** — letting end-user devices join the network natively, without operator-run servers. A libp2p **WebRTC transport** plus a light-client verification path could embed peer discovery, header sync, and transaction submission directly in the page. The directional goal: as user devices proliferate, Foundation-operated infrastructure trends toward zero.
+
+**Open questions:**
+
+- **Transport maturity** — Production-readiness of libp2p WebRTC (NAT traversal, signaling, connection churn) inside browsers.
+- **State budget** — Holding ledger headers/state within IndexedDB quota limits.
+- **Mobile cost** — Battery and data overhead of sustained P2P on phones.
+- **Trust model** — Light-client assumptions vs full-node verification; fraud-proof or sampling strategy.
+- **Bootstrap** — Peer discovery from a cold browser tab with no inbound connectivity.
+
+**Status:** research / future direction. **Phase 0 does not ship this.** Phase 2+ exploration, contingent on libp2p WebRTC maturation; multi-year horizon, no commitment.
+
+### 17.15 AI-native smart contracts
+
+Most contract platforms treat AI as an **external oracle**: inference runs off-chain and a result is posted back. Because TET's CAAC consensus (§6) already settles AI inference as a first-class network operation, an open question is whether programmable contracts (cf. Sentient Assets, §15) could **invoke inference natively** — making an `infer(...)` call a primitive alongside transfers. This would enable patterns such as autonomous agents, on-chain content moderation, and verifiable AI workflows without a trusted oracle bridge.
+
+**Open questions:**
+
+- **Determinism** — Reconciling non-deterministic model output with replayable state transitions across validators.
+- **Verifiable AI** — Maturity of ZK-ML for proving inference correctness at acceptable cost.
+- **Metering** — Gas-equivalent accounting for inference (FLOPs/energy, §5.3) inside contract execution.
+- **Reproducibility** — Model versioning and weight pinning so all validators evaluate identical models.
+- **Consistency** — Cross-validator agreement when runtimes or model builds differ.
+
+**Status:** research / future direction. **Phase 0 does not ship this.** Phase 1–2 exploration; depends on ZK-ML and determinism research before any productization. No committed date.
+
+### 17.16 Anchoring to external networks
+
+TET's own consensus provides liveness and finality; an open question is whether **periodic state anchoring** to established public networks (Bitcoin, Ethereum, IPFS/Filecoin) would add independent **long-term verifiability** and decentralization redundancy. Publishing a recurring commitment — e.g., a Merkle root of TET state — to a high-security external chain is a common pattern in modern L1 design and is particularly valuable for **audit-trail integrity**: anyone can later prove a TET state existed at a given time against the external anchor. This is distinct from, and complementary to, the cross-chain custody bridge open problem (§17.6).
+
+**Open questions:**
+
+- **Frequency** — Anchor cadence, trading external fees against staleness of the latest verifiable checkpoint.
+- **Commitment format** — Merkle root only vs a fuller state commitment.
+- **Verifier tooling** — Lightweight tooling for third parties to check anchors independently.
+- **Cost model** — Ethereum calldata/blob, Bitcoin OP_RETURN/inscription, and storage-network fees per anchor.
+
+**Status:** research / future direction. **Phase 0 does not ship this.** Phase 1+ exploration; per-network effort is small-months scale but unscheduled. No commitment.
+
 ---
 
 ## 18. Comparison Table
