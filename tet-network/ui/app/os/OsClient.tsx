@@ -75,6 +75,8 @@ import FilesPanel from "./tabs/FilesPanel";
 import Win95Window from "./components/Win95Window";
 import Win95TabBar from "./components/Win95TabBar";
 import Win95Menu from "./components/Win95Menu";
+import WalletSummaryHeader from "./components/WalletSummaryHeader";
+import WalletUnlockBody from "./components/WalletUnlockBody";
 import { deriveTmailKeysFromMnemonic, buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { setTmailKeySession, getTmailKeySession } from "../lib/tmail_session";
 
@@ -1512,6 +1514,10 @@ export default function NexusOS() {
     balanceStevemon == null ? "—" : formatStevemonToTetDisplay(balanceStevemon);
   const balanceStevemonDisplay =
     balanceStevemon == null ? "—" : balanceStevemon.toLocaleString("en-US");
+  const walletBurnTetFullDisplay =
+    walletInferenceBurnStevemon != null ? formatStevemonToTetFullDisplay(walletInferenceBurnStevemon) : null;
+  const walletBurnStevemonDisplay =
+    walletInferenceBurnStevemon != null ? formatStevemonDisplay(walletInferenceBurnStevemon) : null;
   const sendAmountStevemon = parseTet(sendAmountTet);
   const sendAmountStevemonDisplay =
     sendAmountStevemon == null ? "" : `(${sendAmountStevemon.toLocaleString("en-US")} Stevemon)`;
@@ -1786,43 +1792,16 @@ export default function NexusOS() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-2 px-3 pt-2 pb-28 md:pb-32 flex-1 min-h-0 overflow-y-auto overscroll-y-contain">
           {/* Left pane */}
           <section className="space-y-3 min-h-0">
-            <div className={`${outset} ${panel} p-3`}>
-              <div className="mb-2">
-                <div className="text-sm font-semibold text-black">AI Task Terminal</div>
-                <div className="text-[11px] text-black/70 mt-1 font-mono">
-                  CAAC: local {visionCaacRole} · network {networkCaacLine}
-                </div>
-              </div>
-              <div className="text-sm font-mono text-black">
-                Balance: {balanceTetDisplay} TET ({balanceStevemonDisplay} Stevemon)
-                {walletInferenceBurnStevemon != null ? (
-                  <span className="text-[11px] text-black/75">
-                    {" "}
-                    · Burned (ledger, this wallet):{" "}
-                    <span className="font-mono font-semibold tabular-nums text-black/90">
-                      {formatStevemonToTetFullDisplay(walletInferenceBurnStevemon)}
-                    </span>{" "}
-                    TET
-                    <span className="text-[#2a4a3a] font-medium font-sans">
-                      {" "}
-                      (
-                      <span className="tabular-nums font-mono">
-                        {formatStevemonDisplay(walletInferenceBurnStevemon)}
-                      </span>{" "}
-                      Stevemon)
-                    </span>
-                  </span>
-                ) : null}
-              </div>
-              <div className="mt-2">
-                <div className="text-sm mb-1">Wallet ID:</div>
-                <div className={`${inset} ${field} px-2 py-1 text-sm font-mono break-all`}>{founderWalletIdHex64}</div>
-              </div>
-              <div className="mt-2">
-                <div className="text-sm mb-1">Address (signer):</div>
-                <div className={`${inset} ${field} px-2 py-1 text-sm font-mono`}>{activeAccountAddress}</div>
-              </div>
-            </div>
+            <WalletSummaryHeader
+              visionCaacRole={visionCaacRole}
+              networkCaacLine={networkCaacLine}
+              balanceTetDisplay={balanceTetDisplay}
+              balanceStevemonDisplay={balanceStevemonDisplay}
+              burnTetFullDisplay={walletBurnTetFullDisplay}
+              burnStevemonDisplay={walletBurnStevemonDisplay}
+              walletId={founderWalletIdHex64}
+              signerAddress={activeAccountAddress}
+            />
 
           <div className="min-h-0 space-y-3">
           {tab === "Transactions" ? (
@@ -2015,165 +1994,38 @@ export default function NexusOS() {
           width="56rem"
           className="space-y-3 text-sm text-black"
         >
-          <>
-            {walletUnlockErr ? (
-                <div className="rounded border border-red-300 bg-red-50 px-2 py-1.5 text-xs font-mono text-red-900">
-                  {walletUnlockErr}
-                </div>
-              ) : null}
-              {persistedWalletKind === "none" ? (
-                <div className="space-y-3">
-                  <p className="text-xs text-black/80 leading-relaxed border-b border-black/10 pb-2">
-                    No wallet file on this device yet. Choose{" "}
-                    <strong className="text-black">Create</strong> for a new 12-word seed, or{" "}
-                    <strong className="text-black">Import</strong> if you already have a mnemonic. Set a{" "}
-                    <strong className="text-black">6–8 digit PIN</strong>; the mnemonic is encrypted with AES-GCM (PBKDF2)
-                    and stored only as{" "}
-                    <span className="font-mono">tet_wallet_keystore</span> — never as plaintext.
-                  </p>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div
-                      className={`${inset} ${field} p-3 flex flex-col gap-2 border-2 border-t-white border-l-white border-b-[#a0a0a0] border-r-[#a0a0a0]`}
-                    >
-                      <div className="text-sm font-bold text-[#000080] border-b border-black/10 pb-1">
-                        Create New Wallet
-                      </div>
-                      <p className="text-[11px] text-black/70 leading-snug">
-                        Generates a fresh BIP39 phrase. Write it on paper before continuing — anyone with these words
-                        controls this identity.
-                      </p>
-                      <button
-                        type="button"
-                        disabled={walletBusy}
-                        className={`${winBtn} ${panel} px-2 py-1.5 text-xs font-semibold w-fit`}
-                        onClick={() =>
-                          void (async () => {
-                            setWalletBusy(true);
-                            setWalletUnlockErr("");
-                            try {
-                              await cryptoWaitReady();
-                              const m = await generateMnemonic12Polkadot();
-                              setNewMnemonicDraft(m);
-                            } catch (e: unknown) {
-                              setWalletUnlockErr(e instanceof Error ? e.message : String(e));
-                            } finally {
-                              setWalletBusy(false);
-                            }
-                          })()
-                        }
-                      >
-                        Generate 12-word phrase
-                      </button>
-                      {newMnemonicDraft ? (
-                        <div className={`${outset} bg-[#fafaf6] p-2 font-mono text-[11px] break-words text-black max-h-28 overflow-y-auto`}>
-                          {newMnemonicDraft}
-                        </div>
-                      ) : (
-                        <div className="text-[11px] text-black/40 italic">Phrase appears here after you generate.</div>
-                      )}
-                      <label className="block text-[11px] font-semibold text-black">
-                        PIN (6–8 digits)
-                        <input
-                          type="password"
-                          inputMode="numeric"
-                          autoComplete="new-password"
-                          value={newWalletPin}
-                          onChange={(e) => setNewWalletPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                          className={`${inset} mt-1 w-full bg-white px-2 py-1.5 font-mono text-sm`}
-                          placeholder="e.g. 123456"
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        disabled={walletBusy || newMnemonicDraft.trim().length === 0 || !isValidWalletPin(newWalletPin)}
-                        className={`${winBtn} ${panel} mt-auto w-full py-2.5 text-sm font-bold`}
-                        onClick={() => void onWalletCreateSave()}
-                      >
-                        Save &amp; unlock
-                      </button>
-                    </div>
-                    <div
-                      className={`${inset} ${field} p-3 flex flex-col gap-2 border-2 border-t-white border-l-white border-b-[#a0a0a0] border-r-[#a0a0a0]`}
-                    >
-                      <div className="text-sm font-bold text-[#000080] border-b border-black/10 pb-1">
-                        Import Wallet (Mnemonic)
-                      </div>
-                      <p className="text-[11px] text-black/70 leading-snug">
-                        Paste your existing 12-word recovery phrase, then choose a new PIN to encrypt the copy stored on
-                        this device (you can reuse your old PIN if you prefer).
-                      </p>
-                      <label className="block text-[11px] font-semibold text-black">
-                        12-word mnemonic
-                        <textarea
-                          value={importMnemonicInput}
-                          onChange={(e) => setImportMnemonicInput(e.target.value)}
-                          rows={5}
-                          spellCheck={false}
-                          className={`${inset} mt-1 w-full bg-white px-2 py-2 font-mono text-[12px] leading-relaxed resize-y min-h-[5.5rem]`}
-                          placeholder="word1 word2 word3 … word12"
-                        />
-                      </label>
-                      <div className="text-[10px] text-black/50 font-mono">
-                        Words: {importMnemonicInput.trim() ? importMnemonicInput.trim().split(/\s+/).filter(Boolean).length : 0}{" "}
-                        / 12
-                      </div>
-                      <label className="block text-[11px] font-semibold text-black">
-                        PIN (6–8 digits, encrypts local copy)
-                        <input
-                          type="password"
-                          inputMode="numeric"
-                          autoComplete="new-password"
-                          value={importWalletPin}
-                          onChange={(e) => setImportWalletPin(e.target.value.replace(/\D/g, "").slice(0, 8))}
-                          className={`${inset} mt-1 w-full bg-white px-2 py-1.5 font-mono text-sm`}
-                          placeholder="e.g. 123456"
-                        />
-                      </label>
-                      <button
-                        type="button"
-                        disabled={
-                          walletBusy ||
-                          importMnemonicInput.trim().length === 0 ||
-                          !isValidWalletPin(importWalletPin)
-                        }
-                        className={`${winBtn} ${panel} mt-auto w-full py-2.5 text-sm font-bold`}
-                        onClick={() => void onWalletImportSave()}
-                      >
-                        Import &amp; unlock
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-xs font-semibold text-black">Enter PIN to Unlock</p>
-                  <p className="text-xs text-black/75 leading-snug">
-                    {persistedWalletKind === "vault"
-                      ? "Enter the same master password you used on /setup (8+ characters, not only digits)."
-                      : persistedWalletKind === "legacy_plain"
-                        ? "This device has a legacy wallet — enter your PIN (6–8 digits). It will upgrade to AES-GCM storage."
-                        : "Encrypted wallet on this device — enter your 6–8 digit PIN. Keys stay in memory only after unlock."}
-                  </p>
-                  <input
-                    type="password"
-                    value={walletSecretInput}
-                    onChange={(e) => setWalletSecretInput(e.target.value)}
-                    className={`${inset} w-full ${field} px-2 py-1.5 font-mono text-sm`}
-                    placeholder={
-                      persistedWalletKind === "vault" ? "Master password" : "6–8 digit PIN"
-                    }
-                  />
-                  <button
-                    type="button"
-                    disabled={walletBusy || walletSecretInput.trim().length === 0}
-                    className={`${winBtn} ${panel} w-full py-2 text-sm font-semibold`}
-                    onClick={() => void onWalletUnlockSubmit()}
-                  >
-                    {walletBusy ? "Unlocking…" : "Unlock"}
-                  </button>
-                </div>
-              )}
-          </>
+          <WalletUnlockBody
+            persistedWalletKind={persistedWalletKind}
+            walletUnlockErr={walletUnlockErr}
+            walletBusy={walletBusy}
+            newMnemonicDraft={newMnemonicDraft}
+            newWalletPin={newWalletPin}
+            setNewWalletPin={setNewWalletPin}
+            importMnemonicInput={importMnemonicInput}
+            setImportMnemonicInput={setImportMnemonicInput}
+            importWalletPin={importWalletPin}
+            setImportWalletPin={setImportWalletPin}
+            walletSecretInput={walletSecretInput}
+            setWalletSecretInput={setWalletSecretInput}
+            onGenerateMnemonic={() =>
+              void (async () => {
+                setWalletBusy(true);
+                setWalletUnlockErr("");
+                try {
+                  await cryptoWaitReady();
+                  const m = await generateMnemonic12Polkadot();
+                  setNewMnemonicDraft(m);
+                } catch (e: unknown) {
+                  setWalletUnlockErr(e instanceof Error ? e.message : String(e));
+                } finally {
+                  setWalletBusy(false);
+                }
+              })()
+            }
+            onWalletCreateSave={() => void onWalletCreateSave()}
+            onWalletImportSave={() => void onWalletImportSave()}
+            onWalletUnlockSubmit={() => void onWalletUnlockSubmit()}
+          />
         </Win95Window>
       ) : null}
 
