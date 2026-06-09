@@ -78,6 +78,7 @@ import Win95Menu from "./components/Win95Menu";
 import WalletSummaryHeader from "./components/WalletSummaryHeader";
 import WalletUnlockBody from "./components/WalletUnlockBody";
 import NetworkStatusPanel from "./components/NetworkStatusPanel";
+import StatusBar from "./components/StatusBar";
 import { deriveTmailKeysFromMnemonic, buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { setTmailKeySession, getTmailKeySession } from "../lib/tmail_session";
 
@@ -1541,6 +1542,10 @@ export default function NexusOS() {
     networkBurnedStevemon != null ? formatStevemonToTetCompact(networkBurnedStevemon) : null;
   const netBurnStevemonDisplay =
     networkBurnedStevemon != null ? formatStevemonDisplay(networkBurnedStevemon) : null;
+  const statusConnectionsDisplay = connectedPeers == null ? "—" : String(connectedPeers);
+  const statusWorkersDisplay = statusWorkers == null ? "—" : String(statusWorkers);
+  const statusEpochDisplay = networkEpoch == null ? "—" : String(networkEpoch);
+  const statusBlockDisplay = bestNumber == null ? "—" : bestNumber.toLocaleString("en-US");
   const sendAmountStevemon = parseTet(sendAmountTet);
   const sendAmountStevemonDisplay =
     sendAmountStevemon == null ? "" : `(${sendAmountStevemon.toLocaleString("en-US")} Stevemon)`;
@@ -1904,41 +1909,20 @@ export default function NexusOS() {
         </div>
 
         {/* Status bar (Windows classic) */}
-        <div className="shrink-0 bg-[#D4D0C8] px-2 py-1 border-t border-l border-b border-r border-t-[#808080] border-l-[#808080] border-b-white border-r-white">
-          <div className="flex gap-2 text-sm text-black font-sans">
-            <div
-              className={`flex-1 min-w-0 px-2 py-0.5 border border-t-[#808080] border-l-[#808080] border-b-white border-r-white rounded-none truncate font-mono text-xs`}
-            >
-              <span className={syncUi.badgeClass}>{syncUi.badgeText}</span>
-              <span> · API: {baseUrl}</span>
-              <span> · </span>
-              <span>
-                Connections: {connectedPeers ?? "—"} (Post-Quantum P2P)
-              </span>
-              <span className={statusSecurity.active ? " text-[#0b5c2e] font-semibold" : ""}>
-                {" "}
-                · {statusSecurity.label}
-              </span>
-              <span className="text-black font-sans text-sm">
-                {" "}
-                · Workers: {statusWorkers ?? "—"} · Network Compute: ~{networkComputeTflopsLabel} TFLOPS
-              </span>
-              <span
-                className=" text-black/80 tabular-nums"
-              >
-                {" "}
-                · Epoch: {networkEpoch ?? "—"}
-              </span>
-              <span className="text-black font-sans text-sm">
-                {" "}
-                · {pqcStatusShort}
-              </span>
-            </div>
-            <div className="w-[min(320px,38vw)] shrink-0 px-2 py-0.5 border border-t-[#808080] border-l-[#808080] border-b-white border-r-white rounded-none text-right font-mono text-xs leading-tight">
-              Block: {bestNumber == null ? "—" : bestNumber.toLocaleString("en-US")} {syncUi.shortLabel}
-            </div>
-          </div>
-        </div>
+        <StatusBar
+          badgeClass={syncUi.badgeClass}
+          badgeText={syncUi.badgeText}
+          baseUrl={baseUrl}
+          connectionsDisplay={statusConnectionsDisplay}
+          securityActive={statusSecurity.active}
+          securityLabel={statusSecurity.label}
+          workersDisplay={statusWorkersDisplay}
+          networkComputeTflopsLabel={networkComputeTflopsLabel}
+          epochDisplay={statusEpochDisplay}
+          pqcStatusShort={pqcStatusShort}
+          blockDisplay={statusBlockDisplay}
+          shortLabel={syncUi.shortLabel}
+        />
       </div>
 
       {walletUnlockOpen ? (
