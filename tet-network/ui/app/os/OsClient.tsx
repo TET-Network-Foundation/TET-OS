@@ -77,6 +77,7 @@ import Win95TabBar from "./components/Win95TabBar";
 import Win95Menu from "./components/Win95Menu";
 import WalletSummaryHeader from "./components/WalletSummaryHeader";
 import WalletUnlockBody from "./components/WalletUnlockBody";
+import NetworkStatusPanel from "./components/NetworkStatusPanel";
 import { deriveTmailKeysFromMnemonic, buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { setTmailKeySession, getTmailKeySession } from "../lib/tmail_session";
 
@@ -1518,6 +1519,28 @@ export default function NexusOS() {
     walletInferenceBurnStevemon != null ? formatStevemonToTetFullDisplay(walletInferenceBurnStevemon) : null;
   const walletBurnStevemonDisplay =
     walletInferenceBurnStevemon != null ? formatStevemonDisplay(walletInferenceBurnStevemon) : null;
+  const netSupplyDisplay =
+    totalSupplyStevemon != null ? formatStevemonToTetCompact(totalSupplyStevemon) : totalSupply;
+  const netSupplyTitle =
+    totalSupplyStevemon != null ? `${formatStevemonToTetFullDisplay(totalSupplyStevemon)} TET` : totalSupply;
+  const netSupplyStevemonDisplay =
+    totalSupplyStevemon != null ? formatStevemonDisplay(totalSupplyStevemon) : null;
+  const netWorkerPoolDisplay =
+    workerPoolBalanceStevemon !== null ? formatStevemonToTetCompact(workerPoolBalanceStevemon) : "—";
+  const netWorkerPoolTitle =
+    workerPoolBalanceStevemon !== null ? `${formatStevemonToTetFullDisplay(workerPoolBalanceStevemon)} TET` : undefined;
+  const netWorkerPoolStevemonDisplay =
+    workerPoolBalanceStevemon != null ? formatStevemonDisplay(workerPoolBalanceStevemon) : null;
+  const netStateRootShort = ledgerState?.state_root
+    ? ledgerState.state_root.length > 14
+      ? `${ledgerState.state_root.slice(0, 10)}…`
+      : ledgerState.state_root
+    : null;
+  const netStateRootFull = ledgerState?.state_root ?? null;
+  const netBurnDisplay =
+    networkBurnedStevemon != null ? formatStevemonToTetCompact(networkBurnedStevemon) : null;
+  const netBurnStevemonDisplay =
+    networkBurnedStevemon != null ? formatStevemonDisplay(networkBurnedStevemon) : null;
   const sendAmountStevemon = parseTet(sendAmountTet);
   const sendAmountStevemonDisplay =
     sendAmountStevemon == null ? "" : `(${sendAmountStevemon.toLocaleString("en-US")} Stevemon)`;
@@ -1606,86 +1629,23 @@ export default function NexusOS() {
         ) : null}
 
         {/* Network supply / mining pool — Win98 inset panel (matches app chrome) */}
-        <div
-          className={`${inset} bg-[#c0c0c0] px-3 py-2 text-sm text-black ${
-            syncUi.panelGreenTint ? "shadow-[inset_0_0_0_1px_rgba(42,255,154,0.35)]" : ""
-          }`}
-        >
-          <div className="flex flex-wrap gap-x-6 gap-y-1 items-baseline justify-between">
-            <span className="min-w-0 max-w-full truncate">
-              <span className={syncUi.dotClass} aria-hidden />
-              Total network supply:{" "}
-              <span className="tabular-nums font-semibold" title={totalSupplyStevemon != null ? `${formatStevemonToTetFullDisplay(totalSupplyStevemon)} TET` : totalSupply}>
-                {totalSupplyStevemon != null ? formatStevemonToTetCompact(totalSupplyStevemon) : totalSupply}
-              </span>{" "}
-              TET
-              {totalSupplyStevemon != null ? (
-                <span className="text-[#2a4a3a] font-medium hidden xl:inline">
-                  {" "}
-                  (<span className="tabular-nums">{formatStevemonDisplay(totalSupplyStevemon)}</span> Stevemon)
-                </span>
-              ) : null}
-            </span>
-            <span className="min-w-0 max-w-full truncate">
-              Worker pool (ledger):{" "}
-              <span
-                className="tabular-nums font-semibold"
-                title={workerPoolBalanceStevemon !== null ? `${formatStevemonToTetFullDisplay(workerPoolBalanceStevemon)} TET` : undefined}
-              >
-                {workerPoolBalanceStevemon !== null ? formatStevemonToTetCompact(workerPoolBalanceStevemon) : "—"}
-              </span>{" "}
-              TET
-              {workerPoolBalanceStevemon != null ? (
-                <span className="text-[#2a4a3a] font-medium hidden xl:inline">
-                  {" "}
-                  (<span className="tabular-nums">{formatStevemonDisplay(workerPoolBalanceStevemon)}</span>{" "}
-                  Stevemon)
-                </span>
-              ) : null}
-            </span>
-          </div>
-          <div className="mt-1 font-mono text-[10px] text-black/65">
-            API: {baseUrl} · {syncUi.pollingHint}
-            {ledgerState?.state_root ? (
-              <>
-                {" "}
-                · root{" "}
-                <span className="font-mono" title={ledgerState.state_root}>
-                  {ledgerState.state_root.length > 14
-                    ? `${ledgerState.state_root.slice(0, 10)}…`
-                    : ledgerState.state_root}
-                </span>
-              </>
-            ) : null}
-          </div>
-          {syncUi.detailLines.length > 0 ? (
-            <div className="mt-0.5 font-mono text-[10px] text-black/70 space-y-0.5">
-              {syncUi.detailLines.map((line) => (
-                <div key={line}>{line}</div>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-1 text-sm text-black tabular-nums leading-snug">
-            [THERMODYNAMIC BURN]{" "}
-            <span className="text-[10px] font-sans text-black/55 normal-case">(network total)</span> Extinguished:{" "}
-            {networkBurnedStevemon != null ? (
-              <>
-                <span className="font-mono font-semibold">
-                  {formatStevemonToTetCompact(networkBurnedStevemon)}
-                </span>{" "}
-                TET
-                <span className="text-[#2a4a3a] font-medium font-sans hidden xl:inline">
-                  {" "}
-                  (
-                  <span className="tabular-nums font-mono">{formatStevemonDisplay(networkBurnedStevemon)}</span>{" "}
-                  Stevemon)
-                </span>
-              </>
-            ) : (
-              <span className="font-mono">—</span>
-            )}
-          </div>
-        </div>
+        <NetworkStatusPanel
+          panelGreenTint={syncUi.panelGreenTint}
+          dotClass={syncUi.dotClass}
+          totalSupplyDisplay={netSupplyDisplay}
+          totalSupplyTitle={netSupplyTitle}
+          totalSupplyStevemonDisplay={netSupplyStevemonDisplay}
+          workerPoolDisplay={netWorkerPoolDisplay}
+          workerPoolTitle={netWorkerPoolTitle}
+          workerPoolStevemonDisplay={netWorkerPoolStevemonDisplay}
+          baseUrl={baseUrl}
+          pollingHint={syncUi.pollingHint}
+          stateRootShort={netStateRootShort}
+          stateRootFull={netStateRootFull}
+          detailLines={syncUi.detailLines}
+          burnDisplay={netBurnDisplay}
+          burnStevemonDisplay={netBurnStevemonDisplay}
+        />
 
         {/* Header + menus */}
         <div className={`px-2 py-1 text-sm ${face} relative z-50`}>
