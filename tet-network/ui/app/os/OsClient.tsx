@@ -79,6 +79,8 @@ import WalletSummaryHeader from "./components/WalletSummaryHeader";
 import WalletUnlockBody from "./components/WalletUnlockBody";
 import NetworkStatusPanel from "./components/NetworkStatusPanel";
 import StatusBar from "./components/StatusBar";
+import TitleBar from "./components/TitleBar";
+import LedgerConsole from "./components/LedgerConsole";
 import { deriveTmailKeysFromMnemonic, buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { setTmailKeySession, getTmailKeySession } from "../lib/tmail_session";
 
@@ -1595,27 +1597,13 @@ export default function NexusOS() {
         className={`m-2 rounded-sm ${face} border-2 border-t-white border-l-white border-b-[#808080] border-r-[#808080] overflow-hidden h-[calc(100vh-16px)] flex flex-col`}
       >
         {/* Title bar */}
-        <div className="bg-[#000080] text-white px-2 py-1 text-sm font-bold [text-rendering:optimizeSpeed] [-webkit-font-smoothing:auto] flex items-center gap-2">
-          <span>tet-core v0.1</span>
-          <button
-            type="button"
-            title={TET_WHITEPAPER_TITLE}
-            onClick={() => setWhitepaperOpen(true)}
-            className="ml-1 rounded-sm border border-white/40 bg-[#000060] px-1.5 py-0.5 text-xs font-mono hover:bg-[#101878]"
-          >
-            Whitepaper.txt
-          </button>
-          <span className="flex-1" aria-hidden="true" />
-          {walletGate === "ready" ? (
-            <button
-              type="button"
-              onClick={() => lockWalletSession()}
-              className="rounded-sm border border-white/40 bg-[#000060] px-2 py-0.5 text-xs font-mono hover:bg-[#101878] shrink-0"
-            >
-              Lock Wallet
-            </button>
-          ) : null}
-        </div>
+        <TitleBar
+          version="tet-core v0.1"
+          whitepaperTitle={TET_WHITEPAPER_TITLE}
+          onWhitepaperOpen={() => setWhitepaperOpen(true)}
+          showLockWallet={walletGate === "ready"}
+          onLockWallet={() => lockWalletSession()}
+        />
 
         {welcomeAirdropBanner ? (
           <div
@@ -1894,18 +1882,11 @@ export default function NexusOS() {
           </section>
 
           {/* Right pane: Ledger always */}
-          <section className={`${outset} ${panel} p-3 flex flex-col min-h-0`}>
-            <div className="text-sm mb-2 flex flex-wrap items-baseline justify-between gap-2">
-              <span>The Thermodynamic Ledger</span>
-              <span className="text-xs text-black/70">Signer: {activeIdentityLabel}</span>
-            </div>
-            <div
-              ref={ledgerRef}
-              className={`${inset} ${field} p-2 flex-1 min-h-0 overflow-auto text-xs font-mono text-black whitespace-pre`}
-            >
-              {ledger.join("\n")}
-            </div>
-          </section>
+          <LedgerConsole
+            ref={ledgerRef}
+            signerLabel={activeIdentityLabel}
+            text={ledger.join("\n")}
+          />
         </div>
 
         {/* Status bar (Windows classic) */}
