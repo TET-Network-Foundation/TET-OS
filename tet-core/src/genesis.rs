@@ -112,6 +112,9 @@ mod tests {
 
     #[test]
     fn env_and_parts_paths_agree() {
+        // Serialize env access with every other test; without this the parallel test runner
+        // can overwrite TET_TREASURY_ADDRESS between our set_var and the read below.
+        let _g = crate::test_env::lock();
         let founder = "cb1f321c00000000000000000000000000000000000000000000000000000000";
         let treasury = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
         unsafe {

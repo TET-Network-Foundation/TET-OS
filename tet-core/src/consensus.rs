@@ -1435,11 +1435,42 @@ pub async fn mine_pending_block_as(
     })
 }
 
-pub async fn apply_remote_block_from_gossip(
-    ledger: Arc<Ledger>,
-    mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+/// Outcome of the synchronous (blocking-pool) section of [`apply_remote_block_from_gossip`].
+enum RemoteBlockSyncOutcome {
+    /// Terminal outcome — no mempool eviction needed (skip / fork / reorg paths).
+    Terminal(RemoteBlockApplyOutcome),
+    /// Block fully applied to the ledger; the async wrapper must still evict the block's
+    /// txs from the mempool and schedule history pruning (same order as the pre-refactor code).
+    AppliedPendingEviction {
+        block_height: u64,
+        tx_count: usize,
+        tx_hashes: Vec<String>,
+        state_root: String,
+    },
+}
+
+/// Validation + consensus state mutation for one remote block. This is the 2×O(N) hot path
+/// (`compute_state_root_after_remote_block` preview + `apply_consensus_block_batch`), so
+/// [`apply_remote_block_from_gossip`] runs it on the tokio blocking pool to keep the libp2p
+/// swarm event loop (and the whole async runtime) responsive while the chain grows.
+///
+/// Operation order is byte-for-byte the pre-refactor inline sequence; only the trailing
+/// mempool eviction (async mutex) and `schedule_history_prune` (spawns a tokio task) moved
+/// to the async wrapper, preserving their original relative order.
+fn apply_remote_block_from_gossip_sync(
+    ledger: &Arc<Ledger>,
     block: RemoteBlockGossip,
-) -> Result<RemoteBlockApplyOutcome, RemoteBlockApplyError> {
+) -> Result<RemoteBlockSyncOutcome, RemoteBlockApplyError> {
+    // Both production call sites (gossip handler + catch-up driver) live on the single swarm
+    // event loop and `await` each apply, so applications were always serialized. This guard
+    // preserves that invariant for any future concurrent caller: the validate→preview→undo→apply
+    // sequence below must never interleave with another apply, or both could pass the preview
+    // and double-apply the same block.
+    static REMOTE_APPLY_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _apply_guard = REMOTE_APPLY_GUARD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let RemoteBlockGossip {
         block_height,
         block_id,
@@ -1456,16 +1487,20 @@ pub async fn apply_remote_block_from_gossip(
         .map_err(|e| RemoteBlockApplyError::Ledger(e.to_string()))?;
 
     if block_height < local_height {
-        return Ok(RemoteBlockApplyOutcome::Skipped {
-            reason: format!("stale block height={block_height} local_height={local_height}"),
-        });
+        return Ok(RemoteBlockSyncOutcome::Terminal(
+            RemoteBlockApplyOutcome::Skipped {
+                reason: format!("stale block height={block_height} local_height={local_height}"),
+            },
+        ));
     }
     if block_height > local_height.saturating_add(1) {
-        return Ok(RemoteBlockApplyOutcome::Skipped {
-            reason: format!(
-                "missing previous blocks height={block_height} local_height={local_height}"
-            ),
-        });
+        return Ok(RemoteBlockSyncOutcome::Terminal(
+            RemoteBlockApplyOutcome::Skipped {
+                reason: format!(
+                    "missing previous blocks height={block_height} local_height={local_height}"
+                ),
+            },
+        ));
     }
     let producer_id = ConsensusIdentity::new(producer_id)
         .ok_or_else(|| RemoteBlockApplyError::Rejected("producer_id required".to_string()))?;
@@ -1491,14 +1526,14 @@ pub async fn apply_remote_block_from_gossip(
     }
 
     let parent_block_id = if block_height == local_height.saturating_add(1) {
-        resolve_parent_block_id(&ledger, block_height, gossip_parent_block_id)?
+        resolve_parent_block_id(ledger, block_height, gossip_parent_block_id)?
     } else {
         gossip_parent_block_id
             .as_ref()
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty())
             .or_else(|| {
-                parent_block_id_for_height(&ledger, block_height)
+                parent_block_id_for_height(ledger, block_height)
                     .ok()
                     .flatten()
             })
@@ -1530,7 +1565,7 @@ pub async fn apply_remote_block_from_gossip(
     }
 
     if block_contains_ai_workload(&txs)
-        && !producer_can_mine_ai_workload(&ledger, producer_id.as_str())
+        && !producer_can_mine_ai_workload(ledger, producer_id.as_str())
     {
         return Err(RemoteBlockApplyError::Rejected(format!(
             "producer_id={} is not POC for AI workload",
@@ -1538,7 +1573,7 @@ pub async fn apply_remote_block_from_gossip(
         )));
     }
 
-    validate_zk_task_claims(&ledger, &txs).map_err(RemoteBlockApplyError::Rejected)?;
+    validate_zk_task_claims(ledger, &txs).map_err(RemoteBlockApplyError::Rejected)?;
     let reward = reward_for_block(&txs).map_err(RemoteBlockApplyError::Rejected)?;
     if reward.base_reward_micro != base_reward_micro
         || reward.compute_reward_micro != compute_reward_micro
@@ -1562,7 +1597,7 @@ pub async fn apply_remote_block_from_gossip(
         if let Some(local) = local {
             if local.block_id != block_id {
                 let _ = record_block_record(
-                    &ledger,
+                    ledger,
                     RecordBlockArgs {
                         block_height,
                         block_id: &block_id,
@@ -1575,37 +1610,45 @@ pub async fn apply_remote_block_from_gossip(
                         canonical: false,
                     },
                 );
-                match reorg_to_branch(&ledger, &block_id) {
+                match reorg_to_branch(ledger, &block_id) {
                     Ok(true) => {
-                        return Ok(RemoteBlockApplyOutcome::Applied {
-                            block_height,
-                            tx_count: txs.len(),
-                            evicted_count: 0,
-                            state_root,
-                        });
+                        return Ok(RemoteBlockSyncOutcome::Terminal(
+                            RemoteBlockApplyOutcome::Applied {
+                                block_height,
+                                tx_count: txs.len(),
+                                evicted_count: 0,
+                                state_root,
+                            },
+                        ));
                     }
                     Ok(false) => {}
                     Err(e) => return Err(RemoteBlockApplyError::Ledger(e)),
                 }
             }
             if remote_wins_fork(&local.block_id, &block_id) {
-                return Ok(RemoteBlockApplyOutcome::ForkLost {
+                return Ok(RemoteBlockSyncOutcome::Terminal(
+                    RemoteBlockApplyOutcome::ForkLost {
+                        reason: format!(
+                            "remote block wins fork by block_id but reorg is not implemented local={} remote={}",
+                            local.block_id, block_id
+                        ),
+                    },
+                ));
+            }
+            return Ok(RemoteBlockSyncOutcome::Terminal(
+                RemoteBlockApplyOutcome::Skipped {
                     reason: format!(
-                        "remote block wins fork by block_id but reorg is not implemented local={} remote={}",
+                        "remote block lost fork choice local={} remote={}",
                         local.block_id, block_id
                     ),
-                });
-            }
-            return Ok(RemoteBlockApplyOutcome::Skipped {
-                reason: format!(
-                    "remote block lost fork choice local={} remote={}",
-                    local.block_id, block_id
-                ),
-            });
+                },
+            ));
         }
-        return Ok(RemoteBlockApplyOutcome::Skipped {
-            reason: format!("same height already applied height={block_height}"),
-        });
+        return Ok(RemoteBlockSyncOutcome::Terminal(
+            RemoteBlockApplyOutcome::Skipped {
+                reason: format!("same height already applied height={block_height}"),
+            },
+        ));
     }
 
     let expected_state_root = ledger
@@ -1652,7 +1695,7 @@ pub async fn apply_remote_block_from_gossip(
         .record_block_summary(block_height, &block_id, &state_root, txs.len() as u64)
         .map_err(|e| RemoteBlockApplyError::Ledger(e.to_string()))?;
     record_block_record(
-        &ledger,
+        ledger,
         RecordBlockArgs {
             block_height,
             block_id: &block_id,
@@ -1669,23 +1712,60 @@ pub async fn apply_remote_block_from_gossip(
     ledger
         .record_tx_indexes_batch(block_height, &tx_hashes, &txs, true)
         .map_err(|e| RemoteBlockApplyError::Ledger(e.to_string()))?;
-    schedule_history_prune(ledger.clone(), block_height);
 
-    let block_hashes: HashSet<&str> = tx_hashes.iter().map(String::as_str).collect();
-    let evicted_count = {
-        let mut mp = mempool.lock().await;
-        let before = mp.len();
-        mp.retain(|env| match tx_hash_for_env(env) {
-            Ok(tx_hash) => !block_hashes.contains(tx_hash.as_str()),
-            Err(_) => true,
-        });
-        before.saturating_sub(mp.len())
-    };
-
-    Ok(RemoteBlockApplyOutcome::Applied {
+    Ok(RemoteBlockSyncOutcome::AppliedPendingEviction {
         block_height,
         tx_count: txs.len(),
-        evicted_count,
+        tx_hashes,
         state_root,
     })
+}
+
+pub async fn apply_remote_block_from_gossip(
+    ledger: Arc<Ledger>,
+    mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    block: RemoteBlockGossip,
+) -> Result<RemoteBlockApplyOutcome, RemoteBlockApplyError> {
+    // Offload the 2×O(N) validation + consensus mutation to the blocking pool so the swarm
+    // event loop / async runtime stays responsive during block application (the last hot path
+    // left inline after the 83e0074 read-only offloads).
+    let ledger_for_sync = ledger.clone();
+    let sync_outcome =
+        tokio::task::spawn_blocking(move || apply_remote_block_from_gossip_sync(&ledger_for_sync, block))
+            .await
+            .map_err(|join| {
+                RemoteBlockApplyError::Ledger(format!(
+                    "remote block apply blocking task failed: {join}"
+                ))
+            })??;
+
+    match sync_outcome {
+        RemoteBlockSyncOutcome::Terminal(outcome) => Ok(outcome),
+        RemoteBlockSyncOutcome::AppliedPendingEviction {
+            block_height,
+            tx_count,
+            tx_hashes,
+            state_root,
+        } => {
+            schedule_history_prune(ledger, block_height);
+
+            let block_hashes: HashSet<&str> = tx_hashes.iter().map(String::as_str).collect();
+            let evicted_count = {
+                let mut mp = mempool.lock().await;
+                let before = mp.len();
+                mp.retain(|env| match tx_hash_for_env(env) {
+                    Ok(tx_hash) => !block_hashes.contains(tx_hash.as_str()),
+                    Err(_) => true,
+                });
+                before.saturating_sub(mp.len())
+            };
+
+            Ok(RemoteBlockApplyOutcome::Applied {
+                block_height,
+                tx_count,
+                evicted_count,
+                state_root,
+            })
+        }
+    }
 }

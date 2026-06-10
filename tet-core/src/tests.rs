@@ -1139,6 +1139,276 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     ));
 }
 
+/// Build a valid single-transfer remote block gossip at `height` from the producer ledger's
+/// *current* state (single-validator "local-wallet" mode, per `set_test_env_base`).
+fn build_remote_block_for_tests(
+    producer_ledger: &crate::ledger::Ledger,
+    height: u64,
+    parent_block_id: Option<String>,
+    env: crate::protocol::SignedTxEnvelopeV1,
+) -> crate::consensus::RemoteBlockGossip {
+    let producer_id = "local-wallet".to_string();
+    let txs = vec![env];
+    let tx_hashes: Vec<String> = txs
+        .iter()
+        .map(|e| crate::consensus::tx_hash_for_env(e).unwrap())
+        .collect();
+    let reward = crate::consensus::reward_for_block(&txs).unwrap();
+    let state_root = producer_ledger
+        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro)
+        .unwrap();
+    let block_id = crate::consensus::block_id_for_block(
+        height,
+        parent_block_id.as_deref().unwrap_or(""),
+        &state_root,
+        &tx_hashes,
+        &producer_id,
+    );
+    crate::consensus::RemoteBlockGossip {
+        block_height: height,
+        block_id,
+        parent_block_id,
+        producer_id,
+        base_reward_micro: reward.base_reward_micro,
+        compute_reward_micro: reward.compute_reward_micro,
+        total_reward_micro: reward.total_reward_micro,
+        state_root,
+        txs,
+    }
+}
+
+/// Two identically-seeded nodes paired as producer/receiver: open temp ledgers, apply genesis,
+/// faucet the same sender on both so their pre-block state roots match.
+#[allow(clippy::type_complexity)]
+fn two_synced_nodes_with_funded_sender() -> (
+    std::sync::Arc<crate::ledger::Ledger>,
+    std::sync::Arc<crate::ledger::Ledger>,
+    crate::rest::RestState,
+    crate::rest::RestState,
+    String,
+    String,
+) {
+    let ledger_a = std::sync::Arc::new(open_temp_ledger());
+    ledger_a.init_genesis_founder_premine_from_env().unwrap();
+    ledger_a.apply_genesis_allocation("founder").unwrap();
+    let ledger_b = std::sync::Arc::new(open_temp_ledger());
+    ledger_b.init_genesis_founder_premine_from_env().unwrap();
+    ledger_b.apply_genesis_allocation("founder").unwrap();
+    let state_a = rest_state_for_tests(ledger_a.clone());
+    let state_b = rest_state_for_tests(ledger_b.clone());
+
+    let sender = crate::wallet::generate_mnemonic_12().unwrap();
+    let sender_words = sender.mnemonic_12.clone().unwrap();
+    let sender_wallet_id = sender.address_hex.to_ascii_lowercase();
+    for ledger in [&ledger_a, &ledger_b] {
+        ledger
+            .admin_rest_faucet(
+                &sender_wallet_id,
+                1000 * crate::ledger::STEVEMON,
+                "ip",
+                true,
+                1,
+                1,
+            )
+            .unwrap();
+    }
+    assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
+    (
+        ledger_a,
+        ledger_b,
+        state_a,
+        state_b,
+        sender_words,
+        sender_wallet_id,
+    )
+}
+
+/// Hot-path regression: applying the same block sequence through the (now offloaded)
+/// `apply_remote_block_from_gossip` must yield byte-identical state roots on producer and
+/// receiver at every height — proving the spawn_blocking refactor changed no consensus output.
+#[tokio::test]
+async fn remote_block_apply_offloaded_sequence_keeps_state_roots_identical() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let (ledger_a, ledger_b, state_a, state_b, sender_words, sender_wallet_id) =
+        two_synced_nodes_with_funded_sender();
+    let recipient = crate::wallet::generate_mnemonic_12().unwrap();
+    let recipient_wallet_id = recipient.address_hex.to_ascii_lowercase();
+
+    let mut parent_block_id: Option<String> = None;
+    for height in 1u64..=4 {
+        // Unique amount per block => unique tx hash per block.
+        let env = signed_transfer_env_for_tests(
+            &sender_words,
+            &sender_wallet_id,
+            &recipient_wallet_id,
+            height * crate::ledger::STEVEMON,
+        );
+        let gossip =
+            build_remote_block_for_tests(&ledger_a, height, parent_block_id.clone(), env);
+
+        for (ledger, state) in [(&ledger_b, &state_b), (&ledger_a, &state_a)] {
+            let outcome = crate::consensus::apply_remote_block_from_gossip(
+                (*ledger).clone(),
+                state.mempool.clone(),
+                gossip.clone(),
+            )
+            .await
+            .unwrap();
+            match outcome {
+                crate::consensus::RemoteBlockApplyOutcome::Applied {
+                    block_height,
+                    state_root,
+                    ..
+                } => {
+                    assert_eq!(block_height, height);
+                    assert_eq!(state_root, gossip.state_root);
+                }
+                other => panic!("expected Applied at height {height}, got {other:?}"),
+            }
+        }
+
+        assert_eq!(ledger_a.block_height().unwrap(), height);
+        assert_eq!(ledger_b.block_height().unwrap(), height);
+        assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
+        assert_eq!(ledger_a.compute_state_root(), gossip.state_root);
+        parent_block_id = Some(gossip.block_id.clone());
+    }
+}
+
+/// Concurrent duplicate delivery of the same block (e.g. several peers gossiping it at once)
+/// must apply exactly once and never fork; the chain must keep extending normally afterwards.
+#[tokio::test]
+async fn remote_block_apply_concurrent_duplicate_delivery_is_fork_safe() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let (ledger_a, ledger_b, _state_a, state_b, sender_words, sender_wallet_id) =
+        two_synced_nodes_with_funded_sender();
+    let recipient = crate::wallet::generate_mnemonic_12().unwrap();
+    let recipient_wallet_id = recipient.address_hex.to_ascii_lowercase();
+
+    let env1 = signed_transfer_env_for_tests(
+        &sender_words,
+        &sender_wallet_id,
+        &recipient_wallet_id,
+        crate::ledger::STEVEMON,
+    );
+    let gossip1 = build_remote_block_for_tests(&ledger_a, 1, None, env1);
+
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+        let ledger = ledger_b.clone();
+        let mempool = state_b.mempool.clone();
+        let gossip = gossip1.clone();
+        handles.push(tokio::spawn(async move {
+            crate::consensus::apply_remote_block_from_gossip(ledger, mempool, gossip).await
+        }));
+    }
+    let mut applied = 0usize;
+    let mut skipped = 0usize;
+    for handle in handles {
+        match handle.await.unwrap().unwrap() {
+            crate::consensus::RemoteBlockApplyOutcome::Applied {
+                block_height,
+                state_root,
+                ..
+            } => {
+                applied += 1;
+                assert_eq!(block_height, 1);
+                assert_eq!(state_root, gossip1.state_root);
+            }
+            crate::consensus::RemoteBlockApplyOutcome::Skipped { .. } => skipped += 1,
+            other => panic!("unexpected outcome under concurrent delivery: {other:?}"),
+        }
+    }
+    assert_eq!(applied, 1, "block must be applied exactly once");
+    assert_eq!(skipped, 3);
+    assert_eq!(ledger_b.block_height().unwrap(), 1);
+    assert_eq!(ledger_b.compute_state_root(), gossip1.state_root);
+
+    // Receiver keeps extending: mirror block 1 on the producer view, then deliver block 2.
+    let _ = crate::consensus::apply_remote_block_from_gossip(
+        ledger_a.clone(),
+        state_b.mempool.clone(),
+        gossip1.clone(),
+    )
+    .await
+    .unwrap();
+    let env2 = signed_transfer_env_for_tests(
+        &sender_words,
+        &sender_wallet_id,
+        &recipient_wallet_id,
+        2 * crate::ledger::STEVEMON,
+    );
+    let gossip2 =
+        build_remote_block_for_tests(&ledger_a, 2, Some(gossip1.block_id.clone()), env2);
+    let outcome = crate::consensus::apply_remote_block_from_gossip(
+        ledger_b.clone(),
+        state_b.mempool.clone(),
+        gossip2.clone(),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        outcome,
+        crate::consensus::RemoteBlockApplyOutcome::Applied { block_height: 2, .. }
+    ));
+    assert_eq!(ledger_b.compute_state_root(), gossip2.state_root);
+}
+
+/// Liveness: with the consensus mutation offloaded to the blocking pool, the (single-threaded)
+/// async runtime must keep making progress *while* a block apply is in flight. Before the
+/// refactor the whole 2×O(N) section ran inline, so the apply future completed on its very
+/// first poll and a concurrently-joined probe future could never tick before it finished.
+#[tokio::test]
+async fn remote_block_apply_keeps_async_runtime_responsive() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let (ledger_a, ledger_b, _state_a, state_b, sender_words, sender_wallet_id) =
+        two_synced_nodes_with_funded_sender();
+    let recipient = crate::wallet::generate_mnemonic_12().unwrap();
+    let recipient_wallet_id = recipient.address_hex.to_ascii_lowercase();
+
+    let env = signed_transfer_env_for_tests(
+        &sender_words,
+        &sender_wallet_id,
+        &recipient_wallet_id,
+        crate::ledger::STEVEMON,
+    );
+    let gossip = build_remote_block_for_tests(&ledger_a, 1, None, env);
+
+    // join! polls the apply future first; if the heavy section ran inline it would finish
+    // before the probe ever runs, so `first_tick < apply_done` proves the offload.
+    let apply_fut = async {
+        let res = crate::consensus::apply_remote_block_from_gossip(
+            ledger_b.clone(),
+            state_b.mempool.clone(),
+            gossip.clone(),
+        )
+        .await;
+        (res, std::time::Instant::now())
+    };
+    let probe_fut = async {
+        let first_tick = std::time::Instant::now();
+        tokio::task::yield_now().await;
+        first_tick
+    };
+    let ((apply_res, apply_done), first_tick) = tokio::join!(apply_fut, probe_fut);
+
+    assert!(matches!(
+        apply_res.unwrap(),
+        crate::consensus::RemoteBlockApplyOutcome::Applied { block_height: 1, .. }
+    ));
+    assert!(
+        first_tick < apply_done,
+        "async runtime made no progress while the block apply was in flight"
+    );
+    assert_eq!(ledger_b.block_height().unwrap(), 1);
+}
+
 #[tokio::test]
 async fn coinbase_reward_moves_worker_pool_to_producer_without_minting() {
     let _g = env_lock();
