@@ -92,6 +92,17 @@ pub fn treasury_address_from_env() -> Result<String, LedgerError> {
     normalize_treasury_address(&raw)
 }
 
+/// Balance keys and split amounts touched by one `TxV1::FileFee` settlement
+/// (returned by `Ledger::apply_file_fee_to_balance_map` so the batch apply can mark
+/// dirty balances and bump burn/fee counters without recomputing keys).
+struct FileFeeEffect {
+    from_key: Vec<u8>,
+    treasury_key: Vec<u8>,
+    storage_key: Vec<u8>,
+    burn_key: Vec<u8>,
+    split: crate::files::FileFeeSplit,
+}
+
 pub fn deterministic_genesis_hash(founder_wallet_id: &str, treasury_wallet_id: &str) -> String {
     crate::genesis::deterministic_genesis_hash_from_parts(founder_wallet_id, treasury_wallet_id)
 }
@@ -596,6 +607,7 @@ impl Ledger {
             crate::protocol::TxV1::GenesisBridge { .. } => "genesis_bridge",
             crate::protocol::TxV1::EnterpriseInference { .. } => "enterprise_inference",
             crate::protocol::TxV1::VerifyZkProof { .. } => "verify_zk_proof",
+            crate::protocol::TxV1::FileFee { .. } => "file_fee",
         }
     }
 
@@ -686,6 +698,28 @@ impl Ledger {
                     balance_keys.push(wallet_id.trim().to_ascii_lowercase().into_bytes());
                     meta_keys.push(Self::remote_tx_applied_meta_key(tx_hash));
                     meta_keys.push(META_FAUCET_INITIAL_RECIPIENTS_COUNT.to_vec());
+                }
+                crate::protocol::TxV1::FileFee {
+                    from_wallet,
+                    storage_wallet,
+                    ..
+                } => {
+                    // Fee settlement touches sender / treasury / storage node / burn sink plus the
+                    // burn + fee counters and the per-tx applied marker. Capturing a key that ends
+                    // up untouched (e.g. empty storage wallet folded into treasury) is harmless.
+                    balance_keys.push(from_wallet.trim().to_ascii_lowercase().into_bytes());
+                    if let Ok(treasury) = treasury_address_from_env() {
+                        balance_keys.push(treasury.into_bytes());
+                    }
+                    let storage = storage_wallet.trim().to_ascii_lowercase();
+                    if !storage.is_empty() {
+                        balance_keys.push(storage.into_bytes());
+                    }
+                    balance_keys.push(self.ai_burn_wallet().into_bytes());
+                    meta_keys.push(META_TOTAL_SUPPLY.to_vec());
+                    meta_keys.push(META_TOTAL_BURNED.to_vec());
+                    meta_keys.push(META_FEE_TOTAL.to_vec());
+                    meta_keys.push(Self::remote_tx_applied_meta_key(tx_hash));
                 }
                 _ => {}
             }
@@ -1405,6 +1439,22 @@ impl Ledger {
                         &mut airdrop_count,
                     )?;
                 }
+                crate::protocol::TxV1::FileFee {
+                    from_wallet,
+                    storage_wallet,
+                    fee_micro,
+                    ..
+                } => {
+                    // Same dedup discipline as InitialAirdrop/Transfer: the miner drops
+                    // already-settled fee txs pre-block, so previewing the debit/credits here
+                    // matches the post-apply root.
+                    self.apply_file_fee_to_balance_map(
+                        &mut balances,
+                        from_wallet,
+                        storage_wallet,
+                        *fee_micro,
+                    )?;
+                }
                 _ => {
                     return Err(LedgerError::Invalid(
                         "unsupported tx in remote block".into(),
@@ -1438,6 +1488,67 @@ impl Ledger {
             .meta
             .get(Self::remote_tx_applied_meta_key(tx_hash))?
             .is_some())
+    }
+
+    /// Deterministic balance effect of a [`crate::protocol::TxV1::FileFee`] settlement against an
+    /// in-memory balances map (File Sharing Phase 0 spec §7).
+    ///
+    /// Debits `fee_micro` from the sender and credits the 25/50/25 split
+    /// ([`crate::files::file_fee_split`]) to treasury / storage node / burn sink. An empty
+    /// `storage_wallet` deterministically folds the storage share into the treasury, so every node
+    /// computes the same root regardless of submitter behaviour. Shared by the non-destructive
+    /// preview ([`Self::compute_state_root_after_remote_block`]) and the batch apply
+    /// ([`Self::apply_consensus_block_batch`]).
+    fn apply_file_fee_to_balance_map(
+        &self,
+        balances: &mut BTreeMap<Vec<u8>, u64>,
+        from_wallet: &str,
+        storage_wallet: &str,
+        fee_micro: u64,
+    ) -> Result<FileFeeEffect, LedgerError> {
+        if fee_micro != crate::files::FILE_FEE_MICRO {
+            return Err(LedgerError::Invalid(format!(
+                "file fee must be exactly {} µTET",
+                crate::files::FILE_FEE_MICRO
+            )));
+        }
+        let from = from_wallet.trim().to_ascii_lowercase();
+        if from.is_empty() {
+            return Err(LedgerError::Invalid("file fee sender required".into()));
+        }
+        let treasury = treasury_address_from_env()?;
+        let storage = {
+            let s = storage_wallet.trim().to_ascii_lowercase();
+            if s.is_empty() { treasury.clone() } else { s }
+        };
+        let split = crate::files::file_fee_split(fee_micro);
+
+        let from_k = from.into_bytes();
+        let fb = balances.get(&from_k).copied().unwrap_or(0);
+        let locked_sum = self.locked_balance_micro(from_wallet.trim(), ledger_now_ms())?;
+        if fb.saturating_sub(locked_sum) < fee_micro {
+            return Err(LedgerError::InsufficientFunds);
+        }
+        balances.insert(from_k.clone(), fb - fee_micro);
+
+        let mut credit = |key: Vec<u8>, amount: u64| {
+            let cur = balances.get(&key).copied().unwrap_or(0);
+            balances.insert(key, cur.saturating_add(amount));
+        };
+        let treasury_k = treasury.into_bytes();
+        let storage_k = storage.into_bytes();
+        let burn_k = self.ai_burn_wallet().into_bytes();
+        credit(treasury_k.clone(), split.treasury_micro);
+        credit(storage_k.clone(), split.storage_micro);
+        credit(burn_k.clone(), split.burn_micro);
+
+        Ok(FileFeeEffect {
+            from_key: from_k,
+            treasury_key: treasury_k,
+            storage_key: storage_k,
+            burn_key: burn_k,
+            split,
+        })
     }
 
     /// Deterministic balance effect of a single [`crate::protocol::TxV1::InitialAirdrop`] claim
@@ -1654,6 +1765,32 @@ impl Ledger {
                             .map_err(|e| LedgerError::Invalid(format!("ai_workload_json:{e}")))?;
                         meta_batch.insert(task_key, self.encrypt_value(&bytes)?);
                     }
+                }
+                crate::protocol::TxV1::FileFee {
+                    from_wallet,
+                    storage_wallet,
+                    fee_micro,
+                    ..
+                } => {
+                    let applied_k = Self::remote_tx_applied_meta_key(tx_hash);
+                    // Network-wide dedup by tx hash: each file fee settles at most once.
+                    if self.meta.get(&applied_k)?.is_some() {
+                        continue;
+                    }
+                    let effect = self.apply_file_fee_to_balance_map(
+                        &mut balances,
+                        from_wallet,
+                        storage_wallet,
+                        *fee_micro,
+                    )?;
+                    dirty_balances.insert(effect.from_key);
+                    dirty_balances.insert(effect.treasury_key);
+                    dirty_balances.insert(effect.storage_key);
+                    dirty_balances.insert(effect.burn_key);
+                    total_supply = total_supply.saturating_sub(effect.split.burn_micro);
+                    total_burned = total_burned.saturating_add(effect.split.burn_micro);
+                    fee_total = fee_total.saturating_add(*fee_micro);
+                    meta_batch.insert(applied_k, self.encrypt_value(b"1")?);
                 }
                 crate::protocol::TxV1::InitialAirdrop { wallet_id } => {
                     let applied_k = Self::remote_tx_applied_meta_key(tx_hash);

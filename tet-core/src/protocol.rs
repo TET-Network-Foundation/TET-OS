@@ -63,6 +63,23 @@ pub enum TxV1 {
         /// 64-hex Ed25519 verifying key (wallet id) receiving the welcome airdrop.
         wallet_id: String,
     },
+    /// File Sharing per-file fee settlement (Phase 0 Step 4, spec §7).
+    ///
+    /// The sender pays [`crate::files::FILE_FEE_MICRO`] which is split deterministically at
+    /// block-apply time: 25% protocol treasury / 50% storage node / 25% burned
+    /// (see [`crate::files::file_fee_split`]). `file_id` ties the settlement to the announced
+    /// envelope (audit) and makes the tx hash unique per file, so network-wide dedup by tx hash
+    /// (the per-tx applied marker) means each file is settled at most once.
+    FileFee {
+        /// Sender wallet (64-hex Ed25519 pubkey); must equal the envelope signer.
+        from_wallet: String,
+        /// Storage node payout id (the node's consensus wallet id, credited 50%).
+        storage_wallet: String,
+        /// UUID of the file envelope this fee settles.
+        file_id: String,
+        /// Fee in µTET; must equal [`crate::files::FILE_FEE_MICRO`].
+        fee_micro: u64,
+    },
     /// Enterprise demand-side inference request (B2B).
     ///
     /// The canonical signature message binds authorization to:

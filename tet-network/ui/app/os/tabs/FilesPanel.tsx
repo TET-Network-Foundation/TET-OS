@@ -23,10 +23,17 @@ import {
   getFilesFetch,
   getTmailKeys,
   normalizeWalletId64,
+  postFilesFee,
   postFilesUpload,
   putTmailKeys,
 } from "../../lib/tet_core_http";
-import { buildFileEnvelopeV1, MAX_FILE_BODY_BYTES, type FileEnvelopeV1 } from "../../lib/files";
+import {
+  buildFileEnvelopeV1,
+  buildFileFeeEnvelopeV1,
+  FILE_FEE_MICRO,
+  MAX_FILE_BODY_BYTES,
+  type FileEnvelopeV1,
+} from "../../lib/files";
 import { buildTmailKeyRegistrationV1 } from "../../lib/tmail_keys";
 import { decryptFileForReceiver, decryptFileMeta } from "../../lib/files_e2ee";
 import { getTmailKeySession } from "../../lib/tmail_session";
@@ -49,7 +56,7 @@ type InboxFile = {
   envelope: FileEnvelopeV1;
 };
 
-type SendPhase = "idle" | "encrypting" | "uploading" | "done" | "error";
+type SendPhase = "idle" | "encrypting" | "uploading" | "fee" | "done" | "error";
 
 type KeyStatus =
   | { state: "loading" }
@@ -320,9 +327,31 @@ export default function FilesPanel(props: { baseUrl: string; myWalletId: string;
       const up = await postFilesUpload(baseUrl, built.envelope, built.bodyCiphertext);
       if (!mountedRef.current) return;
       if (up.ok) {
+        // Step 4 fee settlement: 1000 µTET sender → consensus (25% treasury / 50% storage / 25% burn).
+        // The file is already delivered at this point, so a fee failure degrades to a warning.
+        setSendPhase("fee");
+        let feeText = "";
+        try {
+          const feeEnv = await buildFileFeeEnvelopeV1({
+            senderWalletId: myWalletId,
+            storageWallet: up.storageWallet ?? "",
+            fileId: up.fileId ?? built.envelope.file_id,
+            baseUrl,
+          });
+          const feeRes = await postFilesFee(baseUrl, feeEnv);
+          feeText = feeRes.ok
+            ? ` Fee ${FILE_FEE_MICRO} µTET queued for settlement.`
+            : ` Fee settlement failed: ${feeRes.text ?? `HTTP ${feeRes.status}`}.`;
+        } catch (feeErr: unknown) {
+          feeText = ` Fee settlement failed: ${feeErr instanceof Error ? feeErr.message : String(feeErr)}.`;
+        }
+        if (!mountedRef.current) return;
         setSendPhase("done");
         setSentCount((n) => n + 1);
-        setSendNotice({ kind: "ok", text: `Sent "${file.name}" (file_id: ${shortId(up.fileId ?? built.envelope.file_id)}).` });
+        setSendNotice({
+          kind: "ok",
+          text: `Sent "${file.name}" (file_id: ${shortId(up.fileId ?? built.envelope.file_id)}).${feeText}`,
+        });
         setFile(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
       } else {
@@ -350,7 +379,7 @@ export default function FilesPanel(props: { baseUrl: string; myWalletId: string;
       if (!res.ok || !res.bytes) {
         setInboxErr(
           res.status === 404
-            ? "Encrypted body not on this node yet (Phase 0 fetches from the local node; cross-node arrives in Step 4)."
+            ? "Encrypted body not available yet — the node also tried pulling it from the storage node over libp2p. Retry shortly."
             : (res.text ?? `Fetch failed (HTTP ${res.status}).`),
         );
         return;
@@ -414,12 +443,12 @@ export default function FilesPanel(props: { baseUrl: string; myWalletId: string;
     }
   }
 
-  const sendBusy = sendPhase === "encrypting" || sendPhase === "uploading";
+  const sendBusy = sendPhase === "encrypting" || sendPhase === "uploading" || sendPhase === "fee";
   const visible = showOlder ? items : items.slice(0, INBOX_VISIBLE);
   const hidden = Math.max(0, items.length - INBOX_VISIBLE);
 
-  const stepLabel = (step: "encrypting" | "uploading" | "done") => {
-    const order: SendPhase[] = ["encrypting", "uploading", "done"];
+  const stepLabel = (step: "encrypting" | "uploading" | "fee" | "done") => {
+    const order: SendPhase[] = ["encrypting", "uploading", "fee", "done"];
     const cur = order.indexOf(sendPhase);
     const idx = order.indexOf(step);
     if (sendPhase === "idle" || sendPhase === "error") return "○";
@@ -494,10 +523,18 @@ export default function FilesPanel(props: { baseUrl: string; myWalletId: string;
             {"  "}
             <span title="upload">{stepLabel("uploading")} Upload</span>
             {"  "}
+            <span title={`fee ${FILE_FEE_MICRO} µTET`}>{stepLabel("fee")} Fee</span>
+            {"  "}
             <span title="announce">{stepLabel("done")} Announce</span>
           </div>
           <Win95Button onClick={() => void onSend()} disabled={sendBusy} className="px-4 py-1 text-sm">
-            {sendPhase === "encrypting" ? "Encrypting…" : sendPhase === "uploading" ? "Uploading…" : "Send Encrypted File"}
+            {sendPhase === "encrypting"
+              ? "Encrypting…"
+              : sendPhase === "uploading"
+                ? "Uploading…"
+                : sendPhase === "fee"
+                  ? "Settling fee…"
+                  : "Send Encrypted File"}
           </Win95Button>
         </div>
         {sendNotice ? (
@@ -590,7 +627,8 @@ export default function FilesPanel(props: { baseUrl: string; myWalletId: string;
           </div>
         )}
         <div className="text-[11px] font-mono text-black/60">
-          Max 5 MB · 30-day retention · fee 1000 µTET (declared) · Sent {sentCount} · Received {items.length}
+          Max 5 MB · 30-day retention · fee {FILE_FEE_MICRO} µTET (settled on-chain) · Sent {sentCount} · Received{" "}
+          {items.length}
         </div>
       </Win95Panel>
     </Win95Panel>

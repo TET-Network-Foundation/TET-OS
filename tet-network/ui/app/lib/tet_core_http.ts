@@ -915,6 +915,9 @@ export type FilesUploadResult = {
   status: number;
   fileId?: string;
   storageNode?: string;
+  /** Storage node's consensus wallet id — the 50% payout target for the Step 4 fee settlement. */
+  storageWallet?: string;
+  feeMicro?: number;
   text?: string;
 };
 
@@ -939,8 +942,20 @@ export async function postFilesUpload(
     const text = await r.text();
     if (!r.ok) return { ok: false, status: r.status, text };
     try {
-      const data = JSON.parse(text) as { file_id?: string; storage_node?: string };
-      return { ok: true, status: r.status, fileId: data.file_id ?? envelope.file_id, storageNode: data.storage_node };
+      const data = JSON.parse(text) as {
+        file_id?: string;
+        storage_node?: string;
+        storage_wallet?: string;
+        fee_micro?: number;
+      };
+      return {
+        ok: true,
+        status: r.status,
+        fileId: data.file_id ?? envelope.file_id,
+        storageNode: data.storage_node,
+        storageWallet: data.storage_wallet,
+        feeMicro: data.fee_micro,
+      };
     } catch {
       return { ok: true, status: r.status, fileId: envelope.file_id };
     }
@@ -1003,6 +1018,26 @@ export async function getFilesFetch(baseUrl: string, fileId: string): Promise<Fi
   } catch (e: unknown) {
     return { ok: false, status: 0, text: e instanceof Error ? e.message : String(e) };
   }
+}
+
+export type FilesFeeResult = { ok: boolean; status: number; fileId?: string; text?: string };
+
+/**
+ * `POST /files/fee` — submit a hybrid-signed `TxV1::FileFee` settlement envelope (Step 4, spec §7).
+ * The node prechecks (signature, exact 1000 µTET fee, spendable balance), enqueues into the mempool
+ * and gossips; the 25/50/25 treasury/storage/burn split applies when a producer mines it.
+ */
+export async function postFilesFee(
+  baseUrl: string,
+  env: import("./transfer").SignedTxEnvelopeV1,
+): Promise<FilesFeeResult> {
+  const r = await fetchJson<{ ok?: boolean; file_id?: string }>(tetCoreUrl(baseUrl, "/files/fee"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify(env),
+  });
+  if (!r.ok) return { ok: false, status: r.status, text: r.text };
+  return { ok: true, status: r.status, fileId: r.data?.file_id };
 }
 
 export type FilesDeleteResult = { ok: boolean; status: number; deleted?: boolean; text?: string };

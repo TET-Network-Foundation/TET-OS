@@ -32,6 +32,13 @@ export type TxBodyV1 =
   | {
       kind: "initial_airdrop";
       wallet_id: string;
+    }
+  | {
+      kind: "file_fee";
+      from_wallet: string;
+      storage_wallet: string;
+      file_id: string;
+      fee_micro: number;
     };
 
 /** Hybrid-signed transaction envelope (mirrors tet-core `protocol::SignedTxEnvelopeV1`). */

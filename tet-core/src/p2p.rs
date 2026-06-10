@@ -274,6 +274,9 @@ struct TetBehaviour {
     chain_sync_hello: request_response::json::Behaviour<ChainHello, ChainHello>,
     chain_sync_range:
         request_response::json::Behaviour<ChainSyncRangeRequest, ChainSyncRangeResponse>,
+    /// File Sharing body transfer (`/tet/v1/files/fetch`, Step 4) — custom 8 MiB codec because the
+    /// stock json codec caps requests at 1 MiB and is not size-configurable.
+    files_fetch: request_response::Behaviour<crate::files::fetch_codec::FilesFetchCodec>,
 }
 
 #[derive(Debug)]
@@ -286,6 +289,7 @@ enum Event {
     BlockSync(request_response::Event<BlockRequest, BlockResponse>),
     ChainSyncHello(request_response::Event<ChainHello, ChainHello>),
     ChainSyncRange(request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>),
+    FilesFetch(request_response::Event<crate::files::FileFetchRequest, crate::files::FileFetchResponse>),
 }
 
 impl From<mdns::Event> for Event {
@@ -327,6 +331,26 @@ impl From<request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>
     fn from(e: request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>) -> Self {
         Self::ChainSyncRange(e)
     }
+}
+impl From<request_response::Event<crate::files::FileFetchRequest, crate::files::FileFetchResponse>>
+    for Event
+{
+    fn from(
+        e: request_response::Event<crate::files::FileFetchRequest, crate::files::FileFetchResponse>,
+    ) -> Self {
+        Self::FilesFetch(e)
+    }
+}
+
+/// Ask the swarm task to pull an encrypted file body from a peer over `/tet/v1/files/fetch`
+/// (Step 4). Sent by the REST fetch handler on a local-store miss; the swarm resolves
+/// `storage_node` to a connected peer, performs the request/response, and answers on `resp`.
+pub struct FilesFetchCmd {
+    /// libp2p PeerId (base58) of the node holding the blob, per the announce envelope.
+    /// Unparseable/unknown values fall back to the first connected peer.
+    pub storage_node: String,
+    pub file_id: uuid::Uuid,
+    pub resp: tokio::sync::oneshot::Sender<Result<crate::files::FileFetchResponse, String>>,
 }
 
 pub const BLOCKS_TOPIC: &str = "/tet/v1/blocks";
@@ -710,6 +734,19 @@ fn chain_sync_range_behaviour()
             request_response::ProtocolSupport::Full,
         )],
         request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+    )
+}
+
+fn files_fetch_behaviour()
+-> request_response::Behaviour<crate::files::fetch_codec::FilesFetchCodec> {
+    request_response::Behaviour::with_codec(
+        crate::files::fetch_codec::FilesFetchCodec,
+        [(
+            StreamProtocol::new(crate::files::FILES_FETCH_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        // Generous timeout: a 5 MiB body over a cross-region link can take a while.
+        request_response::Config::default().with_request_timeout(Duration::from_secs(30)),
     )
 }
 
@@ -1123,6 +1160,14 @@ async fn block_record_by_id_offloaded(
         .unwrap_or(None)
 }
 
+/// Handles returned by [`start_mdns_ping_swarm`]: gossip publish channel, files-fetch command
+/// channel (`/tet/v1/files/fetch`), and the swarm task join handle.
+pub type BlockSwarmHandles = (
+    mpsc::Sender<String>,
+    mpsc::Sender<FilesFetchCmd>,
+    tokio::task::JoinHandle<()>,
+);
+
 /// Start a libp2p swarm task and return a Sender you can use to publish gossip messages.
 #[allow(clippy::too_many_arguments)]
 pub fn start_mdns_ping_swarm(
@@ -1136,13 +1181,15 @@ pub fn start_mdns_ping_swarm(
     tmail_store: Arc<crate::tmail::store::TmailStore>,
     file_store: Arc<crate::files::storage::FileStore>,
     swarm_health: crate::swarm_health::SharedSwarmHealth,
-) -> Result<(mpsc::Sender<String>, tokio::task::JoinHandle<()>), AnyErr> {
+) -> Result<BlockSwarmHandles, AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
+    let (files_fetch_tx, files_fetch_rx) = mpsc::channel::<FilesFetchCmd>(32);
     let join = tokio::spawn(async move {
         if let Err(e) = run_mdns_ping_swarm(
             ledger,
             mempool,
             rx,
+            files_fetch_rx,
             keypair,
             listen,
             hello_registry,
@@ -1158,7 +1205,7 @@ pub fn start_mdns_ping_swarm(
             log::warn!("[p2p][mdns] swarm exited: {e}");
         }
     });
-    Ok((tx, join))
+    Ok((tx, files_fetch_tx, join))
 }
 
 /// Run the block-plane libp2p swarm (gossip + chain-sync RPC).
@@ -1168,6 +1215,7 @@ async fn run_mdns_ping_swarm(
     ledger: Arc<crate::ledger::Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     mut publish_rx: mpsc::Receiver<String>,
+    mut files_fetch_rx: mpsc::Receiver<FilesFetchCmd>,
     keypair: identity::Keypair,
     listen: Multiaddr,
     hello_registry: SharedHelloRegistry,
@@ -1270,6 +1318,7 @@ async fn run_mdns_ping_swarm(
         block_sync: block_sync_behaviour(),
         chain_sync_hello: chain_sync_hello_behaviour(),
         chain_sync_range: chain_sync_range_behaviour(),
+        files_fetch: files_fetch_behaviour(),
     };
     let idle_timeout = idle_timeout_from_env();
     let mut swarm = Swarm::new(
@@ -1385,6 +1434,10 @@ async fn run_mdns_ping_swarm(
     let mut blacklisted_peers = BoundedPeerBlacklist::from_env();
     let mut pending_catch_up_range: HashMap<request_response::OutboundRequestId, PeerId> =
         HashMap::new();
+    let mut pending_files_fetch: HashMap<
+        request_response::OutboundRequestId,
+        tokio::sync::oneshot::Sender<Result<crate::files::FileFetchResponse, String>>,
+    > = HashMap::new();
     let chain_hello_interval_ms = chain_hello_interval_sec_from_env().saturating_mul(1000);
     let mut last_chain_hello_sent_at: HashMap<PeerId, u64> = HashMap::new();
     let kad_bootstrap_interval_ms = kad_bootstrap_interval_sec_from_env().saturating_mul(1000);
@@ -1472,6 +1525,33 @@ async fn run_mdns_ping_swarm(
                                 // and harmless until a peer is (re)connected.
                                 log::debug!("[p2p][kad] periodic bootstrap skipped: {e:?}");
                             }
+                        }
+                    }
+                }
+            }
+            maybe_cmd = files_fetch_rx.recv() => {
+                if let Some(cmd) = maybe_cmd {
+                    // Prefer the announced storage node when it is a known connected peer;
+                    // otherwise fall back to the first connected peer (Phase 0 topology is tiny,
+                    // and an honest peer answers `found=false` on a miss).
+                    let parsed = cmd.storage_node.trim().parse::<PeerId>().ok();
+                    let target = parsed
+                        .filter(|p| swarm.is_connected(p))
+                        .or_else(|| swarm.connected_peers().next().copied());
+                    match target {
+                        Some(peer) => {
+                            let request_id = swarm.behaviour_mut().files_fetch.send_request(
+                                &peer,
+                                crate::files::FileFetchRequest { file_id: cmd.file_id },
+                            );
+                            println!(
+                                "[P2P] 📦 FILES FETCH REQUEST sent file_id={} peer={peer} request_id={request_id:?}",
+                                cmd.file_id
+                            );
+                            pending_files_fetch.insert(request_id, cmd.resp);
+                        }
+                        None => {
+                            let _ = cmd.resp.send(Err("no connected peers to fetch file body from".into()));
                         }
                     }
                 }
@@ -2305,6 +2385,53 @@ async fn run_mdns_ping_swarm(
                     }
                 }
             }
+            SwarmEvent::Behaviour(Event::FilesFetch(ev)) => match ev {
+                request_response::Event::Message {
+                    message:
+                        request_response::Message::Request {
+                            request, channel, ..
+                        },
+                    peer,
+                    ..
+                } => {
+                    // Serve the encrypted blob from the node-local store (blind relay; TTL
+                    // respected by `get_blob`). `from_blob` re-hashes so the requester can verify
+                    // integrity against the announced `file_sha256`.
+                    let file_id = request.file_id;
+                    let resp = match file_store.get_blob(&file_id.to_string()) {
+                        Some(blob) => crate::files::FileFetchResponse::from_blob(file_id, &blob),
+                        None => crate::files::FileFetchResponse::not_found(file_id),
+                    };
+                    let found = resp.found;
+                    let _ = swarm.behaviour_mut().files_fetch.send_response(channel, resp);
+                    println!(
+                        "[P2P] 📦 FILES FETCH SERVED file_id={file_id} peer={peer} found={found}"
+                    );
+                }
+                request_response::Event::Message {
+                    message:
+                        request_response::Message::Response {
+                            request_id,
+                            response,
+                        },
+                    ..
+                } => {
+                    if let Some(resp_tx) = pending_files_fetch.remove(&request_id) {
+                        let _ = resp_tx.send(Ok(response));
+                    }
+                }
+                request_response::Event::OutboundFailure {
+                    request_id, error, ..
+                } => {
+                    if let Some(resp_tx) = pending_files_fetch.remove(&request_id) {
+                        let _ = resp_tx.send(Err(format!("files fetch outbound failure: {error}")));
+                    }
+                }
+                request_response::Event::InboundFailure { peer, error, .. } => {
+                    println!("[P2P] ❌ FILES FETCH INBOUND FAILURE peer={peer} err={error}");
+                }
+                request_response::Event::ResponseSent { .. } => {}
+            },
             SwarmEvent::Behaviour(Event::Ping(ev)) => {
                 let ping::Event { peer, result, .. } = ev;
                 match result {
@@ -2388,6 +2515,7 @@ mod tests {
             block_sync: block_sync_behaviour(),
             chain_sync_hello: chain_sync_hello_behaviour(),
             chain_sync_range: chain_sync_range_behaviour(),
+            files_fetch: files_fetch_behaviour(),
         };
 
         Swarm::new(

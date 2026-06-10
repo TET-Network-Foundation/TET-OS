@@ -249,6 +249,10 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::post(super::handlers::files::post_files_announce),
         )
         .route(
+            "/files/fee",
+            axum::routing::post(super::handlers::files::post_files_fee),
+        )
+        .route(
             "/files/inbox/:wallet_id",
             axum::routing::get(super::handlers::files::get_files_inbox),
         )

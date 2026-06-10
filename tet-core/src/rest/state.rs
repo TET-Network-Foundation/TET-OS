@@ -53,6 +53,9 @@ pub struct RestState {
     pub tmail: Arc<crate::tmail::store::TmailStore>,
     /// File Sharing node-local blob/meta/inbox store (off-ledger; spec `PHASE_0_FILE_SHARING_SPEC.md`).
     pub files: Arc<crate::files::storage::FileStore>,
+    /// Command channel into the block-plane swarm for `/tet/v1/files/fetch` body pulls
+    /// (Step 4; `None` when the block swarm is disabled).
+    pub files_fetch_tx: Option<mpsc::Sender<crate::p2p::FilesFetchCmd>>,
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,
     pub workers: Arc<StdMutex<WorkerRegistry>>,
     pub e2ee_jobs: Arc<StdMutex<E2eeJobQueue>>,
@@ -118,6 +121,7 @@ impl RestState {
             crate::protocol::TxV1::EnterpriseInference { amount_micro, .. } => {
                 *amount_micro as u128
             }
+            crate::protocol::TxV1::FileFee { fee_micro, .. } => *fee_micro as u128,
             _ => 0,
         }
     }
