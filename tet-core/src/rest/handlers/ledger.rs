@@ -827,6 +827,11 @@ async fn post_tx_submit_impl(
         TxV1::VerifyZkProof { .. } => post_ledger_zk_verify(State(state), headers, Json(env))
             .await
             .into_response(),
+        TxV1::FileFee { .. } => {
+            crate::rest::handlers::files::post_files_fee(State(state), Json(env))
+                .await
+                .into_response()
+        }
     }
 }
 

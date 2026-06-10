@@ -12,13 +12,16 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use base64::Engine as _;
 use serde::Deserialize;
 
 use crate::files::{
-    FileDeleteError, FileDeleteRequestV1, FileEnvelopeError, FileEnvelopeV1,
+    FILE_FEE_MICRO, FileDeleteError, FileDeleteRequestV1, FileEnvelopeError, FileEnvelopeV1,
     verify_file_delete_request_v1, verify_file_envelope_v1,
 };
+use crate::protocol::{SignedTxEnvelopeV1, TxV1};
 use crate::rest::RestState;
+use crate::rest::helpers::verify_envelope_v1;
 
 const INBOX_DEFAULT_LIMIT: usize = 50;
 const INBOX_MAX_LIMIT: usize = 200;
@@ -121,6 +124,10 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
             "ok": true,
             "file_id": env.file_id,
             "storage_node": env.storage_node,
+            // Step 4 fee settlement: the storage node's consensus wallet id (50% payout target)
+            // so the sender can build + submit the `TxV1::FileFee` to `/files/fee`.
+            "storage_wallet": crate::consensus::local_node_id_from_env(),
+            "fee_micro": env.fee_micro,
             "status": "accepted",
         })),
     )
@@ -188,6 +195,11 @@ pub async fn get_files_inbox(
 }
 
 /// `GET /files/fetch/:file_id` — return the encrypted blob bytes (octet-stream), or `404`.
+///
+/// Step 4: on a local-store miss with a known announce envelope, the body is pulled from the
+/// storage node over the libp2p `/tet/v1/files/fetch` protocol (custom 8 MiB codec), verified
+/// against the envelope's `file_sha256`, cached locally, then served — so the receiver's node
+/// transparently fetches cross-node bodies without any UI change.
 pub async fn get_files_fetch(
     State(state): State<RestState>,
     Path(file_id): Path<String>,
@@ -196,23 +208,154 @@ pub async fn get_files_fetch(
     if uuid::Uuid::parse_str(id).is_err() {
         return (StatusCode::BAD_REQUEST, "file_id must be a UUID").into_response();
     }
-    match state.files.get_blob(id) {
-        Some(bytes) => (
+    if let Some(bytes) = state.files.get_blob(id) {
+        return (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/octet-stream")],
             bytes,
         )
-            .into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "ok": false,
-                "file_id": id,
-                "error": "no blob stored for this file_id (unknown or expired)",
-            })),
-        )
-            .into_response(),
+            .into_response();
     }
+    if let Some(bytes) = fetch_blob_from_peer(&state, id).await {
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/octet-stream")],
+            bytes,
+        )
+            .into_response();
+    }
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({
+            "ok": false,
+            "file_id": id,
+            "error": "no blob stored for this file_id (unknown or expired)",
+        })),
+    )
+        .into_response()
+}
+
+/// Local-miss path of [`get_files_fetch`]: pull the encrypted blob from the announced storage
+/// node over libp2p, verify integrity against the envelope, and cache it locally. Returns `None`
+/// on any failure (caller answers 404); decode/hash/store run on the blocking pool.
+async fn fetch_blob_from_peer(state: &RestState, file_id: &str) -> Option<Vec<u8>> {
+    let env = state.files.get_meta(file_id)?;
+    let fetch_tx = state.files_fetch_tx.as_ref()?;
+    let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+    fetch_tx
+        .send(crate::p2p::FilesFetchCmd {
+            storage_node: env.storage_node.clone(),
+            file_id: env.file_id,
+            resp: resp_tx,
+        })
+        .await
+        .ok()?;
+    let resp = match tokio::time::timeout(std::time::Duration::from_secs(35), resp_rx).await {
+        Ok(Ok(Ok(resp))) => resp,
+        Ok(Ok(Err(e))) => {
+            log::warn!("[files] libp2p fetch failed file_id={file_id}: {e}");
+            return None;
+        }
+        _ => {
+            log::warn!("[files] libp2p fetch timed out / channel closed file_id={file_id}");
+            return None;
+        }
+    };
+    if !resp.found {
+        log::info!(
+            "[files] libp2p fetch: peer does not hold file_id={file_id} (storage_node={})",
+            env.storage_node
+        );
+        return None;
+    }
+    let state2 = state.clone();
+    let file_id_owned = file_id.to_string();
+    tokio::task::spawn_blocking(move || {
+        let blob = base64::engine::general_purpose::STANDARD
+            .decode(resp.blob_b64.as_bytes())
+            .ok()?;
+        // Integrity: the announce envelope's signed sha256/size are authoritative.
+        if blob.len() as u64 != env.file_size || crate::files::sha256_hex(&blob) != env.file_sha256
+        {
+            log::warn!(
+                "[files] libp2p fetch integrity mismatch file_id={file_id_owned}; discarding"
+            );
+            return None;
+        }
+        if let Err(e) = state2.files.store_with_blob(&env, &blob) {
+            // Serve the verified bytes even if local caching fails (e.g. store at capacity).
+            log::warn!("[files] could not cache fetched blob file_id={file_id_owned}: {e}");
+        }
+        Some(blob)
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// `POST /files/fee` — submit a hybrid-signed [`TxV1::FileFee`] settlement (Phase 0 Step 4,
+/// spec §7). Prechecks only (no ledger mutation): envelope signature, exact fee amount, signer ==
+/// payer, spendable balance. Enqueues into the mempool and gossips so any producer can mine it;
+/// the 25/50/25 treasury/storage/burn split is applied deterministically at block-apply time.
+pub async fn post_files_fee(
+    State(state): State<RestState>,
+    Json(env): Json<SignedTxEnvelopeV1>,
+) -> Response {
+    if let Err(e) = verify_envelope_v1(&env) {
+        return (StatusCode::UNAUTHORIZED, e).into_response();
+    }
+    let TxV1::FileFee {
+        from_wallet,
+        storage_wallet,
+        file_id,
+        fee_micro,
+    } = env.tx.clone()
+    else {
+        return (StatusCode::BAD_REQUEST, "expected file_fee tx").into_response();
+    };
+    if fee_micro != FILE_FEE_MICRO {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("fee_micro must be exactly {FILE_FEE_MICRO}"),
+        )
+            .into_response();
+    }
+    if uuid::Uuid::parse_str(file_id.trim()).is_err() {
+        return (StatusCode::BAD_REQUEST, "file_id must be a UUID").into_response();
+    }
+    let from = from_wallet.trim().to_ascii_lowercase();
+    if !is_wallet_id_64hex(&from) {
+        return (StatusCode::BAD_REQUEST, "from_wallet must be 64 hex chars").into_response();
+    }
+    if env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase() != from {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "signer must equal from_wallet",
+        )
+            .into_response();
+    }
+    if storage_wallet.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, "storage_wallet required").into_response();
+    }
+    let spendable = state.ledger.spendable_balance_micro_now(&from).unwrap_or(0);
+    if spendable < fee_micro {
+        return (StatusCode::BAD_REQUEST, "insufficient funds").into_response();
+    }
+    if let Err(e) = state.enqueue_mempool_tx(env.clone()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
+    }
+    state.broadcast_mempool_tx(&env).await;
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "status": "pending",
+            "queued": true,
+            "file_id": file_id,
+            "fee_micro": fee_micro,
+        })),
+    )
+        .into_response()
 }
 
 /// `DELETE /files/:file_id` — sender-only cancel. Body is a hybrid-signed [`FileDeleteRequestV1`];

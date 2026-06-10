@@ -71,6 +71,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         mempool: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
         tmail,
         files,
+        files_fetch_tx: None,
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
         )),
@@ -105,6 +106,46 @@ fn signed_transfer_env_for_tests(
         to_wallet: to_wallet_id.to_string(),
         amount_micro,
         fee_bps: 100,
+    };
+    let tx_bytes = serde_json::to_vec(&tx).unwrap();
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(from_words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(from_words).unwrap();
+    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
+    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
+    let mldsa_sig_bytes =
+        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
+    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
+
+    crate::protocol::SignedTxEnvelopeV1 {
+        v: 1,
+        tx,
+        sig: crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: from_wallet_id.to_string(),
+            ed25519_sig_b64: ed_sig_b64,
+            mldsa_pubkey_b64,
+            mldsa_sig_b64,
+        },
+        attestation: crate::protocol::AttestationV1 {
+            platform: "test".to_string(),
+            report_b64: String::new(),
+        },
+    }
+}
+
+/// Hybrid-sign a [`crate::protocol::TxV1::FileFee`] envelope (legacy raw-tx-JSON preimage, same
+/// as [`signed_transfer_env_for_tests`]).
+fn signed_file_fee_env_for_tests(
+    from_words: &str,
+    from_wallet_id: &str,
+    storage_wallet: &str,
+    file_id: &str,
+) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::FileFee {
+        from_wallet: from_wallet_id.to_string(),
+        storage_wallet: storage_wallet.to_string(),
+        file_id: file_id.to_string(),
+        fee_micro: crate::files::FILE_FEE_MICRO,
     };
     let tx_bytes = serde_json::to_vec(&tx).unwrap();
     let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(from_words).unwrap();
@@ -1274,6 +1315,242 @@ async fn remote_block_apply_offloaded_sequence_keeps_state_roots_identical() {
         assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
         assert_eq!(ledger_a.compute_state_root(), gossip.state_root);
         parent_block_id = Some(gossip.block_id.clone());
+    }
+}
+
+/// File Sharing Step 4: the custom `/tet/v1/files/fetch` codec must round-trip a full 5 MiB
+/// encrypted body (the stock json codec caps requests at 1 MiB) and stay under the response cap.
+#[tokio::test]
+async fn files_fetch_codec_roundtrips_5mib_body() {
+    use libp2p::request_response::Codec as _;
+
+    let protocol = libp2p::StreamProtocol::new(crate::files::FILES_FETCH_PROTOCOL);
+    let mut codec = crate::files::fetch_codec::FilesFetchCodec;
+    let file_id = uuid::Uuid::new_v4();
+
+    // Request side.
+    let mut wire = futures::io::Cursor::new(Vec::<u8>::new());
+    codec
+        .write_request(&protocol, &mut wire, crate::files::FileFetchRequest { file_id })
+        .await
+        .unwrap();
+    let mut rd = futures::io::Cursor::new(wire.into_inner());
+    let req = codec.read_request(&protocol, &mut rd).await.unwrap();
+    assert_eq!(req.file_id, file_id);
+
+    // Response side with a max-size (5 MiB) blob.
+    let blob = vec![0xA7u8; crate::files::MAX_FILE_BODY_BYTES as usize];
+    let resp = crate::files::FileFetchResponse::from_blob(file_id, &blob);
+    let mut wire = futures::io::Cursor::new(Vec::<u8>::new());
+    codec
+        .write_response(&protocol, &mut wire, resp)
+        .await
+        .unwrap();
+    let encoded = wire.into_inner();
+    assert!(
+        (encoded.len() as u64) <= crate::files::fetch_codec::FETCH_RESPONSE_MAX_BYTES,
+        "encoded response {} exceeds codec cap",
+        encoded.len()
+    );
+    let mut rd = futures::io::Cursor::new(encoded);
+    let decoded = codec.read_response(&protocol, &mut rd).await.unwrap();
+    assert!(decoded.found);
+    assert_eq!(decoded.file_id, file_id);
+    assert_eq!(decoded.file_sha256, crate::files::sha256_hex(&blob));
+    let decoded_blob = base64::engine::general_purpose::STANDARD
+        .decode(decoded.blob_b64.as_bytes())
+        .unwrap();
+    assert_eq!(decoded_blob, blob);
+}
+
+/// Spec §7: 25/50/25 with the rounding remainder folded into burn, summing exactly to the fee.
+#[test]
+fn file_fee_split_is_exact_25_50_25() {
+    let s = crate::files::file_fee_split(crate::files::FILE_FEE_MICRO);
+    assert_eq!(s.treasury_micro, 250);
+    assert_eq!(s.storage_micro, 500);
+    assert_eq!(s.burn_micro, 250);
+    for fee in [1u64, 3, 999, 1001, u64::MAX / 2] {
+        let s = crate::files::file_fee_split(fee);
+        assert_eq!(s.treasury_micro + s.storage_micro + s.burn_micro, fee);
+    }
+}
+
+/// File Sharing Step 4 fee settlement: REST submit → mempool → mined block → deterministic
+/// 25/50/25 debit/credit, and a duplicate settlement of the same file fee is a no-op.
+#[tokio::test]
+async fn file_fee_tx_settles_treasury_storage_burn_via_consensus() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let sender = crate::wallet::generate_mnemonic_12().unwrap();
+    let sender_words = sender.mnemonic_12.clone().unwrap();
+    let sender_wallet = sender.address_hex.to_ascii_lowercase();
+    ledger
+        .admin_rest_faucet(&sender_wallet, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1)
+        .unwrap();
+
+    let storage_wallet = "storage-node-wallet";
+    let treasury = crate::ledger::treasury_address_from_env().unwrap();
+    let burn_wallet = ledger.ai_burn_wallet();
+    let before_sender = ledger.balance_micro(&sender_wallet).unwrap();
+    let before_treasury = ledger.balance_micro(&treasury).unwrap();
+    let before_storage = ledger.balance_micro(storage_wallet).unwrap();
+    let before_burn = ledger.balance_micro(&burn_wallet).unwrap();
+
+    let env = signed_file_fee_env_for_tests(
+        &sender_words,
+        &sender_wallet,
+        storage_wallet,
+        &uuid::Uuid::new_v4().to_string(),
+    );
+    let resp = crate::rest::handlers::files::post_files_fee(
+        axum::extract::State(state.clone()),
+        axum::Json(env.clone()),
+    )
+    .await;
+    assert_eq!(resp.into_response().status(), StatusCode::ACCEPTED);
+
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+        .await
+        .unwrap();
+    assert!(outcome.mined);
+    assert_eq!(outcome.tx_count, 1);
+
+    assert_eq!(
+        ledger.balance_micro(&sender_wallet).unwrap(),
+        before_sender - crate::files::FILE_FEE_MICRO
+    );
+    assert_eq!(
+        ledger.balance_micro(&treasury).unwrap(),
+        before_treasury + 250
+    );
+    assert_eq!(
+        ledger.balance_micro(storage_wallet).unwrap(),
+        before_storage + 500
+    );
+    assert_eq!(ledger.balance_micro(&burn_wallet).unwrap(), before_burn + 250);
+
+    // Re-enqueue the identical settlement: the miner must drop it (per-tx applied marker),
+    // leaving every balance unchanged.
+    state.enqueue_mempool_tx(env).await.unwrap();
+    let outcome2 =
+        crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+            .await
+            .unwrap();
+    assert_eq!(outcome2.tx_count, 0);
+    assert_eq!(
+        ledger.balance_micro(&sender_wallet).unwrap(),
+        before_sender - crate::files::FILE_FEE_MICRO
+    );
+    assert_eq!(
+        ledger.balance_micro(&treasury).unwrap(),
+        before_treasury + 250
+    );
+}
+
+/// A fee settlement from a wallet that cannot cover the 1000 µTET fee must be rejected at the
+/// REST boundary (and would equally fail block preview via `InsufficientFunds`).
+#[tokio::test]
+async fn file_fee_insufficient_balance_rejected() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let sender = crate::wallet::generate_mnemonic_12().unwrap();
+    let sender_words = sender.mnemonic_12.clone().unwrap();
+    let sender_wallet = sender.address_hex.to_ascii_lowercase();
+    // No faucet: balance 0 < 1000 µTET fee.
+
+    let env = signed_file_fee_env_for_tests(
+        &sender_words,
+        &sender_wallet,
+        "storage-node-wallet",
+        &uuid::Uuid::new_v4().to_string(),
+    );
+    let resp = crate::rest::handlers::files::post_files_fee(
+        axum::extract::State(state.clone()),
+        axum::Json(env),
+    )
+    .await;
+    assert_eq!(resp.into_response().status(), StatusCode::BAD_REQUEST);
+    assert!(state.mempool.lock().await.is_empty());
+
+    // A wrong fee amount must also be rejected even from a funded wallet.
+    ledger
+        .admin_rest_faucet(&sender_wallet, crate::ledger::STEVEMON, "ip", true, 1, 1)
+        .unwrap();
+    let mut env_bad_fee = signed_file_fee_env_for_tests(
+        &sender_words,
+        &sender_wallet,
+        "storage-node-wallet",
+        &uuid::Uuid::new_v4().to_string(),
+    );
+    if let crate::protocol::TxV1::FileFee { fee_micro, .. } = &mut env_bad_fee.tx {
+        *fee_micro = 1;
+    }
+    let resp = crate::rest::handlers::files::post_files_fee(
+        axum::extract::State(state.clone()),
+        axum::Json(env_bad_fee),
+    )
+    .await;
+    // Tampered tx body breaks the signature first; either way it must not reach the mempool.
+    assert_ne!(resp.into_response().status(), StatusCode::ACCEPTED);
+    assert!(state.mempool.lock().await.is_empty());
+}
+
+/// A block carrying a `FileFee` tx must apply with byte-identical state roots on producer and
+/// receiver through the offloaded remote-apply path (consensus parity for the new tx variant).
+#[tokio::test]
+async fn file_fee_remote_block_apply_keeps_state_roots_identical() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let (ledger_a, ledger_b, state_a, state_b, sender_words, sender_wallet_id) =
+        two_synced_nodes_with_funded_sender();
+
+    let env = signed_file_fee_env_for_tests(
+        &sender_words,
+        &sender_wallet_id,
+        "storage-node-wallet",
+        &uuid::Uuid::new_v4().to_string(),
+    );
+    let gossip = build_remote_block_for_tests(&ledger_a, 1, None, env);
+
+    for (ledger, state) in [(&ledger_b, &state_b), (&ledger_a, &state_a)] {
+        let outcome = crate::consensus::apply_remote_block_from_gossip(
+            (*ledger).clone(),
+            state.mempool.clone(),
+            gossip.clone(),
+        )
+        .await
+        .unwrap();
+        match outcome {
+            crate::consensus::RemoteBlockApplyOutcome::Applied { state_root, .. } => {
+                assert_eq!(state_root, gossip.state_root);
+            }
+            other => panic!("expected Applied, got {other:?}"),
+        }
+    }
+    assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
+
+    let treasury = crate::ledger::treasury_address_from_env().unwrap();
+    for ledger in [&ledger_a, &ledger_b] {
+        assert_eq!(
+            ledger.balance_micro("storage-node-wallet").unwrap(),
+            500,
+            "storage node must receive 50% on every node"
+        );
+        assert!(ledger.balance_micro(&treasury).unwrap() >= 250);
     }
 }
 
@@ -3850,7 +4127,7 @@ mod block_sync {
         let file_store = std::sync::Arc::new(
             crate::files::storage::FileStore::open(&ledger.sled_db()).expect("file store"),
         );
-        let (gossip_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
+        let (gossip_tx, files_fetch_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
             mempool,
             keypair,
@@ -3866,6 +4143,7 @@ mod block_sync {
 
         let mut state = rest_state_for_tests(ledger);
         state.gossip_tx = Some(gossip_tx);
+        state.files_fetch_tx = Some(files_fetch_tx);
         state.block_sync_board = Some(block_sync_board.clone());
         if post_listen_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(post_listen_delay_ms)).await;

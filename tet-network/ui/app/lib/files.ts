@@ -258,6 +258,74 @@ export async function buildFileEnvelopeV1(opts: BuildFileEnvelopeOpts): Promise<
 }
 
 /**
+ * Canonical serde JSON for `TxV1::FileFee` (internally tagged via `#[serde(tag = "kind")]`).
+ * Field order is normative and MUST byte-match tet-core
+ * `serde_json::to_string(&TxV1::FileFee { .. })`.
+ */
+export function fileFeeTxCanonicalJson(
+  fromWallet: string,
+  storageWallet: string,
+  fileId: string,
+  feeMicro: number,
+): string {
+  return (
+    `{"kind":"file_fee","from_wallet":"${fromWallet}","storage_wallet":"${storageWallet}",` +
+    `"file_id":"${fileId}","fee_micro":${feeMicro}}`
+  );
+}
+
+/**
+ * Build a hybrid-signed `TxV1::FileFee` settlement envelope (Step 4, spec §7): the sender pays
+ * {@link FILE_FEE_MICRO} which consensus splits 25% treasury / 50% storage node / 25% burn.
+ * The signing preimage mirrors tet-core `wallet::tx_v1_auth_message_bytes`
+ * (`tet tx v1|chain_id=..|genesis_hash=..|mldsa=<pk>|tx=<canonical-json>`), same as transfers.
+ */
+export async function buildFileFeeEnvelopeV1(opts: {
+  senderWalletId: string;
+  storageWallet: string;
+  fileId: string;
+  baseUrl?: string;
+}): Promise<import("./transfer").SignedTxEnvelopeV1> {
+  const sess = requireHybridSignerSession();
+  const sender = opts.senderWalletId.trim().toLowerCase();
+  if (sender !== sess.walletIdHex64) {
+    throw new Error("Wallet mismatch: session signer does not match sender wallet.");
+  }
+  const storageWallet = opts.storageWallet.trim();
+  if (!storageWallet) {
+    throw new Error("storage_wallet required for fee settlement.");
+  }
+
+  const txCanonical = fileFeeTxCanonicalJson(sender, storageWallet, opts.fileId, FILE_FEE_MICRO);
+  const { chainId, genesisHash } = await expectedChainBinding(opts.baseUrl);
+  const msg = new TextEncoder().encode(
+    `tet tx v1|chain_id=${chainId}|genesis_hash=${genesisHash}` +
+      `|mldsa=${sess.mldsa44_pubkey_b64.trim()}|tx=${txCanonical}`,
+  );
+
+  const edSig = await Promise.resolve(sess.signEd25519(msg));
+  const mldsaSig = await mldsa44SignDeterministic(sess.mldsa44_keypair_b64, msg);
+
+  return {
+    v: 1,
+    tx: {
+      kind: "file_fee",
+      from_wallet: sender,
+      storage_wallet: storageWallet,
+      file_id: opts.fileId,
+      fee_micro: FILE_FEE_MICRO,
+    },
+    sig: {
+      ed25519_pubkey_hex: sender,
+      ed25519_sig_b64: u8ToStdBase64(edSig),
+      mldsa_pubkey_b64: sess.mldsa44_pubkey_b64,
+      mldsa_sig_b64: mldsaSig,
+    },
+    attestation: { platform: "", report_b64: "" },
+  };
+}
+
+/**
  * Build a hybrid-signed {@link FileDeleteRequestV1} (sender-only cancel). Requires the unlocked
  * hybrid signer session for `senderWalletId`.
  */

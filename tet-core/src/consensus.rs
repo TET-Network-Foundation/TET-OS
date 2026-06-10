@@ -494,6 +494,8 @@ pub fn compute_reward_for_block(txs: &[SignedTxEnvelopeV1]) -> Result<u64, Strin
         match &env.tx {
             TxV1::Transfer { .. } => {}
             TxV1::InitialAirdrop { .. } => {}
+            // File fee settlement is a pure balance move; it contributes no compute reward.
+            TxV1::FileFee { .. } => {}
             TxV1::VerifyZkProof {
                 task_id: _,
                 image_id,

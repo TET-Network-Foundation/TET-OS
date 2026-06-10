@@ -8,6 +8,7 @@
 //!
 //! Design invariant: the node is a blind relay — it never sees plaintext filename, MIME, or bytes.
 
+pub mod fetch_codec;
 pub mod storage;
 
 use base64::Engine as _;
@@ -28,12 +29,37 @@ pub const FILES_ANNOUNCE_TOPIC: &str = "/tet/v1/files/announce";
 /// libp2p request/response protocol id for body transfer (defined now; wired in Step 4 — see spec §9).
 pub const FILES_FETCH_PROTOCOL: &str = "/tet/v1/files/fetch";
 
-/// Per-file fee (µTET), bound into the envelope signature. Settlement is deferred to Step 4.
+/// Per-file fee (µTET), bound into the envelope signature. Settled on-chain via
+/// [`crate::protocol::TxV1::FileFee`] (Step 4).
 pub const FILE_FEE_MICRO: u64 = 1000;
 /// Fee split (basis points, sum = 10_000): treasury / storage node / burn = 25 / 50 / 25.
 pub const FEE_SPLIT_TREASURY_BPS: u32 = 2_500;
 pub const FEE_SPLIT_STORAGE_BPS: u32 = 5_000;
 pub const FEE_SPLIT_BURN_BPS: u32 = 2_500;
+
+/// Deterministic 25/50/25 split of a file fee (spec §7).
+///
+/// `burn` takes the integer-division remainder (`fee - treasury - storage`), so the three parts
+/// always sum to exactly `fee_micro` on every node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileFeeSplit {
+    pub treasury_micro: u64,
+    pub storage_micro: u64,
+    pub burn_micro: u64,
+}
+
+pub fn file_fee_split(fee_micro: u64) -> FileFeeSplit {
+    let treasury_micro = (fee_micro as u128 * FEE_SPLIT_TREASURY_BPS as u128 / 10_000) as u64;
+    let storage_micro = (fee_micro as u128 * FEE_SPLIT_STORAGE_BPS as u128 / 10_000) as u64;
+    let burn_micro = fee_micro
+        .saturating_sub(treasury_micro)
+        .saturating_sub(storage_micro);
+    FileFeeSplit {
+        treasury_micro,
+        storage_micro,
+        burn_micro,
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum FileEnvelopeError {
