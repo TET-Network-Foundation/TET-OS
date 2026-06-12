@@ -298,6 +298,22 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::post(super::handlers::worker::post_worker_register),
         )
         .route(
+            "/worker/enroll",
+            axum::routing::post(super::handlers::worker::post_worker_enroll),
+        )
+        .route(
+            "/worker/list",
+            axum::routing::get(super::handlers::worker::get_worker_list),
+        )
+        .route(
+            "/worker/status/:wallet",
+            axum::routing::get(super::handlers::worker::get_worker_status),
+        )
+        .route(
+            "/worker/rewards/:wallet",
+            axum::routing::get(super::handlers::worker::get_worker_rewards),
+        )
+        .route(
             "/worker/model/status",
             axum::routing::get(super::handlers::worker::get_worker_model_status),
         )

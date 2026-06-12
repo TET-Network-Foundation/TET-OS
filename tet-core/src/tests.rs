@@ -133,8 +133,6 @@ fn signed_transfer_env_for_tests(
     }
 }
 
-/// Hybrid-sign a [`crate::protocol::TxV1::FileFee`] envelope (legacy raw-tx-JSON preimage, same
-/// as [`signed_transfer_env_for_tests`]).
 fn signed_file_fee_env_for_tests(
     from_words: &str,
     from_wallet_id: &str,
@@ -162,6 +160,44 @@ fn signed_file_fee_env_for_tests(
         tx,
         sig: crate::protocol::HybridSigV1 {
             ed25519_pubkey_hex: from_wallet_id.to_string(),
+            ed25519_sig_b64: ed_sig_b64,
+            mldsa_pubkey_b64,
+            mldsa_sig_b64,
+        },
+        attestation: crate::protocol::AttestationV1 {
+            platform: "test".to_string(),
+            report_b64: String::new(),
+        },
+    }
+}
+
+fn signed_worker_register_env_for_tests(
+    words: &str,
+    wallet_id: &str,
+    hardware_id_hex: &str,
+) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::WorkerRegister {
+        wallet_id: wallet_id.to_string(),
+        hardware_id_hex: hardware_id_hex.to_string(),
+        hardware_profile: "cpu-prover-v1".to_string(),
+        capabilities: vec!["zk_prove".to_string()],
+        tflops_declared: 4.0,
+    };
+    let tx_bytes = serde_json::to_vec(&tx).unwrap();
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
+    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
+    let mldsa_sig_bytes =
+        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
+    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
+
+    crate::protocol::SignedTxEnvelopeV1 {
+        v: 1,
+        tx,
+        sig: crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: wallet_id.to_string(),
             ed25519_sig_b64: ed_sig_b64,
             mldsa_pubkey_b64,
             mldsa_sig_b64,
@@ -1552,6 +1588,133 @@ async fn file_fee_remote_block_apply_keeps_state_roots_identical() {
         );
         assert!(ledger.balance_micro(&treasury).unwrap() >= 250);
     }
+}
+
+#[tokio::test]
+async fn worker_register_tx_persists_registry_after_mine() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let worker = crate::wallet::generate_mnemonic_12().unwrap();
+    let worker_words = worker.mnemonic_12.clone().unwrap();
+    let worker_wallet = worker.address_hex.to_ascii_lowercase();
+    ledger
+        .admin_rest_faucet(
+            &worker_wallet,
+            crate::ledger::MIN_WORKER_STAKE_MICRO,
+            "ip",
+            true,
+            1,
+            1,
+        )
+        .unwrap();
+    ledger
+        .stake_worker_bond_micro(&worker_wallet, crate::ledger::MIN_WORKER_STAKE_MICRO, None)
+        .unwrap();
+
+    let env = signed_worker_register_env_for_tests(&worker_words, &worker_wallet, "deadbeef001122");
+    let resp = crate::rest::handlers::worker::post_worker_enroll(
+        axum::extract::State(state.clone()),
+        axum::Json(env.clone()),
+    )
+    .await;
+    assert_eq!(resp.into_response().status(), StatusCode::ACCEPTED);
+
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+        .await
+        .unwrap();
+    assert!(outcome.mined);
+    assert_eq!(outcome.tx_count, 1);
+
+    let rec = ledger.worker_registry_get(&worker_wallet).unwrap().unwrap();
+    assert_eq!(rec.wallet_id, worker_wallet);
+    assert_eq!(rec.hardware_profile, "cpu-prover-v1");
+    assert_eq!(rec.capabilities, vec!["zk_prove".to_string()]);
+    assert!(rec.registered_at_height >= 1);
+
+    let list = ledger.worker_registry_list(8).unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].wallet_id, worker_wallet);
+}
+
+#[tokio::test]
+async fn worker_register_insufficient_bond_rejected() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let worker = crate::wallet::generate_mnemonic_12().unwrap();
+    let worker_words = worker.mnemonic_12.clone().unwrap();
+    let worker_wallet = worker.address_hex.to_ascii_lowercase();
+
+    let env = signed_worker_register_env_for_tests(&worker_words, &worker_wallet, "abc123");
+    let resp = crate::rest::handlers::worker::post_worker_enroll(
+        axum::extract::State(state.clone()),
+        axum::Json(env),
+    )
+    .await;
+    assert_eq!(resp.into_response().status(), StatusCode::BAD_REQUEST);
+    assert!(state.mempool.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn worker_register_duplicate_tx_is_idempotent_in_mempool() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let worker = crate::wallet::generate_mnemonic_12().unwrap();
+    let worker_words = worker.mnemonic_12.clone().unwrap();
+    let worker_wallet = worker.address_hex.to_ascii_lowercase();
+    ledger
+        .admin_rest_faucet(
+            &worker_wallet,
+            crate::ledger::MIN_WORKER_STAKE_MICRO,
+            "ip",
+            true,
+            1,
+            1,
+        )
+        .unwrap();
+    ledger
+        .stake_worker_bond_micro(&worker_wallet, crate::ledger::MIN_WORKER_STAKE_MICRO, None)
+        .unwrap();
+
+    let env = signed_worker_register_env_for_tests(&worker_words, &worker_wallet, "hw0011");
+    crate::rest::handlers::worker::post_worker_enroll(
+        axum::extract::State(state.clone()),
+        axum::Json(env.clone()),
+    )
+    .await;
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+        .await
+        .unwrap();
+    assert_eq!(outcome.tx_count, 1);
+
+    state.enqueue_mempool_tx(env.clone()).await.unwrap();
+    let outcome2 =
+        crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+            .await
+            .unwrap();
+    assert_eq!(outcome2.tx_count, 0, "duplicate register tx must not re-apply");
+    assert_eq!(
+        ledger.worker_registry_list(4).unwrap().len(),
+        1,
+        "registry must still have one row"
+    );
 }
 
 /// Concurrent duplicate delivery of the same block (e.g. several peers gossiping it at once)
@@ -3614,6 +3777,7 @@ fn ledger_prune_removes_old_block_undo_beyond_depth() {
             canonical_by_height: vec![],
             chain_tip: vec![],
             blocks: vec![],
+            workers_registry: vec![],
             created_at_ms: 0,
         };
         ledger.store_block_undo(&undo).unwrap();

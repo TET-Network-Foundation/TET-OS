@@ -323,6 +323,8 @@ pub struct Ledger {
     faucet_ip_rl: sled::Tree,
     /// Worker Sybil bond: `wallet_id` utf8 → encrypted `u64` micro (locked; not spendable until unstake).
     worker_stakes: sled::Tree,
+    /// On-chain worker registry (`workers/` Phase 0.5): wallet utf8 → encrypted [`WorkerRegistryRecordV1`] JSON.
+    workers_registry: sled::Tree,
     /// Mined block summaries for explorer UI (encrypted JSON).
     blocks: sled::Tree,
     /// Any known block by `block_id` (canonical or fork candidate), encrypted [`BlockRecordV1`] JSON.
@@ -406,6 +408,8 @@ pub struct BlockUndoV1 {
     pub canonical_by_height: Vec<UndoKvV1>,
     pub chain_tip: Vec<UndoKvV1>,
     pub blocks: Vec<UndoKvV1>,
+    #[serde(default)]
+    pub workers_registry: Vec<UndoKvV1>,
     pub created_at_ms: u128,
 }
 
@@ -608,6 +612,7 @@ impl Ledger {
             crate::protocol::TxV1::EnterpriseInference { .. } => "enterprise_inference",
             crate::protocol::TxV1::VerifyZkProof { .. } => "verify_zk_proof",
             crate::protocol::TxV1::FileFee { .. } => "file_fee",
+            crate::protocol::TxV1::WorkerRegister { .. } => "worker_register",
         }
     }
 
@@ -649,6 +654,7 @@ impl Ledger {
         let mut balance_keys: Vec<Vec<u8>> = Vec::new();
         let mut meta_keys: Vec<Vec<u8>> = vec![META_LEDGER_BLOCK_HEIGHT.to_vec()];
         let mut tx_index_keys: Vec<Vec<u8>> = Vec::new();
+        let mut workers_registry_keys: Vec<Vec<u8>> = Vec::new();
 
         if reward_micro > 0 {
             balance_keys.push(WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec());
@@ -721,6 +727,11 @@ impl Ledger {
                     meta_keys.push(META_FEE_TOTAL.to_vec());
                     meta_keys.push(Self::remote_tx_applied_meta_key(tx_hash));
                 }
+                crate::protocol::TxV1::WorkerRegister { wallet_id, .. } => {
+                    workers_registry_keys
+                        .push(wallet_id.trim().to_ascii_lowercase().into_bytes());
+                    meta_keys.push(Self::remote_tx_applied_meta_key(tx_hash));
+                }
                 _ => {}
             }
         }
@@ -741,6 +752,7 @@ impl Ledger {
                 vec![Self::CHAIN_TIP_CANONICAL_KEY.to_vec()],
             )?,
             blocks: Self::undo_kvs(&self.blocks, vec![Self::blocks_key_be(height).to_vec()])?,
+            workers_registry: Self::undo_kvs(&self.workers_registry, workers_registry_keys)?,
             created_at_ms: ledger_now_ms(),
         })
     }
@@ -772,6 +784,7 @@ impl Ledger {
         Self::restore_kvs(&self.chain_tip, &undo.chain_tip)?;
         Self::restore_kvs(&self.meta, &undo.meta)?;
         Self::restore_kvs(&self.balances, &undo.balances)?;
+        Self::restore_kvs(&self.workers_registry, &undo.workers_registry)?;
         Ok(undo)
     }
 
@@ -1455,6 +1468,9 @@ impl Ledger {
                         *fee_micro,
                     )?;
                 }
+                crate::protocol::TxV1::WorkerRegister { wallet_id, .. } => {
+                    self.validate_worker_register_eligible(wallet_id)?;
+                }
                 _ => {
                     return Err(LedgerError::Invalid(
                         "unsupported tx in remote block".into(),
@@ -1630,6 +1646,8 @@ impl Ledger {
         let mut airdrop_credited = false;
         let mut dirty_balances = BTreeSet::<Vec<u8>>::new();
         let mut meta_batch = sled::Batch::default();
+        let mut workers_registry_batch = sled::Batch::default();
+        let mut workers_registry_dirty = false;
 
         for (env, tx_hash) in txs.iter().zip(tx_hashes.iter()) {
             match &env.tx {
@@ -1792,6 +1810,29 @@ impl Ledger {
                     fee_total = fee_total.saturating_add(*fee_micro);
                     meta_batch.insert(applied_k, self.encrypt_value(b"1")?);
                 }
+                crate::protocol::TxV1::WorkerRegister {
+                    wallet_id,
+                    hardware_id_hex,
+                    hardware_profile,
+                    capabilities,
+                    tflops_declared,
+                } => {
+                    let applied_k = Self::remote_tx_applied_meta_key(tx_hash);
+                    if self.meta.get(&applied_k)?.is_some() {
+                        continue;
+                    }
+                    self.apply_worker_register(
+                        wallet_id,
+                        hardware_id_hex,
+                        hardware_profile,
+                        capabilities,
+                        *tflops_declared,
+                        block_height,
+                        &mut workers_registry_batch,
+                    )?;
+                    workers_registry_dirty = true;
+                    meta_batch.insert(applied_k, self.encrypt_value(b"1")?);
+                }
                 crate::protocol::TxV1::InitialAirdrop { wallet_id } => {
                     let applied_k = Self::remote_tx_applied_meta_key(tx_hash);
                     // Per-tx applied marker == per-wallet once-ever dedup (the tx body is the
@@ -1856,6 +1897,9 @@ impl Ledger {
         }
         self.balances.apply_batch(balance_batch)?;
         self.meta.apply_batch(meta_batch)?;
+        if workers_registry_dirty {
+            self.workers_registry.apply_batch(workers_registry_batch)?;
+        }
         std::mem::drop(self.db.flush_async());
         self.schedule_snapshot_after_block(block_height);
         Ok(state_root)
@@ -3045,6 +3089,121 @@ impl Ledger {
         serde_json::from_slice(&pt).ok()
     }
 
+    /// Read on-chain worker registry row (Phase 0.5).
+    pub fn worker_registry_get(&self, wallet: &str) -> Result<Option<crate::workers::WorkerRegistryRecordV1>, LedgerError> {
+        let w = wallet.trim().to_ascii_lowercase();
+        if w.is_empty() {
+            return Ok(None);
+        }
+        let Some(v) = self.workers_registry.get(w.as_bytes())? else {
+            return Ok(None);
+        };
+        let pt = self.decrypt_value(v.as_ref())?;
+        let rec = serde_json::from_slice::<crate::workers::WorkerRegistryRecordV1>(&pt)
+            .map_err(|e| LedgerError::Invalid(format!("worker registry json: {e}")))?;
+        Ok(Some(rec))
+    }
+
+    /// List registered workers (newest registration height first).
+    pub fn worker_registry_list(&self, limit: usize) -> Result<Vec<crate::workers::WorkerRegistryRecordV1>, LedgerError> {
+        let lim = limit.clamp(1, 512);
+        let mut rows = Vec::new();
+        for item in self.workers_registry.iter() {
+            let (_k, v) = item?;
+            let pt = self.decrypt_value(v.as_ref())?;
+            if let Ok(rec) = serde_json::from_slice::<crate::workers::WorkerRegistryRecordV1>(&pt) {
+                rows.push(rec);
+            }
+        }
+        rows.sort_by(|a, b| {
+            b.registered_at_height
+                .cmp(&a.registered_at_height)
+                .then_with(|| b.registered_at_ms.cmp(&a.registered_at_ms))
+        });
+        rows.truncate(lim);
+        Ok(rows)
+    }
+
+    /// Aggregate declared TFLOPS across registered workers (dashboard scaffold).
+    pub fn worker_registry_total_tflops(&self) -> Result<f64, LedgerError> {
+        let mut sum = 0.0f64;
+        for item in self.workers_registry.iter() {
+            let (_k, v) = item?;
+            let pt = self.decrypt_value(v.as_ref())?;
+            if let Ok(rec) = serde_json::from_slice::<crate::workers::WorkerRegistryRecordV1>(&pt) {
+                if rec.tflops_declared.is_finite() && rec.tflops_declared > 0.0 {
+                    sum += rec.tflops_declared;
+                }
+            }
+        }
+        Ok(sum)
+    }
+
+    pub fn validate_worker_register_eligible(&self, wallet_id: &str) -> Result<(), LedgerError> {
+        let w = wallet_id.trim().to_ascii_lowercase();
+        if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(LedgerError::Invalid(
+                "worker wallet must be 64 hex chars".into(),
+            ));
+        }
+        let bond = self.worker_bond_micro(&w)?;
+        if bond < MIN_WORKER_STAKE_MICRO {
+            return Err(LedgerError::Invalid(format!(
+                "worker bond below minimum (have {bond}, need {MIN_WORKER_STAKE_MICRO})"
+            )));
+        }
+        Ok(())
+    }
+
+    fn apply_worker_register(
+        &self,
+        wallet_id: &str,
+        hardware_id_hex: &str,
+        hardware_profile: &str,
+        capabilities: &[String],
+        tflops_declared: f64,
+        block_height: u64,
+        batch: &mut sled::Batch,
+    ) -> Result<(), LedgerError> {
+        crate::workers::validate_worker_register_fields(
+            wallet_id,
+            hardware_id_hex,
+            hardware_profile,
+            capabilities,
+            tflops_declared,
+        )
+        .map_err(LedgerError::Invalid)?;
+        self.validate_worker_register_eligible(wallet_id)?;
+        let w = wallet_id.trim().to_ascii_lowercase();
+        let mut caps: Vec<String> = capabilities
+            .iter()
+            .map(|c| c.trim().to_ascii_lowercase())
+            .filter(|c| !c.is_empty())
+            .collect();
+        caps.sort();
+        caps.dedup();
+        let prev_rewards = self
+            .worker_registry_get(&w)?
+            .map(|r| r.total_rewards_micro)
+            .unwrap_or(0);
+        let rec = crate::workers::WorkerRegistryRecordV1 {
+            total_rewards_micro: prev_rewards,
+            ..crate::workers::WorkerRegistryRecordV1::new(
+                w.clone(),
+                hardware_id_hex.trim().to_string(),
+                hardware_profile.trim().to_string(),
+                caps,
+                tflops_declared,
+                block_height,
+                ledger_now_ms(),
+            )
+        };
+        let bytes = serde_json::to_vec(&rec)
+            .map_err(|e| LedgerError::Invalid(format!("worker registry json: {e}")))?;
+        batch.insert(w.as_bytes(), self.encrypt_value(&bytes)?);
+        Ok(())
+    }
+
     /// ZK-Court: forfeit **entire** worker bond, burn from total supply, clear bond row.
     pub fn slash_worker_bond_zk_court_burn_all(&self, wallet: &str) -> Result<u64, LedgerError> {
         let w = wallet.trim().to_ascii_lowercase();
@@ -3641,6 +3800,7 @@ impl Ledger {
             faucet_claims: db.open_tree("faucet_claims_v1")?,
             faucet_ip_rl: db.open_tree("faucet_ip_rl_v1")?,
             worker_stakes: db.open_tree("worker_stakes_v1")?,
+            workers_registry: db.open_tree("workers_registry_v1")?,
             blocks: db.open_tree("blocks_v1")?,
             blocks_by_id: db.open_tree("blocks_by_id_v1")?,
             canonical_by_height: db.open_tree("canonical_by_height_v1")?,

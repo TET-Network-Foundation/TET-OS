@@ -832,6 +832,11 @@ async fn post_tx_submit_impl(
                 .await
                 .into_response()
         }
+        TxV1::WorkerRegister { .. } => {
+            crate::rest::handlers::worker::post_worker_enroll(State(state), Json(env))
+                .await
+                .into_response()
+        }
     }
 }
 

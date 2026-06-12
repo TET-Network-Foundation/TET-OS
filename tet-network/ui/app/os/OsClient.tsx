@@ -43,6 +43,17 @@ import {
   userFacingTransferError,
 } from "../lib/transfer";
 import { fetchWorkerCockpit, type WorkerCockpitJson } from "../lib/worker_cockpit";
+import {
+  detectLocalWorkerProfile,
+  fetchWorkerList,
+  fetchWorkerRewards,
+  fetchWorkerStatus,
+  postWorkerEnroll,
+  type WorkerListJson,
+  type WorkerRewardsJson,
+  type WorkerStatusJson,
+} from "../lib/worker_network";
+import { buildWorkerRegisterEnvelopeV1 } from "../lib/worker_register";
 import { GENESIS_FOUNDER_WALLET_ID_HEX } from "../lib/genesis_wallet";
 import {
   changeInAppWalletPin,
@@ -352,6 +363,11 @@ export default function NexusOS() {
   // Worker runtime log
   const [miningOn, setMiningOn] = useState(false);
   const [miningLog, setMiningLog] = useState<string[]>([]);
+  const [workerStatus, setWorkerStatus] = useState<WorkerStatusJson | null>(null);
+  const [workerRewards, setWorkerRewards] = useState<WorkerRewardsJson | null>(null);
+  const [networkWorkers, setNetworkWorkers] = useState<WorkerListJson | null>(null);
+  const [workerEnrollBusy, setWorkerEnrollBusy] = useState(false);
+  const [workerEnrollErr, setWorkerEnrollErr] = useState("");
 
   // Global ledger (always visible)
   const [ledger, setLedger] = useState<string[]>([
@@ -1103,6 +1119,16 @@ export default function NexusOS() {
       setWorkerCockpitErr("");
       setWorkerCockpit(r.data);
       setWorkerCockpitUpdatedAt(Date.now());
+
+      const [st, rw, net] = await Promise.all([
+        fetchWorkerStatus(baseUrl, wid),
+        fetchWorkerRewards(baseUrl, wid),
+        fetchWorkerList(baseUrl, 64),
+      ]);
+      if (cancelled) return;
+      if (st.ok && st.data) setWorkerStatus(st.data);
+      if (rw.ok && rw.data) setWorkerRewards(rw.data);
+      if (net.ok && net.data) setNetworkWorkers(net.data);
     };
     void tick();
     const id = window.setInterval(() => void tick(), 5_000);
@@ -1514,6 +1540,43 @@ export default function NexusOS() {
     ]);
   }
 
+  async function onBecomeWorker() {
+    const wid = normalizeWalletId64(founderWalletIdHex64);
+    if (!wid) {
+      setWorkerEnrollErr("Unlock wallet first.");
+      return;
+    }
+    setWorkerEnrollBusy(true);
+    setWorkerEnrollErr("");
+    try {
+      const profile = detectLocalWorkerProfile(workerCockpit);
+      const env = await buildWorkerRegisterEnvelopeV1({
+        walletId: wid,
+        profile,
+        baseUrl,
+      });
+      const r = await postWorkerEnroll(baseUrl, env);
+      if (!r.ok) {
+        setWorkerEnrollErr(r.text ?? `HTTP ${r.status}`);
+        return;
+      }
+      appendLedger([
+        `[Worker] On-chain registration submitted (${profile.hardwareProfile}). Pending block inclusion.`,
+        "[Worker] After mining, heartbeat via POST /worker/register to appear online.",
+      ]);
+      setMiningLog((prev) =>
+        [`${fmtDate(Date.now())}  [WORKER] Enroll tx queued — ${profile.hardwareProfile}`, ...prev].slice(
+          0,
+          200,
+        ),
+      );
+    } catch (e) {
+      setWorkerEnrollErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWorkerEnrollBusy(false);
+    }
+  }
+
   const balanceTetDisplay =
     balanceStevemon == null ? "—" : formatStevemonToTetDisplay(balanceStevemon);
   const balanceStevemonDisplay =
@@ -1876,6 +1939,12 @@ export default function NexusOS() {
               onMiningToggle={setMiningOn}
               cockpit={workerCockpit}
               log={miningLog}
+              workerStatus={workerStatus}
+              workerRewards={workerRewards}
+              networkWorkers={networkWorkers}
+              enrollBusy={workerEnrollBusy}
+              enrollError={workerEnrollErr}
+              onBecomeWorker={() => void onBecomeWorker()}
             />
           ) : null}
           </div>
