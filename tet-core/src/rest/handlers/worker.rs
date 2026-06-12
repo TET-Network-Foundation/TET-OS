@@ -1,10 +1,10 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::rest::state::E2eeJobV1;
 use crate::rest::{
@@ -12,6 +12,7 @@ use crate::rest::{
     WorkerE2eeCompleteReq, WorkerE2eeNextResp, WorkerRegisterReq,
     helpers::{std_lock, verify_envelope_v1},
 };
+use crate::protocol::{SignedTxEnvelopeV1, TxV1};
 use rand_core::RngCore as _;
 
 async fn post_worker_register_impl(
@@ -602,4 +603,177 @@ pub async fn get_worker_cockpit(
     Path(wallet): Path<String>,
 ) -> impl IntoResponse {
     get_worker_cockpit_impl(State(state), Path(wallet)).await
+}
+
+/// `POST /worker/enroll` — submit a hybrid-signed [`TxV1::WorkerRegister`] (Phase 0.5).
+///
+/// Consensus registration persists the worker profile on-chain. Heartbeat liveness remains
+/// `POST /worker/register` (in-memory). Requires worker bond ≥ minimum stake.
+pub async fn post_worker_enroll(
+    State(state): State<RestState>,
+    Json(env): Json<SignedTxEnvelopeV1>,
+) -> impl IntoResponse {
+    if let Err(e) = verify_envelope_v1(&env) {
+        return (StatusCode::UNAUTHORIZED, e).into_response();
+    }
+    let TxV1::WorkerRegister {
+        wallet_id,
+        hardware_id_hex,
+        hardware_profile,
+        capabilities,
+        tflops_declared,
+    } = env.tx.clone()
+    else {
+        return (StatusCode::BAD_REQUEST, "expected worker_register tx").into_response();
+    };
+    if env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase() != wallet_id.trim().to_ascii_lowercase()
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "signer must equal wallet_id",
+        )
+            .into_response();
+    }
+    if let Err(e) = crate::workers::validate_worker_register_fields(
+        &wallet_id,
+        &hardware_id_hex,
+        &hardware_profile,
+        &capabilities,
+        tflops_declared,
+    ) {
+        return (StatusCode::BAD_REQUEST, e).into_response();
+    }
+    if let Err(e) = state.ledger.validate_worker_register_eligible(&wallet_id) {
+        return (StatusCode::BAD_REQUEST, e.to_string()).into_response();
+    }
+    if let Err(e) = state.enqueue_mempool_tx(env.clone()).await {
+        return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
+    }
+    state.broadcast_mempool_tx(&env).await;
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "status": "pending",
+            "wallet_id": wallet_id.trim().to_ascii_lowercase(),
+            "hardware_profile": hardware_profile,
+        })),
+    )
+        .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WorkerListQuery {
+    pub limit: Option<usize>,
+}
+
+/// `GET /worker/list` — on-chain registered workers (newest first).
+pub async fn get_worker_list(
+    State(state): State<RestState>,
+    Query(q): Query<WorkerListQuery>,
+) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(64).clamp(1, 512);
+    match state.ledger.worker_registry_list(limit) {
+        Ok(workers) => {
+            let registry_tflops = state.ledger.worker_registry_total_tflops().unwrap_or(0.0);
+            let ttl = std::env::var("TET_WORKER_HEARTBEAT_TTL_MS")
+                .ok()
+                .and_then(|v| v.parse::<u128>().ok())
+                .unwrap_or(120_000);
+            let heartbeat = std_lock(&state.workers);
+            let active_heartbeat = heartbeat.active_count(ttl);
+            let heartbeat_tflops = heartbeat.total_tflops(ttl);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "count": workers.len(),
+                    "registered_count": workers.len(),
+                    "active_heartbeat_count": active_heartbeat,
+                    "registry_total_tflops": registry_tflops,
+                    "heartbeat_total_tflops": heartbeat_tflops,
+                    "workers": workers,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+/// `GET /worker/status/:wallet` — registry row + bond + heartbeat liveness.
+pub async fn get_worker_status(
+    State(state): State<RestState>,
+    Path(wallet): Path<String>,
+) -> impl IntoResponse {
+    let w = wallet.trim().to_ascii_lowercase();
+    if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
+        return (StatusCode::BAD_REQUEST, "wallet must be 64 hex chars").into_response();
+    }
+    let registry = state.ledger.worker_registry_get(&w).ok().flatten();
+    let bond_micro = state.ledger.worker_bond_micro(&w).unwrap_or(0);
+    let ttl = std::env::var("TET_WORKER_HEARTBEAT_TTL_MS")
+        .ok()
+        .and_then(|v| v.parse::<u128>().ok())
+        .unwrap_or(120_000);
+    let now_ms = crate::worker_network::now_ms();
+    let heartbeat = {
+        let reg = std_lock(&state.workers);
+        reg.by_wallet.get(&w).cloned()
+    };
+    let online = heartbeat
+        .as_ref()
+        .map(|e| now_ms.saturating_sub(e.last_seen_ms) <= ttl)
+        .unwrap_or(false);
+    if registry.is_none() && bond_micro == 0 && heartbeat.is_none() {
+        return (StatusCode::NOT_FOUND, "worker not registered").into_response();
+    }
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "wallet_id": w,
+            "registered": registry.is_some(),
+            "registry": registry,
+            "worker_bond_micro": bond_micro,
+            "min_worker_bond_micro": crate::ledger::MIN_WORKER_STAKE_MICRO,
+            "bond_sufficient": bond_micro >= crate::ledger::MIN_WORKER_STAKE_MICRO,
+            "online": online,
+            "last_seen_ms": heartbeat.as_ref().map(|e| e.last_seen_ms),
+            "heartbeat_tflops_est": heartbeat.as_ref().map(|e| e.tflops_est),
+        })),
+    )
+        .into_response()
+}
+
+/// `GET /worker/rewards/:wallet` — reward attribution scaffold (registry + AI workload counts).
+pub async fn get_worker_rewards(
+    State(state): State<RestState>,
+    Path(wallet): Path<String>,
+) -> impl IntoResponse {
+    let w = wallet.trim().to_ascii_lowercase();
+    if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
+        return (StatusCode::BAD_REQUEST, "wallet must be 64 hex chars").into_response();
+    }
+    let registry = state.ledger.worker_registry_get(&w).ok().flatten();
+    let balance_micro = state.ledger.balance_micro(&w).unwrap_or(0);
+    let (ai_tasks, zk_wins, _queue) = state
+        .ledger
+        .ai_workload_cockpit_counts_for_worker(&w)
+        .unwrap_or((0, 0, 0));
+    let registry_rewards = registry.as_ref().map(|r| r.total_rewards_micro).unwrap_or(0);
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "wallet_id": w,
+            "registered": registry.is_some(),
+            "balance_micro": balance_micro,
+            "registry_total_rewards_micro": registry_rewards,
+            "ai_tasks_cleared": ai_tasks,
+            "zk_proof_wins": zk_wins,
+            "estimated_total_rewards_micro": balance_micro,
+        })),
+    )
+        .into_response()
 }

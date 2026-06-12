@@ -80,6 +80,23 @@ pub enum TxV1 {
         /// Fee in µTET; must equal [`crate::files::FILE_FEE_MICRO`].
         fee_micro: u64,
     },
+    /// On-chain worker registration (Phase 0.5 scaffold).
+    ///
+    /// Requires an existing worker bond ([`crate::ledger::MIN_WORKER_STAKE_MICRO`]) at block-apply
+    /// time. Writes a durable row to the ledger worker registry; heartbeat liveness remains a
+    /// separate REST step. Re-registration with a new tx updates the profile in-place.
+    WorkerRegister {
+        /// 64-hex Ed25519 wallet id; must equal the envelope signer.
+        wallet_id: String,
+        /// Stable hardware fingerprint (hex); bound to founding cert when present.
+        hardware_id_hex: String,
+        /// Human/machine profile slug (e.g. `gpu-nvidia-a100`, `cpu-prover-v1`).
+        hardware_profile: String,
+        /// Declared capability tags (e.g. `inference`, `zk_prove`); Phase 1 routes workloads.
+        capabilities: Vec<String>,
+        /// Declared compute capacity (TFLOPS estimate); used for network dashboards.
+        tflops_declared: f64,
+    },
     /// Enterprise demand-side inference request (B2B).
     ///
     /// The canonical signature message binds authorization to:

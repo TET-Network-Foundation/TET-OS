@@ -39,6 +39,14 @@ export type TxBodyV1 =
       storage_wallet: string;
       file_id: string;
       fee_micro: number;
+    }
+  | {
+      kind: "worker_register";
+      wallet_id: string;
+      hardware_id_hex: string;
+      hardware_profile: string;
+      capabilities: string[];
+      tflops_declared: number;
     };
 
 /** Hybrid-signed transaction envelope (mirrors tet-core `protocol::SignedTxEnvelopeV1`). */

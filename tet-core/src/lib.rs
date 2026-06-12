@@ -13,5 +13,6 @@ pub mod test_env;
 pub mod tet_worker;
 pub mod tmail;
 pub mod wallet;
+pub mod workers;
 pub mod worker_ai;
 pub mod worker_config;

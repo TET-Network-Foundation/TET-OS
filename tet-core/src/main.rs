@@ -34,6 +34,7 @@ mod tmail;
 mod updater;
 mod vision;
 mod wallet;
+mod workers;
 mod worker_ai;
 mod worker_config;
 mod worker_daemon;

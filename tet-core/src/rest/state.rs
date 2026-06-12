@@ -122,6 +122,7 @@ impl RestState {
                 *amount_micro as u128
             }
             crate::protocol::TxV1::FileFee { fee_micro, .. } => *fee_micro as u128,
+            crate::protocol::TxV1::WorkerRegister { .. } => 1,
             _ => 0,
         }
     }
