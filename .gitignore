@@ -3,6 +3,15 @@ target/
 **/target/
 *.rs.bk
 
+# Node
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+.next/
+**/.next/
+
 # Local DB / P2P identity
 tet.db
 tet.db_*/
@@ -10,15 +19,11 @@ tet.db_*/
 tet.db/**
 **/tet.db/**
 **/libp2p_keypair.bin
+node_mldsa65_*
+*.raw
 
-# Node
-node_modules/
-**/node_modules/
-
-# Build outputs
-dist/
-**/.next/
-.next/
+# Solana test validator ledger (dead pivot; purged 2026-09-17)
+test-ledger/
 
 # IDE / OS
 .vscode/
@@ -35,48 +40,18 @@ dist/
 .env.*
 **/.env
 **/.env.*
-
 deploy/secrets/
+
+# Wallets / runtime artifacts
+tet_ledger.json
+**/tet_ledger.json
 tet-wallet*.json
-test-ledger/
-
-# Additional runtime artifacts (added 2026-05-26)
-tet_ledger.json
-**/tet_ledger.json
 tet-recipient-wallet.json
 **/*-wallet.json
 **/wallet*.json
 secret_founder_terminal.html
 **/secret_founder_terminal.html
 10000000000
-*.raw
-node_mldsa65_*
 
-
-# Additional runtime artifacts (added 2026-05-26)
-tet_ledger.json
-**/tet_ledger.json
-tet-recipient-wallet.json
-**/*-wallet.json
-**/wallet*.json
-secret_founder_terminal.html
-**/secret_founder_terminal.html
-10000000000
-*.raw
-node_mldsa65_*
-
-
-# Additional runtime artifacts (added 2026-05-26)
-tet_ledger.json
-**/tet_ledger.json
-tet-recipient-wallet.json
-**/*-wallet.json
-**/wallet*.json
-secret_founder_terminal.html
-**/secret_founder_terminal.html
-10000000000
-*.raw
-node_mldsa65_*
-
-docs/FUTURE_IDEAS.md
+# Private working notes (contains personal/strategic material — keep out of the public repo)
 docs/FUTURE_IDEAS.md
