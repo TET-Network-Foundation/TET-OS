@@ -3,6 +3,7 @@ pub mod ai_local;
 pub mod e2ee;
 pub mod executor;
 pub mod files;
+pub mod fees;
 pub mod genesis;
 pub mod metrics;
 pub mod models;

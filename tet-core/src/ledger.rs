@@ -33,6 +33,14 @@ pub use crate::genesis::GENESIS_FOUNDER_DEV_PUBLIC_HEX;
 pub const LEGACY_STEVEMON_PER_TET: u64 = 100_000_000;
 pub const MAX_SUPPLY_MICRO: u64 = 10_000_000_000u64 * STEVEMON;
 
+/// `fees.rs` is dependency-free (it compiles into both crate roots, but `ledger` is binary-only),
+/// so it mirrors the supply cap rather than importing it. This ties the two together at compile
+/// time — they cannot drift without failing the build. See `docs/FEE_SPEC.md`.
+const _: () = assert!(
+    crate::fees::MAX_CHARGE_MICRO == MAX_SUPPLY_MICRO,
+    "fees::MAX_CHARGE_MICRO must equal ledger::MAX_SUPPLY_MICRO"
+);
+
 /// Worker Pool wallet (locked, unspendable by humans; no private key exists).
 pub const WALLET_WORKER_POOL: &str =
     "0000000000000000000000000000000000000000000000000000000000000001";
