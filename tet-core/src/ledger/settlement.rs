@@ -8,7 +8,7 @@ impl Ledger {
     ///   - burn **25% of network fee** (i.e. **5% of total**) → reduces total supply + increases burned
     ///   - remaining **75% of network fee** (i.e. **15% of total**) → `dex:treasury`
     ///
-    /// This path is atomic and does **not** use `transfer_with_fee_*` to avoid stacking protocol fees
+    /// This path is atomic and does **not** use `settle_transfer_internal` to avoid stacking protocol fees
     /// on top of the explicit DePIN split.
     pub fn settle_ai_utility_payment(
         &self,

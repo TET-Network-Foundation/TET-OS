@@ -345,7 +345,7 @@ pub fn handle_ai_proxy(
         quote.usd_per_tet
     );
     let month = month_yyyymm();
-    match ledger.transfer_with_fee_attested(
+    match ledger.settle_transfer_internal(
         &from_wallet,
         &to_wallet,
         amount_micro,
@@ -507,7 +507,7 @@ pub fn utility_playground_response(
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tet-api-pool".into());
     let gross = STEVEMON;
-    match ledger.transfer_with_fee(w, &pool, gross, Some(100)) {
+    match ledger.settle_transfer_internal(w, &pool, gross, Some(100), None, None) {
         Ok((_net, fee_micro)) => {
             let response_text = poc_infer(&prompt);
             (

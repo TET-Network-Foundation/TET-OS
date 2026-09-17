@@ -680,10 +680,15 @@ impl Ledger {
                 } => {
                     balance_keys.push(from_wallet.trim().to_ascii_lowercase().into_bytes());
                     balance_keys.push(to_wallet.trim().to_ascii_lowercase().into_bytes());
-                    let fee_micro = amount_micro.saturating_mul(*fee_bps) / 10_000;
-                    if fee_micro > 0 {
+                    // Mirrors the apply arm: burn touches no balance key (FEE_SPEC §1.3), so only
+                    // the pool key and the supply/burn/fee meta counters are in the undo set.
+                    let split = crate::fees::charge(
+                        crate::fees::FeeKind::Transfer { fee_bps: *fee_bps },
+                        *amount_micro,
+                    )
+                    .unwrap_or_default();
+                    if split.fee_micro() > 0 {
                         balance_keys.push(WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec());
-                        balance_keys.push(self.ai_burn_wallet().into_bytes());
                         meta_keys.push(META_TOTAL_SUPPLY.to_vec());
                         meta_keys.push(META_TOTAL_BURNED.to_vec());
                         meta_keys.push(META_FEE_TOTAL.to_vec());
@@ -1417,13 +1422,20 @@ impl Ledger {
                         return Err(LedgerError::Invalid("amount exceeds hard cap".into()));
                     }
 
+                    // FEE_SPEC §2.1: bounded, signed rate. Validated identically here and in the
+                    // apply arm, so a block carrying an out-of-range rate is rejected by every node
+                    // at the same point rather than previewing differently than it applies.
+                    let split = crate::fees::charge(
+                        crate::fees::FeeKind::Transfer { fee_bps: *fee_bps },
+                        *amount_micro,
+                    )
+                    .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+
                     let from = from_wallet.trim().to_ascii_lowercase();
                     let to = to_wallet.trim().to_ascii_lowercase();
                     let from_k = from.as_bytes().to_vec();
                     let to_k = to.as_bytes().to_vec();
                     let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
-                    let burn_wallet = self.ai_burn_wallet();
-                    let burn_k = burn_wallet.as_bytes().to_vec();
 
                     let fb = balances.get(&from_k).copied().unwrap_or(0);
                     let locked_sum = self.locked_balance_micro(&from, ledger_now_ms())?;
@@ -1431,21 +1443,16 @@ impl Ledger {
                         return Err(LedgerError::InsufficientFunds);
                     }
 
-                    let fee_micro = (*amount_micro).saturating_mul(*fee_bps) / 10_000;
-                    let net_micro = (*amount_micro).saturating_sub(fee_micro);
-                    let fee_pool_half = fee_micro / 2;
-                    let fee_burn_half = fee_micro.saturating_sub(fee_pool_half);
-
                     balances.insert(from_k, fb - *amount_micro);
                     let tb = balances.get(&to_k).copied().unwrap_or(0);
-                    balances.insert(to_k, tb.saturating_add(net_micro));
+                    balances.insert(to_k, tb.saturating_add(split.net_micro));
 
-                    if fee_micro > 0 {
+                    if split.pool_micro > 0 {
                         let pool_cur = balances.get(&pool_k).copied().unwrap_or(0);
-                        balances.insert(pool_k, pool_cur.saturating_add(fee_pool_half));
-                        let burn_cur = balances.get(&burn_k).copied().unwrap_or(0);
-                        balances.insert(burn_k, burn_cur.saturating_add(fee_burn_half));
+                        balances.insert(pool_k, pool_cur.saturating_add(split.pool_micro));
                     }
+                    // split.burn_micro touches no balance key (FEE_SPEC §1.3) — it is destroyed.
+                    // state_root covers only the balances tree, so preview and apply agree.
                 }
                 crate::protocol::TxV1::VerifyZkProof { .. } => {}
                 crate::protocol::TxV1::EnterpriseInference { .. } => {}
@@ -1685,30 +1692,32 @@ impl Ledger {
                     if spendable < *amount_micro {
                         return Err(LedgerError::InsufficientFunds);
                     }
-                    let fee_micro = amount_micro.saturating_mul(*fee_bps) / 10_000;
-                    let net_micro = amount_micro.saturating_sub(fee_micro);
-                    let fee_pool_half = fee_micro / 2;
-                    let fee_burn_half = fee_micro.saturating_sub(fee_pool_half);
+                    // FEE_SPEC §2.1 — same validation and same split as the preview arm.
+                    let split = crate::fees::charge(
+                        crate::fees::FeeKind::Transfer { fee_bps: *fee_bps },
+                        *amount_micro,
+                    )
+                    .map_err(|e| LedgerError::Invalid(e.to_string()))?;
 
                     balances.insert(from_k.clone(), fb - amount_micro);
                     let tb = balances.get(&to_k).copied().unwrap_or(0);
-                    balances.insert(to_k.clone(), tb.saturating_add(net_micro));
+                    balances.insert(to_k.clone(), tb.saturating_add(split.net_micro));
                     dirty_balances.insert(from_k);
                     dirty_balances.insert(to_k);
 
-                    if fee_micro > 0 {
-                        let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
-                        let burn_wallet = self.ai_burn_wallet();
-                        let burn_k = burn_wallet.as_bytes().to_vec();
-                        let pool_cur = balances.get(&pool_k).copied().unwrap_or(0);
-                        balances.insert(pool_k.clone(), pool_cur.saturating_add(fee_pool_half));
-                        let burn_cur = balances.get(&burn_k).copied().unwrap_or(0);
-                        balances.insert(burn_k.clone(), burn_cur.saturating_add(fee_burn_half));
-                        dirty_balances.insert(pool_k);
-                        dirty_balances.insert(burn_k);
-                        total_supply = total_supply.saturating_sub(fee_burn_half);
-                        total_burned = total_burned.saturating_add(fee_burn_half);
-                        fee_total = fee_total.saturating_add(fee_micro);
+                    if split.fee_micro() > 0 {
+                        if split.pool_micro > 0 {
+                            let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
+                            let pool_cur = balances.get(&pool_k).copied().unwrap_or(0);
+                            balances.insert(pool_k.clone(), pool_cur.saturating_add(split.pool_micro));
+                            dirty_balances.insert(pool_k);
+                        }
+                        // FEE_SPEC §1.3: burn destroys supply and credits no wallet. Previously this
+                        // *also* credited `tet-api-pool`, so supply fell while the same value stayed
+                        // spendable at that key — value was duplicated, not burned.
+                        total_supply = total_supply.saturating_sub(split.burn_micro);
+                        total_burned = total_burned.saturating_add(split.burn_micro);
+                        fee_total = fee_total.saturating_add(split.fee_micro());
                     }
                     meta_batch.insert(applied_k, self.encrypt_value(b"1")?);
                 }
@@ -2199,15 +2208,15 @@ impl Ledger {
         let from_k = from.as_bytes().to_vec();
         let to_k = to.as_bytes().to_vec();
 
-        let bps = fee_bps;
-        let fee_micro = amount_micro.saturating_mul(bps) / 10_000;
-        let net_micro = amount_micro.saturating_sub(fee_micro);
-        let fee_pool_half = fee_micro / 2;
-        let fee_burn_half = fee_micro.saturating_sub(fee_pool_half);
+        // FEE_SPEC §2.1 — same bounded split as the block-apply arm.
+        let split = crate::fees::charge(
+            crate::fees::FeeKind::Transfer { fee_bps },
+            amount_micro,
+        )
+        .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        let net_micro = split.net_micro;
 
         let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
-        let burn_wallet = self.ai_burn_wallet();
-        let burn_k = burn_wallet.as_bytes().to_vec();
 
         let applied_k = Self::remote_tx_applied_meta_key(tx_hash);
 
@@ -2250,7 +2259,7 @@ impl Ledger {
                     self.encrypt_value(&u64_to_bytes(tb.saturating_add(net_micro)))?,
                 )?;
 
-                if fee_micro > 0 {
+                if split.fee_micro() > 0 {
                     let pool_cur = b
                         .get(&pool_k)?
                         .as_deref()
@@ -2261,20 +2270,11 @@ impl Ledger {
                         .unwrap_or(0);
                     b.insert(
                         pool_k.clone(),
-                        self.encrypt_value(&u64_to_bytes(pool_cur.saturating_add(fee_pool_half)))?,
+                        self.encrypt_value(&u64_to_bytes(
+                            pool_cur.saturating_add(split.pool_micro),
+                        ))?,
                     )?;
-                    let burn_cur = b
-                        .get(&burn_k)?
-                        .as_deref()
-                        .map(|v| self.decrypt_value(v))
-                        .transpose()?
-                        .as_deref()
-                        .map(bytes_to_u64)
-                        .unwrap_or(0);
-                    b.insert(
-                        burn_k.clone(),
-                        self.encrypt_value(&u64_to_bytes(burn_cur.saturating_add(fee_burn_half)))?,
-                    )?;
+                    // FEE_SPEC §1.3: burn credits no wallet — it only reduces supply.
 
                     let supply = m
                         .get(META_TOTAL_SUPPLY)?
@@ -2286,7 +2286,7 @@ impl Ledger {
                         .unwrap_or(0);
                     m.insert(
                         META_TOTAL_SUPPLY,
-                        self.encrypt_value(&u64_to_bytes(supply.saturating_sub(fee_burn_half)))?,
+                        self.encrypt_value(&u64_to_bytes(supply.saturating_sub(split.burn_micro)))?,
                     )?;
 
                     let burned = m
@@ -2299,7 +2299,7 @@ impl Ledger {
                         .unwrap_or(0);
                     m.insert(
                         META_TOTAL_BURNED,
-                        self.encrypt_value(&u64_to_bytes(burned.saturating_add(fee_burn_half)))?,
+                        self.encrypt_value(&u64_to_bytes(burned.saturating_add(split.burn_micro)))?,
                     )?;
 
                     let fee_total = m
@@ -2312,7 +2312,7 @@ impl Ledger {
                         .unwrap_or(0);
                     m.insert(
                         META_FEE_TOTAL,
-                        self.encrypt_value(&u64_to_bytes(fee_total.saturating_add(fee_micro)))?,
+                        self.encrypt_value(&u64_to_bytes(fee_total.saturating_add(split.fee_micro())))?,
                     )?;
                 }
 
@@ -2340,8 +2340,8 @@ impl Ledger {
                 "to_wallet": to,
                 "amount_micro": amount_micro,
                 "net_micro": net_micro,
-                "fee_micro": fee_micro,
-                "fee_bps": bps,
+                "fee_micro": split.fee_micro(),
+                "fee_bps": fee_bps,
             });
             let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
             self.persist_snapshot_best_effort();
@@ -3701,7 +3701,7 @@ impl Ledger {
         Ok(taken)
     }
 
-    /// Last committed nonce for [`Ledger::transfer_with_fee_attested`] when `signed_transfer_nonce` is set.
+    /// Last committed nonce for [`Ledger::settle_transfer_internal`] when `signed_transfer_nonce` is set.
     /// Missing entry is treated as **0** (first valid client nonce is **1**).
     pub fn wallet_last_transfer_nonce(&self, wallet: &str) -> Result<u64, LedgerError> {
         let k = Self::wallet_nonce_meta_key(wallet);
@@ -5906,7 +5906,7 @@ impl Ledger {
     ///   - burn **25% of network fee** (i.e. **5% of total**) → reduces total supply + increases burned
     ///   - remaining **75% of network fee** (i.e. **15% of total**) → `dex:treasury`
     ///
-    /// This path is atomic and does **not** use `transfer_with_fee_*` to avoid stacking protocol fees
+    /// This path is atomic and does **not** use `settle_transfer_internal` to avoid stacking protocol fees
     /// on top of the explicit DePIN split.
     pub fn settle_ai_utility_payment(
         &self,
@@ -6474,20 +6474,6 @@ impl Ledger {
     }
 
     #[allow(dead_code)]
-    pub fn transfer_with_fee(
-        &self,
-        from: &str,
-        to: &str,
-        amount_micro: u64,
-        fee_bps: Option<u64>,
-    ) -> Result<(u64, u64), LedgerError> {
-        // Military-grade SEND gating: if attestation is required, this path is not allowed.
-        if attestation_required() {
-            return Err(LedgerError::AttestationRequired);
-        }
-        self.transfer_with_fee_attested(from, to, amount_micro, fee_bps, None, None)
-    }
-
     /// Fee-less transfer (Phase 1.1.1): move `amount_micro` from `from` to `to` with **no founder fee**.
     ///
     /// This is intentionally narrow: it preserves spendable/locked and pre-sale lock checks,
@@ -6613,47 +6599,18 @@ impl Ledger {
         .map_err(LedgerError::HybridSigRejected)
     }
 
-    /// [`Self::transfer_with_fee_attested`] after mandatory hybrid verification (wallet HTTP path).
-    #[allow(clippy::too_many_arguments)]
-    pub fn transfer_with_fee_attested_dual_verified(
-        &self,
-        from: &str,
-        to: &str,
-        amount_micro: u64,
-        fee_bps: Option<u64>,
-        attestation: Option<&AttestationReport>,
-        signed_transfer_nonce: Option<u64>,
-        ed25519_sig_hex: &str,
-        mldsa_pubkey_b64: &str,
-        mldsa_sig_b64: &str,
-    ) -> Result<(u64, u64), LedgerError> {
-        let nonce = signed_transfer_nonce
-            .ok_or_else(|| LedgerError::Invalid("signed transfer requires nonce".into()))?;
-        if nonce == 0 {
-            return Err(LedgerError::Invalid(
-                "nonce must be greater than last committed nonce".into(),
-            ));
-        }
-        Self::verify_dual_transfer_auth(
-            from,
-            to,
-            amount_micro,
-            nonce,
-            ed25519_sig_hex,
-            mldsa_pubkey_b64,
-            mldsa_sig_b64,
-        )?;
-        self.transfer_with_fee_attested(
-            from,
-            to,
-            amount_micro,
-            fee_bps,
-            attestation,
-            signed_transfer_nonce,
-        )
-    }
-
-    pub fn transfer_with_fee_attested(
+    /// Fee-bearing **internal** settlement, used only by the legacy `/ai/proxy` surface.
+    ///
+    /// Replaces the old `transfer_with_fee_attested` (FEE_AUDIT schedule 1), which discarded the
+    /// caller's `fee_bps` (`let _ = fee_bps;`) and forced `PROTOCOL_MAINTENANCE_FEE_BPS`
+    /// regardless — a second, non-consensus rate for the same operation as
+    /// [`Self::apply_remote_transfer`].
+    ///
+    /// The split now comes from [`crate::fees::charge`] like every other fee, so `fee_bps` is
+    /// honoured and bounds-checked. This is still a direct ledger mutation rather than a consensus
+    /// tx; that predates this change and is tracked separately. User-facing transfers go through
+    /// `TxV1::Transfer`.
+    pub fn settle_transfer_internal(
         &self,
         from: &str,
         to: &str,
@@ -6671,18 +6628,19 @@ impl Ledger {
         if attestation_required() && attestation.is_none() {
             return Err(LedgerError::AttestationRequired);
         }
-        let _ = fee_bps;
-        let bps = PROTOCOL_MAINTENANCE_FEE_BPS; // strict: 1% on all transfers
-        let fee_micro = amount_micro.saturating_mul(bps) / 10_000;
-        let net_micro = amount_micro.saturating_sub(fee_micro);
-        let fee_pool_half = fee_micro / 2;
-        let fee_burn_half = fee_micro.saturating_sub(fee_pool_half);
+        let split = crate::fees::charge(
+            crate::fees::FeeKind::Transfer {
+                fee_bps: fee_bps.unwrap_or(crate::fees::TRANSFER_FEE_BPS_DEFAULT),
+            },
+            amount_micro,
+        )
+        .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        let fee_micro = split.fee_micro();
+        let net_micro = split.net_micro;
 
         let from_k = from.as_bytes().to_vec();
         let to_k = to.as_bytes().to_vec();
         let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
-        let burn_wallet = self.ai_burn_wallet();
-        let burn_k = burn_wallet.as_bytes().to_vec();
 
         let now_ms = ledger_now_ms();
         // `TransactionalTree` has no `.iter()` — read vest locks on the real tree before txn.
@@ -6764,25 +6722,13 @@ impl Ledger {
                         .unwrap_or(0);
                     b.insert(
                         pool_k.clone(),
-                        self.encrypt_value(&u64_to_bytes(pool_cur.saturating_add(fee_pool_half)))?,
+                        self.encrypt_value(&u64_to_bytes(
+                            pool_cur.saturating_add(split.pool_micro),
+                        ))?,
                     )?;
 
-                    if fee_burn_half > 0 {
-                        let sink_cur = b
-                            .get(&burn_k)?
-                            .as_deref()
-                            .map(|v| self.decrypt_value(v))
-                            .transpose()?
-                            .as_deref()
-                            .map(bytes_to_u64)
-                            .unwrap_or(0);
-                        b.insert(
-                            burn_k.clone(),
-                            self.encrypt_value(&u64_to_bytes(
-                                sink_cur.saturating_add(fee_burn_half),
-                            ))?,
-                        )?;
-
+                    if split.burn_micro > 0 {
+                        // FEE_SPEC §1.3: burn credits no wallet; it only reduces supply.
                         let burned_prev = m
                             .get(META_TOTAL_BURNED)?
                             .as_deref()
@@ -6794,7 +6740,7 @@ impl Ledger {
                         m.insert(
                             META_TOTAL_BURNED,
                             self.encrypt_value(&u64_to_bytes(
-                                burned_prev.saturating_add(fee_burn_half),
+                                burned_prev.saturating_add(split.burn_micro),
                             ))?,
                         )?;
 
@@ -6809,7 +6755,7 @@ impl Ledger {
                         m.insert(
                             META_TOTAL_SUPPLY,
                             self.encrypt_value(&u64_to_bytes(
-                                supply.saturating_sub(fee_burn_half),
+                                supply.saturating_sub(split.burn_micro),
                             ))?,
                         )?;
                     }
@@ -6824,7 +6770,7 @@ impl Ledger {
                         .unwrap_or(0);
                     m.insert(
                         META_FEE_TOTAL,
-                        self.encrypt_value(&u64_to_bytes(fee_total.saturating_add(fee_micro)))?,
+                        self.encrypt_value(&u64_to_bytes(fee_total.saturating_add(split.fee_micro())))?,
                     )?;
                 }
                 if let Some(req_n) = signed_transfer_nonce {
@@ -6852,9 +6798,9 @@ impl Ledger {
             "amount_micro": amount_micro,
             "net_micro": net_micro,
             "fee_micro": fee_micro,
-            "fee_to_worker_pool_micro": fee_pool_half,
-            "fee_burned_micro": fee_burn_half,
-            "fee_bps": bps,
+            "fee_to_worker_pool_micro": split.pool_micro,
+            "fee_burned_micro": split.burn_micro,
+            "fee_bps": fee_bps.unwrap_or(crate::fees::TRANSFER_FEE_BPS_DEFAULT),
         });
         let bytes = serde_json::to_vec(&audit).unwrap_or_default();
         let _ = self.audit_write(&bytes);

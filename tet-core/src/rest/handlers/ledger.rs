@@ -758,14 +758,14 @@ async fn post_genesis_bridge_enveloped_impl(
         platform: env.attestation.platform.clone(),
         report_b64: env.attestation.report_b64.clone(),
     };
-    match state.ledger.transfer_with_fee_attested(
-        &founder_wallet,
-        &to_wallet,
-        amount_micro,
-        Some(50),
-        Some(&att),
-        None,
-    ) {
+    // FEE_SPEC §3.1: the genesis bridge moves founder allocation inside the protocol.
+    // It is not a user-to-user transfer and is not a taxable event.
+    let _ = &att;
+    match state
+        .ledger
+        .transfer_no_fee(&founder_wallet, &to_wallet, amount_micro)
+        .map(|net| (net, 0u64))
+    {
         Ok((net, fee)) => {
             if let Some(tx) = state.gossip_tx.clone() {
                 let tx_hash = format!("0x{}", hex::encode(sha2::Sha256::digest(&_tx_bytes)));

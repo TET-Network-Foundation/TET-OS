@@ -2666,7 +2666,7 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
     ledger.init_genesis_founder_premine_from_env().unwrap();
     ledger.apply_genesis_allocation("founder").unwrap();
     ledger
-        .apply_remote_transfer("0xfund-a-main", "founder", &a, 10_000, 0)
+        .transfer_no_fee("founder", &a, 10_000)
         .unwrap();
     let initial_a = ledger.balance_micro(&a).unwrap();
 
@@ -2691,7 +2691,7 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
         .unwrap();
     branch_ledger.apply_genesis_allocation("founder").unwrap();
     branch_ledger
-        .apply_remote_transfer("0xfund-a-branch", "founder", &a, 10_000, 0)
+        .transfer_no_fee("founder", &a, 10_000)
         .unwrap();
     branch_ledger
         .apply_remote_transfer(&branch_hash, &a, &c, 2_000, 100)
@@ -2768,7 +2768,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
     ledger.init_genesis_founder_premine_from_env().unwrap();
     ledger.apply_genesis_allocation("founder").unwrap();
     ledger
-        .apply_remote_transfer("0xfund-a-main-backfill", "founder", &a, 10_000, 0)
+        .transfer_no_fee("founder", &a, 10_000)
         .unwrap();
     let initial_a = ledger.balance_micro(&a).unwrap();
 
@@ -2793,7 +2793,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         .unwrap();
     branch_ledger.apply_genesis_allocation("founder").unwrap();
     branch_ledger
-        .apply_remote_transfer("0xfund-a-branch-backfill", "founder", &a, 10_000, 0)
+        .transfer_no_fee("founder", &a, 10_000)
         .unwrap();
     branch_ledger
         .apply_remote_transfer(&branch_hash, &a, &c, 2_000, 100)
@@ -3013,11 +3013,11 @@ fn db_strict_encryption_encrypts_sensitive_meta_values() {
         report_b64: "test".into(),
     };
     let _ = l
-        .transfer_with_fee_attested(
+        .settle_transfer_internal(
             "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
             w,
             2_000u64 * STEVEMON,
-            Some(50),
+            Some(100),
             Some(&att),
             None,
         )
@@ -3126,24 +3126,25 @@ async fn dex_maker_can_cancel_unfilled_order() {
 
     let bal_after = ledger.balance_micro("alice").unwrap();
     assert_eq!(ledger.balance_micro(&escrow).unwrap(), 0);
-    // Phase 2: transfer fees are strict (PROTOCOL_MAINTENANCE_FEE_BPS); half of each fee is burned.
-    let lock_gross = 500_000_000u64;
-    let bps = crate::ledger::PROTOCOL_MAINTENANCE_FEE_BPS;
-    let fee_lock = lock_gross.saturating_mul(bps) / 10_000;
-    let escrow_net = lock_gross.saturating_sub(fee_lock);
-    let fee_refund = escrow_net.saturating_mul(bps) / 10_000;
-    let (_, burn_lock) = crate::ledger::Ledger::split_protocol_fee_treasury_and_burn(fee_lock);
-    let (_, burn_refund) = crate::ledger::Ledger::split_protocol_fee_treasury_and_burn(fee_refund);
-    let expected_burn_dex = burn_lock.saturating_add(burn_refund);
-    let expected_roundtrip_fee = fee_lock.saturating_add(fee_refund);
-    assert_eq!(bal_before.saturating_sub(bal_after), expected_roundtrip_fee);
+    // FEE_SPEC §3.1: escrow plumbing is not a taxable event. A cancelled order must leave the
+    // maker exactly whole.
+    //
+    // This assertion previously encoded a live bug: all six p2p_dex hops passed `fee_bps: None`
+    // and the deleted schedule 1 forced 1% anyway, so a maker who merely locked and cancelled
+    // lost ~2% of the escrowed amount (1% in, 1% out) and the network burned it.
+    assert_eq!(
+        bal_after, bal_before,
+        "cancelled order must refund the maker in full (no escrow fee)"
+    );
     assert_eq!(
         ledger.total_burned_micro().unwrap(),
-        burned_before_dex.saturating_add(expected_burn_dex)
+        burned_before_dex,
+        "escrow round trip must burn nothing"
     );
     assert_eq!(
         ledger.total_supply_micro().unwrap(),
-        supply_before_dex.saturating_sub(expected_burn_dex)
+        supply_before_dex,
+        "escrow round trip must not change supply"
     );
 }
 
@@ -3161,7 +3162,7 @@ fn transfer_fee_half_burn_reduces_total_supply_and_tracks_burned() {
 
     let pool = "founder";
     ledger
-        .transfer_with_fee(pool, "alice", 100_000_000, Some(50))
+        .settle_transfer_internal(pool, "alice", 100_000_000, Some(100), None, None)
         .unwrap();
     // Phase 2: transfer fees are strict (PROTOCOL_MAINTENANCE_FEE_BPS), ignoring provided fee_bps.
     let fee = 100_000_000u64 * crate::ledger::PROTOCOL_MAINTENANCE_FEE_BPS / 10_000; // 1_000_000
@@ -3486,11 +3487,13 @@ fn genesis_1k_worker_pool_reward_is_110_percent_of_standard_gross() {
     ledger.apply_genesis_allocation("founder").unwrap();
 
     ledger
-        .transfer_with_fee(
+        .settle_transfer_internal(
             "founder",
             crate::ledger::WALLET_SYSTEM_WORKER_POOL,
             200_000_000,
-            Some(50),
+            Some(100),
+            None,
+            None,
         )
         .unwrap();
 
@@ -3537,11 +3540,13 @@ async fn worker_ai_reward_vest_blocks_dex_until_lock_expires() {
     );
 
     ledger
-        .transfer_with_fee(
+        .settle_transfer_internal(
             "founder",
             crate::ledger::WALLET_SYSTEM_WORKER_POOL,
             200_000_000,
-            Some(50),
+            Some(100),
+            None,
+            None,
         )
         .unwrap();
 
@@ -3921,13 +3926,13 @@ fn signed_transfer_rejects_replay_nonce() {
     let w = crate::wallet::recover_from_mnemonic_12(phrase).unwrap();
     let pool = "founder";
     ledger
-        .transfer_with_fee(pool, &w.address_hex, 50_000_000_000, Some(50))
+        .settle_transfer_internal(pool, &w.address_hex, 50_000_000_000, Some(100), None, None)
         .unwrap();
 
     let bob = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let amount_micro = 1_000_000u64;
     ledger
-        .transfer_with_fee_attested(
+        .settle_transfer_internal(
             &w.address_hex,
             bob,
             amount_micro,
@@ -3942,7 +3947,7 @@ fn signed_transfer_rejects_replay_nonce() {
     );
 
     let err = ledger
-        .transfer_with_fee_attested(
+        .settle_transfer_internal(
             &w.address_hex,
             bob,
             amount_micro,
@@ -3957,7 +3962,7 @@ fn signed_transfer_rejects_replay_nonce() {
     );
 
     ledger
-        .transfer_with_fee_attested(
+        .settle_transfer_internal(
             &w.address_hex,
             bob,
             amount_micro,

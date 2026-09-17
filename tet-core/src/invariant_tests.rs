@@ -76,11 +76,13 @@ mod tests {
         let burned_before = ledger.total_burned_micro().unwrap();
 
         ledger
-            .transfer_with_fee(
+            .settle_transfer_internal(
                 super::super::ledger::WALLET_SYSTEM_WORKER_POOL,
                 "alice",
                 1_000_000,
                 Some(100),
+                None,
+                None,
             )
             .unwrap();
         let fee = 10_000u64;
@@ -98,7 +100,7 @@ mod tests {
         let supply_mid = ledger.total_supply_micro().unwrap();
         let burned_mid = ledger.total_burned_micro().unwrap();
         let (t_net, t_fee) = ledger
-            .transfer_with_fee("alice", "bob", 500_000, Some(100))
+            .settle_transfer_internal("alice", "bob", 500_000, Some(100), None, None)
             .unwrap();
         assert_eq!(t_fee, 5_000);
         assert_eq!(t_net, 495_000);

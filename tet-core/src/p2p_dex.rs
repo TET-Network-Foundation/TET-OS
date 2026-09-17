@@ -190,7 +190,7 @@ impl DexEngine {
 
         // Lock funds into escrow via ledger transfer (no core modifications).
         // Fee behavior: use the ledger default by passing `None`.
-        let _ = ledger.transfer_with_fee(maker_wallet, &escrow_wallet, tet_micro_total, None)?;
+        let _ = ledger.transfer_no_fee(maker_wallet, &escrow_wallet, tet_micro_total)?;
         // Track the *actual* escrow balance (net of protocol fees).
         let escrow_bal = ledger.balance_micro(&escrow_wallet)?;
         if escrow_bal == 0 {
@@ -242,7 +242,7 @@ impl DexEngine {
         let order_escrow = escrow_wallet_for_order(&o.id);
         let bal = ledger.balance_micro(&order_escrow)?;
         if bal > 0 {
-            let _ = ledger.transfer_with_fee(&order_escrow, maker, bal, None)?;
+            let _ = ledger.transfer_no_fee(&order_escrow, maker, bal)?;
         }
         self.deindex_order(&o);
         self.orders.remove(oid);
@@ -322,7 +322,7 @@ impl DexEngine {
         let trade_escrow = escrow_wallet_for_trade(&trade_id);
 
         // Internal transfer between escrow wallets. Uses existing ledger transfer path.
-        let _ = ledger.transfer_with_fee(&order_escrow, &trade_escrow, tet_micro, None)?;
+        let _ = ledger.transfer_no_fee(&order_escrow, &trade_escrow, tet_micro)?;
         let trade_bal = ledger.balance_micro(&trade_escrow)?;
         if trade_bal == 0 {
             return Err(DexError::Invalid("trade escrow balance is zero".into()));
@@ -408,7 +408,7 @@ impl DexEngine {
         if bal == 0 {
             return Err(DexError::Invalid("trade escrow empty".into()));
         }
-        let _ = ledger.transfer_with_fee(&trade_escrow, &t.taker_wallet, bal, None)?;
+        let _ = ledger.transfer_no_fee(&trade_escrow, &t.taker_wallet, bal)?;
         t.tet_micro = bal;
         t.status = TradeStatus::Completed;
         self.trades.insert(t.id.clone(), t.clone());
@@ -434,7 +434,7 @@ impl DexEngine {
         if bal == 0 {
             return Err(DexError::Invalid("trade escrow empty".into()));
         }
-        let _ = ledger.transfer_with_fee(&trade_escrow, &t.maker_wallet, bal, None)?;
+        let _ = ledger.transfer_no_fee(&trade_escrow, &t.maker_wallet, bal)?;
         t.tet_micro = bal;
         t.status = TradeStatus::Refunded;
         self.trades.insert(t.id.clone(), t.clone());
@@ -457,11 +457,10 @@ impl DexEngine {
         }
         if o.tet_micro_remaining > 0 {
             let order_escrow = escrow_wallet_for_order(&o.id);
-            let _ = ledger.transfer_with_fee(
+            let _ = ledger.transfer_no_fee(
                 &order_escrow,
                 &o.maker_wallet,
                 o.tet_micro_remaining,
-                None,
             )?;
             o.tet_micro_remaining = 0;
         }
