@@ -621,9 +621,20 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 
 ## B.1 Sprint plan (Sprint 4–11)
 
+> **Numbering and status are not defined here.** [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) is the single
+> source of truth for which sprint is which and what state it is in; where the two disagree, that file
+> wins. This section defines sprint **contents** only. The numbering below was adopted as canonical on
+> 2026-09-17 — the "was Sprint N" notes in §B.1.2–B.1.4 are historical and already absorbed.
+>
+> **Live status (2026-09-17):** S1–S3 ✅ · **S4 🟡 blocked — public seed dead, needs re-provision** ·
+> S5 ✅ · S6 🟡 · S7 ⬜ · S8 ⬜ · S9 ✅ · S10 ⬜ · S11 ⬜
+
 **Prerequisite:** **Sprint 3 complete** (Send Coins, genesis, sync — [`UI_STATUS_PHASE0.md`](./UI_STATUS_PHASE0.md)).
 
 **Steve constraint (2026-05):** Tmail / Sovereign OS work **must not start** until **L1 Foundation** (public testnet) is ship-able. Without Sprint 4, Phase 0 risks **UI-only ship** with no live chain for builders.
+
+> **This constraint was violated.** S5, S6, and S9 were built before S4's AT-F1 gate passed (risk **R8**
+> materialized). The features work; the Foundation gate is still open. See `SPRINT_PLAN.md` §S4 detail.
 
 | Sprint | Duration | Deliverables | Dev-days (est.) |
 |--------|----------|--------------|---------------|
@@ -652,6 +663,10 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 | **Buffer / integration** | **0** (within above) | — | End-to-end: new user → faucet → sync → send 1 TET on **public seed** |
 
 **Sprint 4 exit criteria (Foundation gate):**
+
+> **2026-09-17:** none signed off. The public seed (Hetzner Helsinki) was provisioned and running as of
+> 2026-06-10 but is **now dead** — this item reverts to *to re-provision*, not *done*. Faucet remains
+> admin-token-gated rather than public. Canonical checklist: [`SPRINT_PLAN.md`](./SPRINT_PLAN.md).
 
 - [ ] ≥1 public seed reachable from internet (documented multiaddr)
 - [ ] Faucet funds test wallet; UI or curl documented

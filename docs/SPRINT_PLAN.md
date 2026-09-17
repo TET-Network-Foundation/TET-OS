@@ -1,224 +1,148 @@
-# 6-Sprint Plan — Phase 0 Launch Foundation
+# Sprint Plan — Phase 0
 
-**Horizon:** 6 weeks (1 sprint = 1 week)  
-**Baseline date:** 2026-05-18  
-**Canonical node:** `tet-core/`  
-
-> **Note on “Whitepaper v2 / Phase 0 in 2 weeks”:** ルート `WHITEPAPER.md` に「2 weeks」や「Phase 0」の記述は **ない**。内部目標として `tet-network/ui/README.md`（Phase 0 Autonomous AI Economy E2E）と `SPRINT0_ISSUES.md`（公開 testnet 72h）を参照し、**6 週間で現実的に到達可能な打ち手**に分解した。
-
-**Priority order (fixed):** ブロック同期 → consensus 骨格 → ZK 配線 → インセンティブ層 → inference mock → docs
+**Status:** **Canonical.** This file is the single source of truth for sprint numbering and sprint status.
+**Baseline:** 2026-05-18 (v1) · **Renumbered:** 2026-09-17 (v2)
+**Canonical node:** `tet-core/`
+**Detailed work breakdowns:** [`SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md) §B.1 — that document holds the *contents* of each sprint; this one holds the *numbering and status*. Where they disagree, this file wins.
 
 ---
 
-## Sprint 1 — Block sync MVP (P0)
+## History
 
-### Deliverables
+Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track in this file (S1–S6: block sync → consensus → ZK wiring → incentive layer → inference mock → docs) and a Sovereign OS product track in the spec — the two agreed on S1–S2, diverged at S3, and the daily logs followed the *spec*, so the spec's numbering is adopted here as canonical and this file's original S3–S6 scope is preserved below under [Superseded scope](#superseded-scope).
 
-1. **設計実装:** 単一 libp2p スワーム方針を決定し、ブロック同期用の **pull-based catch-up**（`local_height+1` から順次 apply）を追加。
-2. **3 ノード E2E:** 手順書どおり起動後、全ノード `block_height` が **±2 以内**。
-3. **診断:** `docs/SYNC_ISSUE.md` の「Phase A/B」を実装済みとしてチェックリスト更新。
+**Reading older documents:**
 
-### Files (expected touch)
-
-- `tet-core/src/p2p.rs` — sync RPC / ordered apply loop
-- `tet-core/src/main.rs` — swarm 統合のエントリ
-- `tet-core/src/consensus.rs` — catch-up 呼び出し、skip 理由の構造化ログ
-- `tet-core/src/p2p_network.rs`, `tet-core/src/network.rs` — listen 重複の削減または役割分離
-- `tet-core/src/tests.rs` — multi-height catch-up 統合テスト
-- `docs/SYNC_ISSUE.md` — 実装後の status セクション
-
-### Definition of Done
-
-```bash
-cd tet-core
-RISC0_SKIP_BUILD=1 cargo test --bin TET-Core block_sync 2>&1 | tail -5
-# Expected: tests passed (new integration test name TBD, e.g. catch_up_from_tip_gossip)
-
-# Manual 3-node (release binary rebuilt)
-# ... start 5010 boot + 5020/5030 peers with TET_BOOTNODES ...
-for p in 5010 5020 5030; do curl -sf http://127.0.0.1:$p/ledger/state | jq -r .block_height; done
-# Expected: three integers, max-min <= 2 after 120s
-```
+| If a document says | Written | It means |
+|---|---|---|
+| Sprint 1, Sprint 2 | any date | Same as canonical S1, S2 — no change |
+| Sprint 3 in `DAILY_LOG_*`, spec, `UI_STATUS_PHASE0.md` | 2026-05-19+ | Canonical **S3** (UI Send Coins / genesis / sync) |
+| Sprint 3–6 in **this file, v1 only** | 2026-05-18 | **Superseded.** ZK wiring / incentive layer / inference mock / docs — never executed under those numbers. See [Superseded scope](#superseded-scope) |
+| "Sprint 4" in `DAILY_LOG_2026-05-28` … `05-31` ("Sprint 4 Day 2–5") | 2026-05-28+ | Canonical **S4** — L1 Foundation |
+| "was Sprint 4 / was Sprint 5 / was Sprint 7" in spec §B.1.2–B.1.4 | 2026-05-19 | Spec-internal shift when S4 = L1 Foundation was inserted. Already absorbed into canonical numbering below |
 
 ---
 
-## Sprint 2 — Consensus skeleton hardening (P0)
+## Status legend
 
-### Deliverables
-
-1. **Shared validator set:** `TET_VALIDATOR_IDS` を compose / scripts で必須化。
-2. **Leader-only auto-mine:** 非リーダーは `TET_AUTO_MINE` 無効または skip のみ（現状ログで確認済みの動作をテストで固定）。
-3. **Fork / parent metadata:** マイニング時 `record_block_record` の `parent_block_id` を常に直前ブロックに一致させる（gossip と backfill の整合）。
-4. **Readiness endpoint:** `/ledger/state` に `synced: bool` または `lag_blocks`（同期完了前は明示）。
-
-### Files
-
-- `tet-core/src/consensus.rs`
-- `tet-core/src/main.rs`
-- `tet-core/docker-compose.yml`, `tet-core/scripts/start-network.sh`
-- `tet-core/src/rest/handlers/ledger.rs`
-
-### Definition of Done
-
-```bash
-RISC0_SKIP_BUILD=1 cargo test --bin TET-Core auto_miner 2>&1 | tail -5
-# Expected: existing auto_miner_* tests pass
-
-TET_VALIDATOR_IDS=alice,bob,carol TET_AUTO_MINE=1 cargo test --bin TET-Core leader 2>&1 | tail -5
-# Expected: leader rotation tests pass (add if missing)
-
-curl -s http://127.0.0.1:5020/ledger/state | jq '.synced // .block_height'
-# Expected: synced=true OR lag_blocks=0 when caught up
-```
+| Symbol | Meaning |
+|---|---|
+| ✅ | Complete and verified end-to-end |
+| 🟡 | Partially delivered; named gaps remain |
+| 🔁 | Was complete, now needs redoing (environment lost) |
+| ⬜ | Open — not started |
 
 ---
 
-## Sprint 3 — ZK wiring (P1)
+## Canonical sprint table
 
-### Deliverables
+| Sprint | Scope | Status | Evidence |
+|---|---|---|---|
+| **S1** | Block sync MVP — pull-based catch-up, 3-node E2E | ✅ | `7264191`, `499bb00`; `DAILY_LOG_2026-05-19` |
+| **S2** | Consensus hardening + economics — validator set, leader-only mine, parent metadata, Treasury 25/50/25, ZK-Court §14.1 | ✅ | `5382397`, `68a4b94` |
+| **S3** | UI Send Coins — genesis hash sync, sync status, hybrid-signed transfer; consensus-grade refactor | ✅ | `aad734c`…`d157c77`, `df59517`, `8f52db7`, `2ce9024`; `DAILY_LOG_2026-05-20`, `05-31` |
+| **S4** | **L1 Foundation** — public seed, faucet, Docker (node + UI), CI/CD, operator docs, monitoring | 🟡 **blocked** | See [S4 detail](#s4--l1-foundation-detail) |
+| **S5** | Tmail protocol — `/tet/v1/tmail` gossip, `TmailEnvelopeV1`, REST, store | ✅ *(fee/audit deferred)* | `9e9a4a7`, `4d3fc72` |
+| **S6** | Win95 shell + Basic Tmail UI | 🟡 | `1d3173f`, `356df5e`, `ad3fb3f`, `a3f2720`…`31299c3`. E2EE verified cross-region (CH→FI, 1.3 s). Shell is **tabbed**, not a window manager — no taskbar, no boot sequence, no sounds |
+| **S7** | Time-lock + Burn + Pin stake | ⬜ | Gates marketing (locked decision #6, AT-3/AT-4) |
+| **S8** | Anonymous Mode — RISC0 guest, escrow, anchor audit | ⬜ | **Critical path.** Gates marketing (AT-5). Risk R1: never ship placeholder UI |
+| **S9** | Files — upload, libp2p fetch codec, on-chain fee | ✅ | `dbfa7ab`, `bd98cdc`, `ed9b9bc` |
+| **S10** | Mini-apps — Calculator, Clock, Notes | ⬜ | AT-8 |
+| **S11** | QA matrix, public testnet smoke, ship candidate | ⬜ | AT-0…AT-9 |
 
-1. **RISC0 guest CI path:** `RISC0_SKIP_BUILD=0` で CI サブジョブ（または週次）が `methods/` ビルド成功。
-2. **`NEXUS_GUEST_ELF` 空時の挙動:** 本番は fail-closed、dev は warn（現状の panic 修正を維持）。
-3. **ZK-Court happy path:** mock ではなく guest receipt で `VerifyZkProof` が 1 本通る統合テスト（`TET_ALLOW_MOCK_ZK` なし）。
+**Out-of-band:** Phase 0.5 Mining UI / Worker registration scaffold landed early (`ff6f7be`, 2026-06-12) ahead of its Phase 0.5 slot.
 
-### Files
-
-- `methods/`, `prover/`, `tet-core/build.rs`
-- `tet-core/src/zk_verifier.rs`, `tet-core/src/vision/zk_court.rs`
-- `tet-core/src/worker_daemon.rs`
-- `.github/workflows/`（tet-core 用、新規または既存拡張）
-
-### Definition of Done
-
-```bash
-# Dev (skip build)
-RISC0_SKIP_BUILD=1 cargo test --bin TET-Core should_start_worker_daemon 2>&1 | tail -3
-# Expected: 1 passed
-
-# Full ZK (machine with risc0 toolchain — may be nightly only)
-RISC0_SKIP_BUILD=0 cargo test --bin TET-Core zk_court -- --ignored 2>&1 | tail -5
-# Expected: ignored tests pass when run with --ignored on ZK-capable runner
-```
+**Ordering violation on record:** spec risk **R8** required that S5 not start until S4's AT-F1 passed. S5, S6, and S9 were built anyway. That produced three verified features but left the Foundation gate unclosed — which is why S4 is still the blocker below.
 
 ---
 
-## Sprint 4 — Incentive layer (P1)
+## S4 — L1 Foundation (detail)
 
-### Deliverables
+**Why it gates everything:** without it, Phase 0 ships as a UI against a chain no external builder can join.
 
-1. **AI settlement + thermodynamic rewards:** 既存 80/15/5（`enterprise.rs` / README）と §5.2 R(T) 経路が **マルチノード同期後**も一貫することを E2E テストで確認（§11 tokenomics との対応は v1.1 Gap 6 参照）。
-2. **Worker stake gate:** `p2p_network` の `MIN_WORKER_STAKE_MICRO` 拒否が integration test でカバー。
-3. **Slashing stub → MVP:** ZK-Court 敗訴時の bond forfeit が 1 シナリオで台帳残高に反映（既存 ledger API 利用）。
+| Work item | Est. | Status | Note |
+|---|---|---|---|
+| **Public seed (1×)** | 3 d | 🔁 **to re-provision** | Helsinki VPS is **dead**. Prior build was systemd auto-start, `TET_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001`, ufw 22/4001/5010, fail2ban, 4 GB swap, persistent DB at `/opt/tet-core-data`, `WatchdogSec=120`. Rebuild from that recipe; publish the bootnode multiaddr in `RUNNING_A_NODE.md` this time |
+| **Faucet** — 100 TET/day/IP | 3 d | ⬜ open | Endpoint exists (`POST /ledger/faucet`, worker-pool funded, per-wallet-once + per-IP limit, tested 3/3). But it is **admin-Bearer-token gated** — there is no public self-serve path. That is the gap |
+| **Docker (node + UI)** | 4 d | ⬜ open | `docker-compose.yml` runs `tet-core` only. `tet-network/ui/Dockerfile` exists but no compose service wires it. Locked decision #12 requires node **+ UI** |
+| **CI/CD (GitHub Actions)** | 2 d | ⬜ open | No `.github/` directory exists. All 65 commits' "PASS" claims are local runs |
+| **Public operator docs** | 2 d | ⬜ open | `RUNNING_A_NODE.md` is 17 KB but dated 2026-05-19 — predates the 4001/4003/4005 port split, the watchdog, `/health/swarm`, the `block_id` V2 fork, Tmail, and Files |
+| **Monitoring + logs** | 2 d | ⬜ open | JSON tracing, `/metrics`, `/health/swarm`, systemd watchdog and `observability/{prometheus,grafana}` scaffolding all exist. No dashboards, no alerting, no SLOs |
 
-### Files
+### S4 exit criteria (the Foundation gate)
 
-- `tet-core/src/ledger.rs`
-- `tet-core/src/vision/zk_court.rs`
-- `tet-core/src/p2p_network.rs`
-- `tet-core/src/tests.rs`
+None of these has been formally signed off.
 
-### Definition of Done
-
-```bash
-RISC0_SKIP_BUILD=1 cargo test --bin TET-Core worker_ai_reward 2>&1 | tail -5
-# Expected: vesting / reward tests pass
-
-RISC0_SKIP_BUILD=1 cargo test --bin TET-Core slash 2>&1 | tail -5
-# Expected: new or existing slash scenario passes
-```
-
----
-
-## Sprint 5 — Inference mock E2E (P2)
-
-### Deliverables
-
-1. **Single-swarm inference topic:** `nexus-inference-v1` をブロック mesh と共存（Sprint 1 統合の上）。
-2. **Phase 0 UI path:** `tet-network/ui/README.md` の env で request → worker → result が **1 ローカル mesh** で完走。
-3. **Optional:** `POST /v1/compute` がシャード数 > 0 で 200 を返し、台帳に workload 痕跡。
-
-### Files
-
-- `tet-core/src/p2p_network.rs`, `tet-core/src/rest/handlers/network.rs`, `ai.rs`
-- `tet-network/ui/`（最小 wiring のみ）
-- `tet-core/docker-compose.yml`
-
-### Definition of Done
-
-```bash
-# Per tet-network/ui/README.md Phase 0 block
-RISC0_SKIP_BUILD=1 TET_AUTO_MINE=1 TET_ALLOW_MOCK_ZK=1 TET_DEV_FORCE_POC=1 \
-  cargo run --bin TET-Core &
-sleep 15
-curl -sf -X POST http://127.0.0.1:5010/v1/compute -H 'Content-Type: application/json' \
-  -d '{"prompt":"ping","wallet_id":"..."}' | jq .
-# Expected: HTTP 200, job id or result field present (exact schema per handler)
-
-RISC0_SKIP_BUILD=1 cargo test --bin TET-Core inference 2>&1 | tail -5
-# Expected: p2p inference loop tests pass
-```
+- [ ] ≥1 public seed reachable from the internet, **multiaddr documented in a tracked file**
+- [ ] Faucet funds a test wallet with **no admin token**; curl or UI path documented
+- [ ] Fresh machine: `docker compose up` → **node + UI** against the public seed, no local genesis hack
+- [ ] CI green on the default branch
+- [ ] A builder follows `RUNNING_A_NODE.md` and joins the testnet in under 30 minutes
+- [ ] **AT-F1** passes end-to-end: clean laptop → join seed → faucet → `GET /ledger/me` → send 1 TET
 
 ---
 
-## Sprint 6 — Docs, release, Docker recovery (P2)
+## Superseded scope
 
-### Deliverables
+Original v1 Sprints 3–6, preserved verbatim. **None was executed under these numbers.** Items marked ↪ were absorbed elsewhere; the rest are unscheduled backlog and several overlap S4.
 
-1. **`docs/STATUS.md` 更新** — Sprint 1–5 完了分をステータス昇格。
-2. **Operator runbook:** 3-node + bootnode PeerId + `TET_VALIDATOR_IDS` を `tet-core/README.md` に統合（重複削減）。
-3. **Docker E2E:** Mac Docker Desktop 復旧後、`docker compose up` で 3 ノード + UI smoke（ブロック済み項目のクローズ）。
-4. **Commit / tag:** `Phase 0 foundation` タグ；**push は CI 緑後**.
+### v1 S3 — ZK wiring (P1)
 
-### Files
+1. **RISC0 guest CI path:** `RISC0_SKIP_BUILD=0` で CI サブジョブ（または週次）が `methods/` ビルド成功。 — ⬜ **overlaps S4 CI/CD**
+2. **`NEXUS_GUEST_ELF` 空時の挙動:** 本番は fail-closed、dev は warn。 — ↪ done, `zk_verifier.rs` + `main.rs` mainnet panic guard
+3. **ZK-Court happy path:** mock ではなく guest receipt で `VerifyZkProof` が 1 本通る統合テスト（`TET_ALLOW_MOCK_ZK` なし）。 — ⬜ **open**
 
-- `docs/STATUS.md`, `docs/SYNC_ISSUE.md`, `docs/SPRINT_PLAN.md`
-- `tet-core/README.md`, `README.md`
-- `tet-core/Dockerfile`, `tet-core/docker-compose.yml`
-- `.dockerignore`
+### v1 S4 — Incentive layer (P1)
 
-### Definition of Done
+1. **AI settlement + thermodynamic rewards:** 80/15/5 と §5.2 R(T) 経路がマルチノード同期後も一貫することを E2E テストで確認。 — ⬜ **open**
+2. **Worker stake gate:** `MIN_WORKER_STAKE_MICRO` 拒否が integration test でカバー。 — ↪ partially done via `ff6f7be` `WorkerRegister` bond precondition
+3. **Slashing stub → MVP:** ZK-Court 敗訴時の bond forfeit が台帳残高に反映。 — ↪ `slash_worker_bond_to_ecosystem_all` exists; **no challenger incentive**, so the path is never exercised
 
-```bash
-cd tet-core && docker compose up -d --build
-sleep 90
-curl -sf http://localhost:5010/ledger/state && curl -sf http://localhost:5020/ledger/state
-# Expected: both JSON; |height_5010 - height_5020| <= 2
+### v1 S5 — Inference mock E2E (P2)
 
-git ls-files | grep '^target/' | wc -l
-# Expected: 0
-```
+1. **Single-swarm inference topic:** `nexus-inference-v1` をブロック mesh と共存。 — ⬜ **open**; still three separate swarms (4001/4003/4005)
+2. **Phase 0 UI path:** request → worker → result が 1 ローカル mesh で完走。 — 🟡 works via single-node local fallback; multi-node worker dispatch unproven
+3. **Optional:** `POST /v1/compute` がシャード数 > 0 で 200。 — ⬜ **open**
 
----
+### v1 S6 — Docs, release, Docker recovery (P2)
 
-## Risk register (realistic)
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| 3 swarms 統合が 1 週間で終わらない | Sprint 1 スリップ | 先に pull-sync のみ `p2p.rs` に追加し、統合は Sprint 2 |
-| RISC0 CI が重い | Sprint 3 未完了 | `RISC0_SKIP_BUILD=1` を default CI、`zk` job を optional |
-| Docker Desktop 未復旧 | Sprint 6 DoD 未達 | ローカル `cargo run` E2E を Phase 0 完了基準に |
-| ホワイトペーパーと実装の用語乖離 | docs 混乱 | `STATUS.md` で「WP 記載なし」を明示（維持） |
+1. **`docs/STATUS.md` 更新。** — ⬜ **open**; `STATUS.md` still reflects 2026-05-18 state
+2. **Operator runbook 統合。** — ↪ **merged into S4** operator docs
+3. **Docker E2E:** `docker compose up` で 3 ノード + UI smoke。 — ↪ **merged into S4** Docker item
+4. **Commit / tag:** `Phase 0 foundation` タグ；push は CI 緑後。 — ⬜ **open**; repo has no tags
 
 ---
 
-## Mapping to current gaps
+## Risk register
 
-| Gap | Sprint |
-|-----|--------|
-| height 15/0/0 | 1 |
-| Validator / leader / parent metadata | 2 |
-| ZK-Court production path | 3 |
-| ZK-Court slash / stake / §14.3 collateral | 4 |
-| Inference gossip E2E | 5 |
-| Docker + STATUS refresh | 6 |
+| Risk | Impact | Mitigation | State |
+|---|---|---|---|
+| **No L1 Foundation before Tmail** (spec R8) | Phase 0 ships with no joinable chain | S4 gate before further product work | **Materialized** — S5/S6/S9 shipped first |
+| Public seed SPOF (spec R10) | Network dies with one host | 2nd seed when traffic warrants | **Materialized** — seed is dead, network is down |
+| RISC0 CI が重い | ZK path untested in CI | `RISC0_SKIP_BUILD=1` default, `zk` job optional | Open |
+| Anonymous ZK not ready (spec R1) | Ship slips | Slip the date; never ship placeholder UI | Open — S8 not started |
+| ホワイトペーパーと実装の用語乖離 | docs 混乱 | WP §17 records divergences explicitly | Ongoing; see `TET_STATE_2026-09.md` §3.1 |
+| 3-month dormancy (2026-06-12 → 2026-09-17) | Dependency drift, lost context | This restart pass; `TET_STATE_2026-09.md` | Active |
 
 ---
 
-## Out of scope (6 weeks)
+## Out of scope for Phase 0
 
-- 公開 testnet 72h 連続稼働（`SPRINT0_ISSUES.md` のフル項目）
+- 公開 testnet 72h 連続稼働（`SPRINT0_ISSUES.md` フル項目）
 - Stripe 本番連携
-- Substrate / Solana アーカイブ復活
-- Neural State Transition / Sentient Assets（`SPRINT0_ISSUES.md` §E）
+- Substrate / Solana アーカイブ復活 — see `archive/substrate/`
+- Neural State Transition / Sentient Assets（WP Part II §14–16）
+- SP1 prover, cross-chain bridges, mainnet freeze (WP §19.1 explicit non-goals)
+- Productized AI Worker earn — Phase 0.5
 
-これらは Phase 1 以降のバックログとする。
+---
+
+## References
+
+| Document | Holds |
+|---|---|
+| [`SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md) | Sprint *contents*, acceptance tests AT-F1…AT-9, locked decisions, fee economics |
+| [`TET_STATE_2026-09.md`](./TET_STATE_2026-09.md) | Whole-project state, gap analysis, ideas inventory |
+| [`UI_STATUS_PHASE0.md`](./UI_STATUS_PHASE0.md) | S3 evidence |
+| [`SYNC_ISSUE.md`](./SYNC_ISSUE.md) | S1 evidence |
+| [`SPRINT0_ISSUES.md`](../SPRINT0_ISSUES.md) | Production-readiness backlog (unclosed) |
