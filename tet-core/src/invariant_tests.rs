@@ -86,7 +86,12 @@ mod tests {
             )
             .unwrap();
         let fee = 10_000u64;
-        let (_pool0, burn0) = Ledger::split_protocol_fee_treasury_and_burn(fee);
+        let burn0 = crate::fees::charge(
+            crate::fees::FeeKind::Transfer { fee_bps: 100 },
+            1_000_000,
+        )
+        .unwrap()
+        .burn_micro;
         let net = 1_000_000u64 - fee;
 
         assert_eq!(ledger.balance_micro("alice").unwrap(), net);
@@ -104,7 +109,12 @@ mod tests {
             .unwrap();
         assert_eq!(t_fee, 5_000);
         assert_eq!(t_net, 495_000);
-        let (_pool1, burn1) = Ledger::split_protocol_fee_treasury_and_burn(t_fee);
+        let burn1 = crate::fees::charge(
+            crate::fees::FeeKind::Transfer { fee_bps: 100 },
+            500_000,
+        )
+        .unwrap()
+        .burn_micro;
 
         assert_eq!(ledger.balance_micro("bob").unwrap(), t_net);
         assert_eq!(

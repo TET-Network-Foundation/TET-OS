@@ -3716,13 +3716,6 @@ impl Ledger {
             .unwrap_or(0))
     }
 
-    /// Half of each protocol-style fee → worker pool credit; half → burn from [`META_TOTAL_SUPPLY`].
-    pub fn split_protocol_fee_treasury_and_burn(fee_micro: u64) -> (u64, u64) {
-        let pool_micro = fee_micro / 2;
-        let burn_micro = fee_micro.saturating_sub(pool_micro);
-        (pool_micro, burn_micro)
-    }
-
     /// Clone of the underlying sled `Db` handle (cheap; `Db` is `Arc`-backed).
     ///
     /// Used by side stores that need to live in the **same** sled database so that deleting
@@ -4433,28 +4426,6 @@ impl Ledger {
         Ok(())
     }
 
-    pub fn audit_csv_export(&self, limit: usize) -> Result<String, LedgerError> {
-        let cap = limit.clamp(1, 100_000);
-        let mut out = String::new();
-        out.push_str("hash_sha256_hex,record_json\n");
-        for (i, it) in self.audit.iter().enumerate() {
-            if i >= cap {
-                break;
-            }
-            let (k, v) = it?;
-            let hash = String::from_utf8_lossy(k.as_ref()).to_string();
-            let pt = self.decrypt_value(v.as_ref())?;
-            let rec = String::from_utf8_lossy(&pt)
-                .replace(['\n', '\r'], " ")
-                .replace('"', "\"\"");
-            out.push('"');
-            out.push_str(&hash);
-            out.push_str("\",\"");
-            out.push_str(&rec);
-            out.push_str("\"\n");
-        }
-        Ok(out)
-    }
 
     /// Records `TET_FOUNDER_WALLET` in meta for fee routing / audits. Does **not** mint TET.
     /// Full fixed-supply genesis mint is `apply_genesis_allocation` (typically via `POST /founder/genesis`).
@@ -5478,14 +5449,6 @@ impl Ledger {
         Ok(next)
     }
 
-    fn fee_bps_mint(&self) -> u64 {
-        std::env::var("TET_PROTOCOL_FEE_BPS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(100)
-            .min(10_000)
-    }
-
     pub fn mint_reward_with_proof(
         &self,
         peer: &str,
@@ -5506,10 +5469,9 @@ impl Ledger {
                 "genesis 1k commit requires peer wallet".into(),
             ));
         }
-        let fee_bps = self.fee_bps_mint();
-        let fee_micro = gross_micro.saturating_mul(fee_bps) / 10_000;
-        let net_micro = gross_micro.saturating_sub(fee_micro);
-        let founder = self.founder_wallet()?;
+        // FEE_SPEC §3: schedule 3 (mint fee to founder) is deleted. No fee may route to the
+        // founder wallet. The peer receives the full gross amount.
+        let net_micro = gross_micro;
 
         // Hash preimage is the payload bytes (includes energy/joules info upstream).
         let mut h = Sha256::new();
@@ -5522,7 +5484,6 @@ impl Ledger {
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode(energy_payload_bytes);
 
         let peer_key = peer_trim.as_bytes().to_vec();
-        let founder_key = founder.as_bytes().to_vec();
         let genesis_1k_slot_key: Option<Vec<u8>> = if commit_genesis_1k_slot {
             Some(genesis_1k_wallet_slot_meta_key(peer_trim))
         } else {
@@ -5569,9 +5530,7 @@ impl Ledger {
                     .as_deref()
                     .map(bytes_to_u64)
                     .unwrap_or(0);
-                let (treasury_micro, burn_micro) =
-                    Self::split_protocol_fee_treasury_and_burn(fee_micro);
-                let new_total = total.saturating_add(gross_micro).saturating_sub(burn_micro);
+                let new_total = total.saturating_add(gross_micro);
                 if new_total > MAX_SUPPLY_MICRO {
                     return Err(ConflictableTransactionError::Abort(
                         sled::Error::Unsupported("MAX_SUPPLY exceeded".into()),
@@ -5615,46 +5574,6 @@ impl Ledger {
                     self.encrypt_value(&u64_to_bytes(cur_peer.saturating_add(net_micro)))?,
                 )?;
 
-                if fee_micro > 0 {
-                    let cur_f = b
-                        .get(&founder_key)?
-                        .as_deref()
-                        .map(|v| self.decrypt_value(v))
-                        .transpose()?
-                        .as_deref()
-                        .map(bytes_to_u64)
-                        .unwrap_or(0);
-                    b.insert(
-                        founder_key.clone(),
-                        self.encrypt_value(&u64_to_bytes(cur_f.saturating_add(treasury_micro)))?,
-                    )?;
-                    let fee_total = m
-                        .get(META_FEE_TOTAL)?
-                        .as_deref()
-                        .map(|v| self.decrypt_value(v))
-                        .transpose()?
-                        .as_deref()
-                        .map(bytes_to_u64)
-                        .unwrap_or(0);
-                    m.insert(
-                        META_FEE_TOTAL,
-                        self.encrypt_value(&u64_to_bytes(
-                            fee_total.saturating_add(treasury_micro),
-                        ))?,
-                    )?;
-                    let burned_prev = m
-                        .get(META_TOTAL_BURNED)?
-                        .as_deref()
-                        .map(|v| self.decrypt_value(v))
-                        .transpose()?
-                        .as_deref()
-                        .map(bytes_to_u64)
-                        .unwrap_or(0);
-                    m.insert(
-                        META_TOTAL_BURNED,
-                        self.encrypt_value(&u64_to_bytes(burned_prev.saturating_add(burn_micro)))?,
-                    )?;
-                }
 
                 m.insert(
                     META_TOTAL_SUPPLY,
@@ -5677,14 +5596,14 @@ impl Ledger {
                 }
             }
         })?;
-        let (treasury_micro, burn_micro) = Self::split_protocol_fee_treasury_and_burn(fee_micro);
+        let (treasury_micro, burn_micro) = (0u64, 0u64);
         let audit = serde_json::json!({
             "v": 1,
             "action": "mint",
             "to_wallet": peer_trim,
             "gross_micro": gross_micro,
             "net_micro": net_micro,
-            "fee_micro": fee_micro,
+            "fee_micro": 0,
             "treasury_fee_micro": treasury_micro,
             "burned_fee_micro": burn_micro,
             "proof_id": proof_id,
@@ -5696,11 +5615,15 @@ impl Ledger {
         // Sled writes can be async; a flush here prevents confusing "insufficient funds" in tight E2E loops.
         self.db.flush().map_err(LedgerError::Sled)?;
         self.persist_snapshot_best_effort();
-        Ok((gross_micro, net_micro, fee_micro, proof_id))
+        Ok((gross_micro, net_micro, 0u64, proof_id))
     }
 
     /// Worker AI reward payout: debits **`system:worker_pool`** only (no supply inflation).
-    /// Split: 99% `worker_net` (90-day vest to worker) / 1% imperial tax (unlocked to vault).
+    /// Worker receives 100% of gross on a 90-day vest.
+    ///
+    /// FEE_SPEC §3: the 1% "imperial tax" (`imperial_bps`) is deleted. It was v0 CHF-era
+    /// terminology that `docs/STATUS.md` had already marked non-canonical, and it leaked into
+    /// audit output as `imperial_tax_micro`.
     pub fn mint_worker_network_reward(
         &self,
         worker_wallet: &str,
@@ -5728,9 +5651,7 @@ impl Ledger {
         if attestation_required() && attestation.is_none() {
             return Err(LedgerError::AttestationRequired);
         }
-        let imperial_bps = 100u64;
-        let imperial_tax = gross_micro.saturating_mul(imperial_bps) / 10_000;
-        let worker_net = gross_micro.saturating_sub(imperial_tax);
+        let worker_net = gross_micro;
 
         let mut h = Sha256::new();
         h.update(b"tet-worker-poc:v1");
@@ -5743,7 +5664,6 @@ impl Ledger {
         let payload_b64 = base64::engine::general_purpose::STANDARD.encode(energy_payload_bytes);
 
         let w_key = worker_wallet.trim().as_bytes().to_vec();
-        let i_key = imperial_vault_wallet.trim().as_bytes().to_vec();
         let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
 
         let now_ms = ledger_now_ms();
@@ -5809,20 +5729,6 @@ impl Ledger {
                         self.encrypt_value(&u64_to_bytes(cur_w.saturating_add(worker_net)))?,
                     )?;
 
-                    if imperial_tax > 0 {
-                        let cur_i = b
-                            .get(&i_key)?
-                            .as_deref()
-                            .map(|v| self.decrypt_value(v))
-                            .transpose()?
-                            .as_deref()
-                            .map(bytes_to_u64)
-                            .unwrap_or(0);
-                        b.insert(
-                            i_key.clone(),
-                            self.encrypt_value(&u64_to_bytes(cur_i.saturating_add(imperial_tax)))?,
-                        )?;
-                    }
 
                     let comm = m
                         .get(META_WORKER_COMMUNITY_MICRO)?
@@ -5882,13 +5788,11 @@ impl Ledger {
             "v": 1,
             "action": "worker_pool_payout_vest",
             "worker_wallet": worker_wallet,
-            "imperial_vault": imperial_vault_wallet,
             "pool_wallet": WALLET_SYSTEM_WORKER_POOL,
             "gross_micro_requested": gross_requested_micro,
             "genesis_1k_worker_uplift_10pct": genesis_1k_uplift_applied,
             "gross_micro": gross_micro,
             "worker_net_micro": worker_net,
-            "imperial_tax_micro": imperial_tax,
             "vest_unlock_at_ms": unlock_at_ms,
             "proof_id": proof_id,
             "payload_sha256_hex": hash,
@@ -5896,7 +5800,7 @@ impl Ledger {
         let bytes = serde_json::to_vec(&audit).unwrap_or_default();
         let _ = self.audit_write(&bytes);
         self.persist_snapshot_best_effort();
-        Ok((gross_micro, worker_net, imperial_tax, proof_id))
+        Ok((gross_micro, worker_net, 0u64, proof_id))
     }
 
     /// AI utility settlement: user pays `gross_micro` and the protocol routes value deterministically.
@@ -6797,7 +6701,7 @@ impl Ledger {
             "to_wallet": to,
             "amount_micro": amount_micro,
             "net_micro": net_micro,
-            "fee_micro": fee_micro,
+            "fee_micro": 0,
             "fee_to_worker_pool_micro": split.pool_micro,
             "fee_burned_micro": split.burn_micro,
             "fee_bps": fee_bps.unwrap_or(crate::fees::TRANSFER_FEE_BPS_DEFAULT),

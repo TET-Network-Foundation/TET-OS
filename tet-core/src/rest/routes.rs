@@ -403,10 +403,6 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::post(super::handlers::b2b::post_v1_b2b_compute),
         )
         .route(
-            "/founder/audit.csv",
-            axum::routing::get(super::handlers::founder::get_founder_audit_csv),
-        )
-        .route(
             "/founder/genesis",
             axum::routing::post(super::handlers::founder::post_founder_genesis),
         )

@@ -219,34 +219,3 @@ pub async fn post_founder_genesis(
     }
 }
 
-pub async fn get_founder_audit_csv(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let w = headers
-        .get("x-tet-wallet-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
-        return (StatusCode::UNAUTHORIZED, "missing/invalid x-tet-wallet-id").into_response();
-    }
-    let founder = state.ledger.founder_wallet_public().unwrap_or_default();
-    if founder.is_empty() || w != founder {
-        return (StatusCode::UNAUTHORIZED, "founder only").into_response();
-    }
-    let limit = std::env::var("TET_FOUNDER_AUDIT_CSV_LIMIT")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(20_000);
-    match state.ledger.audit_csv_export(limit) {
-        Ok(csv) => (
-            StatusCode::OK,
-            [("content-type", "text/csv; charset=utf-8")],
-            csv,
-        )
-            .into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
-}

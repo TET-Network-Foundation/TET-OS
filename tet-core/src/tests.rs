@@ -3165,8 +3165,18 @@ fn transfer_fee_half_burn_reduces_total_supply_and_tracks_burned() {
         .settle_transfer_internal(pool, "alice", 100_000_000, Some(100), None, None)
         .unwrap();
     // Phase 2: transfer fees are strict (PROTOCOL_MAINTENANCE_FEE_BPS), ignoring provided fee_bps.
-    let fee = 100_000_000u64 * crate::ledger::PROTOCOL_MAINTENANCE_FEE_BPS / 10_000; // 1_000_000
-    let (_, burn) = crate::ledger::Ledger::split_protocol_fee_treasury_and_burn(fee);
+    let fee = crate::fees::charge(
+        crate::fees::FeeKind::Transfer { fee_bps: 100 },
+        100_000_000,
+    )
+    .unwrap()
+    .fee_micro();
+    let burn = crate::fees::charge(
+        crate::fees::FeeKind::Transfer { fee_bps: 100 },
+        100_000_000,
+    )
+    .unwrap()
+    .burn_micro;
     assert_eq!(ledger.total_burned_micro().unwrap(), burn);
     assert_eq!(
         ledger.total_supply_micro().unwrap(),
@@ -3503,9 +3513,9 @@ fn genesis_1k_worker_pool_reward_is_110_percent_of_standard_gross() {
 
     let gross_req = 100_000_000u64;
     let boosted_gross = (gross_req as u128 * 11 / 10) as u64;
-    let imperial_bps = 100u64;
-    let imperial_tax = boosted_gross.saturating_mul(imperial_bps) / 10_000;
-    let expected_worker_net = boosted_gross.saturating_sub(imperial_tax);
+    // FEE_SPEC §3: the 1% imperial tax is deleted -- the worker now receives the full boosted
+    // gross on a 90-day vest, with nothing skimmed to a vault.
+    let expected_worker_net = boosted_gross;
 
     ledger
         .mint_worker_network_reward("maker", "imperial-vault", gross_req, b"energy:poc", None)
@@ -3514,7 +3524,12 @@ fn genesis_1k_worker_pool_reward_is_110_percent_of_standard_gross() {
     let locked = ledger.locked_balance_micro_now("maker").unwrap();
     assert_eq!(
         locked, expected_worker_net,
-        "Genesis participant should receive +10% on gross before imperial split"
+        "Genesis participant should receive the full +10% boosted gross (no imperial tax)"
+    );
+    assert_eq!(
+        ledger.balance_micro("imperial-vault").unwrap(),
+        0,
+        "imperial vault must never be credited (FEE_SPEC §3)"
     );
 }
 
