@@ -6,7 +6,7 @@
 **Date:** 2026-05-21  
 **Author:** Steve  
 **Title:** Founder-Architect, TET Network Project  
-**Contact:** yizhenxianshi@gmail.com  
+**Contact:** steve@tetnetwork.org  
 
 **Status:** Draft for review. Does **not** supersede [`WHITEPAPER.md`](../WHITEPAPER.md) (Genesis v1.0, 2026-04-28) until merged by explicit commit.  
 **Implementation references:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md), [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md), [`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md), [`docs/STATUS.md`](./STATUS.md)  
@@ -884,7 +884,7 @@ Expertise sought (unchanged in spirit from v1.0):
 - Applied cryptography (ML-DSA, hybrid protocols)
 - Distributed ML infrastructure
 
-Technical critique: **yizhenxianshi@gmail.com** (Subject: Core Builder Application)
+Technical critique: **steve@tetnetwork.org** (Subject: Core Builder Application)
 
 ---
 

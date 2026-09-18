@@ -6,7 +6,7 @@
 **Date:** 2026-04-28  
 **Author:** Steve  
 **Title:** Founder-Architect, TET Network Project  
-**Contact:** yizhenxianshi@gmail.com  
+**Contact:** steve@tetnetwork.org  
 
 ---
 
@@ -248,7 +248,7 @@ The architecture is complete. Translating it into a production codebase is an en
 
 No résumés required. If this architecture contains inefficiencies, or if a better mechanism exists, identify it, describe it precisely, and send your technical critique to:
 
-**yizhenxianshi@gmail.com** *(Subject: Core Builder Application)*
+**steve@tetnetwork.org** *(Subject: Core Builder Application)*
 
 The first block of the global resource grid will not be mined by credential, but by those who understand why this architecture is correct — and can prove where it is not.
 

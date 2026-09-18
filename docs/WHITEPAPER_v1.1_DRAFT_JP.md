@@ -8,7 +8,7 @@
 **日付:** 2026-05-21  
 **著者:** Steve  
 **肩書:** Founder-Architect, TET Network Project  
-**連絡先:** yizhenxianshi@gmail.com  
+**連絡先:** steve@tetnetwork.org  
 
 **ステータス:** レビュー用ドラフト。明示的なコミットによるマージまで、[`WHITEPAPER.md`](../WHITEPAPER.md)（Genesis v1.0、2026-04-28）を**置き換えない**。  
 **実装参照:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md)、[`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md)、[`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md)、[`docs/STATUS.md`](./STATUS.md)  
@@ -852,7 +852,7 @@ TET Network は漸進的な L1 の微調整ではない。**ハードウェア�
 - 応用暗号（ML-DSA、ハイブリッドプロトコル）
 - 分散 ML インフラ
 
-技術的批判：**yizhenxianshi@gmail.com**（件名: Core Builder Application）
+技術的批判：**steve@tetnetwork.org**（件名: Core Builder Application）
 
 ---
 

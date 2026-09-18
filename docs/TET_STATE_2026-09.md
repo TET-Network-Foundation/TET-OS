@@ -31,7 +31,7 @@ The git history is **not** the project history. `main` begins on 2026-05-10 with
 - the content imported in `50ffb79` (which *does* contain the Substrate and Solana trees — see §1.3),
 - prose in `docs/` and the archived whitepapers.
 
-65 commits total, spanning **2026-05-10 → 2026-06-12** (34 days). Author: `Steve <yizhenxianshi@gmail.com>`. A large fraction are co-authored `Cursor <cursoragent@cursor.com>` — this codebase was built in a tight human+agent loop, and the daily logs are explicit about that methodology (see §1.6).
+65 commits total, spanning **2026-05-10 → 2026-06-12** (34 days). Author: `Steve <…>`. A large fraction are co-authored `Cursor <cursoragent@cursor.com>` — this codebase was built in a tight human+agent loop, and the daily logs are explicit about that methodology (see §1.6).
 
 Working tree is clean except one untracked file: `tet-network/ui/scripts/files_interop_step3.mjs`.
 
@@ -45,7 +45,7 @@ Working tree is clean except one untracked file: `tet-network/ui/scripts/files_i
 | 2026-05-10 | **Monorepo genesis commit** — nested repos purged, single tree | `50ffb79` |
 | 2026-05-18 | Whitepaper unified to Genesis v1.0 as canonical; `SPRINT_PLAN.md` (6-sprint plan) written | `183fd14` |
 | 2026-05-18→19 | **Sprint 1 + 2 + 3A in ~2 days**: chain catch-up driver, 3-node sync, sync gate, 25/50/25 treasury, ZK-Court §14.1, three UI-P0 commits | `7264191`…`d157c77` |
-| 2026-05-20 | **Dual `genesis_hash` bug** found and fixed; founder wallet migrated to Steve's mnemonic address; Substrate/Solana trees deleted from the tree | `df59517`, `32f8eee` |
+| 2026-05-20 | **Dual `genesis_hash` bug** found and fixed; founder wallet migrated to the founder's mnemonic-derived address; Substrate/Solana trees deleted from the tree | `df59517`, `32f8eee` |
 | 2026-05-21 | `CODEBASE_ATLAS.md`, worker-mode audits | `04fbad4`, `2021269`, `6f7fd44` |
 | 2026-05-22 | **Sovereign OS Phase 0 spec** (54 KB) + **WP v1.1** + JP translation + Phrack-style PDF | `b6d0620`, `e798d87`, `2dcad0f` |
 | 2026-05-24 | Founder philosophy essay; WP §17.13 (Bitcoin mining reuse); **WP v1.1 promoted to canonical** | `3def56a`, `4be6201`, `3898a12` |

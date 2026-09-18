@@ -745,7 +745,7 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 |----|------|---|------------|
 | R1 | Anonymous ZK not ready | **H** | Slip ship; never ship placeholder UI |
 | R2 | Win95 polish infinite | M | Feature freeze; defer visual bugs to 0.0.1 |
-| R3 | Steve health / summer bandwidth | M | Weekly scope review; cut Files replication scope first |
+| R3 | Founder bandwidth | M | Weekly scope review; cut Files replication scope first |
 | R4 | Post-ship burn false sense | M | Legal/UI disclaimer |
 | R5 | libp2p 3-swarm ops burden | M | Document ports; one-click docker compose |
 | R6 | Time-lock not true VDF | L | Marketing: “scheduled release”; VDF in 0.1 |
