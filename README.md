@@ -54,7 +54,7 @@ See [`tet-core/README.md`](./tet-core/README.md) for the 5-minute single-node se
 ### Canonical specifications
 
 - [`WHITEPAPER.md`](./WHITEPAPER.md) — **Whitepaper v1.1** (current, Sovereign OS Suite integrated, 2026-05-21)
-- [`docs/WHITEPAPER_v1.1_DRAFT.pdf`](./docs/WHITEPAPER_v1.1_DRAFT.pdf) — Phrack-style PDF (17 pages)
+- **Phrack-style PDF** — not tracked; regenerate with `python3 docs/scripts/render_phrack_wp_pdf.py` (see [`docs/WHITEPAPER_BUILD.md`](./docs/WHITEPAPER_BUILD.md))
 - [`docs/WHITEPAPER_v1.1_DRAFT_JP.md`](./docs/WHITEPAPER_v1.1_DRAFT_JP.md) — Japanese translation
 - [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./docs/SOVEREIGN_OS_PHASE0_SPEC.md) — Phase 0 ship plan (target: 2026-09-15)
 

@@ -55,3 +55,8 @@ secret_founder_terminal.html
 
 # Private working notes (contains personal/strategic material — keep out of the public repo)
 docs/FUTURE_IDEAS.md
+
+# Whitepaper PDF is a build artifact -- regenerate with
+# `python3 docs/scripts/render_phrack_wp_pdf.py` (see docs/WHITEPAPER_BUILD.md).
+# Untracked because a rendered binary cannot be text-scrubbed.
+docs/WHITEPAPER_v1.1_DRAFT.pdf
