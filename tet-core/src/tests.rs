@@ -5429,3 +5429,192 @@ fn file_announce_network_event_roundtrips_json() {
         _ => panic!("expected FileAnnounce"),
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Block 9828 regression suite — three independent non-determinism sources in the state_root
+// pipeline, each of which can produce the observed symptom: identical block_id, identical
+// tx_hashes, divergent state_root, no error logged.
+//
+// See docs/BUG_block_9828_divergence_mystery.md. These tests assert CURRENT BROKEN BEHAVIOUR so
+// the bug is pinned; each carries a TODO naming the fix that will invert its assertion.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/// **BUG (rank 2): wall-clock time is a consensus input.**
+///
+/// `apply_consensus_block_batch` (`ledger.rs:1678`) and `compute_state_root_after_remote_block`
+/// (`ledger.rs:1432`) both call `locked_balance_micro(.., ledger_now_ms())`. That value gates the
+/// spendability check which decides whether a transfer applies or returns `InsufficientFunds`.
+///
+/// Two nodes applying the *same block* at different wall-clock moments therefore reach different
+/// state whenever a vest-lock boundary falls between them. On 2026-05-30 the VPS mined block 9828
+/// at ~02:30 UTC and the Mac replayed it ~17 hours later.
+///
+/// TODO(9828): consensus must read the *block's* timestamp, not the node's clock. Once
+/// `apply_consensus_block_batch` takes `block_time_ms` and threads it into
+/// `locked_balance_micro`, flip the `assert_ne!` below to `assert_eq!` — the whole point of the
+/// fix is that the two evaluations become identical.
+#[test]
+fn wallclock_time_changes_spendability_for_the_same_block() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+
+    // A worker reward creates a 90-day vest lock (WORKER_REWARD_VEST_MS_DEFAULT).
+    // It debits WALLET_SYSTEM_WORKER_POOL, so genesis must fund the pool first.
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let worker = "w".repeat(64);
+    let gross = 10_000_000u64;
+    let (_g0, worker_net, _tax, _proof) = ledger
+        .mint_worker_network_reward(&worker, "vault", gross, b"energy:9828", None)
+        .expect("mint seeds the vest lock");
+    assert!(worker_net > 0, "worker must receive a vested amount");
+
+    let day_ms: u128 = 86_400_000;
+    // Same computation as the private `ledger::ledger_now_ms()`; kept local so this test needs
+    // no production-code change.
+    let t_during = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let t_after = t_during + 91 * day_ms; // past the 90-day vest
+
+    let locked_during = ledger.locked_balance_micro(&worker, t_during).unwrap();
+    let locked_after = ledger.locked_balance_micro(&worker, t_after).unwrap();
+
+    // The injected timestamp is the ONLY difference. Stored state is byte-identical.
+    assert_ne!(
+        locked_during, locked_after,
+        "BUG: locked balance depends on wall-clock time, and the apply path feeds it \
+         ledger_now_ms(). Same block + same state + different clock = different outcome."
+    );
+    assert_eq!(locked_during, worker_net, "fully locked during the vest");
+    assert_eq!(locked_after, 0, "unlocked after the vest");
+
+    // The consensus-relevant consequence: the spendability gate flips.
+    let balance = ledger.balance_micro(&worker).unwrap();
+    let amount = worker_net / 2;
+    let spendable_during = balance.saturating_sub(locked_during);
+    let spendable_after = balance.saturating_sub(locked_after);
+
+    assert!(
+        spendable_during < amount,
+        "a node applying during the vest rejects the transfer (InsufficientFunds)"
+    );
+    assert!(
+        spendable_after >= amount,
+        "a node applying after the vest accepts the same transfer"
+    );
+}
+
+/// **BUG (rank 3, downgraded): `compute_state_root` silently drops rows it cannot read.**
+///
+/// `compute_state_root` (`ledger.rs:1346-1357`) uses `let Ok(..) else { continue }` for sled
+/// errors, decrypt failures and malformed lengths — a bad row vanishes from the root with no log
+/// line. `compute_state_root_after_remote_block` (`ledger.rs:1388-1396`) propagates the same
+/// conditions with `?`. The two disagree on what counts as valid state.
+///
+/// **Correction to the original 9828 hypothesis.** A whole-DB key change cannot reach this: the
+/// `META_DB_MAGIC` sentinel (`ledger.rs:3859-3868`) makes `Ledger::open` fail with
+/// "database decryption failed (wrong key?)" before any root is computed. So the plausible trigger
+/// is narrower than first supposed — a single torn/corrupt row from a partial sled write, which is
+/// what this test injects directly.
+///
+/// TODO(9828): `compute_state_root` must return `Result<String, LedgerError>` and propagate like
+/// the preview does, so a corrupt row fails loudly on both paths instead of silently changing the
+/// root on one. Then both calls below error identically and the `assert_ne!` becomes `assert_eq!`.
+#[test]
+fn state_root_silently_drops_unreadable_rows() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    // Encryption must be ON for the asymmetry to appear: with no cipher, `decrypt_value` is a
+    // passthrough and BOTH paths fall through the shared `pt.len() != 8 => continue`, agreeing.
+    // The divergence needs `decrypt_value` to return Err, which requires a cipher and a value
+    // shorter than the 12-byte nonce (`crypto.rs:31`).
+    unsafe {
+        std::env::set_var("TET_DB_ENCRYPT", "strict");
+        std::env::set_var(
+            "TET_DB_KEY_B64",
+            base64::engine::general_purpose::STANDARD.encode([9u8; 32]),
+        );
+    }
+    let ledger = open_temp_ledger();
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    let root_before = ledger.compute_state_root();
+    assert!(
+        ledger.compute_state_root_after_remote_block(&[], "", 0).is_ok(),
+        "healthy encrypted DB: both paths agree"
+    );
+
+    // Inject one unreadable balance row, as a torn write would leave behind: too short to carry
+    // the 12-byte AES-GCM nonce, so decryption fails rather than yielding a wrong-length plaintext.
+    let balances = ledger.sled_db().open_tree("balances").unwrap();
+    balances
+        .insert(b"c".repeat(64), vec![0xAAu8; 3])
+        .expect("raw insert simulates a partial write");
+
+    let live_root = ledger.compute_state_root();
+    let preview = ledger.compute_state_root_after_remote_block(&[], "", 0);
+
+    // The live root silently skipped the unreadable row and reports the chain as healthy...
+    assert_eq!(
+        live_root, root_before,
+        "BUG: compute_state_root dropped an undecryptable row with no error — root looks unchanged"
+    );
+    // ...while the preview path refuses the very same bytes.
+    assert!(
+        preview.is_err(),
+        "BUG: the two root computations disagree about identical bytes on disk — the live root \
+         silently succeeds where the preview errors (live={live_root}, preview={preview:?})"
+    );
+
+    unsafe {
+        std::env::remove_var("TET_DB_KEY_B64");
+        std::env::set_var("TET_DB_ENCRYPT", "false");
+    }
+}
+
+/// **BUG (rank 1): any direct ledger write forks consensus.**
+///
+/// `admin_rest_faucet` mutates balances outside the block pipeline. On 2026-05-30 four such paths
+/// were live (`/wallet/transfer`, `/ledger/initial_airdrop`, `/ai/infer`, `admin_rest_faucet`);
+/// three were fixed within eight days — the first of them 86 minutes *after* the 9828 bug report
+/// was written, which is why nobody connected them. `admin_rest_faucet` is still direct today.
+///
+/// The companion test `welcome_airdrop_offchain_claim_forks_node_state_root` covers the removed
+/// `claim_initial_airdrop` path; this one covers the path that still ships.
+///
+/// TODO(9828): route the faucet through a consensus tx (as `TxV1::InitialAirdrop` was in
+/// `2ce9024`), then invert to `assert_eq!`.
+#[test]
+fn admin_faucet_direct_write_forks_state_root() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let n1 = open_temp_ledger();
+    n1.init_genesis_founder_premine_from_env().unwrap();
+    n1.apply_genesis_allocation("founder").unwrap();
+    let n2 = open_temp_ledger();
+    n2.init_genesis_founder_premine_from_env().unwrap();
+    n2.apply_genesis_allocation("founder").unwrap();
+
+    // Both nodes apply the identical block — empty body, same producer, same reward.
+    let r1 = n1.apply_consensus_block_batch(1, &[], &[], "producer-x", 1_000).unwrap();
+    let r2 = n2.apply_consensus_block_batch(1, &[], &[], "producer-x", 1_000).unwrap();
+    assert_eq!(r1, r2, "same block on same state must give the same root");
+
+    // One node takes a direct write that never entered a block.
+    let user = "f".repeat(64);
+    n1.admin_rest_faucet(&user, 100 * crate::ledger::STEVEMON, "10.0.0.1", true, 60_000, 100)
+        .expect("faucet credits off-chain");
+
+    assert_ne!(
+        n1.compute_state_root(),
+        n2.compute_state_root(),
+        "BUG: a direct ledger write forks the state root while block history stays identical — \
+         exactly the 9828 symptom (same block_id, same tx_hashes, divergent root)"
+    );
+}
