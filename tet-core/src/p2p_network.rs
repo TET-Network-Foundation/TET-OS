@@ -1185,8 +1185,7 @@ pub async fn run_swarm_loop(
                                             .max(1)
                                             .min(res.cost_micro_tet.max(1));
                                         if !client.is_empty() && !worker.is_empty() && client != worker {
-                                            let burn_wallet = ledger.ai_burn_wallet();
-                                            match ledger.settle_ai_utility_payment(client, worker, cost, &burn_wallet) {
+                                            match ledger.settle_ai_utility_payment(client, worker, cost) {
                                                 Ok((_w, _t, _b)) => {
                                                     log::info!("💸 [p2p][settlement] SETTLED gross={} Stevemon from {} to {} (ZK journal, micropayment cap)!", cost, client, worker);
                                                 }

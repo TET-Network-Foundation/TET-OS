@@ -19,8 +19,6 @@ pub const STEVEMON: u64 = 1_000_000;
 
 /// Mainnet Genesis Epoch length (inference settlements ≈ nominal 4s spacing → ~60 days).
 pub const GENESIS_EPOCH_BLOCK_LIMIT: u64 = 1_300_000;
-/// Worker-pool credit multiplier during Genesis Epoch (burn remainder absorbs reduced burn share).
-pub const GENESIS_REWARD_MULTIPLIER: u64 = 5;
 /// Minimum wall-clock spacing between inference settlements (consensus stabilizer).
 pub const TARGET_BLOCK_TIME_MS: u64 = 4_000;
 
@@ -107,8 +105,7 @@ struct FileFeeEffect {
     from_key: Vec<u8>,
     treasury_key: Vec<u8>,
     storage_key: Vec<u8>,
-    burn_key: Vec<u8>,
-    split: crate::files::FileFeeSplit,
+    split: crate::fees::FeeSplit,
 }
 
 pub fn deterministic_genesis_hash(founder_wallet_id: &str, treasury_wallet_id: &str) -> String {
@@ -137,16 +134,10 @@ pub const WORKER_MIN_STAKE_MICRO: u64 = 5_000u64 * STEVEMON;
 /// Minimum **worker bond** (Sybil resistance): collateral locked in [`worker_stakes_v1`] tree (**1,000 TET** Stevemon).
 pub const MIN_WORKER_STAKE_MICRO: u64 = 1_000u64 * STEVEMON;
 
-/// Protocol maintenance fee on transfers: **1%** of gross amount (bps); fee split **50%** worker pool / **50%** burn (§10).
-pub const PROTOCOL_MAINTENANCE_FEE_BPS: u64 = 100;
 
 /// --- DePIN economics (AI utility) ---
 /// Worker must have at least this much **bond** in [`worker_stakes_v1`] to count as an active worker ([`is_active_worker`]).
 pub const MIN_STAKE_AMOUNT_MICRO: u64 = MIN_WORKER_STAKE_MICRO;
-/// Network fee percent (20%) charged on AI task payments.
-pub const NETWORK_FEE_BPS: u64 = 2_000; // 20.00%
-/// Burn percent of the network fee (25% of 20% = 5% of total).
-pub const BURN_FRACTION_OF_NETWORK_FEE_BPS: u64 = 2_500; // 25.00% of the network fee
 /// Slashing penalty (5%) applied to staked balance on worker failure.
 pub const SLASHING_PENALTY_BPS: u64 = 500; // 5.00%
 
@@ -723,9 +714,10 @@ impl Ledger {
                     storage_wallet,
                     ..
                 } => {
-                    // Fee settlement touches sender / treasury / storage node / burn sink plus the
-                    // burn + fee counters and the per-tx applied marker. Capturing a key that ends
-                    // up untouched (e.g. empty storage wallet folded into treasury) is harmless.
+                    // Fee settlement touches sender / treasury / storage node plus the burn + fee
+                    // counters and the per-tx applied marker. Burn touches no balance key
+                    // (FEE_SPEC §1.3). Capturing a key that ends up untouched (e.g. empty storage
+                    // wallet folded into treasury) is harmless.
                     balance_keys.push(from_wallet.trim().to_ascii_lowercase().into_bytes());
                     if let Ok(treasury) = treasury_address_from_env() {
                         balance_keys.push(treasury.into_bytes());
@@ -734,7 +726,6 @@ impl Ledger {
                     if !storage.is_empty() {
                         balance_keys.push(storage.into_bytes());
                     }
-                    balance_keys.push(self.ai_burn_wallet().into_bytes());
                     meta_keys.push(META_TOTAL_SUPPLY.to_vec());
                     meta_keys.push(META_TOTAL_BURNED.to_vec());
                     meta_keys.push(META_FEE_TOTAL.to_vec());
@@ -1568,16 +1559,14 @@ impl Ledger {
         };
         let treasury_k = treasury.into_bytes();
         let storage_k = storage.into_bytes();
-        let burn_k = self.ai_burn_wallet().into_bytes();
         credit(treasury_k.clone(), split.treasury_micro);
-        credit(storage_k.clone(), split.storage_micro);
-        credit(burn_k.clone(), split.burn_micro);
+        credit(storage_k.clone(), split.net_micro);
+        // FEE_SPEC §1.3: burn credits no wallet; the caller decrements META_TOTAL_SUPPLY.
 
         Ok(FileFeeEffect {
             from_key: from_k,
             treasury_key: treasury_k,
             storage_key: storage_k,
-            burn_key: burn_k,
             split,
         })
     }
@@ -1821,7 +1810,6 @@ impl Ledger {
                     dirty_balances.insert(effect.from_key);
                     dirty_balances.insert(effect.treasury_key);
                     dirty_balances.insert(effect.storage_key);
-                    dirty_balances.insert(effect.burn_key);
                     total_supply = total_supply.saturating_sub(effect.split.burn_micro);
                     total_burned = total_burned.saturating_add(effect.split.burn_micro);
                     fee_total = fee_total.saturating_add(*fee_micro);
@@ -5817,12 +5805,10 @@ impl Ledger {
         payer_wallet: &str,
         worker_wallet: &str,
         gross_micro: u64,
-        burn_wallet: &str,
     ) -> Result<(u64, u64, u64), LedgerError> {
         let payer = payer_wallet.trim();
         let worker = worker_wallet.trim();
-        let burn = burn_wallet.trim();
-        if payer.is_empty() || worker.is_empty() || burn.is_empty() {
+        if payer.is_empty() || worker.is_empty() {
             return Err(LedgerError::Invalid("wallet ids required".into()));
         }
         if gross_micro == 0 || gross_micro > MAX_SUPPLY_MICRO {
@@ -5832,17 +5818,19 @@ impl Ledger {
             return Err(LedgerError::Invalid("payer and worker must differ".into()));
         }
 
-        let fee_bps = NETWORK_FEE_BPS;
-        let fee_micro = gross_micro.saturating_mul(fee_bps) / 10_000;
-        let worker_micro = gross_micro.saturating_sub(fee_micro);
-        // Burn 25% of network fee (5% of total).
-        let burn_micro = fee_micro.saturating_mul(BURN_FRACTION_OF_NETWORK_FEE_BPS) / 10_000;
-        let treasury_micro = fee_micro.saturating_sub(burn_micro);
+        let fee_bps = crate::fees::NETWORK_FEE_BPS;
+        // FEE_SPEC §2.2 -- 80 worker / 15 treasury / 5 burn.
+        let split = crate::fees::charge(crate::fees::FeeKind::AiUtility, gross_micro)
+            .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        let fee_micro = split.fee_micro();
+        let worker_micro = split.net_micro;
+        let burn_micro = split.burn_micro;
+        let treasury_micro = split.treasury_micro;
 
         let payer_k = payer.as_bytes().to_vec();
         let worker_k = worker.as_bytes().to_vec();
-        let burn_k = burn.as_bytes().to_vec();
-        let treasury_k = WALLET_DEX_TREASURY.as_bytes().to_vec();
+        // FEE_SPEC §1.4: the one treasury. Was WALLET_DEX_TREASURY ("dex:treasury"), a v0 artifact.
+        let treasury_k = treasury_address_from_env()?.into_bytes();
 
         let res: Result<(), TransactionError<sled::Error>> = (&self.meta, &self.balances)
             .transaction(|(m, b)| {
@@ -5924,19 +5912,7 @@ impl Ledger {
 
                 // Burn (5%): credit burn wallet (optional sink accounting) and reduce total supply.
                 if burn_micro > 0 {
-                    let b_cur = b
-                        .get(&burn_k)?
-                        .as_deref()
-                        .map(|v| self.decrypt_value(v))
-                        .transpose()?
-                        .as_deref()
-                        .map(bytes_to_u64)
-                        .unwrap_or(0);
-                    b.insert(
-                        burn_k.clone(),
-                        self.encrypt_value(&u64_to_bytes(b_cur.saturating_add(burn_micro)))?,
-                    )?;
-
+                    // FEE_SPEC §1.3: burn credits no wallet.
                     let burned_prev = m
                         .get(META_TOTAL_BURNED)?
                         .as_deref()
@@ -5973,15 +5949,14 @@ impl Ledger {
             "action": "ai_utility_settlement_v1",
             "payer_wallet": payer,
             "worker_wallet": worker,
-            "treasury_wallet": WALLET_DEX_TREASURY,
-            "burn_wallet": burn,
+            "treasury_wallet": treasury_address_from_env().unwrap_or_default(),
             "gross_micro": gross_micro,
             "worker_micro": worker_micro,
             "network_fee_micro": fee_micro,
             "treasury_micro": treasury_micro,
             "burn_micro": burn_micro,
             "network_fee_bps": fee_bps,
-            "burn_fraction_of_network_fee_bps": BURN_FRACTION_OF_NETWORK_FEE_BPS,
+            "burn_fraction_of_network_fee_bps": crate::fees::BURN_FRACTION_OF_NETWORK_FEE_BPS,
         });
         let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
         self.persist_snapshot_best_effort();
@@ -5990,7 +5965,7 @@ impl Ledger {
 
     /// Phase 1 AI inference settlement: debit `payer_wallet`; route **50%** to the worker reward pool and **50%** to burn.
     ///
-    /// Burn path mirrors [`Ledger::settle_ai_utility_payment`]: credit burn sink for accounting, bump [`META_TOTAL_BURNED`],
+    /// Burn path mirrors [`Ledger::settle_ai_utility_payment`]: bump [`META_TOTAL_BURNED`],
     /// reduce [`META_TOTAL_SUPPLY`].
     pub fn settle_ai_inference_dynamic_charge(
         &self,
@@ -6005,19 +5980,22 @@ impl Ledger {
             return Err(LedgerError::Invalid("invalid inference cost".into()));
         }
 
+        // Inference settlement counter (not a fee input; see FEE_SPEC §2.3 -- the split no
+        // longer consults height at all).
         let height_at = self.inference_block_height();
-        let base_pool = cost_micro / 2;
-        let pool_half = if height_at < GENESIS_EPOCH_BLOCK_LIMIT {
-            base_pool
-                .saturating_mul(GENESIS_REWARD_MULTIPLIER)
-                .min(cost_micro)
-        } else {
-            base_pool
-        };
-        let burn_half = cost_micro.saturating_sub(pool_half);
+
+        // FEE_SPEC §2.3 -- a true 50/50 at every height.
+        //
+        // The Genesis Epoch multiplier is gone. It read:
+        //     pool = (cost/2 * GENESIS_REWARD_MULTIPLIER).min(cost)
+        // which saturates -- cost/2 * 5 = 2.5 * cost, clamped to cost -- so for all
+        // 1_300_000 Genesis Epoch blocks the split was 100% pool / 0% burn and the 50/50
+        // documented in whitepaper §5.6 never actually ran.
+        let split = crate::fees::charge(crate::fees::FeeKind::AiInference, cost_micro)
+            .map_err(|e| LedgerError::Invalid(e.to_string()))?;
+        let pool_half = split.pool_micro;
+        let burn_half = split.burn_micro;
         let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
-        let burn_wallet = self.ai_burn_wallet();
-        let burn_k = burn_wallet.as_bytes().to_vec();
         let payer_k = payer.as_bytes().to_vec();
 
         let res: Result<(), TransactionError<sled::Error>> = (&self.meta, &self.balances)
@@ -6064,19 +6042,7 @@ impl Ledger {
                     .unwrap_or(0);
 
                 if burn_half > 0 {
-                    let b_cur = b
-                        .get(&burn_k)?
-                        .as_deref()
-                        .map(|v| self.decrypt_value(v))
-                        .transpose()?
-                        .as_deref()
-                        .map(bytes_to_u64)
-                        .unwrap_or(0);
-                    b.insert(
-                        burn_k.clone(),
-                        self.encrypt_value(&u64_to_bytes(b_cur.saturating_add(burn_half)))?,
-                    )?;
-
+                    // FEE_SPEC §1.3: burn credits no wallet; it only reduces supply.
                     let burned_prev = m
                         .get(META_TOTAL_BURNED)?
                         .as_deref()
@@ -6141,10 +6107,8 @@ impl Ledger {
             "cost_micro": cost_micro,
             "worker_pool_wallet": WALLET_SYSTEM_WORKER_POOL,
             "pool_credit_micro": pool_half,
-            "burn_wallet": burn_wallet,
             "burn_micro": burn_half,
             "inference_block_height_before": height_at,
-            "genesis_boost_active": height_at < GENESIS_EPOCH_BLOCK_LIMIT,
         });
         let (audit_hash, audit_seq) =
             self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default())?;

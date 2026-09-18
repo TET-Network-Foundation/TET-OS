@@ -214,7 +214,11 @@ R_micro = (C_flops / E_joules_per_flop) × Γ × scale
 
 ### 5.6 AI inference settlement split (related economics)
 
-Separate from transfer fees (§11), AI utility settlement in code uses a **50/50** split of thermodynamic `R_micro` between worker reward and protocol burn (`estimate_ai_infer_cost_micro`). This is **not** identical to v1.0 §11.2 “50% of all transaction fees burned” wording for every flow — see §17.7 and `WHITEPAPER_v1.0_GAPS.md` Gap 6 in STATUS.
+Separate from transfer fees (§11), AI inference settlement splits thermodynamic `R_micro` **50/50** between the worker pool and protocol burn, at every height (`fees::FeeKind::AiInference`).
+
+**Corrected 2026-09-17.** Earlier drafts stated this 50/50 but the code did not implement it. A Genesis Epoch multiplier computed `pool = (R/2 × 5).min(R)`, which saturates — `2.5 × R` clamped to `R` — so for all 1,300,000 Genesis Epoch blocks the real split was **100% pool / 0% burn** and the burn never occurred. The multiplier is removed and the split is now a true 50/50 (`docs/FEE_SPEC.md` §2.3).
+
+Enterprise AI **utility** settlement is a different schedule: 20% network fee on gross → **80% worker / 15% treasury / 5% burn** (§2.2 of the fee spec).
 
 ---
 

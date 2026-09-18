@@ -210,11 +210,10 @@ pub async fn post_enterprise_inference(
     };
 
     // Settle payment AFTER success using golden rule 80/15/5.
-    let burn_wallet = state.ledger.ai_burn_wallet();
     let (worker_micro, treasury_micro, burn_micro) =
         match state
             .ledger
-            .settle_ai_utility_payment(&w, &worker_wallet, amount_micro, &burn_wallet)
+            .settle_ai_utility_payment(&w, &worker_wallet, amount_micro)
         {
             Ok(v) => v,
             Err(LedgerError::InsufficientFunds) => {
@@ -259,7 +258,6 @@ pub async fn post_enterprise_inference(
             "worker_micro": worker_micro,
             "treasury_micro": treasury_micro,
             "burn_micro": burn_micro,
-            "burn_wallet": burn_wallet,
             "model": want_model,
             "attestation_required": attestation_required,
             "response": out,

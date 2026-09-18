@@ -1399,16 +1399,18 @@ async fn files_fetch_codec_roundtrips_5mib_body() {
     assert_eq!(decoded_blob, blob);
 }
 
-/// Spec §7: 25/50/25 with the rounding remainder folded into burn, summing exactly to the fee.
+/// FEE_SPEC §2.4: 25/50/25 with the rounding remainder folded into burn, summing exactly to the
+/// fee. The storage-node share is `net_micro` on the unified `fees::FeeSplit`.
 #[test]
 fn file_fee_split_is_exact_25_50_25() {
     let s = crate::files::file_fee_split(crate::files::FILE_FEE_MICRO);
     assert_eq!(s.treasury_micro, 250);
-    assert_eq!(s.storage_micro, 500);
+    assert_eq!(s.net_micro, 500, "storage node share");
     assert_eq!(s.burn_micro, 250);
-    for fee in [1u64, 3, 999, 1001, u64::MAX / 2] {
+    assert_eq!(s.pool_micro, 0, "file fees never fund the worker pool");
+    for fee in [1u64, 3, 999, 1001, crate::fees::MAX_CHARGE_MICRO] {
         let s = crate::files::file_fee_split(fee);
-        assert_eq!(s.treasury_micro + s.storage_micro + s.burn_micro, fee);
+        assert_eq!(s.total_micro(), fee, "conservation at fee={fee}");
     }
 }
 
@@ -1433,11 +1435,12 @@ async fn file_fee_tx_settles_treasury_storage_burn_via_consensus() {
 
     let storage_wallet = "storage-node-wallet";
     let treasury = crate::ledger::treasury_address_from_env().unwrap();
-    let burn_wallet = ledger.ai_burn_wallet();
+    // FEE_SPEC §1.3: burn credits no wallet -- assert on supply instead.
+    let before_supply = ledger.total_supply_micro().unwrap();
+    let before_burned = ledger.total_burned_micro().unwrap();
     let before_sender = ledger.balance_micro(&sender_wallet).unwrap();
     let before_treasury = ledger.balance_micro(&treasury).unwrap();
     let before_storage = ledger.balance_micro(storage_wallet).unwrap();
-    let before_burn = ledger.balance_micro(&burn_wallet).unwrap();
 
     let env = signed_file_fee_env_for_tests(
         &sender_words,
@@ -1470,7 +1473,16 @@ async fn file_fee_tx_settles_treasury_storage_burn_via_consensus() {
         ledger.balance_micro(storage_wallet).unwrap(),
         before_storage + 500
     );
-    assert_eq!(ledger.balance_micro(&burn_wallet).unwrap(), before_burn + 250);
+    assert_eq!(
+        ledger.total_supply_micro().unwrap(),
+        before_supply - 250,
+        "burn must reduce total supply, not credit a wallet"
+    );
+    assert_eq!(
+        ledger.total_burned_micro().unwrap(),
+        before_burned + 250,
+        "burn counter must track the destroyed amount"
+    );
 
     // Re-enqueue the identical settlement: the miner must drop it (per-tx applied marker),
     // leaving every balance unchanged.
@@ -3148,6 +3160,101 @@ async fn dex_maker_can_cancel_unfilled_order() {
     );
 }
 
+/// FEE_SPEC §1.3 — burn destroys supply and credits no wallet, on every fee-bearing path.
+#[test]
+fn burn_decrements_total_supply_and_credits_no_wallet() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    let legacy_sink = ledger.ai_burn_wallet();
+    let sink_before = ledger.balance_micro(&legacy_sink).unwrap();
+
+    // Transfer (FeeKind::Transfer)
+    let supply_before = ledger.total_supply_micro().unwrap();
+    let burned_before = ledger.total_burned_micro().unwrap();
+    let expect = crate::fees::charge(crate::fees::FeeKind::Transfer { fee_bps: 100 }, 1_000_000)
+        .unwrap();
+    ledger
+        .settle_transfer_internal("founder", "alice", 1_000_000, Some(100), None, None)
+        .unwrap();
+    assert_eq!(
+        ledger.total_supply_micro().unwrap(),
+        supply_before - expect.burn_micro,
+        "transfer burn must reduce supply"
+    );
+    assert_eq!(
+        ledger.total_burned_micro().unwrap(),
+        burned_before + expect.burn_micro
+    );
+
+    // AI utility (FeeKind::AiUtility)
+    let supply_mid = ledger.total_supply_micro().unwrap();
+    let ai = crate::fees::charge(crate::fees::FeeKind::AiUtility, 500_000).unwrap();
+    ledger
+        .settle_ai_utility_payment("alice", "workerx", 500_000)
+        .unwrap();
+    assert_eq!(
+        ledger.total_supply_micro().unwrap(),
+        supply_mid - ai.burn_micro,
+        "ai utility burn must reduce supply"
+    );
+
+    // The legacy burn sink must never be credited by any of them.
+    assert_eq!(
+        ledger.balance_micro(&legacy_sink).unwrap(),
+        sink_before,
+        "burn must not credit the legacy tet-api-pool sink"
+    );
+}
+
+/// FEE_SPEC §1.4 / §3 — no fee may route to the founder wallet or to `dex:treasury`.
+#[test]
+fn no_fee_routes_to_founder_or_dex_treasury() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    ledger
+        .settle_transfer_internal("founder", "alice", 10_000_000, Some(100), None, None)
+        .unwrap();
+
+    let founder_before = ledger.balance_micro("founder").unwrap();
+    let dex_before = ledger
+        .balance_micro(crate::ledger::WALLET_DEX_TREASURY)
+        .unwrap();
+
+    // A transfer between two third parties.
+    ledger
+        .settle_transfer_internal("alice", "bob", 1_000_000, Some(500), None, None)
+        .unwrap();
+    // An AI utility settlement.
+    ledger
+        .settle_ai_utility_payment("alice", "workerx", 1_000_000)
+        .unwrap();
+    // Mint paths are not exercised here: genesis mints the entire supply cap
+    // (GENESIS_TOTAL_MINT_MICRO == MAX_SUPPLY_MICRO), so any post-genesis mint returns
+    // HardCapExceeded. Schedule 3's founder cut and schedule 4's imperial cut are covered by
+    // genesis_1k_worker_pool_reward_is_110_percent_of_standard_gross.
+
+    assert_eq!(
+        ledger.balance_micro("founder").unwrap(),
+        founder_before,
+        "no fee may route to the founder wallet"
+    );
+    assert_eq!(
+        ledger
+            .balance_micro(crate::ledger::WALLET_DEX_TREASURY)
+            .unwrap(),
+        dex_before,
+        "no fee may route to dex:treasury"
+    );
+}
+
 #[test]
 fn transfer_fee_half_burn_reduces_total_supply_and_tracks_burned() {
     let _g = env_lock();
@@ -3631,7 +3738,7 @@ fn ai_utility_micro_tet_split_is_nonzero_for_0_001_tet() {
     ledger.transfer_no_fee("founder", payer, 10_000).unwrap();
 
     let (w, t, b) = ledger
-        .settle_ai_utility_payment(payer, worker, 1_000, &burn)
+        .settle_ai_utility_payment(payer, worker, 1_000)
         .unwrap();
     assert_eq!(w + t + b, 1_000, "split must conserve gross micro");
     assert_eq!(w, 800, "80% worker");
@@ -5249,13 +5356,15 @@ fn file_two_node_send_receive_flow() {
 
 #[test]
 fn file_fee_split_constants_sum_to_full() {
+    // FEE_SPEC §4: the constants now live in fees.rs; files re-exports FILE_FEE_MICRO.
     assert_eq!(
-        crate::files::FEE_SPLIT_TREASURY_BPS
-            + crate::files::FEE_SPLIT_STORAGE_BPS
-            + crate::files::FEE_SPLIT_BURN_BPS,
-        10_000
+        crate::fees::FILE_SPLIT_TREASURY_BPS
+            + crate::fees::FILE_SPLIT_STORAGE_BPS
+            + crate::fees::FILE_SPLIT_BURN_BPS,
+        crate::fees::BPS_DENOM
     );
     assert_eq!(crate::files::FILE_FEE_MICRO, 1000);
+    assert_eq!(crate::files::FILE_FEE_MICRO, crate::fees::FILE_FEE_MICRO);
 }
 
 #[test]

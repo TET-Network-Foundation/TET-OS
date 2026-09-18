@@ -94,12 +94,14 @@ pub fn estimate_ai_infer_cost_micro(c_flops: u128) -> InferCostEstimate {
     let gamma = NetworkDifficulty::from_env();
     let e = env_joules_per_flop();
     let r_micro = discrete_thermodynamic_reward_stevemon_micro(c_flops, e, gamma);
-    let half = r_micro / 2;
-    let rem = r_micro.saturating_sub(half * 2);
+    // FEE_SPEC §2.3 — the estimate must use the same split the ledger settles with, so quote and
+    // settlement cannot drift. Previously this recomputed 50/50 locally while the ledger applied a
+    // saturating ×5 Genesis Epoch multiplier, so the quote was wrong for the whole epoch.
+    let split = crate::fees::charge(crate::fees::FeeKind::AiInference, r_micro).unwrap_or_default();
     InferCostEstimate {
         total_micro_ledger: r_micro,
-        to_worker_reward_micro: half,
-        to_protocol_burn_micro: half.saturating_add(rem),
+        to_worker_reward_micro: split.pool_micro,
+        to_protocol_burn_micro: split.burn_micro,
         thermodynamic_r_micro: r_micro,
         notes: "§4.2 discrete R=(C_flops/E)×Γ → Stevemon micro; 50/50 worker pool / protocol burn on settlement",
     }

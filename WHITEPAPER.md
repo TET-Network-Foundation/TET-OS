@@ -214,7 +214,11 @@ R_micro = (C_flops / E_joules_per_flop) × Γ × scale
 
 ### 5.6 AI inference settlement split (related economics)
 
-Separate from transfer fees (§11), AI utility settlement in code uses a **50/50** split of thermodynamic `R_micro` between worker reward and protocol burn (`estimate_ai_infer_cost_micro`). This is **not** identical to v1.0 §11.2 “50% of all transaction fees burned” wording for every flow — see §17.7 and `WHITEPAPER_v1.0_GAPS.md` Gap 6 in STATUS.
+Separate from transfer fees (§11), AI inference settlement splits thermodynamic `R_micro` **50/50** between the worker pool and protocol burn, at every height (`fees::FeeKind::AiInference`).
+
+**Corrected 2026-09-17.** Earlier drafts stated this 50/50 but the code did not implement it. A Genesis Epoch multiplier computed `pool = (R/2 × 5).min(R)`, which saturates — `2.5 × R` clamped to `R` — so for all 1,300,000 Genesis Epoch blocks the real split was **100% pool / 0% burn** and the burn never occurred. The multiplier is removed and the split is now a true 50/50 (`docs/FEE_SPEC.md` §2.3).
+
+Enterprise AI **utility** settlement is a different schedule: 20% network fee on gross → **80% worker / 15% treasury / 5% burn** (§2.2 of the fee spec).
 
 ---
 
@@ -431,16 +435,21 @@ Protocol fees for **Tmail** and related Sovereign OS actions (spec: [`SOVEREIGN_
 
 | Parameter | Value | Code |
 |-----------|-------|------|
-| Maintenance fee | **1%** of gross transfer | `PROTOCOL_MAINTENANCE_FEE_BPS = 100` |
-| Fee split | **50%** to worker pool, **50%** burned | `ledger.rs` transfer settlement |
+| Fee rate | **sender-declared, signed, bounded `[1%, 10%]`** | `fees::TRANSFER_FEE_BPS_MIN` / `_MAX` |
+| Default rate | **1%** of gross transfer | `fees::TRANSFER_FEE_BPS_DEFAULT = 100` |
+| Fee split | **50%** to worker pool, **50%** burned | `fees::FeeKind::Transfer` |
 
-Example (Phase 0 E2E): send `1,000,000` micro (1 TET) → `fee_micro = 10,000`, `net_micro = 990,000`.
+Example: send `1,000,000` micro (1 TET) at the default rate → `fee_micro = 10,000`, `net_micro = 990,000`, of which `5,000` credits the worker pool and `5,000` is destroyed.
 
-**Note:** This is the **wallet transfer** path (`POST /wallet/transfer`). Mempool `POST /ledger/transfer` uses a different envelope (`SignedTxEnvelopeV1`).
+**Corrected 2026-09-17.** Two schedules previously settled this same operation. `POST /wallet/transfer` ran a direct ledger mutation that discarded the signed `fee_bps` and forced 1%; the consensus path honoured the envelope's `fee_bps` with **no validation at all**, so any value `0..=10000` applied — a sender could pay nothing, or destroy the entire amount. There is now one schedule, it is the consensus one, and the rate is bounds-checked at block-apply time on every node. See `docs/FEE_SPEC.md` §2.1 and `docs/FEE_AUDIT.md`.
 
 ### 11.7 Deflationary burn (vision vs transfer path)
 
-v1.0 §11.2 states 50% of fees burn under sustained use. Implementation matches this for **standard wallet transfers**. AI inference economics additionally use thermodynamic 50/50 worker/burn split (§5.6). Unified narrative for v1.1 mainnet docs remains **open** (§17.7).
+v1.0 §11.2 states 50% of fees burn under sustained use. Transfers implement exactly that (§11.6), and AI inference uses the same 50/50 shape on thermodynamic `R_micro` (§5.6). AI utility (80/15/5) and file fees (25/50/25) burn a smaller fraction by design.
+
+**"Burn" now has one meaning.** It decrements `META_TOTAL_SUPPLY` and credits no wallet. Previously some paths merely credited a sink balance key (`tet-api-pool`) that accumulated and remained spendable — and the transfer and file-fee paths did **both**, so supply fell while the same value stayed spendable. That is fixed (`docs/FEE_SPEC.md` §1.3).
+
+**"Treasury" now has one meaning:** `TET_TREASURY_ADDRESS`. The `dex:treasury` and founder-wallet fee destinations are removed (§1.4).
 
 ### 11.8 Worker pool emission
 
@@ -629,7 +638,9 @@ No canonical bridge spec for ETH/SOL/BTC custody. **Status: open.**
 
 ### 17.7 Slash magnitude and economics notation reconciliation
 
-§12 documents 100% slash for ZK fraud vs §14.3 λ·R_expected parametric model. AI 50/50 thermodynamic split vs global fee-burn wording differs. **Status: partial** (documented in GAPS doc; code uses Option A).
+§12 documents 100% slash for ZK fraud vs §14.3 λ·R_expected parametric model. **Status: open** for the slash half.
+
+The **fee/burn half of this item is closed** (2026-09-17). All fee schedules resolve through a single module (`tet-core/src/fees.rs`) under `docs/FEE_SPEC.md`, with one meaning of "burn", one treasury, a conservation invariant proved by proptest, and the whitepaper's stated splits now matching the code. The seven-schedule inventory that preceded it is preserved in `docs/FEE_AUDIT.md`.
 
 ### 17.8 Time-lock cryptography upgrade
 

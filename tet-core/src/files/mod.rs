@@ -30,35 +30,18 @@ pub const FILES_ANNOUNCE_TOPIC: &str = "/tet/v1/files/announce";
 pub const FILES_FETCH_PROTOCOL: &str = "/tet/v1/files/fetch";
 
 /// Per-file fee (µTET), bound into the envelope signature. Settled on-chain via
-/// [`crate::protocol::TxV1::FileFee`] (Step 4).
-pub const FILE_FEE_MICRO: u64 = 1000;
-/// Fee split (basis points, sum = 10_000): treasury / storage node / burn = 25 / 50 / 25.
-pub const FEE_SPLIT_TREASURY_BPS: u32 = 2_500;
-pub const FEE_SPLIT_STORAGE_BPS: u32 = 5_000;
-pub const FEE_SPLIT_BURN_BPS: u32 = 2_500;
-
-/// Deterministic 25/50/25 split of a file fee (spec §7).
+/// [`crate::protocol::TxV1::FileFee`].
 ///
-/// `burn` takes the integer-division remainder (`fee - treasury - storage`), so the three parts
-/// always sum to exactly `fee_micro` on every node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FileFeeSplit {
-    pub treasury_micro: u64,
-    pub storage_micro: u64,
-    pub burn_micro: u64,
-}
+/// Re-exported from [`crate::fees`], which owns every fee constant (FEE_SPEC §4).
+pub use crate::fees::FILE_FEE_MICRO;
 
-pub fn file_fee_split(fee_micro: u64) -> FileFeeSplit {
-    let treasury_micro = (fee_micro as u128 * FEE_SPLIT_TREASURY_BPS as u128 / 10_000) as u64;
-    let storage_micro = (fee_micro as u128 * FEE_SPLIT_STORAGE_BPS as u128 / 10_000) as u64;
-    let burn_micro = fee_micro
-        .saturating_sub(treasury_micro)
-        .saturating_sub(storage_micro);
-    FileFeeSplit {
-        treasury_micro,
-        storage_micro,
-        burn_micro,
-    }
+/// Deterministic 25 / 50 / 25 split of a file fee: treasury / storage node / burn.
+///
+/// Delegates to [`crate::fees::charge`]. `burn_micro` takes the integer-division remainder, so
+/// the parts always sum to exactly `fee_micro` on every node (FEE_SPEC §1.2) -- the rounding rule
+/// this schedule originated and which every other schedule now follows.
+pub fn file_fee_split(fee_micro: u64) -> crate::fees::FeeSplit {
+    crate::fees::charge(crate::fees::FeeKind::File, fee_micro).unwrap_or_default()
 }
 
 #[derive(Debug, thiserror::Error)]
