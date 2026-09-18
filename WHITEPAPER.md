@@ -265,7 +265,29 @@ Edge nodes earn weight from:
 
 TET adopts **ML-DSA** (FIPS 204, module-lattice signatures) as the protocol-family PQC scheme. Migration-from-ECDSA is intentionally avoided.
 
-**Implementation:** `quantum_shield.rs`, `tet-pqc-wasm/`, Dilithium crates in `wallet.rs`.
+**Implementation:** `quantum_shield.rs`, `tet-pqc-wasm/`, the `dilithium-rs` crate in `wallet.rs`.
+
+#### Parameter set actually shipped in Phase 0
+
+**Phase 0 ships ML-DSA-44 (NIST security level 2)** for all user wallets. This is not a
+simplification of a higher level — it is what the code does, and this section previously implied
+otherwise.
+
+| Surface | Level | Why |
+|---------|-------|-----|
+| **Browser wallet** (all user signatures) | **ML-DSA-44** | `tet-pqc-wasm` builds level 44 only |
+| Node default for mnemonic-derived keys | **ML-DSA-44** | `wallet::active_mldsa_mode()`; was 65 until 2026-09-17, which silently disagreed with every wallet on the network |
+| Node auxiliary keystore | ML-DSA-65 | `pqc_keystore.rs` — server-side operations, not a user identity |
+| `tet-signer` (macOS Keychain / Secure Enclave) | ML-DSA-65 | independent device-bound key, randomly seeded, **not** mnemonic-derived |
+
+Operators may select **65** or **87** node-side via `TET_MLDSA_SECURITY_LEVEL`.
+
+**Level inference on verification.** `wallet::verify_mldsa_b64` does not take a level argument. It
+infers the parameter set from the **public-key length** (1312 / 1952 / 2592 bytes → 44 / 65 / 87)
+and accepts all three. This is why the level split above went unnoticed: mixed-level signatures
+verify fine. It also means the effective security level of any given signature is whatever the
+signer chose, not a protocol-enforced floor. Pinning a minimum level is a consensus change and is
+deferred to the Phase 1 genesis.
 
 ### 7.2 Phase 0 hybrid wallet auth
 
@@ -286,11 +308,17 @@ tet xfer hybrid v1|chain_id=...|genesis_hash=...|to=...|amount_micro=...|nonce=.
 
 ### 7.3 Node ML-DSA keystore
 
-`pqc_keystore::ensure_node_mldsa_keystore` provisions node-level ML-DSA keys under the DB directory for server-side operations.
+`pqc_keystore::ensure_node_mldsa_keystore` provisions node-level **ML-DSA-65** keys under the DB directory for server-side operations. These are distinct from the user wallet identity (§7.1) and are never used to authorise a transfer.
 
 ### 7.4 Quantum threat model
 
 ECDSA-secured chains face retroactive migration risk under Shor-capable adversaries. TET assumes ML-DSA parameter sets aligned with NIST guidance; parameter agility for future standards remains an operational concern, not a Phase 0 blocker.
+
+**Implementation caveat.** ML-DSA comes from `dilithium-rs 0.2.0`, a single-maintainer crate with
+no published third-party audit. It ships known-answer tests validated bit-for-bit against the
+pq-crystals C reference, and TET vendors its own FIPS-204 conformance test so a dependency change
+cannot silently break the claim (`tet-core/src/fips204_vectors.rs`). The **KEM** is *not* ML-KEM —
+see §17.17.
 
 ---
 
@@ -534,7 +562,7 @@ Visual design uses open **98.css** styling: gray bevel chrome, draggable windows
 
 | # | Feature | Phase 0 mechanism |
 |---|---------|-------------------|
-| 1 | **Basic E2EE** | X25519 + ML-KEM + ChaCha20-Poly1305 (`tet-core/src/e2ee.rs`) |
+| 1 | **Basic E2EE** | X25519 + CRYSTALS-Kyber-768 (Round-3) + ChaCha20-Poly1305 (`tet-core/src/e2ee.rs`) |
 | 2 | **Time-lock** | **Stake-scheduled** `release_at_ms` (nodes enforce decrypt policy); VDF upgrade §17.8 |
 | 3 | **Burn-after-read** | Read receipt → gossip revoke; **best-effort** (§17.9) |
 | 4 | **Anonymous sender** | Anchor + ephemeral + RISC0 ownership proof; **1 TET** escrow |
@@ -692,6 +720,79 @@ Bitcoin and PoW altcoin networks consume on the order of **~150 TWh annually** (
 
 **Status:** research / future direction. **Phase 0 does not ship this.** Phase 1+ exploration only; no commitment to dual-mining productization.
 
+### 17.14 Browser-embedded node architecture
+
+Most L1s (Bitcoin, Ethereum) gate participation on running external node software. Because the Sovereign OS shell (§13) already runs entirely in the browser, an open question is whether a **light TET node** can run **in-tab** — letting end-user devices join the network natively, without operator-run servers. A libp2p **WebRTC transport** plus a light-client verification path could embed peer discovery, header sync, and transaction submission directly in the page. The directional goal: as user devices proliferate, Foundation-operated infrastructure trends toward zero.
+
+**Open questions:**
+
+- **Transport maturity** — Production-readiness of libp2p WebRTC (NAT traversal, signaling, connection churn) inside browsers.
+- **State budget** — Holding ledger headers/state within IndexedDB quota limits.
+- **Mobile cost** — Battery and data overhead of sustained P2P on phones.
+- **Trust model** — Light-client assumptions vs full-node verification; fraud-proof or sampling strategy.
+- **Bootstrap** — Peer discovery from a cold browser tab with no inbound connectivity.
+
+**Status:** research / future direction. **Phase 0 does not ship this.** Phase 2+ exploration, contingent on libp2p WebRTC maturation; multi-year horizon, no commitment.
+
+### 17.15 AI-native smart contracts
+
+Most contract platforms treat AI as an **external oracle**: inference runs off-chain and a result is posted back. Because TET's CAAC consensus (§6) already settles AI inference as a first-class network operation, an open question is whether programmable contracts (cf. Sentient Assets, §15) could **invoke inference natively** — making an `infer(...)` call a primitive alongside transfers. This would enable patterns such as autonomous agents, on-chain content moderation, and verifiable AI workflows without a trusted oracle bridge.
+
+**Open questions:**
+
+- **Determinism** — Reconciling non-deterministic model output with replayable state transitions across validators.
+- **Verifiable AI** — Maturity of ZK-ML for proving inference correctness at acceptable cost.
+- **Metering** — Gas-equivalent accounting for inference (FLOPs/energy, §5.3) inside contract execution.
+- **Reproducibility** — Model versioning and weight pinning so all validators evaluate identical models.
+- **Consistency** — Cross-validator agreement when runtimes or model builds differ.
+
+**Status:** research / future direction. **Phase 0 does not ship this.** Phase 1–2 exploration; depends on ZK-ML and determinism research before any productization. No committed date.
+
+### 17.16 Anchoring to external networks
+
+TET's own consensus provides liveness and finality; an open question is whether **periodic state anchoring** to established public networks (Bitcoin, Ethereum, IPFS/Filecoin) would add independent **long-term verifiability** and decentralization redundancy. Publishing a recurring commitment — e.g., a Merkle root of TET state — to a high-security external chain is a common pattern in modern L1 design and is particularly valuable for **audit-trail integrity**: anyone can later prove a TET state existed at a given time against the external anchor. This is distinct from, and complementary to, the cross-chain custody bridge open problem (§17.6).
+
+**Open questions:**
+
+- **Frequency** — Anchor cadence, trading external fees against staleness of the latest verifiable checkpoint.
+- **Commitment format** — Merkle root only vs a fuller state commitment.
+- **Verifier tooling** — Lightweight tooling for third parties to check anchors independently.
+- **Cost model** — Ethereum calldata/blob, Bitcoin OP_RETURN/inscription, and storage-network fees per anchor.
+
+**Status:** research / future direction. **Phase 0 does not ship this.** Phase 1+ exploration; per-network effort is small-months scale but unscheduled. No commitment.
+
+### 17.17 FIPS-203 ML-KEM migration (both E2EE planes)
+
+Phase 0 ships **CRYSTALS-Kyber-768 (Round-3)**, not FIPS-203 ML-KEM-768. The two are
+**byte-incompatible**: a Round-3 public key, ciphertext, and shared secret cannot be consumed by an
+ML-KEM implementation, and vice versa. Earlier drafts of this document said "ML-KEM"; that was
+inaccurate and is corrected throughout (2026-09-17).
+
+Two independent planes use a KEM, and they never interoperate with each other:
+
+| Plane | Participants | Implementation | Key provenance |
+|-------|--------------|----------------|----------------|
+| **Tmail / Files** | browser ↔ browser (node is a blind relay) | `crystals-kyber-js` 1.1.2 | **derived from the wallet BIP39 mnemonic** (`tmail_keys.ts`) |
+| **AI inference E2EE** | node ↔ worker | `pqcrypto-kyber` 0.8.1 | ephemeral, `--keygen` CLI |
+
+Because the planes are disjoint, each can migrate independently — a coordinated cutover is **not**
+required.
+
+**Blocker:** the Tmail/Files KEM keypair is mnemonic-derived, so changing the algorithm changes
+every existing user's messaging identity and makes stored ciphertext undecryptable. Migration needs
+a key-rotation/re-registration flow, or a chain reset that discards the old key directory. The
+inference plane has no such constraint (keys are ephemeral).
+
+**Open questions:**
+
+- **Key migration** — re-registration flow vs discarding the directory at the Phase 1 genesis.
+- **Dual-read window** — whether nodes should accept both algorithms during a transition, and for how long.
+- **Library maturity** — FIPS-203 crate selection on both sides, and whether either has an audit.
+- **Wire format** — the `mlkem_*` field names are legacy and currently misleading; renaming them is a protocol change and is deliberately deferred.
+
+**Status: open.** Target **Phase 1 genesis**, where key migration is free because a new genesis is
+being cut regardless (see `docs/SPRINT_PLAN.md`, Strategy C). **Phase 0 does not ship this.**
+
 ---
 
 ## 18. Comparison Table
@@ -716,7 +817,7 @@ Differentiates **L1 + messaging** on two axes — not only consensus:
 | Capability | Signal | Telegram | Session | **TET Tmail (Phase 0)** |
 |------------|--------|----------|---------|-------------------------|
 | **libp2p / decentralized transport** | No | No | Yes | **Yes** |
-| **Post-quantum (ML-DSA / ML-KEM path)** | No | No | No | **Yes** |
+| **Post-quantum (ML-DSA / KEM path)** | No | No | No | **Yes** — Kyber Round-3; FIPS-203 ML-KEM migration scheduled for Phase 1 genesis (§17.17) |
 | **On-chain fee / audit metadata** | No | No | No | **Yes** |
 | **Time-lock delivery** | No | No | No | **Yes** (stake-scheduled) |
 | **Network burn-after-read** | No | Limited (timer) | No | **Yes** (best-effort) |

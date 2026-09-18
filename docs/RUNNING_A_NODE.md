@@ -226,6 +226,34 @@ The process exits at startup (exit code **2** from `StartupConfig`) when:
 
 Empty ledger: env is validated and treasury is written at **`apply_genesis_allocation`**.
 
+### Sovereign OS UI (`tet-network/ui`) — post-quantum WASM (required)
+
+**A fresh clone cannot sign anything until you build this.** The UI produces every ML-DSA-44
+signature through `tet-pqc-wasm`, loaded at runtime from `/pqc/tet_pqc_wasm.js`. That build output
+is **gitignored** (`tet-network/ui/public/pqc/.gitignore`), so it is absent after `git clone` and
+wallet unlock, transfers, Tmail and Files all fail until it exists.
+
+```bash
+# one-time: install wasm-pack
+cargo install wasm-pack
+
+# from the repository root — regenerate after any change to tet-pqc-wasm/
+wasm-pack build tet-pqc-wasm \
+  --target web \
+  --out-dir ../tet-network/ui/public/pqc
+```
+
+Verify the four expected artifacts exist:
+
+```bash
+ls tet-network/ui/public/pqc
+# tet_pqc_wasm.js  tet_pqc_wasm_bg.wasm  tet_pqc_wasm.d.ts  tet_pqc_wasm_bg.wasm.d.ts
+```
+
+If the UI console shows a failed import of `/pqc/tet_pqc_wasm.js`, this step was skipped.
+
+> Automating this in CI is an open Sprint 4 item (`docs/SPRINT_PLAN.md` §S4 — CI/CD).
+
 ### Sovereign OS UI (`tet-network/ui`) — genesis hash env
 
 Hybrid-signed requests (inference, airdrop, future transfer) embed `chain_id` + `genesis_hash`. The UI computes the same hash as `deterministic_genesis_hash(founder, treasury)` when **`NEXT_PUBLIC_TET_GENESIS_HASH`** is unset.

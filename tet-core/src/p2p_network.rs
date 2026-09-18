@@ -41,7 +41,8 @@ type AnyErr = Box<dyn Error + Send + Sync + 'static>;
 pub const INFERENCE_TOPIC: &str = "nexus-inference-v1";
 
 /// Hard cap for gossip payloads (libp2p `max_transmit_size` + local validation).
-/// Default **96 KiB**: fits E2EE-wrapped inference (~24KiB prompt ceiling) + ML-KEM/X25519 boxes + ZK receipt headroom.
+/// Default **96 KiB**: fits E2EE-wrapped inference (~24KiB prompt ceiling) + Kyber-768 (R3) /
+/// X25519 boxes + ZK receipt headroom.
 /// Override with `TET_P2P_GOSSIP_MAX_MSG_BYTES` (allowed range **48 KiB … 128 KiB**).
 pub const DEFAULT_GOSSIP_MAX_MSG_BYTES: usize = 96 * 1024;
 

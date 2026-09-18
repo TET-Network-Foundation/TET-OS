@@ -51,7 +51,7 @@
 
 | Asset | Location | Reuse for Sovereign OS |
 |-------|----------|------------------------|
-| E2EE | `tet-core/src/e2ee.rs` | Tmail body encryption (X25519 + ML-KEM + ChaCha20-Poly1305) |
+| E2EE | `tet-core/src/e2ee.rs` | Tmail body encryption (X25519 + CRYSTALS-Kyber-768 (Round-3) + ChaCha20-Poly1305) |
 | Hybrid auth | `tet-core/src/wallet.rs` | Tmail / Files / Anonymous envelopes |
 | ZK guest | `methods/`, `vision/zk_court.rs` | Anonymous ownership proof guest (new journal type) |
 | Block P2P | `tet-core/src/p2p.rs` | `/tet/v1/tmail`, `/tet/v1/files-meta`, RR `/tet/v1/files/chunk` |
@@ -209,7 +209,7 @@ Reuse [`e2ee.rs`](../../tet-core/src/e2ee.rs):
 - `POST /worker/register` fields `x25519_pubkey_b64`, `mlkem_pubkey_b64` ([`types.rs:201-204`](../../tet-core/src/rest/types.rs)), **or**
 - Dedicated `POST /tmail/keys/register` (preferred — decouples from worker role).
 
-**PQ layer:** ML-KEM-768 hybrid KDF `derive_key_hybrid` `e2ee.rs:112-119` — **same as inference E2EE**.
+**PQ layer:** Kyber-768 (Round-3) hybrid KDF `derive_key_hybrid` `e2ee.rs:112-119` — **same as inference E2EE**. Not ML-KEM; see WP §17.17.
 
 **Forward secrecy (Phase 0):** **Per-message ephemeral X25519** for sender side only; **no** Double Ratchet. Phase 1: Signal-style sessions.
 
@@ -1208,7 +1208,7 @@ sequenceDiagram
 
 # Appendix S — Post-quantum coverage matrix (Phase 0)
 
-| Surface | Ed25519 | ML-DSA | ML-KEM | ChaCha20-Poly1305 |
+| Surface | Ed25519 | ML-DSA | Kyber-768 (R3) | ChaCha20-Poly1305 |
 |---------|---------|--------|--------|-------------------|
 | Wallet transfer | Yes | Yes | — | — |
 | Tmail envelope sign | Yes | Yes | — | — |

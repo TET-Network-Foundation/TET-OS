@@ -1,6 +1,7 @@
 //! File Sharing — Phase 0 (spec `docs/PHASE_0_FILE_SHARING_SPEC.md`).
 //!
-//! End-to-end encrypted 1:1 file transfer reusing the Tmail crypto stack (X25519 + ML-KEM-768 +
+//! End-to-end encrypted 1:1 file transfer reusing the Tmail crypto stack (X25519 +
+//! CRYSTALS-Kyber-768 Round-3, **not** ML-KEM — see WP §17.17 +
 //! ChaCha20-Poly1305 for E2EE; Ed25519 + ML-DSA-44 for the hybrid signature). Like Tmail, file
 //! content is **never** written to the ledger: the signed [`FileEnvelopeV1`] (metadata only) travels
 //! over libp2p gossip (`/tet/v1/files/announce`) and the encrypted body lives in a node-local TTL

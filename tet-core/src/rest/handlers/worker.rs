@@ -168,7 +168,8 @@ pub(crate) async fn enqueue_compute_e2ee_job(
         return (StatusCode::BAD_REQUEST, "worker_wallet required").into_response();
     }
 
-    // Ensure worker exists and has an X25519 + ML-KEM pubkey registered (for clients to trust).
+    // Ensure worker exists and has an X25519 + Kyber-768 (R3) pubkey registered (for clients to
+    // trust). Field names say `mlkem`; the algorithm is not ML-KEM (WP §17.17).
     let reg = std_lock(&state.workers);
     let Some(w) = reg.by_wallet.get(&worker_wallet) else {
         return (StatusCode::BAD_REQUEST, "unknown worker_wallet").into_response();

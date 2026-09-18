@@ -115,7 +115,8 @@ pub async fn get_tmail_inbox(
         .into_response()
 }
 
-/// `GET /tmail/keys/:wallet_id` — the wallet's registered X25519 + ML-KEM public keys, or `404`.
+/// `GET /tmail/keys/:wallet_id` — the wallet's registered X25519 + Kyber-768 (Round-3) public
+/// keys, or `404`. Field names say `mlkem`; the algorithm is not ML-KEM (WP §17.17).
 pub async fn get_tmail_keys(
     State(state): State<RestState>,
     Path(wallet_id): Path<String>,

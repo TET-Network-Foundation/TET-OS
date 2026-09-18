@@ -3757,11 +3757,28 @@ fn client_wallet_bundle_matches_core_abandon_vector() {
     assert_eq!(w.address_hex.len(), 64);
     assert!(w.address_hex.chars().all(|c| c.is_ascii_hexdigit()));
 
-    // ML-DSA pubkey (default ML-DSA-65) must be decodable; length matches FIPS-204 raw encoding.
+    // ML-DSA pubkey must be decodable; length matches FIPS-204 raw encoding.
+    // Default is **ML-DSA-44** (WP §7.1) -- it matches what the browser wallet signs, which is the
+    // only level `tet-pqc-wasm` builds. It was 65 until 2026-09-17, silently disagreeing with every
+    // wallet on the network.
     let pk = base64::engine::general_purpose::STANDARD
         .decode(w.dilithium_pubkey_b64.trim())
         .unwrap();
-    assert_eq!(pk.len(), dilithium::ML_DSA_65.public_key_bytes());
+    assert_eq!(pk.len(), dilithium::ML_DSA_44.public_key_bytes());
+}
+
+/// WP §7.1 -- the shipped default parameter set. Pinned so it cannot drift back.
+#[test]
+fn default_mldsa_level_is_44() {
+    let _g = env_lock();
+    unsafe {
+        std::env::remove_var("TET_MLDSA_SECURITY_LEVEL");
+    }
+    assert_eq!(
+        crate::wallet::active_mldsa_mode(),
+        dilithium::ML_DSA_44,
+        "Phase 0 ships ML-DSA-44; tet-pqc-wasm builds no other level"
+    );
 }
 
 #[test]
@@ -3777,8 +3794,13 @@ fn mldsa44_hybrid_transfer_sign_verify_roundtrip() {
     crate::wallet::verify_mldsa44_b64(&pk_b64, &sig_b64, &msg).unwrap();
 }
 
+/// The node-side selectable level (WP §7.1). Selects 65 explicitly -- the default is 44.
 #[test]
 fn mldsa65_hybrid_transfer_sign_verify_roundtrip() {
+    let _g = env_lock();
+    unsafe {
+        std::env::set_var("TET_MLDSA_SECURITY_LEVEL", "65");
+    }
     let wi = crate::wallet::generate_mnemonic_12().unwrap();
     let phrase = wi.mnemonic_12.as_deref().unwrap_or_default();
     let kp = crate::wallet::mldsa_keypair_from_mnemonic(phrase).unwrap();
@@ -3789,6 +3811,9 @@ fn mldsa65_hybrid_transfer_sign_verify_roundtrip() {
     let sig = crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap();
     let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig);
     crate::wallet::verify_mldsa_b64(&pk_b64, &sig_b64, &msg).unwrap();
+    unsafe {
+        std::env::remove_var("TET_MLDSA_SECURITY_LEVEL");
+    }
 }
 
 #[test]

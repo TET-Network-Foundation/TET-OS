@@ -216,8 +216,8 @@ Discovered while shipping **UI-P0-3** (`POST /wallet/transfer` hybrid flow in `t
 
 | Path | Role |
 |------|------|
-| **`POST /wallet/transfer`** | Hybrid Ed25519 + ML-DSA; **immediate** ledger debit/credit (`transfer_with_fee_attested_dual_verified`). **UI-P0-3 uses this.** |
-| **`POST /ledger/transfer`** | `SignedTxEnvelopeV1` → mempool (`202 Accepted`); different auth and lifecycle. |
+| **`POST /wallet/transfer`** | Hybrid Ed25519 + ML-DSA → `TxV1::Transfer` → mempool (`202 Accepted`). **Superseded 2026-05-31** (`8f52db7`): this endpoint used to do an immediate off-chain ledger debit/credit via `transfer_with_fee_attested_dual_verified`, which forked non-producer nodes. That function was deleted 2026-09-17 (`ad6749f`). |
+| **`POST /ledger/transfer`** | `SignedTxEnvelopeV1` → mempool (`202 Accepted`). Both endpoints now share the consensus path; only the request envelope differs. |
 
 ---
 

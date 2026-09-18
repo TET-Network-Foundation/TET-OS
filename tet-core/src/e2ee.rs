@@ -1,6 +1,13 @@
 //! End-to-end encryption primitives (E2EE).
 //!
 //! Goal: TET-Core routes ciphertext only. Workers decrypt on-device.
+//!
+//! **Algorithm: X25519 + CRYSTALS-Kyber-768 (Round-3) + ChaCha20-Poly1305.**
+//!
+//! The `mlkem_*` names on the wire and throughout this module are **legacy and misleading**: the
+//! algorithm is Kyber Round-3 (`pqcrypto-kyber 0.8`), which is byte-incompatible with FIPS-203
+//! ML-KEM-768. Renaming the fields is a protocol change and is deliberately deferred; the
+//! migration itself is tracked as whitepaper §17.17.
 
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead as _, KeyInit as _};

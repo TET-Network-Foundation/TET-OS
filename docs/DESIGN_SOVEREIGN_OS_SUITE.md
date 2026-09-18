@@ -119,7 +119,7 @@
 | Primitive | 実装 |
 |-----------|------|
 | X25519 ECDH | `StaticSecret`, `PublicKey` (`e2ee.rs:82-86`) |
-| ML-KEM-768 hybrid KDF | `derive_key_hybrid` + HKDF-SHA256 (`e2ee.rs:112-119`) |
+| Kyber-768 (Round-3) hybrid KDF | `derive_key_hybrid` + HKDF-SHA256 (`e2ee.rs:112-119`) — not ML-KEM; see WP §17.17 |
 | AEAD | ChaCha20-Poly1305 (`e2ee.rs:6-7`, `165-167`) |
 | Encrypt path | `encrypt_for_worker` — client ephemeral → worker static (`e2ee.rs:147-168`) |
 
@@ -365,7 +365,7 @@ Send (µTET) → gossip/REST → Receiver node buffer
 | 判断 | 推奨 |
 |------|------|
 | libp2p topology | **block plane に `/tet/v1/messages` を追加**；4th swarm しない |
-| E2EE | **既存 `e2ee.rs` パターン**（X25519 + ML-KEM + ChaCha）；register で X25519 公開 |
+| E2EE | **既存 `e2ee.rs` パターン**（X25519 + Kyber-768 R3 + ChaCha）；register で X25519 公開 |
 | Hybrid sig | **新 preimage + Ed25519/ML-DSA**；wallet_id = identity |
 | On-chain vs off-chain | **fee メタ on-chain、ciphertext off-chain** |
 | Phase 0 Files | **ローカル mailbox のみ**；P2P file stream は 0.5 |

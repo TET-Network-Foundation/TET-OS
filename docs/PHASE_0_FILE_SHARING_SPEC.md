@@ -14,7 +14,9 @@ File Sharing lets one wallet send an **end-to-end encrypted** file to another wa
 TET network, reusing the exact cryptographic stack already shipped and verified for Tmail Basic
 E2EE (Step 3+4):
 
-- **KEM / E2EE:** X25519 (DH) + ML-KEM-768 (Kyber768) → HKDF-SHA256 → ChaCha20-Poly1305 (AEAD).
+- **KEM / E2EE:** X25519 (DH) + **CRYSTALS-Kyber-768 (Round-3)** → HKDF-SHA256 → ChaCha20-Poly1305 (AEAD).
+  **Kyber Round-3 is not ML-KEM.** FIPS-203 ML-KEM-768 is a different, byte-incompatible algorithm;
+  migration is tracked as whitepaper §17.17.
 - **Authentication:** hybrid signature Ed25519 + ML-DSA-44 over a canonical preimage.
 
 Like Tmail, file content is **never written to the ledger**. The signed *envelope* (metadata only)

@@ -57,8 +57,12 @@ impl TmailFlags {
     }
 }
 
-/// E2EE block (spec §A.1.2 `e2ee`). Mirrors the hybrid X25519 + ML-KEM-768 + ChaCha20-Poly1305
-/// scheme in `e2ee.rs`. The node treats this as an opaque blob — it never decrypts.
+/// E2EE block (spec §A.1.2 `e2ee`). Mirrors the hybrid X25519 + CRYSTALS-Kyber-768 (Round-3) +
+/// ChaCha20-Poly1305 scheme in `e2ee.rs`. The node treats this as an opaque blob — it never
+/// decrypts.
+///
+/// **Not ML-KEM.** Kyber Round-3 is byte-incompatible with FIPS-203 ML-KEM-768. The `mlkem_*`
+/// field names are legacy; migration is whitepaper §17.17.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmailE2eeBlock {
     pub v: u32,

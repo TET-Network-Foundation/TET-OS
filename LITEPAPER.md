@@ -1,3 +1,17 @@
+> # ⚠ DEPRECATED — do not cite
+>
+> This litepaper describes the **v0 economic framing**: a 1 TET = 1 CHF peg and bank bypass via a
+> P2P DEX. **That model was abandoned** and replaced by the thermodynamic energy peg in Genesis
+> Draft v1.0 (2026-04-28). It is retained only as a historical record; the byte-identical
+> `archive/LITEPAPER_v0.md` carries the same banner.
+>
+> **Canonical documents:**
+> - [`WHITEPAPER.md`](./WHITEPAPER.md) — Whitepaper v1.1 (current)
+> - [`docs/FEE_SPEC.md`](./docs/FEE_SPEC.md) — normative fee model
+>
+> Specific claims below that are **no longer true**: the CHF peg; "ML-DSA/Dilithium2" (Phase 0
+> ships **ML-DSA-44**, see WP §7.1); the P2P DEX as a shipped product.
+
 ## TET Litepaper (1-Page Executive Summary)
 
 ### Mission

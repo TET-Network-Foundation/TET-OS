@@ -10,6 +10,7 @@ mod e2ee;
 mod executor;
 mod files;
 mod fees;
+mod fips204_vectors;
 mod genesis;
 mod invariant_tests;
 mod ledger;

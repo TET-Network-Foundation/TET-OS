@@ -15,8 +15,12 @@ Built primarily in Rust (`tet-core`), with a Sovereign OS UI on libp2p.
 ## What TET ships in Phase 0
 
 - **Sovereign OS UI** — Win95-style desktop environment (Wallet + Tmail + Files + mini-apps)
-- **Tmail** — encrypted P2P messaging with time-locked delivery, burn-after-read, and ZK-anonymous sender
-- **Hybrid wallet** — Ed25519 + ML-DSA (FIPS 204) signatures, BIP39 seed compatible
+- **Tmail** — encrypted P2P messaging (X25519 + CRYSTALS-Kyber-768 Round-3 + ChaCha20-Poly1305).
+  Time-locked delivery, burn-after-read and ZK-anonymous sender are **specified, not yet built**
+  (WP §17.17 covers the FIPS-203 ML-KEM migration)
+- **Hybrid wallet** — Ed25519 + **ML-DSA-44** (FIPS 204, NIST level 2) signatures, BIP39 seed compatible.
+  Verification infers the level from public-key length and accepts 44/65/87; operators may select
+  65 or 87 node-side via `TET_MLDSA_SECURITY_LEVEL` (WP §7.1)
 - **Multi-node testnet** — libp2p block plane, faucet, public seed node
 - **Energy-pegged tokenomics** — `R(T) = Σ[η(W_i)·C(t_i)] / D(t)` (Phase 0 approximation; formal η in §17.1)
 
@@ -27,7 +31,9 @@ Worker mode (AI inference earn) ships in **Phase 0.5** (post-2026-09-15).
 - [`tet-core/`](./tet-core) — Sovereign Layer 1 node (Rust). **The canonical L1.**
 - [`tet-network/ui/`](./tet-network/ui) — Sovereign OS frontend (Next.js)
 - [`tet-agent-sdk/`](./tet-agent-sdk) — M2M agent client (TypeScript)
-- [`tet-pqc-wasm/`](./tet-pqc-wasm) — Post-quantum signature WASM (ML-DSA-44)
+- [`tet-pqc-wasm/`](./tet-pqc-wasm) — Post-quantum signature WASM (ML-DSA-44). **Build artifact is
+  gitignored** — a fresh clone must build it before the UI can sign; see
+  [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md)
 - [`methods/`](./methods), [`prover/`](./prover) — RISC0 zkVM foundation for ZK-Court
 
 ## Quick start

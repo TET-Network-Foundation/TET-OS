@@ -1,6 +1,7 @@
 //! Tmail key directory — receiver KEM public-key registration (spec §A.1.4).
 //!
-//! A sender needs the receiver's X25519 + ML-KEM-768 public keys to build the E2EE block. Wallets
+//! A sender needs the receiver's X25519 + Kyber-768 (Round-3) public keys to build the E2EE
+//! block. The `mlkem_*` names are legacy; the algorithm is not ML-KEM (WP §17.17). Wallets
 //! publish them via `PUT /tmail/keys/:wallet_id` (or `POST /tmail/keys/register`), authenticated by
 //! a hybrid (Ed25519 + ML-DSA) signature over a dedicated preimage — no admin token. Storage lives
 //! in [`crate::tmail::store::TmailStore`].

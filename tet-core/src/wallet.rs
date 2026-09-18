@@ -33,17 +33,28 @@ fn signing_key_from_mnemonic(m: &Mnemonic) -> SigningKey {
     SigningKey::from_bytes(&sk)
 }
 
-/// Active ML-DSA parameter set for **new** keys from mnemonic (`44`, `65`, `87`). Default: **65** (ML-DSA-65 / Dilithium3).
+/// Active ML-DSA parameter set for **new** keys from mnemonic (`44`, `65`, `87`).
+///
+/// **Default: 44** (ML-DSA-44, NIST security level 2).
+///
+/// This matches what users actually sign. The browser wallet signs through `tet-pqc-wasm`, which
+/// builds **ML-DSA-44 only**, so every real user signature is level 44. The default here was
+/// previously 65, which meant the node's own keys and `tet-signer` used a different parameter set
+/// from every wallet on the network — a split that only went unnoticed because
+/// [`verify_mldsa_b64`] infers the level from public-key length and silently accepts all three.
+///
+/// Operators who want a higher level node-side can set `TET_MLDSA_SECURITY_LEVEL=65` or `87`;
+/// verification accepts 44/65/87 regardless of this setting.
 pub fn active_mldsa_mode() -> DilithiumMode {
     match std::env::var("TET_MLDSA_SECURITY_LEVEL")
         .ok()
         .as_deref()
         .map(str::trim)
     {
-        Some("44") => ML_DSA_44,
+        Some("65") => ML_DSA_65,
         Some("87") => ML_DSA_87,
-        Some("65") | None => ML_DSA_65,
-        _ => ML_DSA_65,
+        Some("44") | None => ML_DSA_44,
+        _ => ML_DSA_44,
     }
 }
 
