@@ -1,5 +1,34 @@
 # Fee Schedule Audit
 
+> ## ⚠ Superseded — historical record
+>
+> The state described below no longer exists in code. All seven schedules were unified into
+> `tet-core/src/fees.rs` on 2026-09-17 under [`FEE_SPEC.md`](./FEE_SPEC.md), which is now normative.
+> This document is kept because it is the evidence trail for *why* the unification was shaped the
+> way it was, and because the commit messages reference its numbering.
+>
+> ### Corrections found during implementation
+>
+> Three claims below were wrong or incomplete. They are left in place rather than edited, so the
+> record stays honest:
+>
+> 1. **Schedule 1 "Entered by" is wrong.** It lists `POST /wallet/transfer → rest/handlers/ledger.rs:761`.
+>    Line 761 is the **GenesisBridge** handler. `POST /wallet/transfer` had *already* been routed
+>    through `TxV1::Transfer` → mempool → consensus by commit `8f52db7` in May, so it used
+>    **schedule 2**, not schedule 1. Schedule 1's real callers were the genesis bridge, `/ai/proxy`,
+>    and six `p2p_dex` escrow hops.
+> 2. **The burn bug was worse than recorded.** §Observations item 4 says schedules 1, 2 and 7 "credit
+>    a balance key" rather than burning. In fact the transfer and file-fee *apply* paths did **both** —
+>    credited `tet-api-pool` **and** decremented `META_TOTAL_SUPPLY` — so supply fell while the same
+>    value stayed spendable at that key. Value was duplicated, not merely mis-accounted.
+> 3. **Finding 7 is resolved.** `settle_ai_utility_payment` appeared twice because
+>    `ledger/settlement.rs` **was never compiled** — `ledger.rs` has no `mod settlement;`. The file
+>    was 188 lines of dead code and has been deleted.
+>
+> One live bug surfaced that this audit did not catch: all six `p2p_dex` escrow hops passed
+> `fee_bps: None` while schedule 1 forced 1% regardless, so a maker who locked an order and
+> cancelled it silently lost ~2% of the escrowed amount.
+
 **Date:** 2026-09-17
 **Scope:** Inventory only. **Nothing is unified or changed by this document.**
 **Method:** Code read at commit `56c91dd`. Every rate and split below is quoted from source, not from a spec.
