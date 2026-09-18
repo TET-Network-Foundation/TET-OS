@@ -105,13 +105,19 @@ fn quote_pricing(model: &str, input: &str) -> PricingQuote {
     let required_net_tet = total_usd / usd_per_tet;
     let required_net_micro = (required_net_tet * STEVEMON as f64).ceil().max(0.0) as u64;
 
-    // AI Proxy fee is fixed at 1% (pure profit, routed to founder by ledger).
-    let fee_bps = 100u64;
+    // FEE_SPEC §2.1 default rate. (Previously commented "routed to founder" -- that was
+    // schedule 3, now deleted; the fee splits 50/50 worker pool / burn like any transfer.)
+    let fee_bps = crate::fees::TRANSFER_FEE_BPS_DEFAULT;
     // gross such that net == gross * (1 - fee_bps/10_000)
     let required_gross_micro =
         (required_net_micro as u128 * 10_000u128).div_ceil((10_000 - fee_bps) as u128);
     let required_gross_micro = u64::try_from(required_gross_micro).unwrap_or(u64::MAX);
-    let required_fee_micro = required_gross_micro.saturating_mul(fee_bps) / 10_000;
+    let required_fee_micro = crate::fees::charge(
+        crate::fees::FeeKind::Transfer { fee_bps },
+        required_gross_micro,
+    )
+    .map(|s| s.fee_micro())
+    .unwrap_or(0);
 
     PricingQuote {
         model: model.to_string(),
@@ -168,9 +174,11 @@ fn quote_worker_network(model: &str, input: &str) -> PricingQuote {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(10_000_000);
-    let fee_bps = 100u64;
-    let required_fee_micro = gross_micro.saturating_mul(fee_bps) / 10_000;
-    let required_net_micro = gross_micro.saturating_sub(required_fee_micro);
+    let fee_bps = crate::fees::TRANSFER_FEE_BPS_DEFAULT;
+    let split = crate::fees::charge(crate::fees::FeeKind::Transfer { fee_bps }, gross_micro)
+        .unwrap_or_default();
+    let required_fee_micro = split.fee_micro();
+    let required_net_micro = split.net_micro;
     PricingQuote {
         model: model.to_string(),
         input_chars,

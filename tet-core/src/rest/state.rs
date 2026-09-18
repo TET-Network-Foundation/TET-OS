@@ -117,7 +117,13 @@ impl RestState {
                 amount_micro,
                 fee_bps,
                 ..
-            } => (*amount_micro as u128).saturating_mul(*fee_bps as u128) / 10_000,
+            } => crate::fees::charge(
+                crate::fees::FeeKind::Transfer { fee_bps: *fee_bps },
+                *amount_micro,
+            )
+            // An out-of-range fee_bps scores 0; the tx is rejected at apply anyway (FEE_SPEC §2.1).
+            .map(|s| s.fee_micro() as u128)
+            .unwrap_or(0),
             crate::protocol::TxV1::EnterpriseInference { amount_micro, .. } => {
                 *amount_micro as u128
             }
