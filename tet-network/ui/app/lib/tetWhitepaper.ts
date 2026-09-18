@@ -1,4 +1,12 @@
-/** In-app summary — mirrors Genesis Draft v1.0 (2026-04-28). Full text: repo WHITEPAPER.md / PDF. */
+/**
+ * In-app summary — this text still mirrors **Genesis Draft v1.0** (2026-04-28).
+ *
+ * The downloadable PDF (`public/tet-network-whitepaper.pdf`) was replaced on 2026-09-18 and is now
+ * **Whitepaper v1.1**, so it is NEWER than this summary. Rewriting the summary to v1.1 is a
+ * separate content task; the labels below are left at v1.0 because that is what this text is.
+ *
+ * Full canonical text: repo `WHITEPAPER.md`.
+ */
 export const TET_WHITEPAPER_TITLE =
   "TET Network — Genesis Draft v1.0 (2026-04-28)";
 
@@ -30,4 +38,5 @@ Core concepts: CAAC · PoC · PoR · Sovereign Runtime · ZK-Court · ML-DSA · 
 
 TET-OS binds AI prompts to chain_id, genesis_hash, and monotonic nonces (Ed25519 + ML-DSA). Invalid compute is economically punishable via disputes and burn/settlement paths on L1.
 
-Full canonical text: repository WHITEPAPER.md and tet-network-whitepaper.pdf.`;
+Full canonical text: repository WHITEPAPER.md.
+Note: the downloadable PDF is Whitepaper v1.1, newer than this v1.0 summary.`;

@@ -5,7 +5,12 @@
 **Deprecated economics:** [`archive/WHITEPAPER_v0_economic.md`](../archive/WHITEPAPER_v0_economic.md)  
 **Implementation:** `tet-core/` (Rust L1 node)
 
-> UI short summary: `tet-network/ui/app/lib/tetWhitepaper.ts` (Genesis v1.0). PDF: `tet-network/ui/public/tet-network-whitepaper.pdf` (~1.8 MB, 2026-04-28) — byte-level diff deferred to Phase 0 ship.
+> UI short summary: `tet-network/ui/app/lib/tetWhitepaper.ts` — **still Genesis v1.0**; rewriting it
+> to v1.1 is an open content task. PDF: `tet-network/ui/public/tet-network-whitepaper.pdf` —
+> **replaced 2026-09-18 with Whitepaper v1.1** (744 KB, rendered from the scrubbed
+> `docs/WHITEPAPER_v1.1_DRAFT.md`; see [`WHITEPAPER_BUILD.md`](./WHITEPAPER_BUILD.md)). The prior
+> v1.0 PDF (1.8 MB, 2026-04-28) was removed because it embedded a personal contact address.
+> The summary and the PDF are therefore at **different versions** until the summary is rewritten.
 
 ## Status legend
 
