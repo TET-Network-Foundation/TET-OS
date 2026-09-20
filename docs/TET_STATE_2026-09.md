@@ -1,5 +1,24 @@
 # TET Network — State of the Project, 2026-09
 
+> ## ⚠ SUPERSEDED IN PART — annotated 2026-09-20
+>
+> This document is repository archaeology **compiled 2026-09-17** and is kept as a snapshot of that
+> date. Work done since has removed code it describes as live. It has been **annotated, not
+> rewritten** — inline **[SUPERSEDED 2026-09-20]** notes mark each claim that later work falsified.
+> Everything not so marked is still the 2026-09-17 reading and has not been re-verified.
+>
+> **For current state, read instead:**
+>
+> 1. `git log --oneline ff6f7be..HEAD` — every change since the dormancy ended
+> 2. [`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) — what is deferred to the genesis
+>    ceremony, and §3 "Fixed before Phase 1 — do not redo"
+> 3. [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) — canonical sprint numbering and status
+> 4. [`STATUS.md`](./STATUS.md) — one-page current status
+>
+> **Gone from the tree entirely, though described below as live** (all 2026-09-20): the seven
+> `/dex/*` routes and `p2p_dex.rs`; `POST /ledger/recover-from-guardian`; the faucet's direct-write
+> path **and both faucet routes**.
+
 **Compiled:** 2026-09-17
 **Method:** Read-only repository archaeology (git history, all `docs/`, all whitepaper versions, and the Rust/TypeScript source as it exists on disk). No code was changed.
 **Audience:** An incoming CTO with no prior context.
@@ -94,7 +113,7 @@ The oldest economic framing (`archive/WHITEPAPER_v0_economic.md`, `archive/LITEP
 - A **P2P orderbook DEX with "Quantum Gate"** whose purpose was explicitly *bank bypass* — escrow released against a Solana USDC `txid`.
 - Fiat bridge (Stripe/CHF) as a Phase 4 deliverable.
 
-Genesis v1.0 (2026-04-28) replaced all of that with the **energy peg** `R(T) = Σ[η(W_i)·C(t_i)]/D(t)`. But `LITEPAPER.md` **at the repo root still says "1 TET = 1 CHF"** — the deprecation banner exists only on `archive/LITEPAPER_v0.md`. And the CHF machinery is still in the ledger: `chf_top_up_mint`, `META_CHF_DEPOSITS_MICRO`, `META_FIAT_MINT_STEVEMON_MICRO`, `META_AML_CHF_PREFIX`, plus `p2p_dex.rs` (589 LOC) live and routed at `/dex/*`.
+Genesis v1.0 (2026-04-28) replaced all of that with the **energy peg** `R(T) = Σ[η(W_i)·C(t_i)]/D(t)`. But `LITEPAPER.md` **at the repo root still says "1 TET = 1 CHF"** — the deprecation banner exists only on `archive/LITEPAPER_v0.md`. And the CHF machinery is still in the ledger: `chf_top_up_mint`, `META_CHF_DEPOSITS_MICRO`, `META_FIAT_MINT_STEVEMON_MICRO`, `META_AML_CHF_PREFIX`, plus `p2p_dex.rs` (589 LOC) live and routed at `/dex/*`. **[SUPERSEDED 2026-09-20]** `p2p_dex.rs` and all seven `/dex/*` routes were **REMOVED** in `13ba795` (six of them moved funds with no authentication); `removed_dex_routes_are_not_reachable` guards them. The `chf_top_up_mint` / CHF / AML / fiat meta keys are untouched and still live. Root `LITEPAPER.md` has carried a full "⚠ DEPRECATED — do not cite" banner since `977a3b5` (2026-09-18), and `archive/LITEPAPER_v0.md` was brought up to the same banner on 2026-09-20 — the two files are otherwise byte-identical and the root copy should be deleted as a duplicate.
 
 ### Pivot 4 — Whitepaper v1.0 → v1.1 (structural honesty)
 
@@ -132,7 +151,7 @@ Scheme B superseded A and is what the daily logs use ("Sprint 4 Day 2/3/4/5"). `
 | Version | Date | Location | Core claim |
 |---|---|---|---|
 | **v0 economic** | pre-2026-04 | `archive/WHITEPAPER_v0_economic.md` | 1 TET = 1 CHF; compute gateway + orchestrator; Imperial Tax; bank bypass via DEX |
-| **Litepaper v0** | pre-2026-04 | `archive/LITEPAPER_v0.md` (deprecated banner) + **`LITEPAPER.md` (root, no banner)** | Same CHF peg, P2P DEX "Quantum Gate" |
+| **Litepaper v0** | pre-2026-04 | `archive/LITEPAPER_v0.md` (deprecated banner) + ~~**`LITEPAPER.md` (root, no banner)**~~ **[SUPERSEDED 2026-09-20]** root copy bannered in `977a3b5` (2026-09-18); both copies now carry the same banner; the root duplicate is still pending deletion | Same CHF peg, P2P DEX "Quantum Gate" |
 | **Genesis v1.0** | 2026-04-28 | `GENESIS_V1.md`, `archive/WHITEPAPER_v1.0.md` | CAAC + PoC/PoR; energy peg; ML-DSA from genesis; §12 mixes near/long-term |
 | **v1.1** | 2026-05-21 | **`WHITEPAPER.md` (canonical)** + `docs/WHITEPAPER_v1.1_DRAFT.md` + JP + PDF | Three-part split; Sovereign OS §13; §17 open problems; §19 roadmap with 2026-09-15 ship date |
 
@@ -382,6 +401,19 @@ What is *not* production-shaped:
 
 Grouped: `/ledger/*` (state, blocks, mine, transfer, faucet, stake, unstake, me, proof, zk_verify, genesis_bridge, initial_airdrop/claim, mint_demo, recover-from-guardian) · `/wallet/*` (mnemonic new/recover, active, nonce, transfer, stake, slash) · `/tmail/*` (send, inbox, keys) · `/files/*` (upload, announce, fee, inbox, fetch, item) · `/worker/*` (register, enroll, list, status, rewards, model status/download, ai_engine/status, e2ee next/complete, stats, cockpit, pending) · `/ai/*` (infer, infer_signed, nonce, pricing, proxy, utility) · `/v1/vision/*` (caac challenge/complete/profile, zk-court challenge(s)/params/verify-optimistic, thermo/genesis, pqc/status, network config/stats, market/index, ledger me/initial_airdrop) · `/dex/*` (orderbook, place, cancel, take, settlement/confirm, trade/complete, sweep/refunds) · `/enterprise/inference[/submit]` · `/founder/*` (genesis, audit.csv, withdraw_treasury) · `/genesis/1000/*` · `/health/swarm`, `/metrics`, `/status`, `/logs` (SSE), `/telemetry/local`, `/network/{stats,power}` · `/phase4/*` (all return **501 Not Implemented**).
 
+> **[SUPERSEDED 2026-09-20]** Four entries in that inventory are **gone from the router** and are
+> pinned as regression guards in `tests.rs`:
+>
+> | Route(s) | Removed in | Why |
+> |---|---|---|
+> | `/dex/*` (all 7) | `13ba795` | Six moved funds unauthenticated; v0 CHF-era product with no caller |
+> | `POST /ledger/recover-from-guardian` | `e48aad5` | Unauthenticated: wiped the balances tree and loaded caller-supplied state |
+> | `POST /ledger/faucet` **and** `POST /faucet` | `c2416dc` | REST-reachable direct balance write that forked `state_root` |
+>
+> Two others now require a hybrid Ed25519 + ML-DSA signature: `POST /v1/vision/zk-court/challenge`
+> (`bdf1db5`) and `POST /v1/vision/caac/complete` (`2922c34` — **impersonation only**; the latency
+> it records is still self-declared, see [`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) §2.3).
+
 ## 2.10 Sovereign OS UI
 
 Next.js **16.1.6** App Router, React **19.2.3**, Tailwind 4, TypeScript. 13,683 lines under `app/`. Entry: `/os` → `OsClient.tsx` (**2,281 lines**, down from 3,100+ after the 10-step redesign).
@@ -424,7 +456,7 @@ Interop verification scripts (real, executed, results recorded in commits): `tma
 | 16 | Tmail Pin (1000 Stevemon stake, >5 msgs) | 11.5, AT-7 | **Not built** | **Not built** |
 | 17 | Mini-apps: Calculator, Clock, Notes | 13.3, AT-8 | **Not built** (S10) | **Not built** |
 | 18 | Win95 shell with window manager, taskbar, boot sequence, sounds | 13.2, A.5 | A **tabbed** Win95-styled shell with a component library and modal `Win95Window`s. No WM, no taskbar, no boot sequence, no sounds | **Partial — different design** |
-| 19 | Faucet 100 TET/day/IP | 19.1, D#10 | `POST /ledger/faucet` + `/faucet`, **admin Bearer token required**, per-wallet once + per-IP rate limit, source = worker pool. Tested 3/3 in production | **Implemented; not public** (a token-gated faucet is not a self-serve faucet) |
+| 19 | Faucet 100 TET/day/IP | 19.1, D#10 | `POST /ledger/faucet` + `/faucet`, **admin Bearer token required**, per-wallet once + per-IP rate limit, source = worker pool. Tested 3/3 in production | **Implemented; not public** (a token-gated faucet is not a self-serve faucet) — **[SUPERSEDED 2026-09-20]** both routes **removed** in `c2416dc` (direct balance write, forked `state_root`). There is now **no faucet endpoint at all**; S4 must build a consensus-routed public one, not un-gate the old one |
 | 20 | Public seed node, builder joins in <30 min | B.1.1 | One Hetzner VPS in Helsinki, systemd + ufw + fail2ban + 4 GB swap. `RUNNING_A_NODE.md` exists (17 KB). Sprint-4 exit criteria were never formally signed off | **Partial** |
 | 21 | CI/CD green on main | B.1.1 | **No `.github/workflows/` in the repo at all** | **Not built** |
 | 22 | Hardware fingerprinting for Sybil resistance | 10, 17.5 | Heuristic hash; own docstring says "not a security anchor" | **Partial, disclosed** |
@@ -464,7 +496,7 @@ Interop verification scripts (real, executed, results recorded in commits): `tma
 | `tet-core/src/workers/mod.rs:1,28` | "On-chain worker registry (Phase 0.5 **scaffold**)"; `total_rewards_micro` is a scaffold counter |
 | `tet-core/src/protocol.rs:83` | `WorkerRegister` — "Phase 0.5 scaffold" |
 | `tet-core/src/p2p_network.rs:929` | Trace root is a "**placeholder** for real trace merkle root" |
-| `tet-core/src/p2p_dex.rs:71,383` | Solana settlement listener "(or stub)"; "real pending queue lands in Phase 4" |
+| ~~`tet-core/src/p2p_dex.rs:71,383`~~ | Solana settlement listener "(or stub)"; "real pending queue lands in Phase 4" — **[SUPERSEDED 2026-09-20]** file **REMOVED** in `13ba795` |
 | `tet-core/src/ai_filter.rs:54` | "Expect false positives. Phase 4.2 will add ML-based policy" |
 | `tet-core/src/worker_config.rs:9` | `--unsafe-no-filter` disables "content filtering placeholders" |
 | `nexus-wasm/src/lib.rs:5` | "gating wasm-only dependencies and providing **no-op stubs**" |
@@ -505,7 +537,7 @@ Interop verification scripts (real, executed, results recorded in commits): `tma
 | `nexus-frontend/` (1 `index.html`), `web-wallet/` (1 `README.md`), `pwa/` (empty) | Vestigial |
 | `tet-worker/index.ts` (279 lines) | Legacy TS worker, superseded by `tet-core/src/bin/tet-worker.rs` |
 | `tet-agent-sdk/` | Alive but still on `@polkadot/keyring` |
-| `p2p_dex.rs` (589 LOC) + `/dex/*` routes | **v0 CHF-era product**, still live and routed |
+| ~~`p2p_dex.rs` (589 LOC) + `/dex/*` routes~~ | **v0 CHF-era product**, still live and routed — **[SUPERSEDED 2026-09-20]** **REMOVED** in `13ba795`, file and all 7 routes |
 | `chf_top_up_mint`, CHF/AML/fiat meta keys | v0 CHF-era, still live |
 | `archive/` (3 whitepapers), `docs/archive/` | Correctly archived |
 | Root clutter | `bootnode.log` (157 KB), `client.log` (159 KB), `worker.log` (53 KB), `node.log`, `prover.log`, `ignition-run.log`, `tet.db_5010/`, `tet.db_5011/`, `tet.db_8010/`, `test-ledger/`, `tet_ledger.json`, and a **zero-byte file literally named `10000000000`**. `1cc000f` removed testnet wallet files from git, but the local copies and logs remain on disk. |
@@ -665,7 +697,7 @@ Not features, but the decision rules behind them, and worth reading before you c
 | Work item | Est. | Last documented state |
 |---|---|---|
 | **Public seed ×1** — Hetzner EU, static IP, bootnode multiaddr | 3 d | **Done.** Helsinki VPS hardened 2026-05-28: systemd auto-start, fixed `TET_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001`, ufw (22/4001/5010 only), fail2ban (61 fails / 8 IPs banned on day one), 4 GB swap, persistent DB at `/opt/tet-core-data`. Later re-hardened with `WatchdogSec=120`. **Liveness today unknown.** |
-| **Faucet** — 100 TET/day/IP | 3 d | **Partial.** `POST /ledger/faucet` + `/faucet` exist; source = worker pool; per-wallet once + per-IP rate limit; production-tested 3/3 (claim / IP-limit / unauthorized) on 2026-05-29 and again on the post-hard-fork chain. **But it requires an admin Bearer token** (`TET_ADMIN_API_KEY`, stored `chmod 600` at `/root/admin_token.txt`). There is no public self-serve faucet UI or endpoint. |
+| **Faucet** — 100 TET/day/IP | 3 d | **Partial.** `POST /ledger/faucet` + `/faucet` exist; source = worker pool; per-wallet once + per-IP rate limit; production-tested 3/3 (claim / IP-limit / unauthorized) on 2026-05-29 and again on the post-hard-fork chain. **But it requires an admin Bearer token** (`TET_ADMIN_API_KEY`, stored `chmod 600` at `/root/admin_token.txt`). There is no public self-serve faucet UI or endpoint. **[SUPERSEDED 2026-09-20]** Both routes were **removed** in `c2416dc` — the handler wrote balances directly, outside consensus. The remaining `faucet_*` helpers in `rest/handlers/ledger.rs` are vestigial. This item is now **⬜ open, not partial**: it needs a consensus-routed public faucet built from scratch. |
 | **Docker (node + UI)** — `docker compose up` brings up both | 4 d | **Partial.** Root `docker-compose.yml` runs `tet-core` (+ `tet-core-gpu` profile) only. `tet-network/ui/Dockerfile` exists but **no compose service wires the UI**. Locked decision #12 requires node + UI. |
 | **CI/CD (GitHub Actions)** — `cargo test`, `cargo clippy`, UI `npm run build` + lint, required check on `main` | 2 d | **Not done.** No `.github/` directory in the repo. Every "PASS" in the commit log is a local run. |
 | **Public operator docs** — extend `RUNNING_A_NODE.md` | 2 d | **Partial.** `RUNNING_A_NODE.md` is 17 KB but dated 2026-05-19 — it predates the port split (4001/4003/4005), the watchdog, `/health/swarm`, the `block_id` V2 fork, Tmail, and Files. |
@@ -674,7 +706,7 @@ Not features, but the decision rules behind them, and worth reading before you c
 **Sprint 4 exit criteria (the Foundation gate) — none formally signed off:**
 
 - [ ] ≥1 public seed reachable from the internet with a documented multiaddr — *seed exists; the multiaddr is not published in any tracked doc*
-- [ ] Faucet funds a test wallet, UI or curl documented — *works, but admin-token-gated*
+- [ ] Faucet funds a test wallet, UI or curl documented — *~~works, but admin-token-gated~~* — **[SUPERSEDED 2026-09-20]** the endpoint no longer exists (`c2416dc`); **not met**
 - [ ] Fresh machine: `docker compose up` → **node + UI** against the public seed with **no local genesis hack** — **not met (UI not in compose)**
 - [ ] CI green on the default branch — **not met (no CI)**
 - [ ] A builder can follow `RUNNING_A_NODE.md` and join the testnet in under 30 minutes — **unverified, and the doc is stale**

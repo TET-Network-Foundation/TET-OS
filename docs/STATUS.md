@@ -1,92 +1,19 @@
-# TET Network — Whitepaper vs Implementation Status
+# TET — Current Status
 
-**Generated:** 2026-05-18 (updated for Genesis Draft v1.0)  
-**Canonical whitepaper:** [`WHITEPAPER.md`](../WHITEPAPER.md) / [`GENESIS_V1.md`](../GENESIS_V1.md) (§1–§17, 2026-04-28)  
-**Deprecated economics:** [`archive/WHITEPAPER_v0_economic.md`](../archive/WHITEPAPER_v0_economic.md)  
-**Implementation:** `tet-core/` (Rust L1 node)
+**As of:** 2026-09-20 · `main` @ `2922c34` = `origin/main`, tree clean, no tags, repo **private**
+**Canonical whitepaper:** [`WHITEPAPER.md`](../WHITEPAPER.md) (v1.1) · **Sprint numbering:** [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) · **Genesis-deferred work:** [`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md)
+**Whitepaper-claim → code mapping** (this file's former contents, rewritten and expanded): [`TET_STATE_2026-09.md`](./TET_STATE_2026-09.md) §3.1
 
-> UI short summary: `tet-network/ui/app/lib/tetWhitepaper.ts` — **still Genesis v1.0**; rewriting it
-> to v1.1 is an open content task. PDF: `tet-network/ui/public/tet-network-whitepaper.pdf` —
-> **replaced 2026-09-18 with Whitepaper v1.1** (744 KB, rendered from the scrubbed
-> `docs/WHITEPAPER_v1.1_DRAFT.md`; see [`WHITEPAPER_BUILD.md`](./WHITEPAPER_BUILD.md)). The prior
-> v1.0 PDF (1.8 MB, 2026-04-28) was removed because it embedded a personal contact address.
-> The summary and the PDF are therefore at **different versions** until the summary is rewritten.
+| Area | State |
+|---|---|
+| **Tests** | `RISC0_SKIP_BUILD=1 cargo test -p tet-core` → **182 passed, 0 failed** (16 lib + 166 `--bin TET-Core`; run 2026-09-20, 90 s). Local only — there is still no CI, so no result is enforced on `main`. Build is not warning-clean: one unused import (`solana_sdk::pubkey::Pubkey`) and two unused variables (`fee`, `burn`) left by the faucet-route removal. |
+| **Chain** | Nothing is running. The Helsinki seed is dead and the Phase 0 testnet is throwaway by design (Strategy C); Phase 1 cuts a fresh genesis. |
+| **Security — removed** | `POST /ledger/recover-from-guardian` (unauthenticated ledger replacement), all 7 `/dex/*` routes (6 moved funds unauthenticated), both faucet routes (direct balance write that forked `state_root`). Each has a regression guard in `tests.rs`. |
+| **Security — hardened** | `/v1/vision/zk-court/challenge` and `/v1/vision/caac/complete` now require a hybrid Ed25519 + ML-DSA signature. CAAC is **impersonation-only**: the latency it records is still self-declared and still feeds leader-election weight (`PHASE_1_GENESIS_SPEC.md` §2.3). |
+| **Consensus (9828)** | Three divergence mechanisms are pinned by tests that assert the **broken** behaviour and carry `TODO(9828)`. The fix — use `block.timestamp`, not `ledger_now_ms()`, on every apply path — is consensus-breaking and therefore genesis-only (`PHASE_1_GENESIS_SPEC.md` §1). |
+| **Fees** | `fees.rs` is the single source of truth, [`FEE_SPEC.md`](./FEE_SPEC.md) is normative: schedules 1/3/4 deleted, 5–7 unified, `fee_bps` bounded, the ×5 burn saturation fixed. |
+| **S4 — L1 Foundation (the blocker)** | ⬜ re-provision the public seed · ⬜ public faucet — must now be **built** consensus-routed, not un-gated · ⬜ UI service in `docker-compose.yml` · ⬜ CI (no `.github/` at all) · ⬜ refresh `RUNNING_A_NODE.md` (dated 2026-05-19) · ⬜ dashboards / alerting / SLOs. **0 of 6 exit criteria signed off.** |
+| **Other sprints** | S1–S3, S5, S9 ✅ · S6 🟡 (tabbed Win95 shell — no window manager, taskbar or boot sequence) · S7, S8 (Anonymous Mode — critical path), S10, S11 ⬜. |
+| **Open, not genesis-blocked** | ~15 direct-write paths still reachable from REST/p2p · ZK-Court has no challenger incentive, so the dispute path is never exercised · `chf_top_up_mint` and the CHF/AML/fiat meta keys are still live v0 machinery. |
 
-## Status legend
-
-| Symbol | Meaning |
-|--------|---------|
-| ❌ | 未着手 |
-| 🟡 | 概念のみ |
-| 🟠 | 骨格あり |
-| 🟢 | mock / dev 動作 |
-| ✅ | 単体ノードで継続利用可能 |
-
-「本番」= 単一 `tet-core` ノード基準。マルチノード同期・公開 testnet 72h は未達（[`SYNC_ISSUE.md`](./SYNC_ISSUE.md)）。
-
----
-
-## A. Genesis v1.0 (`WHITEPAPER.md`) コンポーネント
-
-| コンポーネント | 目的（1文） | ステータス | 実装パス |
-|----------------|-------------|------------|----------|
-| **§4 CAAC — PoC** | GPU クラスタで推論実行・楽観的/ZK 検証 | 🟠 | `vision/caac.rs`, `worker_daemon.rs`, `consensus.rs` |
-| **§4 CAAC — PoR** | エッジでリレー・PQC 軽量検証 | 🟠 | `vision/caac.rs`, `p2p.rs` |
-| **§5.1 Sovereign Runtime** | 楽観的コミット + challenge window → ZK-Court | 🟠 | `vision/zk_court.rs`, `rest/`, `tet-network/ui/app/os/` |
-| **§5.2 R(T) / Sovereign Peg** | 熱力学報酬・1 TET = 検証可能物理仕事 | 🟠 | `vision/thermo_genesis.rs`（式は WP と部分一致；η 未定義） |
-| **§6 Fluid tx (workload flag)** | flag 0/1 で CAAC ルーティング | 🟢 | `protocol.rs`, enterprise inference TX |
-| **§7 Weight Locality** | モデル重みのクラスタキャッシュ | 🟡 | 設計のみ；地理ルーティング未 |
-| **§8 Edge light clients** | ヘッダ + Merkle branch 検証 | 🟠 | `ledger.rs` state root；SPV プロトコル未 |
-| **§9 Cockroach Doctrine** | PoR メッシュで台帳継続 | 🟠 | `p2p.rs`, `replication.rs`；マルチノード未検証 |
-| **§10 ML-DSA** | ジェネシスから PQC 署名 | 🟢 | `quantum_shield.rs`, `tet-pqc-wasm/` |
-| **§11 Tokenomics** | 10B cap、25/50/25、50% fee burn | 🟠 | `ledger.rs` cap/burn；配分は要突合 |
-| **§11.2 vs AI 80/15/5** | inference 決済スプリット | 🟢 | `ledger.rs`, `enterprise.rs`（**WP §11 に未記載** → Gap 6） |
-| **§12.1–12.4 Applications** | RaaS、marketplace、agents、DeFi | 🟠 | REST + UI；L2 RaaS 本番未 |
-| **§12.5–12.7 Future Work** | World Brain / Sentient Assets / Agent-Gate | 🟡 | 本文で Phase 0/1 対象外；コードなし |
-| **§13 Roadmap Phase 0–2** | inference wedge → CAAC → fluid grid | 🟠 | Phase 0 UI README；L1 同期は Sprint 1 |
-| **§14.1 ZK-Court disputes** | 不正推論の slash | 🟠 | `vision/zk_court.rs`, `tests.rs` |
-| **§14.2 Hardware fingerprinting** | Sybil 対策 micro-tasks | 🟠 | `caac.rs` 静的 probe のみ |
-| **§14.3 Economic finality** | S = λ·R_expected | 🟡 | 本文あり；bond 実装は部分 |
-
----
-
-## B. Legacy / archive のみ（正本に非掲載）
-
-| 項目 | 備考 | ステータス | 実装 |
-|------|------|------------|------|
-| CHF 1:1 peg | `archive/WHITEPAPER_v0_economic.md` | 🟢（legacy） | `ledger.rs` `chf_top_up_mint` — **要 Steve 判断**（廃止 vs 別プロダクト） |
-| Imperial Tax 99/1 | deprecated WP | 🟠 | ワーカー mint 経路に類似ロジックの可能性；用語は非正本 |
-| Sharding Plugins | deprecated WP | 🟠 | シャードシミュレーション；≠ §5.1 Sovereign Runtime |
-| P2P DEX (Quantum Gate) | `archive/LITEPAPER_v0.md` | 🟠 | `p2p_dex.rs` |
-
----
-
-## C. 正本に明示なし — 実装に存在
-
-| コンポーネント | ステータス | 実装パス |
-|----------------|------------|----------|
-| libp2p メッシュ / block gossip | 🟠 | `p2p.rs`, `p2p_network.rs`, `network.rs` |
-| Consensus / auto-mine | 🟢 / 🟠 | `consensus.rs` |
-| 80/15/5 AI utility settlement | 🟢 | `enterprise.rs`, `ledger.rs` |
-| Substrate / Solana 実験 | 🟡 ARCHIVED | `tet-core-node/`, `nexus-onchain/` |
-
----
-
-## D. ギャップ要約
-
-1. **§12.1–12.4 が binding scope**；§12.5–12.7 は Future Work（WP L173–177）。  
-2. **マルチノード `block_height` 同期**未検証 — [`SYNC_ISSUE.md`](./SYNC_ISSUE.md)。  
-3. **§11 tokenomics と 80/15/5** — 一本化は v1.1（[`WHITEPAPER_V1.1_GAPS.md`](./WHITEPAPER_V1.1_GAPS.md) Gap 6）。  
-4. Sprint / Phase 用語は [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) と WP §13 を併読。
-
----
-
-## E. 参照
-
-| 文書 | パス |
-|------|------|
-| Whitepaper (canonical) | `WHITEPAPER.md`, `GENESIS_V1.md` |
-| v0 economics (archive) | `archive/WHITEPAPER_v0_economic.md` |
-| Litepaper (archive) | `archive/LITEPAPER_v0.md` |
-| v1.1 gaps | `docs/WHITEPAPER_V1.1_GAPS.md` |
-| Launch report | `docs/WHITEPAPER_V1.0_LAUNCH.md` |
+**Next:** close the S4 gate. Nothing else in Phase 0 is worth building against a chain no external builder can join.

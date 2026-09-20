@@ -63,7 +63,7 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | Work item | Est. | Status | Note |
 |---|---|---|---|
 | **Public seed (1×)** | 3 d | 🔁 **to re-provision** | Helsinki VPS is **dead**. Prior build was systemd auto-start, `TET_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001`, ufw 22/4001/5010, fail2ban, 4 GB swap, persistent DB at `/opt/tet-core-data`, `WatchdogSec=120`. Rebuild from that recipe; publish the bootnode multiaddr in `RUNNING_A_NODE.md` this time |
-| **Faucet** — 100 TET/day/IP | 3 d | ⬜ open | Endpoint exists (`POST /ledger/faucet`, worker-pool funded, per-wallet-once + per-IP limit, tested 3/3). But it is **admin-Bearer-token gated** — there is no public self-serve path. That is the gap |
+| **Faucet** — 100 TET/day/IP | 3 d | ⬜ open | **Updated 2026-09-20: there is no faucet endpoint any more.** `POST /ledger/faucet` and `POST /faucet` were removed in `c2416dc` — the handler wrote balances directly, outside consensus, and forked `state_root` (a block-9828 mechanism). The per-wallet-once / per-IP limiter helpers survive in `rest/handlers/ledger.rs` but are unrouted. The work is now **build** a consensus-routed public faucet, not un-gate the old one; re-estimate above 3 d |
 | **Docker (node + UI)** | 4 d | ⬜ open | `docker-compose.yml` runs `tet-core` only. `tet-network/ui/Dockerfile` exists but no compose service wires it. Locked decision #12 requires node **+ UI** |
 | **CI/CD (GitHub Actions)** | 2 d | ⬜ open | No `.github/` directory exists. All 65 commits' "PASS" claims are local runs |
 | **Public operator docs** | 2 d | ⬜ open | `RUNNING_A_NODE.md` is 17 KB but dated 2026-05-19 — predates the 4001/4003/4005 port split, the watchdog, `/health/swarm`, the `block_id` V2 fork, Tmail, and Files |
