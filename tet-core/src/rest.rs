@@ -3,7 +3,7 @@ pub mod helpers;
 pub mod state;
 pub mod types;
 
-mod routes;
+pub mod routes;
 
 pub use routes::serve;
 pub use state::{E2eeJobQueue, HttpRateLimit, RestState};

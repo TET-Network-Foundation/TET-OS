@@ -70,6 +70,8 @@ zk-prove = ["risc0-zkvm/client"]
 
 [dev-dependencies]
 proptest = "1.6"
+# Router-level tests (ServiceExt::oneshot) -- asserts removed routes are really gone.
+tower = { version = "0.5", features = ["util"] }
 tempfile = "3"
 once_cell = "1"
 

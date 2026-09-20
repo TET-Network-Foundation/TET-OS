@@ -16,7 +16,7 @@ use crate::{
     },
     protocol::{SignedTxEnvelopeV1, TxV1},
     rest::{
-        ExplorerEventsQuery, GuardianRecoverReq, LedgerMeQuery,
+        ExplorerEventsQuery, LedgerMeQuery,
         LedgerWorkerBondStakeReq, LedgerWorkerBondUnstakeReq, MarketIndexResp, MintDemoReq,
         ProofsQuery, RestState, VaultHistoryQuery, WalletIdQuery,
         helpers::{require_admin_bearer, require_hybrid_sig, verify_envelope_v1},
@@ -171,30 +171,6 @@ pub async fn get_market_index(State(state): State<RestState>) -> axum::response:
     (StatusCode::OK, Json(r)).into_response()
 }
 
-async fn post_ledger_recover_from_guardian_impl(
-    State(state): State<RestState>,
-    _headers: HeaderMap,
-    Json(req): Json<GuardianRecoverReq>,
-) -> axum::response::Response {
-    match crate::replication::verify_state_snapshot_signed(
-        req.sha256_hex.trim(),
-        req.snapshot_b64.trim(),
-        req.ed25519_pubkey_hex.trim(),
-        req.ed25519_sig_b64.trim(),
-    ) {
-        Ok(bytes) => match state.ledger.import_snapshot_json_v1(&bytes) {
-            Ok(()) => {
-                eprintln!(
-                    "[REPL] Ledger restored from guardian sha256={}",
-                    req.sha256_hex.trim()
-                );
-                (StatusCode::OK, "restored").into_response()
-            }
-            Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-        },
-        Err(e) => (StatusCode::UNAUTHORIZED, e).into_response(),
-    }
-}
 
 async fn get_ledger_me_impl(
     State(state): State<RestState>,
@@ -1070,13 +1046,6 @@ pub async fn post_tx_submit(
     post_tx_submit_impl(State(state), headers, Json(env)).await
 }
 
-pub async fn post_ledger_recover_from_guardian(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-    Json(req): Json<GuardianRecoverReq>,
-) -> axum::response::Response {
-    post_ledger_recover_from_guardian_impl(State(state), headers, Json(req)).await
-}
 
 pub async fn get_genesis_1k_status(
     State(state): State<RestState>,

@@ -5648,3 +5648,58 @@ fn consensus_faucet_path_keeps_nodes_in_agreement() {
         "the claim must actually credit the wallet"
     );
 }
+
+/// **SECURITY REGRESSION GUARD.** `POST /ledger/recover-from-guardian` must stay gone.
+///
+/// It was unauthenticated (`_headers` ignored, no `require_admin_bearer`, no mainnet gate) and
+/// `verify_state_snapshot_signed` checked the signature against a public key supplied **in the same
+/// request body** — self-certifying, so it authorised nothing. `import_snapshot_json_v1` then wiped
+/// every row of the balances tree and replaced it with caller-supplied state.
+///
+/// Any unauthenticated caller who could reach the REST port could therefore overwrite a node's
+/// entire ledger. The seed node had 5010 open to the internet.
+///
+/// Guardian recovery is an offline ops procedure: an operator restoring a node has filesystem
+/// access and does not need an HTTP endpoint. `Ledger::import_snapshot_json_v1` is retained for
+/// that use and is no longer reachable over HTTP.
+#[tokio::test]
+async fn removed_guardian_recover_route_is_not_reachable() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let root_before = ledger.compute_state_root().unwrap();
+
+    let body = serde_json::json!({
+        "sha256_hex": "00".repeat(32),
+        "snapshot_b64": "",
+        "ed25519_pubkey_hex": "11".repeat(32),
+        "ed25519_sig_b64": "",
+    });
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ledger/recover-from-guardian")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
+
+    let resp = crate::rest::routes::build_router(state)
+        .oneshot(req)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "the unauthenticated ledger-replacement route must never be re-added over HTTP"
+    );
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "no request to that path may mutate ledger state"
+    );
+}

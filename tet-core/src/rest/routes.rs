@@ -5,16 +5,26 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::normalize_path::NormalizePathLayer;
 
 pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Error> {
-    let mw_state = state.clone();
     let shutdown_state = state.clone();
+    let app = build_router(state);
+    serve_router(app, addr, shutdown_state).await
+}
 
+/// Builds the REST router without binding a socket.
+///
+/// Split out of [`serve`] so tests can assert the routing table directly — in particular that a
+/// removed route really is gone. `POST /ledger/recover-from-guardian` was an unauthenticated
+/// endpoint that replaced the entire balances tree; see
+/// `tests::removed_guardian_recover_route_is_not_reachable`.
+pub fn build_router(state: RestState) -> axum::Router {
+    let mw_state = state.clone();
     // NOTE: The actual route handlers remain in the parent module (`rest.rs`) for now.
     // This file extracts only the router wiring and server lifecycle to de-monolith the module.
     //
     // Layer order (last `.layer` = **outermost**; runs first on incoming requests):
     //   Cors → default body limit → global rate limit → routes.
     // CORS must stay outermost so preflight and `Access-Control-*` apply before auth/rate-limit.
-    let app = axum::Router::new()
+    axum::Router::new()
         .route(
             "/",
             axum::routing::get(super::handlers::pages::get_core_root),
@@ -387,10 +397,6 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             axum::routing::get(super::handlers::dex::get_dex_orderbook),
         )
         .route(
-            "/ledger/recover-from-guardian",
-            axum::routing::post(super::handlers::ledger::post_ledger_recover_from_guardian),
-        )
-        .route(
             "/v1/b2b/compute",
             axum::routing::post(super::handlers::b2b::post_v1_b2b_compute),
         )
@@ -503,8 +509,14 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
                 .allow_methods(Any)
                 .allow_headers(Any)
                 .allow_private_network(true),
-        );
+        )
+}
 
+async fn serve_router(
+    app: axum::Router,
+    addr: SocketAddr,
+    shutdown_state: RestState,
+) -> Result<(), std::io::Error> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(
         listener,
