@@ -1112,7 +1112,9 @@ async fn build_chain_hello_resilient(ledger: &Arc<crate::ledger::Ledger>) -> Cha
                 chain_id: crate::ledger::chain_id_from_env(),
                 block_height: ledger.block_height().unwrap_or(0),
                 tip_block_id: String::new(),
-                state_root: ledger.compute_state_root(),
+                state_root: ledger
+                        .compute_state_root()
+                        .unwrap_or_else(|_| crate::ledger::Ledger::STATE_ROOT_UNAVAILABLE.to_string()),
             }
         })
     })

@@ -1337,25 +1337,43 @@ impl Ledger {
     /// - Decrypts values and uses canonical 8-byte LE `u64` amounts.
     /// - Sorts by wallet key bytes lexicographically.
     /// - Hashes the concatenation to produce a stable root.
-    pub fn compute_state_root(&self) -> String {
+    /// Returned by status/telemetry paths when the root cannot be computed. Deliberately not a
+    /// valid `0x<64 hex>` root, so a node with unreadable state can never compare EQUAL to a
+    /// healthy peer and silently look "in sync".
+    pub const STATE_ROOT_UNAVAILABLE: &'static str = "0xUNAVAILABLE";
+
+    /// Consensus state root over the `balances` tree.
+    ///
+    /// **Fails closed.** A row that cannot be read — sled error, failed decryption, or a malformed
+    /// length — aborts the computation instead of being skipped.
+    ///
+    /// Until 2026-09-19 each of those cases was a silent `continue`, so one unreadable row simply
+    /// vanished from the root while every other node kept it: identical block history, divergent
+    /// root, no error logged. That is the block 9828 signature
+    /// (`docs/BUG_block_9828_divergence_mystery.md`). `compute_state_root_after_remote_block`
+    /// already propagated these cases with `?`; the two now agree, which is the point — a root
+    /// that silently omits state is worse than no root at all.
+    ///
+    /// Note the asymmetry only bites with encryption enabled: with no cipher `decrypt_value` is a
+    /// passthrough and a short value falls through the shared length check on both paths.
+    pub fn compute_state_root(&self) -> Result<String, LedgerError> {
         let mut rows: Vec<(Vec<u8>, u64)> = Vec::new();
         for it in self.balances.iter() {
-            let Ok((k, v)) = it else {
-                continue;
-            };
-            let Ok(pt) = self.decrypt_value(v.as_ref()) else {
-                continue;
-            };
+            let (k, v) = it?;
+            let pt = self.decrypt_value(v.as_ref())?;
             if pt.len() != 8 {
-                continue;
+                return Err(LedgerError::Invalid(format!(
+                    "balance row {} has {} bytes, expected 8 — refusing to compute a state root \
+                     over partial state",
+                    hex::encode(&k),
+                    pt.len()
+                )));
             }
-            let Ok(arr) = <[u8; 8]>::try_from(pt.as_slice()) else {
-                continue;
-            };
-            let amt = u64::from_le_bytes(arr);
-            rows.push((k.to_vec(), amt));
+            let arr = <[u8; 8]>::try_from(pt.as_slice())
+                .map_err(|_| LedgerError::Invalid("invalid balance encoding".into()))?;
+            rows.push((k.to_vec(), u64::from_le_bytes(arr)));
         }
-        Self::state_root_from_rows(rows)
+        Ok(Self::state_root_from_rows(rows))
     }
 
     fn state_root_from_rows(mut rows: Vec<(Vec<u8>, u64)>) -> String {
@@ -5153,6 +5171,15 @@ impl Ledger {
     /// Admin HTTP faucet: move `amount_micro` from [`WALLET_SYSTEM_WORKER_POOL`] → `wallet_id` exactly once per wallet,
     /// with per-IP rolling-window limits enforced in the **same** sled transaction as the balance updates when
     /// `bypass_limits` is false.
+    /// Direct pool-to-wallet credit. **Not reachable from REST** — the `/ledger/faucet` and
+    /// `/faucet` routes were removed 2026-09-19 because this writes balances outside the block
+    /// pipeline and therefore forks `state_root` on whichever node serves the request (the block
+    /// 9828 class of bug; see `docs/BUG_block_9828_divergence_mystery.md`).
+    ///
+    /// Retained only for test seeding and offline operator use. **Do not re-expose it over HTTP.**
+    /// The consensus-safe faucet is `POST /ledger/initial_airdrop/claim`, which routes a
+    /// hybrid-signed `TxV1::InitialAirdrop` through the mempool and applies deterministically on
+    /// every node (`2ce9024`).
     pub fn admin_rest_faucet(
         &self,
         wallet_id: &str,

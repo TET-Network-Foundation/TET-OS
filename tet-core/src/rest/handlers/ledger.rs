@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -11,12 +11,12 @@ use std::net::SocketAddr;
 use crate::{
     attestation::AttestationReport,
     ledger::{
-        ADMIN_REST_FAUCET_MAX_AMOUNT_MICRO, AdminRestFaucetOutcome, BlockSummary, MAX_SUPPLY_MICRO,
+        BlockSummary, MAX_SUPPLY_MICRO,
         MIN_WORKER_STAKE_MICRO, STEVEMON, TxIndexRecordV1,
     },
     protocol::{SignedTxEnvelopeV1, TxV1},
     rest::{
-        ExplorerEventsQuery, FaucetReq, GuardianRecoverReq, LedgerMeQuery,
+        ExplorerEventsQuery, GuardianRecoverReq, LedgerMeQuery,
         LedgerWorkerBondStakeReq, LedgerWorkerBondUnstakeReq, MarketIndexResp, MintDemoReq,
         ProofsQuery, RestState, VaultHistoryQuery, WalletIdQuery,
         helpers::{require_admin_bearer, require_hybrid_sig, verify_envelope_v1},
@@ -611,123 +611,6 @@ async fn post_mint_demo_impl(
     }
 }
 
-async fn post_ledger_faucet_impl(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-    ConnectInfo(sock): ConnectInfo<SocketAddr>,
-    Json(req): Json<FaucetReq>,
-) -> impl IntoResponse {
-    if let Err(r) = require_admin_bearer(&headers) {
-        return r;
-    }
-    let w = req.wallet_id.trim().to_ascii_lowercase();
-    if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
-        return (StatusCode::BAD_REQUEST, "wallet_id must be 64 hex chars").into_response();
-    }
-    let bytes = match hex::decode(w.as_bytes()) {
-        Ok(v) => v,
-        Err(_) => {
-            return (StatusCode::BAD_REQUEST, "wallet_id must be 64 hex chars").into_response();
-        }
-    };
-    let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) else {
-        return (StatusCode::BAD_REQUEST, "wallet_id must be 32 bytes").into_response();
-    };
-    let pk = Pubkey::new_from_array(arr);
-    let amount_tet = req
-        .amount_tet
-        .unwrap_or(100.0)
-        .clamp(0.00000001, 1_000_000.0);
-    let amount_micro = (amount_tet * STEVEMON as f64).round() as u64;
-    if amount_micro == 0 {
-        return (StatusCode::BAD_REQUEST, "amount_tet too small").into_response();
-    }
-    if amount_micro > ADMIN_REST_FAUCET_MAX_AMOUNT_MICRO {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!(
-                "amount_micro exceeds single-grant cap ({})",
-                ADMIN_REST_FAUCET_MAX_AMOUNT_MICRO
-            ),
-        )
-            .into_response();
-    }
-
-    let bypass = faucet_bypass_limits();
-    let ip_label = extract_client_ip(&headers, sock);
-    let (window_ms, max_ip) = if disable_rate_limit() {
-        // Local/dev bypass: keep one-time-per-wallet rule, only skip IP-based RL.
-        // Setting max_ip very high prevents `admin_faucet_ip_rl` while still recording the row.
-        (faucet_ip_window_ms(), u32::MAX)
-    } else {
-        (faucet_ip_window_ms(), faucet_max_per_ip_per_window())
-    };
-
-    match state
-        .ledger
-        .admin_rest_faucet(&w, amount_micro, &ip_label, bypass, window_ms, max_ip)
-    {
-        Ok(AdminRestFaucetOutcome::Granted {
-            credited_micro,
-            audit_hash_hex,
-        }) => {
-            let mut solana_sig: Option<String> = None;
-            if faucet_also_mint_solana() {
-                match state.solana.faucet_tet(&pk, credited_micro) {
-                    Ok(sig) => solana_sig = Some(sig),
-                    Err(e) => {
-                        log::error!(
-                            "[solana][faucet] ledger credited but SPL mint failed wallet_id={} err={e:?}",
-                            w
-                        );
-                    }
-                }
-            }
-
-            if let Some(tx) = state.gossip_tx.clone() {
-                let event = NetworkEvent::FaucetExecuted {
-                    event_id: audit_hash_hex.clone(),
-                    to_wallet: w.clone(),
-                    amount_micro: credited_micro,
-                };
-                if let Ok(json) = serde_json::to_string(&event) {
-                    let _ = tx.send(json).await;
-                }
-            }
-
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "ok": true,
-                    "to_wallet_id": w,
-                    "amount_micro_tet": credited_micro,
-                    "audit_hash_hex": audit_hash_hex,
-                    "ledger": "credited",
-                    "solana_sig": solana_sig,
-                })),
-            )
-                .into_response()
-        }
-        Ok(AdminRestFaucetOutcome::AlreadyClaimed) => {
-            (
-                StatusCode::FORBIDDEN,
-                "faucet: this wallet already received its admin faucet grant",
-            )
-                .into_response()
-        }
-        Ok(AdminRestFaucetOutcome::IpRateLimited) => (
-            StatusCode::TOO_MANY_REQUESTS,
-            "faucet: IP rate limit (see TET_FAUCET_IP_WINDOW_MS / TET_FAUCET_MAX_PER_IP_PER_WINDOW)",
-        )
-            .into_response(),
-        Ok(AdminRestFaucetOutcome::PoolInsufficient) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "faucet: worker pool balance insufficient for this grant",
-        )
-            .into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
-}
 
 async fn post_genesis_bridge_enveloped_impl(
     State(state): State<RestState>,
@@ -888,7 +771,9 @@ pub async fn get_ledger_state(State(state): State<RestState>) -> impl IntoRespon
         let ledger = state.ledger.clone();
         tokio::task::spawn_blocking(move || ledger.compute_state_root())
             .await
-            .unwrap_or_default()
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_else(|| crate::ledger::Ledger::STATE_ROOT_UNAVAILABLE.to_string())
     };
     let ledger_sync = match &state.block_sync_board {
         Some(board) => {
@@ -1035,14 +920,6 @@ pub async fn post_mint_demo(
     post_mint_demo_impl(State(state), headers, Json(req)).await
 }
 
-pub async fn post_ledger_faucet(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-    ConnectInfo(sock): ConnectInfo<SocketAddr>,
-    Json(req): Json<FaucetReq>,
-) -> impl IntoResponse {
-    post_ledger_faucet_impl(State(state), headers, ConnectInfo(sock), Json(req)).await
-}
 
 pub async fn post_ledger_mine(
     State(state): State<RestState>,

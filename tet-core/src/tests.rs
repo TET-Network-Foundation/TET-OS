@@ -987,29 +987,23 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     let recipient = crate::wallet::generate_mnemonic_12().unwrap();
     let recipient_wallet_id = recipient.address_hex.to_ascii_lowercase();
 
-    // [A] Faucet sender via handler (rate limit bypass is enabled via env).
-    let faucet_req = crate::rest::FaucetReq {
-        wallet_id: sender_wallet_id.clone(),
-        amount_tet: Some(1000.0),
-    };
-    let resp = crate::rest::handlers::ledger::post_ledger_faucet(
-        axum::extract::State(state_a.clone()),
-        admin_headers_for_tests(),
-        axum::extract::ConnectInfo("127.0.0.1:12345".parse().unwrap()),
-        axum::Json(faucet_req),
-    )
-    .await
-    .into_response();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
-        .await
+    // [A] Seed the sender directly on the ledger. The REST faucet handler was removed on
+    // 2026-09-19 because it wrote balances outside the block pipeline and forked state_root on
+    // whichever node served it. The consensus-safe faucet is POST /ledger/initial_airdrop/claim.
+    let outcome = ledger_a
+        .admin_rest_faucet(
+            &sender_wallet_id,
+            1000 * crate::ledger::STEVEMON,
+            "127.0.0.1",
+            true,
+            1,
+            1,
+        )
         .unwrap();
-    let v: Value = serde_json::from_slice(&body).unwrap();
-    let audit_hash_hex = v
-        .get("audit_hash_hex")
-        .and_then(|x| x.as_str())
-        .unwrap_or("")
-        .to_string();
+    let audit_hash_hex = match outcome {
+        crate::ledger::AdminRestFaucetOutcome::Granted { audit_hash_hex, .. } => audit_hash_hex,
+        other => panic!("seed failed: {other:?}"),
+    };
     assert!(!audit_hash_hex.is_empty());
 
     // [B] Apply faucet event (simulate gossip delivery).
@@ -1191,7 +1185,7 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     );
 
     // Deterministic state root: after applying same block, roots match.
-    assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
+    assert_eq!(ledger_a.compute_state_root().unwrap(), ledger_b.compute_state_root().unwrap());
 
     let skipped = crate::consensus::apply_remote_block_from_gossip(
         ledger_b.clone(),
@@ -1289,7 +1283,7 @@ fn two_synced_nodes_with_funded_sender() -> (
             )
             .unwrap();
     }
-    assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
+    assert_eq!(ledger_a.compute_state_root().unwrap(), ledger_b.compute_state_root().unwrap());
     (
         ledger_a,
         ledger_b,
@@ -1348,8 +1342,8 @@ async fn remote_block_apply_offloaded_sequence_keeps_state_roots_identical() {
 
         assert_eq!(ledger_a.block_height().unwrap(), height);
         assert_eq!(ledger_b.block_height().unwrap(), height);
-        assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
-        assert_eq!(ledger_a.compute_state_root(), gossip.state_root);
+        assert_eq!(ledger_a.compute_state_root().unwrap(), ledger_b.compute_state_root().unwrap());
+        assert_eq!(ledger_a.compute_state_root().unwrap(), gossip.state_root);
         parent_block_id = Some(gossip.block_id.clone());
     }
 }
@@ -1589,7 +1583,7 @@ async fn file_fee_remote_block_apply_keeps_state_roots_identical() {
             other => panic!("expected Applied, got {other:?}"),
         }
     }
-    assert_eq!(ledger_a.compute_state_root(), ledger_b.compute_state_root());
+    assert_eq!(ledger_a.compute_state_root().unwrap(), ledger_b.compute_state_root().unwrap());
 
     let treasury = crate::ledger::treasury_address_from_env().unwrap();
     for ledger in [&ledger_a, &ledger_b] {
@@ -1778,7 +1772,7 @@ async fn remote_block_apply_concurrent_duplicate_delivery_is_fork_safe() {
     assert_eq!(applied, 1, "block must be applied exactly once");
     assert_eq!(skipped, 3);
     assert_eq!(ledger_b.block_height().unwrap(), 1);
-    assert_eq!(ledger_b.compute_state_root(), gossip1.state_root);
+    assert_eq!(ledger_b.compute_state_root().unwrap(), gossip1.state_root);
 
     // Receiver keeps extending: mirror block 1 on the producer view, then deliver block 2.
     let _ = crate::consensus::apply_remote_block_from_gossip(
@@ -1807,7 +1801,7 @@ async fn remote_block_apply_concurrent_duplicate_delivery_is_fork_safe() {
         outcome,
         crate::consensus::RemoteBlockApplyOutcome::Applied { block_height: 2, .. }
     ));
-    assert_eq!(ledger_b.compute_state_root(), gossip2.state_root);
+    assert_eq!(ledger_b.compute_state_root().unwrap(), gossip2.state_root);
 }
 
 /// Liveness: with the consensus mutation offloaded to the blocking pool, the (single-threaded)
@@ -2186,8 +2180,8 @@ fn state_root_changes_on_1_micro_difference() {
         .admin_rest_faucet(&w, 1_001, "ip", true, 1, 1)
         .unwrap();
 
-    let r1 = ledger1.compute_state_root();
-    let r2 = ledger2.compute_state_root();
+    let r1 = ledger1.compute_state_root().unwrap();
+    let r2 = ledger2.compute_state_root().unwrap();
     assert_ne!(r1, r2);
 }
 
@@ -2215,7 +2209,7 @@ async fn chain_hello_offload_matches_direct() {
 
     // State root specifically must be stable when computed off-thread.
     let l3 = ledger.clone();
-    let root_off = tokio::task::spawn_blocking(move || l3.compute_state_root())
+    let root_off = tokio::task::spawn_blocking(move || l3.compute_state_root().unwrap())
         .await
         .expect("join");
     assert_eq!(direct.state_root, root_off);
@@ -2711,7 +2705,7 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
     branch_ledger
         .apply_block_reward("producer-b", branch_reward.total_reward_micro, 1)
         .unwrap();
-    let branch_root = branch_ledger.compute_state_root();
+    let branch_root = branch_ledger.compute_state_root().unwrap();
     let branch_id = crate::consensus::block_id_for_block(
         1,
         "",
@@ -2745,7 +2739,7 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
     let changed = crate::consensus::reorg_to_branch(&ledger, &branch_id).unwrap();
     assert!(changed);
     assert_eq!(ledger.block_height().unwrap(), 1);
-    assert_eq!(ledger.compute_state_root(), branch_root);
+    assert_eq!(ledger.compute_state_root().unwrap(), branch_root);
     assert_eq!(ledger.balance_micro(&a).unwrap(), initial_a - 2_000);
     assert_eq!(ledger.balance_micro(&b).unwrap(), 0);
     assert_eq!(ledger.balance_micro(&c).unwrap(), 1_980);
@@ -2813,7 +2807,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
     branch_ledger
         .apply_block_reward("local-wallet", parent_reward.total_reward_micro, 1)
         .unwrap();
-    let parent_state_root = branch_ledger.compute_state_root();
+    let parent_state_root = branch_ledger.compute_state_root().unwrap();
     let parent_block_id = crate::consensus::block_id_for_block(
         1,
         "",
@@ -2824,7 +2818,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
     branch_ledger
         .apply_block_reward("local-wallet", child_reward.total_reward_micro, 2)
         .unwrap();
-    let child_state_root = branch_ledger.compute_state_root();
+    let child_state_root = branch_ledger.compute_state_root().unwrap();
     let child_block_id = crate::consensus::block_id_for_block(
         2,
         &parent_block_id,
@@ -2866,7 +2860,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
     let changed = crate::consensus::try_reorg_backfilled_branch(&ledger, &child_block_id).unwrap();
     assert!(changed);
     assert_eq!(ledger.block_height().unwrap(), 2);
-    assert_eq!(ledger.compute_state_root(), child_state_root);
+    assert_eq!(ledger.compute_state_root().unwrap(), child_state_root);
     assert_eq!(ledger.balance_micro(&a).unwrap(), initial_a - 2_000);
     assert_eq!(ledger.balance_micro(&b).unwrap(), 0);
     assert_eq!(ledger.balance_micro(&c).unwrap(), 1_980);
@@ -4187,14 +4181,14 @@ fn welcome_airdrop_offchain_claim_forks_node_state_root() {
     n2.apply_genesis_allocation("founder").unwrap();
 
     // Identical genesis => identical consensus state root.
-    assert_eq!(n1.compute_state_root(), n2.compute_state_root());
+    assert_eq!(n1.compute_state_root().unwrap(), n2.compute_state_root().unwrap());
 
     // Off-chain claim on n1 only (the removed `/ai/infer` behavior) forks the state root.
     let user = "a".repeat(64);
     n1.claim_initial_airdrop(&user).unwrap();
     assert_ne!(
-        n1.compute_state_root(),
-        n2.compute_state_root(),
+        n1.compute_state_root().unwrap(),
+        n2.compute_state_root().unwrap(),
         "off-chain airdrop on one node forks consensus state root; it must not run in handlers"
     );
 }
@@ -4214,8 +4208,8 @@ fn welcome_airdrop_consensus_tx_predicts_same_root_on_all_nodes() {
     let n2 = open_temp_ledger();
     n2.init_genesis_founder_premine_from_env().unwrap();
     n2.apply_genesis_allocation("founder").unwrap();
-    let genesis_root = n1.compute_state_root();
-    assert_eq!(genesis_root, n2.compute_state_root());
+    let genesis_root = n1.compute_state_root().unwrap();
+    assert_eq!(genesis_root, n2.compute_state_root().unwrap());
 
     // Build a hybrid-signed InitialAirdrop claim for a fresh wallet.
     let w = crate::wallet::generate_mnemonic_12().unwrap();
@@ -4550,8 +4544,8 @@ mod block_sync {
         loop {
             let hs = heights(ledgers);
             if height_spread(&hs) <= max_delta {
-                let root = ledgers[0].compute_state_root();
-                if ledgers.iter().all(|l| l.compute_state_root() == root) {
+                let root = ledgers[0].compute_state_root().unwrap();
+                if ledgers.iter().all(|l| l.compute_state_root().unwrap() == root) {
                     return;
                 }
             }
@@ -4588,10 +4582,10 @@ mod block_sync {
     }
 
     fn assert_state_roots_match(ledgers: &[Arc<crate::ledger::Ledger>]) {
-        let root = ledgers[0].compute_state_root();
+        let root = ledgers[0].compute_state_root().unwrap();
         for (i, l) in ledgers.iter().enumerate() {
             assert_eq!(
-                l.compute_state_root(),
+                l.compute_state_root().unwrap(),
                 root,
                 "state_root mismatch at node index {i}"
             );
@@ -4616,7 +4610,7 @@ mod block_sync {
 
     fn tip_triplet(ledger: &crate::ledger::Ledger) -> (u64, String, String) {
         let height = ledger.block_height().unwrap_or(0);
-        let state_root = ledger.compute_state_root();
+        let state_root = ledger.compute_state_root().unwrap();
         let block_id = ledger
             .chain_tip()
             .ok()
@@ -5507,31 +5501,23 @@ fn wallclock_time_changes_spendability_for_the_same_block() {
     );
 }
 
-/// **BUG (rank 3, downgraded): `compute_state_root` silently drops rows it cannot read.**
+/// **FIXED (was rank 3): the two root computations now agree on unreadable rows.**
 ///
-/// `compute_state_root` (`ledger.rs:1346-1357`) uses `let Ok(..) else { continue }` for sled
-/// errors, decrypt failures and malformed lengths — a bad row vanishes from the root with no log
-/// line. `compute_state_root_after_remote_block` (`ledger.rs:1388-1396`) propagates the same
-/// conditions with `?`. The two disagree on what counts as valid state.
+/// `compute_state_root` used `let Ok(..) else { continue }` for sled errors, decrypt failures and
+/// malformed lengths, so one bad row silently vanished from the root while peers kept it —
+/// identical block history, divergent root, nothing logged. That is the block 9828 signature
+/// (`docs/BUG_block_9828_divergence_mystery.md`).
 ///
-/// **Correction to the original 9828 hypothesis.** A whole-DB key change cannot reach this: the
-/// `META_DB_MAGIC` sentinel (`ledger.rs:3859-3868`) makes `Ledger::open` fail with
-/// "database decryption failed (wrong key?)" before any root is computed. So the plausible trigger
-/// is narrower than first supposed — a single torn/corrupt row from a partial sled write, which is
-/// what this test injects directly.
+/// It now returns `Result` and fails closed, matching `compute_state_root_after_remote_block`
+/// which already propagated with `?`. This test was inverted from its TODO(9828): it previously
+/// asserted the two DISAGREED; it now asserts they agree by both refusing.
 ///
-/// TODO(9828): `compute_state_root` must return `Result<String, LedgerError>` and propagate like
-/// the preview does, so a corrupt row fails loudly on both paths instead of silently changing the
-/// root on one. Then both calls below error identically and the `assert_ne!` becomes `assert_eq!`.
+/// The asymmetry only bites with encryption on: with no cipher `decrypt_value` is a passthrough
+/// and a short value falls through the shared length check on both paths.
 #[test]
-fn state_root_silently_drops_unreadable_rows() {
+fn state_root_paths_agree_on_unreadable_rows() {
     let _g = env_lock();
     set_test_env_base();
-
-    // Encryption must be ON for the asymmetry to appear: with no cipher, `decrypt_value` is a
-    // passthrough and BOTH paths fall through the shared `pt.len() != 8 => continue`, agreeing.
-    // The divergence needs `decrypt_value` to return Err, which requires a cipher and a value
-    // shorter than the 12-byte nonce (`crypto.rs:31`).
     unsafe {
         std::env::set_var("TET_DB_ENCRYPT", "strict");
         std::env::set_var(
@@ -5543,32 +5529,33 @@ fn state_root_silently_drops_unreadable_rows() {
     ledger.init_genesis_founder_premine_from_env().unwrap();
     ledger.apply_genesis_allocation("founder").unwrap();
 
-    let root_before = ledger.compute_state_root();
-    assert!(
-        ledger.compute_state_root_after_remote_block(&[], "", 0).is_ok(),
-        "healthy encrypted DB: both paths agree"
-    );
+    // Healthy DB: both paths succeed and agree.
+    let live_ok = ledger.compute_state_root().expect("healthy live root");
+    let preview_ok = ledger
+        .compute_state_root_after_remote_block(&[], "", 0)
+        .expect("healthy preview root");
+    assert_eq!(live_ok, preview_ok, "healthy DB: both paths agree");
 
-    // Inject one unreadable balance row, as a torn write would leave behind: too short to carry
-    // the 12-byte AES-GCM nonce, so decryption fails rather than yielding a wrong-length plaintext.
+    // Inject one unreadable row, as a torn write would leave behind: shorter than the 12-byte
+    // AES-GCM nonce, so decryption fails outright.
     let balances = ledger.sled_db().open_tree("balances").unwrap();
     balances
         .insert(b"c".repeat(64), vec![0xAAu8; 3])
         .expect("raw insert simulates a partial write");
 
-    let live_root = ledger.compute_state_root();
+    let live = ledger.compute_state_root();
     let preview = ledger.compute_state_root_after_remote_block(&[], "", 0);
 
-    // The live root silently skipped the unreadable row and reports the chain as healthy...
-    assert_eq!(
-        live_root, root_before,
-        "BUG: compute_state_root dropped an undecryptable row with no error — root looks unchanged"
-    );
-    // ...while the preview path refuses the very same bytes.
     assert!(
+        live.is_err(),
+        "the live root must refuse to hash partial state, not silently skip the row"
+    );
+    assert!(preview.is_err(), "the preview root must refuse it too");
+    assert_eq!(
+        live.is_err(),
         preview.is_err(),
-        "BUG: the two root computations disagree about identical bytes on disk — the live root \
-         silently succeeds where the preview errors (live={live_root}, preview={preview:?})"
+        "both root computations must reach the SAME verdict on identical bytes — \
+         disagreement here is the 9828 mechanism"
     );
 
     unsafe {
@@ -5577,20 +5564,22 @@ fn state_root_silently_drops_unreadable_rows() {
     }
 }
 
-/// **BUG (rank 1): any direct ledger write forks consensus.**
+/// **FIXED (was rank 1): the faucet no longer has a REST-reachable direct-write path.**
 ///
-/// `admin_rest_faucet` mutates balances outside the block pipeline. On 2026-05-30 four such paths
-/// were live (`/wallet/transfer`, `/ledger/initial_airdrop`, `/ai/infer`, `admin_rest_faucet`);
-/// three were fixed within eight days — the first of them 86 minutes *after* the 9828 bug report
-/// was written, which is why nobody connected them. `admin_rest_faucet` is still direct today.
+/// `/ledger/faucet` and `/faucet` routed to `admin_rest_faucet`, which wrote balances outside the
+/// block pipeline — so whichever node served the request forked its `state_root` while block
+/// history stayed identical. Both routes and the handler were removed on 2026-09-19.
 ///
-/// The companion test `welcome_airdrop_offchain_claim_forks_node_state_root` covers the removed
-/// `claim_initial_airdrop` path; this one covers the path that still ships.
+/// The consensus-safe faucet is `POST /ledger/initial_airdrop/claim`: a hybrid-signed
+/// `TxV1::InitialAirdrop` through the mempool, applied deterministically on every node
+/// (`2ce9024`). This test was inverted from its TODO(9828): it previously asserted a direct write
+/// FORKED the root; it now asserts the consensus path KEEPS nodes equal.
 ///
-/// TODO(9828): route the faucet through a consensus tx (as `TxV1::InitialAirdrop` was in
-/// `2ce9024`), then invert to `assert_eq!`.
+/// `Ledger::admin_rest_faucet` still exists for test seeding and offline operator use and still
+/// writes directly — that is why it must never be re-exposed over HTTP. The companion test
+/// `welcome_airdrop_offchain_claim_forks_node_state_root` pins what happens if it is.
 #[test]
-fn admin_faucet_direct_write_forks_state_root() {
+fn consensus_faucet_path_keeps_nodes_in_agreement() {
     let _g = env_lock();
     set_test_env_base();
 
@@ -5600,21 +5589,62 @@ fn admin_faucet_direct_write_forks_state_root() {
     let n2 = open_temp_ledger();
     n2.init_genesis_founder_premine_from_env().unwrap();
     n2.apply_genesis_allocation("founder").unwrap();
+    assert_eq!(
+        n1.compute_state_root().unwrap(),
+        n2.compute_state_root().unwrap(),
+        "identical genesis"
+    );
 
-    // Both nodes apply the identical block — empty body, same producer, same reward.
-    let r1 = n1.apply_consensus_block_batch(1, &[], &[], "producer-x", 1_000).unwrap();
-    let r2 = n2.apply_consensus_block_batch(1, &[], &[], "producer-x", 1_000).unwrap();
-    assert_eq!(r1, r2, "same block on same state must give the same root");
+    // A hybrid-signed InitialAirdrop -- the consensus-safe faucet that replaced the removed
+    // /ledger/faucet route.
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let wallet_id = w.address_hex.to_ascii_lowercase();
+    let tx = crate::protocol::TxV1::InitialAirdrop {
+        wallet_id: wallet_id.clone(),
+    };
+    let tx_bytes = serde_json::to_vec(&tx).unwrap();
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words).unwrap();
+    let env = crate::protocol::SignedTxEnvelopeV1 {
+        v: 1,
+        tx,
+        sig: crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: wallet_id.clone(),
+            ed25519_sig_b64: base64::engine::general_purpose::STANDARD
+                .encode(ed_sk.sign(tx_bytes.as_slice()).to_bytes().as_slice()),
+            mldsa_pubkey_b64: base64::engine::general_purpose::STANDARD
+                .encode(mldsa_kp.public_key()),
+            mldsa_sig_b64: base64::engine::general_purpose::STANDARD.encode(
+                crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap(),
+            ),
+        },
+        attestation: crate::protocol::AttestationV1 {
+            platform: "test".to_string(),
+            report_b64: String::new(),
+        },
+    };
+    let h = crate::consensus::tx_hash_for_env(&env).unwrap();
 
-    // One node takes a direct write that never entered a block.
-    let user = "f".repeat(64);
-    n1.admin_rest_faucet(&user, 100 * crate::ledger::STEVEMON, "10.0.0.1", true, 60_000, 100)
-        .expect("faucet credits off-chain");
+    // APPLY it on both nodes (the sibling test covers the preview arm; this covers apply).
+    let a1 = n1
+        .apply_consensus_block_batch(1, std::slice::from_ref(&env), &[h.clone()], "producer-x", 0)
+        .unwrap();
+    let a2 = n2
+        .apply_consensus_block_batch(1, std::slice::from_ref(&env), &[h], "producer-x", 0)
+        .unwrap();
 
-    assert_ne!(
-        n1.compute_state_root(),
-        n2.compute_state_root(),
-        "BUG: a direct ledger write forks the state root while block history stays identical — \
-         exactly the 9828 symptom (same block_id, same tx_hashes, divergent root)"
+    assert_eq!(
+        a1, a2,
+        "the consensus faucet path must leave both nodes at the SAME state root"
+    );
+    assert_eq!(
+        n1.compute_state_root().unwrap(),
+        n2.compute_state_root().unwrap(),
+        "no node-local side effect: roots stay equal after the claim"
+    );
+    assert!(
+        n1.balance_micro(&wallet_id).unwrap() > 0,
+        "the claim must actually credit the wallet"
     );
 }

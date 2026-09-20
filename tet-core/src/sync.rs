@@ -713,7 +713,11 @@ pub async fn ledger_sync_status(
     board: &SharedBlockSyncBoard,
     ledger: &crate::ledger::Ledger,
 ) -> LedgerSyncStatus {
-    let local_state_root = ledger.compute_state_root();
+    // Fails closed: an unreadable root becomes a sentinel that never matches a peer, so the node
+    // reports out-of-sync rather than silently claiming agreement (block 9828 class).
+    let local_state_root = ledger
+        .compute_state_root()
+        .unwrap_or_else(|_| crate::ledger::Ledger::STATE_ROOT_UNAVAILABLE.to_string());
     ledger_sync_status_with_state_root(board, ledger, &local_state_root).await
 }
 
@@ -757,7 +761,11 @@ pub async fn auto_mine_blocked_by_sync(
         return false;
     };
     let local_height = ledger.block_height().unwrap_or(0);
-    let local_state_root = ledger.compute_state_root();
+    // Sentinel on failure: a node that cannot read its own state must never compare EQUAL to a
+    // peer and report itself in sync (block 9828 class).
+    let local_state_root = ledger
+        .compute_state_root()
+        .unwrap_or_else(|_| crate::ledger::Ledger::STATE_ROOT_UNAVAILABLE.to_string());
     let local_tip_block_id = ledger
         .chain_tip()
         .ok()
@@ -800,7 +808,9 @@ pub async fn auto_mine_blocked_by_sync(
 /// Local chain status for hello request/response.
 pub fn build_chain_hello(ledger: &Ledger) -> Result<ChainHello, LedgerError> {
     let block_height = ledger.block_height()?;
-    let state_root = ledger.compute_state_root();
+    // Propagates: chain_hello drives peer sync decisions, so an unreadable root must abort the
+    // hello rather than advertise a root computed over partial state (block 9828 class).
+    let state_root = ledger.compute_state_root()?;
     let tip_block_id = ledger.chain_tip()?.map(|t| t.block_id).unwrap_or_default();
     Ok(ChainHello {
         chain_id: crate::ledger::chain_id_from_env(),

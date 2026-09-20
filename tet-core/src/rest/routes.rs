@@ -164,15 +164,7 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
             "/ledger/mint_demo",
             axum::routing::post(super::handlers::ledger::post_mint_demo),
         )
-        .route(
-            "/ledger/faucet",
-            axum::routing::post(super::handlers::ledger::post_ledger_faucet),
-        )
         // Dev alias (same handler as `/ledger/faucet`): admin Bearer mint from worker pool.
-        .route(
-            "/faucet",
-            axum::routing::post(super::handlers::ledger::post_ledger_faucet),
-        )
         .route(
             "/ledger/proof",
             axum::routing::get(super::handlers::ledger::get_proofs),
