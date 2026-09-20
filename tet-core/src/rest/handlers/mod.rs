@@ -2,7 +2,6 @@ pub mod admin;
 pub mod ai;
 pub mod assets;
 pub mod b2b;
-pub mod dex;
 pub mod enterprise;
 pub mod files;
 pub mod founder;

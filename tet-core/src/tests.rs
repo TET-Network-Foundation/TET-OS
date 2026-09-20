@@ -79,7 +79,6 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
             crate::worker_network::WorkerRegistry::default(),
         )),
         e2ee_jobs: std::sync::Arc::new(std::sync::Mutex::new(crate::rest::E2eeJobQueue::default())),
-        dex: std::sync::Arc::new(std::sync::Mutex::new(crate::p2p_dex::DexEngine::default())),
         genesis_1k_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         log_tx,
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -3076,84 +3075,6 @@ fn sign_hybrid_headers(
     );
 }
 
-#[tokio::test]
-async fn dex_maker_can_cancel_unfilled_order() {
-    let _g = env_lock();
-    set_test_env_base();
-
-    let ledger = open_temp_ledger();
-    ledger.init_genesis_founder_premine_from_env().unwrap();
-    let _ = ledger
-        .mint_reward_with_proof("alice", 2_000_000_000, b"energy:test", None, false)
-        .unwrap();
-    let bal_before = ledger.balance_micro("alice").unwrap();
-    let supply_before_dex = ledger.total_supply_micro().unwrap();
-    let burned_before_dex = ledger.total_burned_micro().unwrap();
-
-    let state = rest_state_for_tests(std::sync::Arc::new(ledger));
-
-    let place = crate::rest::handlers::dex::post_dex_order_place(
-        axum::extract::State(state.clone()),
-        axum::Json(crate::rest::DexOrderPlaceReq {
-            maker_wallet: "alice".into(),
-            side: "sell".into(),
-            quote_asset: "USDC".into(),
-            price_quote_per_tet: 50,
-            tet_micro_total: 500_000_000,
-            ttl_sec: Some(600),
-        }),
-    )
-    .await;
-    assert_eq!(place.status(), StatusCode::OK);
-    let place_body = axum::body::to_bytes(place.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let place_json: serde_json::Value = serde_json::from_slice(&place_body).unwrap();
-    let order_id = place_json
-        .get("order_id")
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let ledger = state.ledger.clone();
-    let escrow = crate::p2p_dex::escrow_wallet_for_order(&order_id);
-    assert!(ledger.balance_micro(&escrow).unwrap() > 0);
-
-    let cancel = crate::rest::handlers::dex::post_dex_order_cancel(
-        axum::extract::State(state),
-        axum::Json(crate::rest::DexOrderCancelReq {
-            order_id,
-            maker_wallet: "alice".into(),
-        }),
-    )
-    .await;
-    assert_eq!(cancel.status(), StatusCode::OK);
-
-    let bal_after = ledger.balance_micro("alice").unwrap();
-    assert_eq!(ledger.balance_micro(&escrow).unwrap(), 0);
-    // FEE_SPEC §3.1: escrow plumbing is not a taxable event. A cancelled order must leave the
-    // maker exactly whole.
-    //
-    // This assertion previously encoded a live bug: all six p2p_dex hops passed `fee_bps: None`
-    // and the deleted schedule 1 forced 1% anyway, so a maker who merely locked and cancelled
-    // lost ~2% of the escrowed amount (1% in, 1% out) and the network burned it.
-    assert_eq!(
-        bal_after, bal_before,
-        "cancelled order must refund the maker in full (no escrow fee)"
-    );
-    assert_eq!(
-        ledger.total_burned_micro().unwrap(),
-        burned_before_dex,
-        "escrow round trip must burn nothing"
-    );
-    assert_eq!(
-        ledger.total_supply_micro().unwrap(),
-        supply_before_dex,
-        "escrow round trip must not change supply"
-    );
-}
-
 /// FEE_SPEC §1.3 — burn destroys supply and credits no wallet, on every fee-bearing path.
 #[test]
 fn burn_decrements_total_supply_and_credits_no_wallet() {
@@ -3283,146 +3204,6 @@ fn transfer_fee_half_burn_reduces_total_supply_and_tracks_burned() {
         ledger.total_supply_micro().unwrap(),
         sup0.saturating_sub(burn)
     );
-}
-
-#[tokio::test]
-async fn dex_escrow_flow_quantum_gate_accepts_valid_and_rejects_classical_only() {
-    let _g = env_lock();
-    set_test_env_base();
-
-    let ledger = open_temp_ledger();
-    ledger.init_genesis_founder_premine_from_env().unwrap();
-    // Fund maker so they can lock escrow.
-    let _ = ledger
-        .mint_reward_with_proof("maker", 5_000_000_000, b"energy:test", None, false)
-        .unwrap();
-
-    let state = rest_state_for_tests(std::sync::Arc::new(ledger));
-
-    // Place order (maker sells TET for USDC).
-    let mut headers = HeaderMap::new();
-    headers.insert("x-api-key", "testkey".parse().unwrap());
-    let place = crate::rest::handlers::dex::post_dex_order_place(
-        axum::extract::State(state.clone()),
-        axum::Json(crate::rest::DexOrderPlaceReq {
-            maker_wallet: "maker".into(),
-            side: "sell".into(),
-            quote_asset: "USDC".into(),
-            price_quote_per_tet: 100,
-            tet_micro_total: 1_000_000_000,
-            ttl_sec: Some(600),
-        }),
-    )
-    .await;
-    assert_eq!(place.status(), StatusCode::OK);
-
-    // Taker takes.
-    let take = crate::rest::handlers::dex::post_dex_take(
-        axum::extract::State(state.clone()),
-        axum::Json(crate::rest::DexTakeReq {
-            taker_wallet: "taker".into(),
-            side: "buy".into(),
-            quote_asset: "USDC".into(),
-            tet_micro: 250_000_000,
-            max_price_quote_per_tet: Some(100),
-            settlement_ttl_sec: Some(600),
-        }),
-    )
-    .await;
-    assert_eq!(take.status(), StatusCode::OK);
-    let take_body = axum::body::to_bytes(take.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let take_json: serde_json::Value = serde_json::from_slice(&take_body).unwrap();
-    let trade_id = take_json
-        .get("trade_id")
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    // Prepare valid hybrid signatures for both parties.
-    let maker_ed = SigningKey::generate(&mut rand_core::OsRng);
-    let taker_ed = SigningKey::generate(&mut rand_core::OsRng);
-    let maker_mldsa = {
-        let mut seed = [0u8; 32];
-        rand_core::OsRng.fill_bytes(&mut seed);
-        dilithium::MlDsaKeyPair::generate_deterministic(dilithium::ML_DSA_65, &seed)
-    };
-    let taker_mldsa = {
-        let mut seed = [0u8; 32];
-        rand_core::OsRng.fill_bytes(&mut seed);
-        dilithium::MlDsaKeyPair::generate_deterministic(dilithium::ML_DSA_65, &seed)
-    };
-
-    let trade = {
-        let dex = state.dex.lock().unwrap();
-        dex.get_trade(&trade_id).unwrap()
-    };
-    let txid = "solana_txid_dummy_123";
-    let msg = crate::p2p_dex::DexEngine::trade_complete_message_v1(&trade, txid);
-
-    let mut qh = headers.clone();
-    sign_hybrid_headers(&mut qh, "maker", &maker_ed, &maker_mldsa, &msg);
-    sign_hybrid_headers(&mut qh, "taker", &taker_ed, &taker_mldsa, &msg);
-
-    // Payment verified guard: hybrid-ready but settlement not confirmed -> 403.
-    let blocked = crate::rest::handlers::dex::post_dex_trade_complete(
-        axum::extract::State(state.clone()),
-        qh.clone(),
-        axum::Json(crate::rest::DexTradeCompleteReq {
-            trade_id: trade_id.clone(),
-            solana_usdc_txid: txid.into(),
-            maker_ed25519_pubkey_hex: hex::encode(maker_ed.verifying_key().as_bytes()),
-            taker_ed25519_pubkey_hex: hex::encode(taker_ed.verifying_key().as_bytes()),
-        }),
-    )
-    .await;
-    assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
-
-    let confirm = crate::rest::handlers::dex::post_dex_settlement_confirm(
-        axum::extract::State(state.clone()),
-        axum::Json(crate::rest::DexSettlementConfirmReq {
-            trade_id: trade_id.clone(),
-            solana_usdc_txid: txid.into(),
-        }),
-    )
-    .await;
-    assert_eq!(confirm.status(), StatusCode::OK);
-
-    // After settlement confirm, complete should pass (quantum gate still enforced).
-    let complete_ok = crate::rest::handlers::dex::post_dex_trade_complete(
-        axum::extract::State(state.clone()),
-        qh.clone(),
-        axum::Json(crate::rest::DexTradeCompleteReq {
-            trade_id: trade_id.clone(),
-            solana_usdc_txid: txid.into(),
-            maker_ed25519_pubkey_hex: hex::encode(maker_ed.verifying_key().as_bytes()),
-            taker_ed25519_pubkey_hex: hex::encode(taker_ed.verifying_key().as_bytes()),
-        }),
-    )
-    .await;
-    assert_eq!(complete_ok.status(), StatusCode::OK);
-
-    // Classical-only: omit ML-DSA headers -> must be 403.
-    let mut classical = headers.clone();
-    let sig = maker_ed.sign(&msg);
-    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-    classical.insert("x-tet-maker-ed25519-sig-b64", sig_b64.parse().unwrap());
-    classical.insert("x-tet-taker-ed25519-sig-b64", sig_b64.parse().unwrap());
-
-    let complete_forbidden = crate::rest::handlers::dex::post_dex_trade_complete(
-        axum::extract::State(state),
-        classical,
-        axum::Json(crate::rest::DexTradeCompleteReq {
-            trade_id,
-            solana_usdc_txid: txid.into(),
-            maker_ed25519_pubkey_hex: hex::encode(maker_ed.verifying_key().as_bytes()),
-            taker_ed25519_pubkey_hex: hex::encode(taker_ed.verifying_key().as_bytes()),
-        }),
-    )
-    .await;
-    assert_eq!(complete_forbidden.status(), StatusCode::FORBIDDEN);
 }
 
 #[test]
@@ -3632,88 +3413,6 @@ fn genesis_1k_worker_pool_reward_is_110_percent_of_standard_gross() {
         0,
         "imperial vault must never be credited (FEE_SPEC §3)"
     );
-}
-
-#[tokio::test]
-async fn worker_ai_reward_vest_blocks_dex_until_lock_expires() {
-    let _g = env_lock();
-    set_test_env_base();
-    unsafe {
-        std::env::set_var("TET_WORKER_VEST_MS", "80");
-    }
-    let _vest_env = EnvVarRemoveOnDrop {
-        key: "TET_WORKER_VEST_MS",
-    };
-
-    let ledger = open_temp_ledger();
-    ledger.init_genesis_founder_premine_from_env().unwrap();
-    ledger.apply_genesis_allocation("founder").unwrap();
-    let supply_after_genesis = ledger.total_supply_micro().unwrap();
-    assert_eq!(
-        supply_after_genesis,
-        crate::ledger::GENESIS_TOTAL_MINT_MICRO,
-        "genesis must mint full max supply (25% founder + 75% system pool)"
-    );
-
-    ledger
-        .settle_transfer_internal(
-            "founder",
-            crate::ledger::WALLET_SYSTEM_WORKER_POOL,
-            200_000_000,
-            Some(100),
-            None,
-            None,
-        )
-        .unwrap();
-
-    let gross = 100_000_000u64;
-    ledger
-        .mint_worker_network_reward("maker", "imperial-vault", gross, b"energy:poc", None)
-        .unwrap();
-    assert!(
-        ledger.total_supply_micro().unwrap() <= supply_after_genesis,
-        "worker_pool payout must not inflate total supply (burn is allowed)"
-    );
-
-    let locked = ledger.locked_balance_micro_now("maker").unwrap();
-    assert!(locked > 0, "worker_net must appear as locked balance");
-    assert_eq!(
-        ledger.spendable_balance_micro_now("maker").unwrap(),
-        0,
-        "DEX must not spend vest-locked worker_net"
-    );
-
-    let state = rest_state_for_tests(std::sync::Arc::new(ledger));
-
-    let place_fail = crate::rest::handlers::dex::post_dex_order_place(
-        axum::extract::State(state.clone()),
-        axum::Json(crate::rest::DexOrderPlaceReq {
-            maker_wallet: "maker".into(),
-            side: "sell".into(),
-            quote_asset: "USDC".into(),
-            price_quote_per_tet: 100,
-            tet_micro_total: 1_000_000,
-            ttl_sec: Some(600),
-        }),
-    )
-    .await;
-    assert_eq!(place_fail.status(), StatusCode::BAD_REQUEST);
-
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
-
-    let place_ok = crate::rest::handlers::dex::post_dex_order_place(
-        axum::extract::State(state),
-        axum::Json(crate::rest::DexOrderPlaceReq {
-            maker_wallet: "maker".into(),
-            side: "sell".into(),
-            quote_asset: "USDC".into(),
-            price_quote_per_tet: 100,
-            tet_micro_total: 1_000_000,
-            ttl_sec: Some(600),
-        }),
-    )
-    .await;
-    assert_eq!(place_ok.status(), StatusCode::OK);
 }
 
 #[test]
@@ -5756,5 +5455,61 @@ fn ai_infer_settlement_direct_write_forks_state_root() {
         n2.compute_state_root().unwrap(),
         "BUG: serving one /ai/infer request forks that node's state root while block history \
          stays identical — the 9828 symptom. Deferred to PHASE_1_GENESIS_SPEC §2.1."
+    );
+}
+
+/// **SECURITY REGRESSION GUARD.** The entire `/dex/*` surface must stay gone.
+///
+/// Six mutating endpoints had **no authentication of any kind**, and
+/// `p2p_dex::place_maker_order` took `maker_wallet` straight from the request body — no signature,
+/// no ownership proof — then called `ledger.transfer_no_fee(maker_wallet, escrow, amount)`.
+/// Anyone who could reach the REST port could move anyone else's funds into an escrow keyed by an
+/// order id they chose, and `/dex/take`, `/dex/settlement/confirm`, `/dex/order/cancel` and
+/// `/dex/sweep/refunds` were equally open.
+///
+/// The DEX was the v0 CHF-era "Quantum Gate" product (`archive/LITEPAPER_v0.md`), abandoned when
+/// the economics moved to the thermodynamic peg. It had no UI, no Sovereign OS surface, and no
+/// caller outside its own tests. Removed rather than secured.
+#[tokio::test]
+async fn removed_dex_routes_are_not_reachable() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let root_before = ledger.compute_state_root().unwrap();
+
+    for (method, path) in [
+        ("POST", "/dex/order/place"),
+        ("POST", "/dex/order/cancel"),
+        ("POST", "/dex/take"),
+        ("POST", "/dex/trade/complete"),
+        ("POST", "/dex/settlement/confirm"),
+        ("POST", "/dex/sweep/refunds"),
+        ("GET", "/dex/orderbook"),
+    ] {
+        let req = axum::http::Request::builder()
+            .method(method)
+            .uri(path)
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        let resp = crate::rest::routes::build_router(rest_state_for_tests(ledger.clone()))
+            .oneshot(req)
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::NOT_FOUND,
+            "{method} {path} must stay removed — it moved funds with no authentication"
+        );
+    }
+
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "no request to a /dex/* path may mutate ledger state"
     );
 }

@@ -11,16 +11,6 @@ pub struct AiPricingQuery {
     pub input: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct DexOrderbookEntry {
-    pub order_id: String,
-    pub maker_wallet: String,
-    pub side: String,
-    pub quote_asset: String,
-    pub price_quote_per_tet: u64,
-    pub tet_micro_remaining: u64,
-    pub expires_at_ms: u128,
-}
 
 #[derive(Debug, Deserialize)]
 pub struct GuardianRecoverReq {
@@ -311,91 +301,14 @@ pub struct FounderGenesisReq {
 
 // --- DEX DTOs ---
 
-#[derive(Debug, Deserialize)]
-pub struct DexOrderPlaceReq {
-    pub maker_wallet: String,
-    /// "buy" | "sell"
-    pub side: String,
-    pub quote_asset: String,
-    pub price_quote_per_tet: u64,
-    pub tet_micro_total: u64,
-    #[serde(default)]
-    pub ttl_sec: Option<u64>,
-}
 
-#[derive(Debug, Serialize)]
-pub struct DexOrderPlaceResp {
-    pub order_id: String,
-    pub escrow_wallet: String,
-    pub status: String,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct DexOrderCancelReq {
-    pub order_id: String,
-    pub maker_wallet: String,
-}
 
-#[derive(Debug, Serialize)]
-pub struct DexOrderCancelResp {
-    pub order_id: String,
-    pub status: String,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct DexTakeReq {
-    pub taker_wallet: String,
-    /// taker intent: "buy" | "sell"
-    pub side: String,
-    pub quote_asset: String,
-    pub tet_micro: u64,
-    #[serde(default)]
-    pub max_price_quote_per_tet: Option<u64>,
-    #[serde(default)]
-    pub settlement_ttl_sec: Option<u64>,
-}
 
-#[derive(Debug, Serialize)]
-pub struct DexTakeResp {
-    pub trade_id: String,
-    pub order_id: String,
-    pub status: String,
-    pub deadline_at_ms: u128,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct DexTradeCompleteReq {
-    pub trade_id: String,
-    pub solana_usdc_txid: String,
-    pub maker_ed25519_pubkey_hex: String,
-    pub taker_ed25519_pubkey_hex: String,
-}
 
-#[derive(Debug, Serialize)]
-pub struct DexTradeCompleteResp {
-    pub trade_id: String,
-    pub status: String,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct DexSettlementConfirmReq {
-    pub trade_id: String,
-    pub solana_usdc_txid: String,
-}
 
-#[derive(Debug, Serialize)]
-pub struct DexSettlementConfirmResp {
-    pub trade_id: String,
-    pub status: String,
-}
 
-#[derive(Debug, Deserialize)]
-pub struct DexSweepRefundsReq {
-    #[serde(default)]
-    pub now_ms: Option<u128>,
-}
 
-#[derive(Debug, Serialize)]
-pub struct DexSweepRefundsResp {
-    pub refunded_trade_ids: Vec<String>,
-}

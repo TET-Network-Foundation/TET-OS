@@ -21,7 +21,6 @@ mod network;
 mod onchain;
 mod oracle;
 mod p2p;
-mod p2p_dex;
 mod p2p_keystore;
 mod p2p_network;
 mod protocol;
@@ -672,7 +671,6 @@ async fn main() -> Result<(), AnyErr> {
         http_ratelimit: Arc::new(tokio::sync::Mutex::new(HttpRateLimit::new(config.http_rps))),
         workers: Arc::new(StdMutex::new(WorkerRegistry::default())),
         e2ee_jobs: Arc::new(StdMutex::new(crate::rest::E2eeJobQueue::default())),
-        dex: Arc::new(StdMutex::new(crate::p2p_dex::DexEngine::default())),
         genesis_1k_lock: Arc::new(tokio::sync::Mutex::new(())),
         log_tx,
         log_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),

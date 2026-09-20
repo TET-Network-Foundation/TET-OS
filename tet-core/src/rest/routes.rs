@@ -369,34 +369,6 @@ pub fn build_router(state: RestState) -> axum::Router {
         )
         // ---------------- Phase X: P2P DEX (Isolated) ----------------
         .route(
-            "/dex/order/place",
-            axum::routing::post(super::handlers::dex::post_dex_order_place),
-        )
-        .route(
-            "/dex/order/cancel",
-            axum::routing::post(super::handlers::dex::post_dex_order_cancel),
-        )
-        .route(
-            "/dex/take",
-            axum::routing::post(super::handlers::dex::post_dex_take),
-        )
-        .route(
-            "/dex/trade/complete",
-            axum::routing::post(super::handlers::dex::post_dex_trade_complete),
-        )
-        .route(
-            "/dex/settlement/confirm",
-            axum::routing::post(super::handlers::dex::post_dex_settlement_confirm),
-        )
-        .route(
-            "/dex/sweep/refunds",
-            axum::routing::post(super::handlers::dex::post_dex_sweep_refunds),
-        )
-        .route(
-            "/dex/orderbook",
-            axum::routing::get(super::handlers::dex::get_dex_orderbook),
-        )
-        .route(
             "/v1/b2b/compute",
             axum::routing::post(super::handlers::b2b::post_v1_b2b_compute),
         )

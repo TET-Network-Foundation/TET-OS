@@ -1,5 +1,4 @@
 use crate::ledger::Ledger;
-use crate::p2p_dex::DexEngine;
 use crate::worker_network::WorkerRegistry;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicUsize;
@@ -59,7 +58,6 @@ pub struct RestState {
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,
     pub workers: Arc<StdMutex<WorkerRegistry>>,
     pub e2ee_jobs: Arc<StdMutex<E2eeJobQueue>>,
-    pub dex: Arc<StdMutex<DexEngine>>,
     pub genesis_1k_lock: Arc<tokio::sync::Mutex<()>>,
     pub log_tx: broadcast::Sender<String>,
     pub log_sse_connections: Arc<AtomicUsize>,
