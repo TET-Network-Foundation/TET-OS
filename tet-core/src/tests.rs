@@ -5703,3 +5703,58 @@ async fn removed_guardian_recover_route_is_not_reachable() {
         "no request to that path may mutate ledger state"
     );
 }
+
+/// **BUG (deferred to Phase 1): `/ai/infer` settlement is a direct balance write.**
+///
+/// `rest/handlers/ai.rs:744` calls `settle_ai_inference_dynamic_charge`, which mutates balances
+/// outside the block pipeline. Whichever node serves the request forks its `state_root` while
+/// block history stays identical — the block 9828 signature
+/// (`docs/BUG_block_9828_divergence_mystery.md`).
+///
+/// `3bd2009` removed the welcome-airdrop mutation from this handler in June but left the
+/// settlement, so `/ai/infer` was only ever half-fixed.
+///
+/// **Why this is not fixed here.** The charge is a compile-time constant and the request is
+/// already hybrid-signed and nonce-bound, so consensus *could* validate it — but settlement runs
+/// after inference and before the 200 OK, and the 402 path rejects post-compute. Routing it
+/// through the mempool needs a new `TxV1` variant (schema change) **and** a client-signed
+/// settlement envelope (API + UI change), entangled with the optimistic-execution model that
+/// §5.1/§8 specify but that is not built. See `docs/PHASE_1_GENESIS_SPEC.md` §2.1.
+///
+/// TODO(9828): when §2.1 lands, invert this to `assert_eq!` — settlement through consensus must
+/// leave both nodes at the same root. If this test still passes unchanged, the fix did not work.
+#[test]
+fn ai_infer_settlement_direct_write_forks_state_root() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let n1 = open_temp_ledger();
+    n1.init_genesis_founder_premine_from_env().unwrap();
+    n1.apply_genesis_allocation("founder").unwrap();
+    let n2 = open_temp_ledger();
+    n2.init_genesis_founder_premine_from_env().unwrap();
+    n2.apply_genesis_allocation("founder").unwrap();
+
+    // Fund an identical payer on both nodes, then confirm they agree.
+    let payer = "e".repeat(64);
+    let seed = 1_000 * crate::ledger::STEVEMON;
+    n1.transfer_no_fee("founder", &payer, seed).unwrap();
+    n2.transfer_no_fee("founder", &payer, seed).unwrap();
+    assert_eq!(
+        n1.compute_state_root().unwrap(),
+        n2.compute_state_root().unwrap(),
+        "identical state before the inference"
+    );
+
+    // Exactly what ai.rs:744 does when a node serves /ai/infer.
+    let charge = crate::p2p_network::AI_INFER_MICROPAYMENT_MICRO;
+    n1.settle_ai_inference_dynamic_charge(&payer, charge)
+        .expect("settlement succeeds on the serving node");
+
+    assert_ne!(
+        n1.compute_state_root().unwrap(),
+        n2.compute_state_root().unwrap(),
+        "BUG: serving one /ai/infer request forks that node's state root while block history \
+         stays identical — the 9828 symptom. Deferred to PHASE_1_GENESIS_SPEC §2.1."
+    );
+}

@@ -78,6 +78,7 @@ These are all consensus- or schema-breaking and are cheap only at a ceremony.
 
 | Item | Source | Why it must wait for genesis |
 |------|--------|------------------------------|
+| **`/ai/infer` settlement → consensus** | `ai.rs:744`, this doc §2.1 | Needs a new `TxV1` variant **and** a client-signed settlement envelope; see §2.1 |
 | **Founder vesting: cliff + linear** | WP §17.3, `DAILY_LOG_2026-05-29` | The live chain has a one-shot 365-day 100% cliff on 2.5B TET burned into genesis, with no early-unlock path. This is the reason Strategy C exists |
 | **`TxV1::Transfer` nonce** | `DAILY_LOG_2026-05-31` | Identical transfers currently collide on tx hash, so only the first applies. Adding a nonce changes the tx schema |
 | **FIPS-203 ML-KEM migration** | WP §17.17 | Tmail/Files KEM keys are mnemonic-derived; changing the algorithm invalidates every messaging identity. Free when the key directory is discarded anyway |
@@ -85,6 +86,58 @@ These are all consensus- or schema-breaking and are cheap only at a ceremony.
 | **Protocol reserve allocation** | WP §11.4 | `WALLET_PROTOCOL_RESERVE` mints 0 and is committed in the genesis hash. Changing it needs a new ceremony |
 | **Denomination naming** | `WHITEPAPER_v1.0_GAPS.md` §10.1 | "Stevemon" vs "micro-TET" is cosmetic in code but appears in the genesis hash payload |
 | **Per-block `state_root` checkpoints** | `BUG_block_9828_divergence_mystery.md` | Validation is tip-only today, so divergence surfaces at an arbitrary later block rather than the one that caused it. Changes what nodes exchange |
+
+### 2.1 `/ai/infer` settlement must become a consensus tx
+
+`rest/handlers/ai.rs:744` calls `settle_ai_inference_dynamic_charge` — a **direct balance write**.
+Whichever node serves the request forks its `state_root` while block history stays identical: the
+block 9828 signature. `3bd2009` removed the welcome-airdrop mutation from this handler in June but
+left the settlement.
+
+**Why it cannot be fixed server-side alone.**
+
+The amount is tractable — `charge_micro` is `AI_INFER_LOCAL_CHARGE_MICRO` (`ai.rs:14`), a
+compile-time constant, so consensus could validate it. The request is already hybrid-signed over
+`(wallet, prompt, flops, nonce)` with the nonce consumed in sled, so it is replay-proof.
+
+The blocker is ordering. Settlement runs **after** inference and **before** the `200 OK`
+(`ai.rs:742` → response at `:841`), and the `402 PAYMENT_REQUIRED` branch (`ai.rs:747`) rejects
+*post-compute*. Routing settlement through the mempool means:
+
+- the caller receives the inference result before payment confirms, and
+- a tx that never mines leaves the node having done the work for free.
+
+That is precisely the **optimistic execution** model the whitepaper describes (§5.1, §8 ZK-Court) —
+deliver first, settle or dispute after. The model is specified but not built: ZK-Court has no
+challenger incentive, so the dispute path is never exercised.
+
+**Shape of the fix.**
+
+1. New `TxV1::AiInferenceCharge { wallet_id, charge_micro, nonce }` — schema change, genesis-only.
+2. The **client** signs and submits it; the node cannot sign on the user's behalf. API + UI change.
+3. Consensus validates `charge_micro` against the protocol constant and applies the
+   `fees::FeeKind::AiInference` split at block-apply.
+4. Settle the delivery/dispute story, or accept that an unmined charge is the node's loss.
+
+### 2.2 ⚠ Trap for whoever implements §2.1
+
+**Do not derive the charge from the thermodynamic calculation without first making its inputs
+consensus fields.**
+
+`vision/thermo_genesis.rs` computes `R = (C_flops / E) × Γ × scale`, where `E`, `Γ` and `scale`
+come from **per-node environment variables**:
+
+| Env var | Read at |
+|---|---|
+| `TET_JOULES_PER_FLOP` | `thermo_genesis.rs:44` |
+| `TET_NETWORK_DIFFICULTY_GAMMA` | `thermo_genesis.rs:27` |
+| `TET_THERMO_STEVEMON_MICRO_SCALE` | `thermo_genesis.rs:50` |
+
+Two nodes with different values compute **different charges for the same transaction** and diverge —
+the same class of defect as §1, with a different input. Today this is latent because the live path
+uses the constant, not the formula. The moment the formula reaches consensus, those three values
+must be block or genesis fields, not env reads.
+
 
 ---
 
@@ -100,6 +153,7 @@ Recorded so the ceremony checklist does not re-litigate them.
 | Fee schedules unified, `fee_bps` bounded | `ad6749f`…`3b90701` | Seven ad-hoc schedules; unvalidated caller-supplied rate |
 | Genesis Epoch ×5 burn saturation | `3b90701` | Documented 50/50 never ran |
 | `/ledger/faucet` direct write | 2026-09-19 | REST-reachable direct balance write |
+| `/ledger/recover-from-guardian` | 2026-09-20 | **Unauthenticated** route that wiped the balances tree and loaded caller-supplied state |
 | `compute_state_root` silent row-drop | 2026-09-19 | Unreadable rows vanished from the root with no error |
 
 ---
@@ -108,8 +162,7 @@ Recorded so the ceremony checklist does not re-litigate them.
 
 Tracked here only so they are not forgotten; none requires a ceremony.
 
-- **`/ai/infer` settlement** (`ai.rs:744`) still calls `settle_ai_inference_dynamic_charge`
-  directly. The airdrop was fixed in `3bd2009`; the settlement was not.
+- ~~`/ai/infer` settlement~~ — **promoted to §2.1**; it is genesis-blocked after all.
 - **~15 other direct-write paths** remain reachable from REST or p2p — see the audit in the
   commit body for 2026-09-19. None is a *new* regression; all predate this work.
 - **ZK-Court has no challenger incentive**, so the dispute path is never exercised (WP §8).
