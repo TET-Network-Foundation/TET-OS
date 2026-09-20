@@ -3669,6 +3669,13 @@ fn zkcourt_challenge_rejected_after_window_closes() {
     let req = crate::vision::zk_court::ChallengeSubmitReq {
         inference_id: "infer-late".to_string(),
         challenger_wallet_id: challenger.to_string(),
+        // Signature fields are verified in the REST handler, not in submit_challenge; these
+        // tests exercise the ledger layer directly. Auth coverage:
+        // zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond.
+        nonce: 1,
+        ed25519_sig_hex: String::new(),
+        mldsa_pubkey_b64: String::new(),
+        mldsa_sig_b64: String::new(),
         reason: "late".to_string(),
     };
     let err = crate::vision::zk_court::submit_challenge(&ledger, &req).unwrap_err();
@@ -3706,6 +3713,13 @@ fn zkcourt_dispute_persists_and_invalid_challenge_bond_goes_to_ecosystem() {
     let req = crate::vision::zk_court::ChallengeSubmitReq {
         inference_id: "infer-1".to_string(),
         challenger_wallet_id: challenger.to_string(),
+        // Signature fields are verified in the REST handler, not in submit_challenge; these
+        // tests exercise the ledger layer directly. Auth coverage:
+        // zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond.
+        nonce: 1,
+        ed25519_sig_hex: String::new(),
+        mldsa_pubkey_b64: String::new(),
+        mldsa_sig_b64: String::new(),
         reason: "test invalid challenge".to_string(),
     };
     let st = crate::vision::zk_court::submit_challenge(&ledger, &req).unwrap();
@@ -5511,5 +5525,127 @@ async fn removed_dex_routes_are_not_reachable() {
         ledger.compute_state_root().unwrap(),
         root_before,
         "no request to a /dex/* path may mutate ledger state"
+    );
+}
+
+/// **SECURITY REGRESSION GUARD.** `/v1/vision/zk-court/challenge` must prove control of
+/// `challenger_wallet_id` before any bond is locked.
+///
+/// The endpoint previously took that field from the request body unverified, while
+/// `zkcourt_lock_challenger_bond` (`zk_court.rs:225`) debits the named wallet — and a dismissed
+/// challenge forfeits the bond. Any unauthenticated caller could therefore burn a third party's
+/// funds by naming them as challenger.
+///
+/// Asserts both directions: an unsigned request is rejected **and** leaves the balance untouched,
+/// and a correctly signed one gets past authentication.
+#[tokio::test]
+async fn zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    // A funded victim who never consents to anything.
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let victim = w.address_hex.to_ascii_lowercase();
+    ledger
+        .transfer_no_fee("founder", &victim, 100 * crate::ledger::STEVEMON)
+        .unwrap();
+    let balance_before = ledger.balance_micro(&victim).unwrap();
+    let root_before = ledger.compute_state_root().unwrap();
+
+    let call = |body: serde_json::Value, l: std::sync::Arc<crate::ledger::Ledger>| async move {
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/vision/zk-court/challenge")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        crate::rest::routes::build_router(rest_state_for_tests(l))
+            .oneshot(req)
+            .await
+            .unwrap()
+            .status()
+    };
+
+    // [A] No signature at all — the original attack.
+    let status = call(
+        serde_json::json!({
+            "inference_id": "infer-1",
+            "challenger_wallet_id": victim,
+            "reason": "forged",
+            "nonce": 1,
+        }),
+        ledger.clone(),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "an unsigned challenge must be rejected"
+    );
+
+    // [B] Garbage signature.
+    let status = call(
+        serde_json::json!({
+            "inference_id": "infer-1",
+            "challenger_wallet_id": victim,
+            "reason": "forged",
+            "nonce": 1,
+            "ed25519_sig_hex": "00".repeat(64),
+            "mldsa_pubkey_b64": "",
+            "mldsa_sig_b64": "",
+        }),
+        ledger.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "a forged signature must be rejected");
+
+    // The victim's funds were never touched.
+    assert_eq!(
+        ledger.balance_micro(&victim).unwrap(),
+        balance_before,
+        "no bond may be locked from a wallet that did not sign"
+    );
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "a rejected challenge must not mutate state"
+    );
+
+    // [C] A correctly signed request gets PAST authentication. It still fails downstream because
+    // no such dispute exists, but the point is that it is no longer a 401.
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words).unwrap();
+    let mldsa_pub_b64 =
+        base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let msg = crate::wallet::zkcourt_challenge_hybrid_auth_message_bytes(
+        &victim,
+        "infer-1",
+        1,
+        &mldsa_pub_b64,
+    );
+    let status = call(
+        serde_json::json!({
+            "inference_id": "infer-1",
+            "challenger_wallet_id": victim,
+            "reason": "genuine",
+            "nonce": 1,
+            "ed25519_sig_hex": hex::encode(ed_sk.sign(&msg).to_bytes()),
+            "mldsa_pubkey_b64": mldsa_pub_b64,
+            "mldsa_sig_b64": base64::engine::general_purpose::STANDARD
+                .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, &msg).unwrap()),
+        }),
+        ledger.clone(),
+    )
+    .await;
+    assert_ne!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a correctly signed challenge must pass authentication"
     );
 }

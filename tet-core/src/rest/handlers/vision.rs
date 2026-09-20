@@ -204,10 +204,70 @@ pub async fn get_vision_zk_court_challenges(State(state): State<RestState>) -> i
     (StatusCode::OK, Json(v)).into_response()
 }
 
+/// Opens a ZK-Court dispute.
+///
+/// **Requires a hybrid signature from the challenger.** Until 2026-09-20 this endpoint took
+/// `challenger_wallet_id` straight from the request body with no proof of control, while
+/// `zkcourt_lock_challenger_bond` (`zk_court.rs:225`) debits that wallet — so an unauthenticated
+/// caller could name any wallet as challenger and a dismissed challenge would forfeit its bond.
+///
+/// Verification runs here, before `run_challenge_pipeline`, so a bad signature rejects with 401
+/// **before any bond is locked**.
 pub async fn post_vision_zk_court_challenge(
     State(state): State<RestState>,
     Json(req): Json<crate::vision::zk_court::ChallengeSubmitReq>,
 ) -> impl IntoResponse {
+    const MAX_B64_FIELD: usize = 32_768;
+    let challenger = req.challenger_wallet_id.trim().to_ascii_lowercase();
+    if challenger.len() != 64 || !challenger.chars().all(|c| c.is_ascii_hexdigit()) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"BAD_WALLET","message":"challenger_wallet_id must be 64 hex chars"})),
+        )
+            .into_response();
+    }
+    if req.ed25519_sig_hex.len() > 200
+        || req.mldsa_pubkey_b64.len() > MAX_B64_FIELD
+        || req.mldsa_sig_b64.len() > MAX_B64_FIELD
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"FIELD_TOO_LONG"})),
+        )
+            .into_response();
+    }
+    if req.nonce == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"NONCE_REQUIRED","message":"nonce must be > 0"})),
+        )
+            .into_response();
+    }
+    let msg = crate::wallet::zkcourt_challenge_hybrid_auth_message_bytes(
+        &challenger,
+        req.inference_id.trim(),
+        req.nonce,
+        &req.mldsa_pubkey_b64,
+    );
+    if let Err(e) =
+        crate::wallet::verify_ed25519_hex_message(&challenger, &msg, req.ed25519_sig_hex.trim())
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"BAD_ED25519_SIG","message": e})),
+        )
+            .into_response();
+    }
+    if let Err(e) =
+        crate::wallet::verify_mldsa_b64(&req.mldsa_pubkey_b64, &req.mldsa_sig_b64, &msg)
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"BAD_MLDSA_SIG","message": e})),
+        )
+            .into_response();
+    }
+
     match crate::vision::zk_court::run_challenge_pipeline(state.ledger.as_ref(), &req).await {
         Ok(out) => (StatusCode::OK, Json(out)).into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),

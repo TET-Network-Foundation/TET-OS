@@ -395,6 +395,30 @@ pub fn enterprise_inference_hybrid_auth_message_bytes(
 /// Hybrid signed payload for `POST /ai/infer` and `POST /ai/utility` (Ed25519 + ML-DSA), **always** on mainnet nodes.
 /// Must stay byte-for-byte aligned with Sovereign OS `ai_infer_hybrid.ts`.
 /// Canonical preimage for `POST /ledger/stake` worker bond (must match Sovereign OS signing).
+/// Canonical preimage for `POST /v1/vision/zk-court/challenge`.
+///
+/// Binds the challenger to the dispute they are opening. Without this the endpoint took
+/// `challenger_wallet_id` from the request body unverified, so an unauthenticated caller could
+/// name **any** wallet as challenger and `zkcourt_lock_challenger_bond` would debit it — and a
+/// dismissed challenge forfeits that bond. Same shape as the stake preimages: chain-bound,
+/// nonce-bound, and committing to the ML-DSA public key so the hybrid pair cannot be split.
+pub fn zkcourt_challenge_hybrid_auth_message_bytes(
+    challenger_wallet_id_hex: &str,
+    inference_id: &str,
+    nonce: u64,
+    mldsa_pubkey_b64: &str,
+) -> Vec<u8> {
+    let w = challenger_wallet_id_hex.trim().to_ascii_lowercase();
+    let i = inference_id.trim();
+    let p = mldsa_pubkey_b64.trim();
+    format!(
+        "tet zk-court challenge v1|chain_id={}|genesis_hash={}|{w}|{i}|{nonce}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
+}
+
 pub fn worker_bond_stake_hybrid_auth_message_bytes(
     wallet_id_hex: &str,
     amount_micro: u64,

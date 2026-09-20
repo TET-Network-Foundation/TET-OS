@@ -37,6 +37,19 @@ pub struct ChallengeSubmitReq {
     pub inference_id: String,
     pub challenger_wallet_id: String,
     pub reason: String,
+    /// Replay protection; must be > 0. Bound into the signed preimage.
+    #[serde(default)]
+    pub nonce: u64,
+    /// Ed25519 signature (hex) over
+    /// [`crate::wallet::zkcourt_challenge_hybrid_auth_message_bytes`].
+    #[serde(default)]
+    pub ed25519_sig_hex: String,
+    /// ML-DSA public key (base64) — also committed to by the preimage.
+    #[serde(default)]
+    pub mldsa_pubkey_b64: String,
+    /// ML-DSA signature (base64) over the same preimage.
+    #[serde(default)]
+    pub mldsa_sig_b64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
