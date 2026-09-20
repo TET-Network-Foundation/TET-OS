@@ -395,6 +395,33 @@ pub fn enterprise_inference_hybrid_auth_message_bytes(
 /// Hybrid signed payload for `POST /ai/infer` and `POST /ai/utility` (Ed25519 + ML-DSA), **always** on mainnet nodes.
 /// Must stay byte-for-byte aligned with Sovereign OS `ai_infer_hybrid.ts`.
 /// Canonical preimage for `POST /ledger/stake` worker bond (must match Sovereign OS signing).
+/// Canonical preimage for `POST /v1/vision/caac/complete`.
+///
+/// Proves the caller controls the wallet whose CAAC role record is being written. Without it the
+/// endpoint took `wallet` from the request body unverified, so anyone could write a role record
+/// for any bonded wallet — and that record feeds `LedgerCaacWeightProvider::consensus_weight`
+/// (`consensus.rs:200`), i.e. leader-election weight when `TET_CONSENSUS_LEADER_MODE=caac`.
+///
+/// **This closes impersonation only.** `client_latency_ms` is still self-declared, so a node can
+/// honestly sign its own "latency 0" and self-elevate to PoC. That is a design flaw requiring
+/// server-measured or attested latency — whitepaper §17.5, `PHASE_1_GENESIS_SPEC.md` §2.3.
+pub fn caac_complete_hybrid_auth_message_bytes(
+    wallet_id_hex: &str,
+    seed_hex: &str,
+    client_latency_ms: u64,
+    mldsa_pubkey_b64: &str,
+) -> Vec<u8> {
+    let w = wallet_id_hex.trim().to_ascii_lowercase();
+    let seed = seed_hex.trim().to_ascii_lowercase();
+    let p = mldsa_pubkey_b64.trim();
+    format!(
+        "tet caac complete v1|chain_id={}|genesis_hash={}|{w}|{seed}|{client_latency_ms}|{p}",
+        chain_id_from_env(),
+        expected_genesis_hash_from_env(),
+    )
+    .into_bytes()
+}
+
 /// Canonical preimage for `POST /v1/vision/zk-court/challenge`.
 ///
 /// Binds the challenger to the dispute they are opening. Without this the endpoint took

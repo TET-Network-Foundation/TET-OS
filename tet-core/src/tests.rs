@@ -5649,3 +5649,77 @@ async fn zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond() {
         "a correctly signed challenge must pass authentication"
     );
 }
+
+/// **SECURITY REGRESSION GUARD.** `/v1/vision/caac/complete` must prove control of `wallet`
+/// before writing a CAAC role record.
+///
+/// The record feeds `LedgerCaacWeightProvider::consensus_weight` (`consensus.rs:200`), which sets
+/// leader-election weight when `TET_CONSENSUS_LEADER_MODE=caac` — the value
+/// `.env.mainnet.example` ships. Unauthenticated, an attacker could write a record for any bonded
+/// wallet: self-elevate to PoC (weight 100 + up to 1000 latency bonus) or demote a rival to PoR
+/// (weight 25).
+///
+/// **Scope:** this pins impersonation only. `client_latency_ms` is still self-declared, so a node
+/// can sign its own "latency 0" honestly and self-elevate. See WP §17.5 /
+/// `PHASE_1_GENESIS_SPEC.md` §2.3 — not fixed by a signature.
+#[tokio::test]
+async fn caac_complete_without_signature_is_rejected_and_writes_no_record() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    let victim = "d".repeat(64);
+    assert!(
+        ledger.caac_get_worker_record(&victim).is_none(),
+        "no record before the attack"
+    );
+
+    let seed_hex = "11".repeat(32);
+    let digest = crate::vision::caac::compute_challenge_digest(&seed_hex).unwrap();
+
+    for (label, body) in [
+        (
+            "no signature",
+            serde_json::json!({
+                "wallet": victim, "seed_hex": seed_hex, "digest_hex": digest,
+                "client_latency_ms": 0, "nonce": 1,
+            }),
+        ),
+        (
+            "forged signature",
+            serde_json::json!({
+                "wallet": victim, "seed_hex": seed_hex, "digest_hex": digest,
+                "client_latency_ms": 0, "nonce": 1,
+                "ed25519_sig_hex": "00".repeat(64),
+                "mldsa_pubkey_b64": "", "mldsa_sig_b64": "",
+            }),
+        ),
+    ] {
+        let req = axum::http::Request::builder()
+            .method("POST")
+            .uri("/v1/vision/caac/complete")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from(serde_json::to_vec(&body).unwrap()))
+            .unwrap();
+        let status = crate::rest::routes::build_router(rest_state_for_tests(ledger.clone()))
+            .oneshot(req)
+            .await
+            .unwrap()
+            .status();
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{label}: must be rejected before any record is written"
+        );
+    }
+
+    assert!(
+        ledger.caac_get_worker_record(&victim).is_none(),
+        "no CAAC record may be written for a wallet that did not sign — that record sets \
+         leader-election weight"
+    );
+}

@@ -649,6 +649,21 @@ Genesis mints 5B TET to locked pool; ongoing emission rate shape (constant vs de
 
 Timing micro-tasks are described; formal security game (emulator, FPGA, cloud GPU posing as mobile) is not written. **Status: open** (implementation partial).
 
+**Concrete instance of this gap (2026-09-20).** `POST /v1/vision/caac/complete` accepts
+`client_latency_ms` **from the caller** and derives the PoC/PoR role from it
+(`vision::caac::role_from_latency_ms`). The resulting record feeds
+`LedgerCaacWeightProvider::consensus_weight` (`consensus.rs:200`), which sets leader-election
+weight when `TET_CONSENSUS_LEADER_MODE=caac` — the value `.env.mainnet.example` ships.
+
+The endpoint now requires a hybrid Ed25519 + ML-DSA signature, which closes **impersonation**: you
+can no longer write a role record for a wallet you do not control. It does **not** close
+self-elevation. A node can honestly sign its own `client_latency_ms: 0`, be classified PoC, and
+take weight 100 plus a latency bonus of up to 1000 — while a truthful slow node takes 25.
+
+**The signature proves who is speaking, not that the number is true.** Closing this needs
+server-measured or hardware-attested latency, which is the formal model this section is about.
+Tracked for the ceremony in [`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) §2.3.
+
 ### 17.6 Cross-chain bridge design (Phase 1 interoperability)
 
 No canonical bridge spec for ETH/SOL/BTC custody. **Status: open.**

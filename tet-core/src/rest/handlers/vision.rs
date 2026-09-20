@@ -36,7 +36,20 @@ pub struct CaacCompleteReq {
     /// Lowercase hex from [`crate::vision::caac::compute_challenge_digest`].
     pub digest_hex: String,
     /// Wall time on worker while executing the challenge (ms).
+    ///
+    /// **Self-declared.** The signature below proves who is speaking, not that this number is
+    /// true. See WP §17.5 / `PHASE_1_GENESIS_SPEC.md` §2.3.
     pub client_latency_ms: u64,
+    /// Replay protection; must be > 0.
+    #[serde(default)]
+    pub nonce: u64,
+    /// Ed25519 signature (hex) over [`crate::wallet::caac_complete_hybrid_auth_message_bytes`].
+    #[serde(default)]
+    pub ed25519_sig_hex: String,
+    #[serde(default)]
+    pub mldsa_pubkey_b64: String,
+    #[serde(default)]
+    pub mldsa_sig_b64: String,
 }
 
 pub async fn post_vision_caac_complete(
@@ -51,6 +64,47 @@ pub async fn post_vision_caac_complete(
         )
             .into_response();
     }
+    // Prove control of `wallet` BEFORE writing a record that feeds leader-election weight.
+    // Closes impersonation only -- client_latency_ms remains self-declared (WP §17.5).
+    const MAX_B64_FIELD: usize = 32_768;
+    if req.ed25519_sig_hex.len() > 200
+        || req.mldsa_pubkey_b64.len() > MAX_B64_FIELD
+        || req.mldsa_sig_b64.len() > MAX_B64_FIELD
+    {
+        return (StatusCode::BAD_REQUEST, Json(json!({"error":"FIELD_TOO_LONG"}))).into_response();
+    }
+    if req.nonce == 0 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"NONCE_REQUIRED","message":"nonce must be > 0"})),
+        )
+            .into_response();
+    }
+    let auth_msg = crate::wallet::caac_complete_hybrid_auth_message_bytes(
+        &w,
+        &req.seed_hex,
+        req.client_latency_ms,
+        &req.mldsa_pubkey_b64,
+    );
+    if let Err(e) =
+        crate::wallet::verify_ed25519_hex_message(&w, &auth_msg, req.ed25519_sig_hex.trim())
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"BAD_ED25519_SIG","message": e})),
+        )
+            .into_response();
+    }
+    if let Err(e) =
+        crate::wallet::verify_mldsa_b64(&req.mldsa_pubkey_b64, &req.mldsa_sig_b64, &auth_msg)
+    {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":"BAD_MLDSA_SIG","message": e})),
+        )
+            .into_response();
+    }
+
     let expected = match crate::vision::caac::compute_challenge_digest(&req.seed_hex) {
         Ok(x) => x,
         Err(e) => {

@@ -139,6 +139,33 @@ uses the constant, not the formula. The moment the formula reaches consensus, th
 must be block or genesis fields, not env reads.
 
 
+### 2.3 CAAC latency is self-declared — signature does not fix it
+
+`POST /v1/vision/caac/complete` derives the PoC/PoR role from `client_latency_ms`, a value the
+**caller supplies**. The record it writes feeds `LedgerCaacWeightProvider::consensus_weight`
+(`consensus.rs:200`) and therefore leader election whenever
+`TET_CONSENSUS_LEADER_MODE=caac` — which is what `.env.mainnet.example` sets.
+
+A hybrid signature was added on 2026-09-20. **It closes impersonation only.** You can no longer
+write a role record for someone else's wallet. You can still sign your own `latency: 0` truthfully
+and self-elevate:
+
+| Declared latency | Role | Weight |
+|---|---|---|
+| `0` (claimed) | PoC | 100 + up to 1000 latency bonus |
+| honest, slow | PoR | 25 |
+
+So the *honest* participant is penalised and the liar is rewarded — the incentive points the wrong
+way, which is worse than the endpoint simply being unauthenticated would suggest.
+
+**What actually fixes it:** server-measured latency (the node times the challenge itself rather
+than trusting a reported number — `measure_challenge_wall_ms` already exists and is currently
+recorded only for audit), or hardware attestation binding the claim to a device. Either changes
+what CAAC records mean and therefore what consensus weights mean, so it belongs at the ceremony.
+
+Related: WP §17.5, which this is a concrete instance of.
+
+
 ---
 
 ## 3. Fixed before Phase 1 — do not redo
@@ -154,6 +181,9 @@ Recorded so the ceremony checklist does not re-litigate them.
 | Genesis Epoch ×5 burn saturation | `3b90701` | Documented 50/50 never ran |
 | `/ledger/faucet` direct write | 2026-09-19 | REST-reachable direct balance write |
 | `/ledger/recover-from-guardian` | 2026-09-20 | **Unauthenticated** route that wiped the balances tree and loaded caller-supplied state |
+| `/dex/*` (7 routes) | 2026-09-20 | Six unauthenticated fund-movement endpoints; v0 CHF-era product, removed |
+| `/v1/vision/zk-court/challenge` | 2026-09-20 | Unauthenticated: could lock and forfeit a third party's bond |
+| `/v1/vision/caac/complete` | 2026-09-20 | Unauthenticated **impersonation** closed; self-declared latency remains — see §2.3 |
 | `compute_state_root` silent row-drop | 2026-09-19 | Unreadable rows vanished from the root with no error |
 
 ---
