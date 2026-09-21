@@ -179,8 +179,12 @@ enum TxAction {
         /// Mnemonic phrase (12/24 words). Wrap in quotes.
         #[arg(long)]
         mnemonic: String,
-        /// Fee bps (currently accepted but not used in phase2 spend check).
-        #[arg(long, default_value_t = 0)]
+        /// Transfer fee in basis points. Consensus accepts only
+        /// [`fees::TRANSFER_FEE_BPS_MIN`, `MAX`] = [100, 1000]; the old default of 0
+        /// built a tx that passed signature verification, entered the mempool, and
+        /// was then rejected at mining time with "fee_bps 0 outside accepted range",
+        /// so no `tx send` with default flags could ever settle.
+        #[arg(long, default_value_t = tet_core::fees::TRANSFER_FEE_BPS_DEFAULT)]
         fee_bps: u64,
 
         /// Auto-mine a block after this tx is accepted (God Mode).
@@ -358,6 +362,18 @@ async fn main() -> Result<()> {
                     if !amount_tet.is_finite() || amount_tet <= 0.0 {
                         anyhow::bail!("amount must be a positive number (TET)");
                     }
+                    // Fail here rather than let the node accept the tx into the mempool and
+                    // silently drop it at mining time.
+                    if !(tet_core::fees::TRANSFER_FEE_BPS_MIN
+                        ..=tet_core::fees::TRANSFER_FEE_BPS_MAX)
+                        .contains(&fee_bps)
+                    {
+                        anyhow::bail!(
+                            "fee_bps {fee_bps} outside the range consensus accepts [{}, {}]",
+                            tet_core::fees::TRANSFER_FEE_BPS_MIN,
+                            tet_core::fees::TRANSFER_FEE_BPS_MAX
+                        );
+                    }
                     let amount_micro = (amount_tet * STEVEMON_F64).round().max(0.0) as u64;
                     if amount_micro == 0 {
                         anyhow::bail!("amount too small (rounded to 0 micro-TET)");
@@ -378,18 +394,32 @@ async fn main() -> Result<()> {
                         amount_micro,
                         fee_bps,
                     };
-                    let tx_bytes = serde_json::to_vec(&tx).context("tx serialization failed")?;
+                    // Canonical hybrid preimage:
+                    //   `tet tx v1|chain_id=..|genesis_hash=..|mldsa=<pk>|tx=<canonical-json>`
+                    // This used to sign bare `serde_json::to_vec(&tx)`, which carries no chain_id
+                    // or genesis_hash binding. `verify_envelope_v1` accepts that form ONLY through
+                    // its non-mainnet fallback, so `tx send` worked against a dev node and would
+                    // have failed against mainnet with "invalid signature or missing
+                    // chain_id/genesis_hash binding". The UI has always signed the canonical form
+                    // (ui/app/lib/transfer.ts:130); the CLI now matches it.
+                    //
+                    // chain_id and genesis_hash come from THIS process's env, so TET_CHAIN_ID,
+                    // TET_TREASURY_ADDRESS and TET_GENESIS_FOUNDER_WALLET_ID must match the node.
+                    let mldsa_kp = tet_core::wallet::mldsa_keypair_from_mnemonic(mnemonic.trim())
+                        .context("failed to derive ML-DSA keypair")?;
+                    let tx_bytes =
+                        tet_core::wallet::tx_v1_auth_message_bytes(&tx, &wi.dilithium_pubkey_b64)
+                            .map_err(anyhow::Error::msg)
+                            .context("failed to build the hybrid auth message")?;
 
-                    // Sign (Ed25519: base64 sig over tx_bytes).
+                    // Sign (Ed25519: base64 sig over the canonical preimage).
                     let sk = tet_core::wallet::ed25519_signing_key_from_mnemonic(mnemonic.trim())
                         .context("failed to derive ed25519 signing key")?;
                     let ed_sig = sk.sign(&tx_bytes);
                     let ed_sig_b64 =
                         base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes());
 
-                    // Sign (ML-DSA: deterministic base64 sig over tx_bytes).
-                    let mldsa_kp = tet_core::wallet::mldsa_keypair_from_mnemonic(mnemonic.trim())
-                        .context("failed to derive ML-DSA keypair")?;
+                    // Sign (ML-DSA: deterministic base64 sig over the same bytes).
                     let mldsa_sig_bytes =
                         tet_core::wallet::mldsa_sign_deterministic(&mldsa_kp, &tx_bytes)
                             .context("ML-DSA signing failed")?;
@@ -450,7 +480,17 @@ async fn main() -> Result<()> {
                         println!("txid: {}", txid);
                         println!("node_response: {}", body.trim());
                     } else {
-                        anyhow::bail!("transfer HTTP {}: {}", status.as_u16(), body.trim());
+                        anyhow::bail!(
+                            "transfer HTTP {}: {}{}",
+                            status.as_u16(),
+                            body.trim(),
+                            if status == StatusCode::UNAUTHORIZED {
+                                "\n  hint: 401 usually means this CLI's TET_CHAIN_ID / \
+TET_TREASURY_ADDRESS / TET_GENESIS_FOUNDER_WALLET_ID do not match the node's."
+                            } else {
+                                ""
+                            }
+                        );
                     }
                 }
             }
