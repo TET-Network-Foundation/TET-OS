@@ -41,7 +41,7 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | **S1** | Block sync MVP — pull-based catch-up, 3-node E2E | ✅ | `7264191`, `499bb00`; `DAILY_LOG_2026-05-19` |
 | **S2** | Consensus hardening + economics — validator set, leader-only mine, parent metadata, Treasury 25/50/25, ZK-Court §14.1 | ✅ | `5382397`, `68a4b94` |
 | **S3** | UI Send Coins — genesis hash sync, sync status, hybrid-signed transfer; consensus-grade refactor | ✅ | `aad734c`…`d157c77`, `df59517`, `8f52db7`, `2ce9024`; `DAILY_LOG_2026-05-20`, `05-31` |
-| **S4** | **L1 Foundation** — public seed, faucet, Docker (node + UI), CI/CD, operator docs, monitoring | 🟡 **blocked** | See [S4 detail](#s4--l1-foundation-detail) |
+| **S4** | **L1 Foundation** — public seed, faucet, Docker (node + UI), CI/CD, operator docs, monitoring | 🟡 **seed-blocked** | Faucet ✅, Docker ✅, CI ✅, docs ✅ (2026-09-21). Public seed and monitoring remain. See [S4 detail](#s4--l1-foundation-detail) |
 | **S5** | Tmail protocol — `/tet/v1/tmail` gossip, `TmailEnvelopeV1`, REST, store | ✅ *(fee/audit deferred)* | `9e9a4a7`, `4d3fc72` |
 | **S6** | Win95 shell + Basic Tmail UI | 🟡 | `1d3173f`, `356df5e`, `ad3fb3f`, `a3f2720`…`31299c3`. E2EE verified cross-region (CH→FI, 1.3 s). Shell is **tabbed**, not a window manager — no taskbar, no boot sequence, no sounds |
 | **S7** | Time-lock + Burn + Pin stake | ⬜ | Gates marketing (locked decision #6, AT-3/AT-4) |
@@ -63,22 +63,32 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | Work item | Est. | Status | Note |
 |---|---|---|---|
 | **Public seed (1×)** | 3 d | 🔁 **to re-provision** | Helsinki VPS is **dead**. Prior build was systemd auto-start, `TET_P2P_LISTEN=/ip4/0.0.0.0/tcp/4001`, ufw 22/4001/5010, fail2ban, 4 GB swap, persistent DB at `/opt/tet-core-data`, `WatchdogSec=120`. Rebuild from that recipe; publish the bootnode multiaddr in `RUNNING_A_NODE.md` this time |
-| **Faucet** — 100 TET/day/IP | 3 d | ⬜ open | **Updated 2026-09-20: there is no faucet endpoint any more.** `POST /ledger/faucet` and `POST /faucet` were removed in `c2416dc` — the handler wrote balances directly, outside consensus, and forked `state_root` (a block-9828 mechanism). The per-wallet-once / per-IP limiter helpers survive in `rest/handlers/ledger.rs` but are unrouted. The work is now **build** a consensus-routed public faucet, not un-gate the old one; re-estimate above 3 d |
-| **Docker (node + UI)** | 4 d | ⬜ open | `docker-compose.yml` runs `tet-core` only. `tet-network/ui/Dockerfile` exists but no compose service wires it. Locked decision #12 requires node **+ UI** |
-| **CI/CD (GitHub Actions)** | 2 d | ⬜ open | No `.github/` directory exists. All 65 commits' "PASS" claims are local runs |
-| **Public operator docs** | 2 d | ⬜ open | `RUNNING_A_NODE.md` is 17 KB but dated 2026-05-19 — predates the 4001/4003/4005 port split, the watchdog, `/health/swarm`, the `block_id` V2 fork, Tmail, and Files |
+| **Faucet** — 100 TET/day/IP | 3 d | ✅ **done, by another route** | **2026-09-21.** `POST /ledger/faucet` and `POST /faucet` stay removed (`c2416dc`: direct balance write, forked `state_root`). The public path is the consensus-safe welcome airdrop, `POST /ledger/initial_airdrop/claim` — hybrid-signed, mempool-routed, 1,000 TET, one per wallet, cap 10,000, **no admin token**. Round-trip verified: wallet → claim → 1,000 TET after one block. Driver: `tet-cli faucet claim`. Docs: `RUNNING_A_NODE.md` § Getting testnet TET. **Not** 100 TET/day/IP — a different, better-shaped grant; no UI button yet |
+| **Docker (node + UI)** | 4 d | ✅ **done** | **2026-09-21** (`e9c8aae`). Compose brings up `tet-core` + `ui`; PQC WASM baked into the UI image; healthchecks on both, `ui` gated on `tet-core` healthy. `docker-compose.dev.yml` is the ~10-min quickstart; the base file keeps the zk-prove production default. Images 214 MB / 343 MB |
+| **CI/CD (GitHub Actions)** | 2 d | ✅ **done** | **2026-09-21** (`a914316`). Four jobs — `rust` (build + 185 tests + 6 named security guards + 4 block-9828 pins), `ui`, `wasm`, `docker`. Green on `main`. Clippy runs non-blocking until the 37 existing warnings are cleared |
+| **Public operator docs** | 2 d | 🟡 **partly done** | **2026-09-21:** the Docker section is rewritten against real output (Quickstart / Production split, `docker-compose.dev.yml`), and § Getting testnet TET is new. Still stale elsewhere: the doc is dated 2026-05-19 and predates the 4001/4003/4005 port split, the watchdog, `/health/swarm`, the `block_id` V2 fork, Tmail and Files |
 | **Monitoring + logs** | 2 d | ⬜ open | JSON tracing, `/metrics`, `/health/swarm`, systemd watchdog and `observability/{prometheus,grafana}` scaffolding all exist. No dashboards, no alerting, no SLOs |
 
 ### S4 exit criteria (the Foundation gate)
 
-None of these has been formally signed off.
+**Updated 2026-09-21.** Two pass outright, three are done except for the seed, one is open. Every
+remaining gap traces to the same missing thing: a host that is not this laptop.
 
-- [ ] ≥1 public seed reachable from the internet, **multiaddr documented in a tracked file**
-- [ ] Faucet funds a test wallet with **no admin token**; curl or UI path documented
-- [ ] Fresh machine: `docker compose up` → **node + UI** against the public seed, no local genesis hack
-- [ ] CI green on the default branch
-- [ ] A builder follows `RUNNING_A_NODE.md` and joins the testnet in under 30 minutes
-- [ ] **AT-F1** passes end-to-end: clean laptop → join seed → faucet → `GET /ledger/me` → send 1 TET
+| # | Criterion | State | Evidence / what is left |
+|---|---|---|---|
+| 1 | ≥1 public seed reachable from the internet, **multiaddr documented in a tracked file** | ⬜ **open** | Helsinki VPS is dead. Nothing to document until a host exists. **The only true blocker.** |
+| 2 | Faucet funds a test wallet with **no admin token**; curl or UI path documented | ✅ | `POST /ledger/initial_airdrop/claim`, hybrid-signed, no token. Verified 0 → 1,000 TET after one block. Documented in `RUNNING_A_NODE.md` § Getting testnet TET. Caveat: **CLI path only, no UI button** |
+| 3 | Fresh machine: `docker compose up` → **node + UI** against the public seed, no local genesis hack | 🟡 **half** | Compose brings up node + UI with no local hack and no `.env` (`e9c8aae`). Cannot point at a public seed because criterion 1 is open, so it is verified **single-node only** |
+| 4 | CI green on the default branch | ✅ | Run 35547793730 on `main`, all jobs green (`a914316`) |
+| 5 | A builder follows `RUNNING_A_NODE.md` and joins the testnet in under 30 minutes | 🟡 **half** | The Docker and faucet sections are rewritten against real output; quickstart is ~10 min. "Joins the testnet" is untestable until criterion 1 |
+| 6 | **AT-F1** end-to-end: clean laptop → join seed → faucet → `GET /ledger/me` → send 1 TET | 🟡 **all but the seed** | faucet → `/ledger/me` → send 1 TET all verified against the compose stack (1,000 TET claimed; transfer settled 1000 → 975.0 with the recipient at 24.75 after the 1% fee). Only "join seed" is unproven |
+
+**So: seed node and monitoring are the remaining ⬜.** Criteria 3, 5 and 6 are each blocked on
+exactly one thing — a reachable public seed — and are otherwise done. Provisioning it converts
+four rows at once.
+
+Still ⬜ from the work-item table above: **public seed** and **monitoring** (dashboards, alerting,
+SLOs; the `/metrics`, `/health/swarm` and `observability/` scaffolding all exists already).
 
 ---
 

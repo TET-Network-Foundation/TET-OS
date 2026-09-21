@@ -167,13 +167,31 @@ done
 UI (locked decision #12). Before this, compose ran the node only and `tet-network/ui/Dockerfile`
 was referenced by nothing.
 
+#### Quickstart (~10 min)
+
 ```bash
-# fast path: skips the RISC Zero guest build (tens of minutes)
-RISC0_SKIP_BUILD=1 TET_BUILD_FEATURES= docker compose up --build -d
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build -d
+open http://localhost:3000
 ```
 
-Drop the two env vars to get the production image, which installs the risc0 toolchain and builds
-with `--features zk-prove`. Nothing else differs.
+The override builds the node **without the RISC Zero guests**. That is the whole difference, and
+it is the difference between a first build of minutes and one of tens of minutes.
+
+What you give up: the zk prover. The log shows
+`[worker-daemon] not started: NEXUS_GUEST_ELF is empty`, and the zk-court and proof paths are
+unavailable. Wallet, faucet claim, transfers, Tmail, Files and mining all work. The zk path is
+fail-closed on mainnet and warn-only in dev, which is why this is fine locally and is **not** a
+production configuration.
+
+#### Production
+
+```bash
+docker compose up --build -d
+```
+
+The base file alone keeps `RISC0_SKIP_BUILD=0` and `--features zk-prove`, so it installs the risc0
+toolchain and builds the guests. A deployment that does not pass `docker-compose.dev.yml` is
+unaffected by anything in it.
 
 No `.env` is required — `env_file` is marked `required: false` and the compose file carries local
 dev defaults (`TET_CHAIN_ID=tet-local-dev`, dev founder, dev treasury, P2P off, auto-mine on). An
@@ -191,6 +209,8 @@ dev defaults (`TET_CHAIN_ID=tet-local-dev`, dev founder, dev treasury, P2P off, 
 > ```
 
 #### Expected output
+
+Shown for the quickstart; `docker compose ps` is identical either way.
 
 ```console
 $ docker compose ps
@@ -266,6 +286,83 @@ The node does not expose its genesis hash over REST — it appears only inside s
 |---|---|---|
 | `nexus_network-tet-core` | 214 MB | `debian:bookworm-slim` + the release binary |
 | `nexus_network-ui` | 343 MB | `node:22-alpine`, Next `output: "standalone"`, non-root `nextjs` user, PQC baked in |
+
+### Getting testnet TET
+
+There is **no faucet endpoint.** `POST /ledger/faucet` and `POST /faucet` were removed on
+2026-09-20 (`c2416dc`) because the handler wrote balances directly, outside consensus, and forked
+`state_root` — one of the block-9828 mechanisms. Do not look for an admin token; there isn't one
+any more.
+
+The replacement is the **one-time welcome airdrop**: 1,000 TET per wallet, capped at 10,000
+recipients network-wide, public and self-serve. It is an ordinary consensus transaction — a
+hybrid-signed `TxV1::InitialAirdrop` that enters the mempool and is applied by every node at
+block-apply, so it cannot fork the chain the way the old faucet could.
+
+#### With the CLI
+
+```console
+$ cargo run -p tet-cli -- keys generate --words 12
+Public Address (ed25519 vk, hex):
+bfab9fbd9615e9f988ed58d5ebc43a4ea63766587307322f0e947e2963c80cf3
+Mnemonic (DO NOT SHARE):
+main bubble twin police box sell business favorite chaos into tag knee
+
+$ export TET_CHAIN_ID=tet-local-dev
+$ export TET_TREASURY_ADDRESS=fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321
+$ export TET_GENESIS_FOUNDER_WALLET_ID=57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0
+
+$ cargo run -p tet-cli -- --node-url http://127.0.0.1:5010 \
+    faucet claim --mnemonic "main bubble twin police box sell business favorite chaos into tag knee"
+Welcome airdrop claimed.
+wallet: bfab9fbd...0cf3
+status: pending — credited when the next block is mined
+node_response: {"ok":true,"status":"pending","tx_hash":"0x0e5c7282...","welcome_airdrop_tet":1000}
+```
+
+**The three env vars are not optional.** They feed the signature preimage
+(`tet tx v1|chain_id=..|genesis_hash=..|mldsa=..|tx=..`), so if they disagree with the node you get
+`401 ed25519 verification failed` — which does not sound like a configuration problem, so the CLI
+appends a hint saying it is. The values above are the compose defaults.
+
+Wait one block (`TET_BLOCK_TIME_SEC`, default 12), then:
+
+```console
+$ curl -sf "http://127.0.0.1:5010/ledger/me?wallet_id=<wallet>" | jq .balance_tet
+1000.0
+```
+
+Claiming twice is safe and does nothing — the second call returns `200` with
+`"outcome":"already_claimed"` and the same `tx_hash`, because the tx body is the wallet id alone,
+so its hash is unique per wallet.
+
+#### With curl
+
+The envelope must carry a valid hybrid Ed25519 + ML-DSA signature over the canonical preimage, so
+there is no meaningful hand-rolled `curl` for the claim itself — building the signature *is* the
+work, which is what `tet-cli faucet claim` and the UI both do. The shape, for reference:
+
+```
+POST /ledger/initial_airdrop/claim
+{ "v": 1,
+  "tx": { "kind": "initial_airdrop", "wallet_id": "<64 hex>" },
+  "sig": { "ed25519_pubkey_hex": "<must equal wallet_id>",
+           "ed25519_sig_b64": "...", "mldsa_pubkey_b64": "...", "mldsa_sig_b64": "..." },
+  "attestation": { "platform": "", "report_b64": "" } }
+→ 202 Accepted   {"status":"pending","tx_hash":"0x..."}
+→ 200 OK         {"outcome":"already_claimed"}   (idempotent)
+→ 401            signature invalid, or signer != wallet_id
+```
+
+`/v1/vision/ledger/initial_airdrop/claim` is an alias for the same handler.
+
+#### In the UI
+
+**There is no button yet.** The Sovereign OS has no claim control, and `ui/app/lib/ai_infer_hybrid.ts:91`
+already builds a `tet initial airdrop claim hybrid v1` preimage, so the client-side signing exists
+but nothing calls it for this route. The natural home is the Wallet window, next to the balance —
+a "Claim 1,000 TET" button visible while the balance is zero and the wallet has not claimed. That
+is UI work, deliberately not done here.
 
 #### Multi-node
 

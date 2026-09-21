@@ -1,0 +1,25 @@
+# Local development override — the fast path.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+#
+# Identical to the base stack except that the node image is built WITHOUT the
+# RISC Zero guests. That skips installing the risc0 toolchain and building the
+# zkVM guests, which is the difference between a first build measured in minutes
+# and one measured in tens of minutes.
+#
+# What you give up: the zk prover. `TET_WORKER_DAEMON` logs
+#   [worker-daemon] not started: NEXUS_GUEST_ELF is empty
+# and the zk-court / proof paths are unavailable. Everything the Sovereign OS
+# quickstart needs — wallet, faucet claim, transfers, Tmail, Files, mining —
+# works normally. The zk path is fail-closed on mainnet and warn-only in dev,
+# which is why this is safe for local use and not a production configuration.
+#
+# The base docker-compose.yml keeps RISC0_SKIP_BUILD=0 + --features zk-prove as
+# its default, so a deployment that does not pass this file is unaffected.
+
+services:
+  tet-core:
+    build:
+      args:
+        RISC0_SKIP_BUILD: "1"
+        TET_BUILD_FEATURES: ""
