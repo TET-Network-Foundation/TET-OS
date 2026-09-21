@@ -146,6 +146,10 @@ enum Command {
         #[command(subcommand)]
         action: AdminAction,
     },
+    Faucet {
+        #[command(subcommand)]
+        action: FaucetAction,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -203,15 +207,31 @@ enum ZkAction {
 
 #[derive(Debug, Subcommand)]
 enum AdminAction {
-    /// Grant test funds to an address using admin faucet.
-    Faucet {
-        address: String,
-        /// Faucet amount in TET (human units). Default: 100.
-        #[arg(long)]
-        amount_tet: Option<f64>,
-    },
     /// Mine a block from the mempool (admin-only).
     Mine,
+}
+
+#[derive(Debug, Subcommand)]
+enum FaucetAction {
+    /// Claim the one-time welcome airdrop (1,000 TET) for your own wallet.
+    ///
+    /// Public and self-serve: no admin token. The claim is a hybrid-signed
+    /// `TxV1::InitialAirdrop` submitted to `POST /ledger/initial_airdrop/claim`,
+    /// which verifies the signature, enqueues into the mempool and gossips it,
+    /// so the credit is applied by every node at block-apply rather than written
+    /// directly on whichever node served the request.
+    ///
+    /// One claim per wallet, network-wide cap 10,000 recipients.
+    Claim {
+        /// Mnemonic phrase (12/24 words) of the wallet to fund. Wrap in quotes.
+        #[arg(long)]
+        mnemonic: String,
+
+        /// Mine a block immediately so the credit lands without waiting for the
+        /// auto-miner (dev convenience; needs TET_ADMIN_API_KEY).
+        #[arg(long)]
+        mine: bool,
+    },
 }
 
 #[tokio::main]
@@ -540,42 +560,97 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Command::Admin { action } => match action {
-            AdminAction::Faucet {
-                address,
-                amount_tet,
-            } => {
-                let api_key = std::env::var("TET_ADMIN_API_KEY")
-                    .ok()
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .context("TET_ADMIN_API_KEY is not set (required for admin faucet)")?;
-
+        Command::Faucet { action } => match action {
+            FaucetAction::Claim { mnemonic, mine } => {
+                let wi = tet_core::wallet::recover_from_mnemonic_12(mnemonic.trim())
+                    .context("invalid mnemonic")?;
+                let wallet_id = wi.address_hex.clone();
                 let base = cli.node_url.trim_end_matches('/');
-                let url = url_join(base, "/ledger/faucet");
-                let payload = serde_json::json!({
-                    "wallet_id": address.trim(),
-                    "amount_tet": amount_tet,
-                });
+
+                let tx = tet_core::protocol::TxV1::InitialAirdrop {
+                    wallet_id: wallet_id.clone(),
+                };
+
+                // Canonical hybrid preimage, NOT `serde_json::to_vec(&tx)`. It binds the
+                // signature to chain_id + genesis_hash, which is what `verify_envelope_v1`
+                // requires on mainnet; the bare-JSON form is only accepted by the dev
+                // fallback. Both are read from this process's env, so TET_CHAIN_ID,
+                // TET_TREASURY_ADDRESS and TET_GENESIS_FOUNDER_WALLET_ID must match the
+                // node or the node computes a different preimage and returns 401.
+                let auth_bytes =
+                    tet_core::wallet::tx_v1_auth_message_bytes(&tx, &wi.dilithium_pubkey_b64)
+                        .map_err(anyhow::Error::msg)
+                        .context("failed to build the hybrid auth message")?;
+
+                let sk = tet_core::wallet::ed25519_signing_key_from_mnemonic(mnemonic.trim())
+                    .context("failed to derive ed25519 signing key")?;
+                let ed_sig_b64 =
+                    base64::engine::general_purpose::STANDARD.encode(sk.sign(&auth_bytes).to_bytes());
+
+                let mldsa_kp = tet_core::wallet::mldsa_keypair_from_mnemonic(mnemonic.trim())
+                    .context("failed to derive ML-DSA keypair")?;
+                let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(
+                    tet_core::wallet::mldsa_sign_deterministic(&mldsa_kp, &auth_bytes)
+                        .context("ML-DSA signing failed")?,
+                );
+
+                let env = tet_core::protocol::SignedTxEnvelopeV1 {
+                    v: 1,
+                    tx,
+                    sig: tet_core::protocol::HybridSigV1 {
+                        // The node rejects the claim unless the signer equals wallet_id.
+                        ed25519_pubkey_hex: wallet_id.clone(),
+                        ed25519_sig_b64: ed_sig_b64,
+                        mldsa_pubkey_b64: wi.dilithium_pubkey_b64.clone(),
+                        mldsa_sig_b64,
+                    },
+                    attestation: tet_core::protocol::AttestationV1 {
+                        platform: String::new(),
+                        report_b64: String::new(),
+                    },
+                };
+
+                let url = url_join(base, "/ledger/initial_airdrop/claim");
                 let r = http
                     .post(url.clone())
-                    .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
-                    .json(&payload)
+                    .json(&env)
                     .send()
                     .await
                     .with_context(|| format!("failed to POST {url}"))?;
                 let status = r.status();
                 let body = r.text().await.unwrap_or_default();
-                if !status.is_success() {
-                    anyhow::bail!("faucet HTTP {}: {}", status.as_u16(), body.trim());
+
+                if status == StatusCode::ACCEPTED {
+                    println!("{}Welcome airdrop claimed.{}", green_bold(), reset());
+                    println!("wallet: {wallet_id}");
+                    println!("status: pending — credited when the next block is mined");
+                    println!("node_response: {}", body.trim());
+                    if mine {
+                        println!();
+                        println!("--- auto mine ---");
+                        admin_mine_and_print_status(&http, base).await?;
+                    }
+                } else if status.is_success() {
+                    // 200 is the idempotent "already_claimed" answer, not a failure.
+                    println!("{}Claim accepted (HTTP {}).{}", green_bold(), status.as_u16(), reset());
+                    println!("wallet: {wallet_id}");
+                    println!("node_response: {}", body.trim());
+                } else {
+                    anyhow::bail!(
+                        "airdrop claim HTTP {}: {}{}",
+                        status.as_u16(),
+                        body.trim(),
+                        if status == StatusCode::UNAUTHORIZED {
+                            "\n  hint: 401 usually means this CLI's TET_CHAIN_ID / \
+TET_TREASURY_ADDRESS / TET_GENESIS_FOUNDER_WALLET_ID do not match the node's."
+                        } else {
+                            ""
+                        }
+                    );
                 }
-                println!(
-                    "{}Faucet succeeded.{} {}",
-                    green_bold(),
-                    reset(),
-                    body.trim()
-                );
             }
+        },
+        Command::Admin { action } => match action {
             AdminAction::Mine => {
                 let base = cli.node_url.trim_end_matches('/');
                 admin_mine_and_print_status(&http, base).await?;
