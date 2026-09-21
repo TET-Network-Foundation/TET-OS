@@ -527,7 +527,12 @@ TET_TREASURY_ADDRESS / TET_GENESIS_FOUNDER_WALLET_ID do not match the node's."
                         journal_b64,
                         receipt_b64,
                     };
-                    let tx_bytes = serde_json::to_vec(&tx).context("tx serialization failed")?;
+                    // Canonical, chain-bound preimage -- the only form verify_envelope_v1
+                    // accepts since the dev fallback was removed.
+                    let tx_bytes =
+                        tet_core::wallet::tx_v1_auth_message_bytes(&tx, &wi.dilithium_pubkey_b64)
+                            .map_err(anyhow::Error::msg)
+                            .context("failed to build the hybrid auth message")?;
 
                     let sk = tet_core::wallet::ed25519_signing_key_from_mnemonic(mnemonic.trim())
                         .context("failed to derive ed25519 signing key")?;

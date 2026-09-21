@@ -1,5 +1,5 @@
 use crate::attestation::{AttestationReport, verify_attestation_report};
-use crate::protocol::{SignedTxEnvelopeV1, TxV1};
+use crate::protocol::SignedTxEnvelopeV1;
 use axum::{
     Json,
     extract::State,
@@ -197,26 +197,6 @@ pub fn verify_envelope_v1(env: &SignedTxEnvelopeV1) -> Result<Vec<u8>, String> {
         return Err("unsupported envelope version".into());
     }
     let tx_bytes = crate::wallet::tx_v1_auth_message_bytes(&env.tx, &env.sig.mldsa_pubkey_b64)?;
-    let legacy_tx_bytes = match &env.tx {
-        TxV1::EnterpriseInference {
-            enterprise_wallet_id,
-            model,
-            amount_micro,
-            nonce,
-            prompt_sha256_hex,
-            attestation_required,
-            ..
-        } => crate::wallet::enterprise_inference_hybrid_auth_message_bytes(
-            enterprise_wallet_id,
-            *nonce,
-            *amount_micro,
-            prompt_sha256_hex,
-            model,
-            *attestation_required,
-            &env.sig.mldsa_pubkey_b64,
-        ),
-        _ => serde_json::to_vec(&env.tx).map_err(|_| "tx serialization failed")?,
-    };
 
     if mainnet_strict() {
         let stub = std::env::var("TET_ATTESTATION_ALLOW_STUB")
@@ -229,37 +209,32 @@ pub fn verify_envelope_v1(env: &SignedTxEnvelopeV1) -> Result<Vec<u8>, String> {
         }
     }
 
-    let canonical_ok = crate::quantum_shield::verify_ed25519(
+    // Both signatures must validate over the canonical, chain-bound preimage. There is no
+    // second acceptable form.
+    //
+    // Until 2026-09-21 a non-mainnet node fell back to accepting signatures over bare
+    // `serde_json::to_vec(&tx)`. That still required BOTH Ed25519 and ML-DSA, so it was not a
+    // forgery hole -- what it dropped was the BINDING to chain_id, genesis_hash and the ML-DSA
+    // pubkey, which is exactly what makes a signature non-replayable across chains. It also
+    // meant testnet verified differently from mainnet, so a client that signed the wrong thing
+    // passed every test and would have failed at the genesis ceremony. `tet-cli tx send` was
+    // doing precisely that, undetected, for months.
+    //
+    // Guarded by `bare_json_signed_envelope_is_rejected_off_mainnet` and
+    // `envelope_signed_against_a_different_genesis_hash_is_rejected`.
+    crate::quantum_shield::verify_ed25519(
         &env.sig.ed25519_pubkey_hex,
         &env.sig.ed25519_sig_b64,
         &tx_bytes,
     )
-    .is_ok()
-        && crate::wallet::verify_mldsa_b64(
-            &env.sig.mldsa_pubkey_b64,
-            &env.sig.mldsa_sig_b64,
-            &tx_bytes,
-        )
-        .is_ok();
-    let signed_tx_bytes = if canonical_ok {
-        tx_bytes.clone()
-    } else {
-        if mainnet_strict() {
-            return Err("invalid signature or missing chain_id/genesis_hash binding".into());
-        }
-        crate::quantum_shield::verify_ed25519(
-            &env.sig.ed25519_pubkey_hex,
-            &env.sig.ed25519_sig_b64,
-            &legacy_tx_bytes,
-        )
-        .map_err(|e| e.to_string())?;
-        crate::wallet::verify_mldsa_b64(
-            &env.sig.mldsa_pubkey_b64,
-            &env.sig.mldsa_sig_b64,
-            &legacy_tx_bytes,
-        )?;
-        legacy_tx_bytes.clone()
-    };
+    .map_err(|_| "invalid signature or missing chain_id/genesis_hash binding".to_string())?;
+    crate::wallet::verify_mldsa_b64(
+        &env.sig.mldsa_pubkey_b64,
+        &env.sig.mldsa_sig_b64,
+        &tx_bytes,
+    )
+    .map_err(|_| "invalid signature or missing chain_id/genesis_hash binding".to_string())?;
+    let signed_tx_bytes = tx_bytes;
 
     let must_attest = mainnet_strict() || crate::attestation::attestation_required();
     if must_attest {

@@ -82,8 +82,13 @@ jobs:
       # loudly if one is ever deleted or renamed rather than fixed: a `cargo test <filter>` that
       # matches nothing exits 0, so each run is asserted to have executed exactly one test.
       #
-      # Inventory as of 2026-09-20: FOUR tests carry `SECURITY REGRESSION GUARD` and FOUR carry
-      # `TODO(9828)`. There is no guard for the removed faucet routes (`POST /ledger/faucet`,
+      # Inventory as of 2026-09-21: SIX tests carry `SECURITY REGRESSION GUARD` and FOUR carry
+      # `TODO(9828)`. The two newest guard the removal of the dev signature fallback, so testnet
+      # verifies exactly like mainnet. A related non-guard test,
+      # `mainnet_rejects_legacy_tx_signature_without_chain_binding`, covers the mainnet side and
+      # runs with the rest of the suite.
+      #
+      # There is still no guard for the removed faucet routes (`POST /ledger/faucet`,
       # `POST /faucet`, removed in c2416dc) — `admin_rest_faucet_once_per_wallet_and_ip_rl` still
       # exercises the *ledger method*, which is unrouted, so nothing would catch the routes being
       # re-added. Adding `removed_faucet_routes_are_not_reachable` alongside the /dex/* guard is
@@ -100,6 +105,8 @@ jobs:
             removed_dex_routes_are_not_reachable
             zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond
             caac_complete_without_signature_is_rejected_and_writes_no_record
+            bare_json_signed_envelope_is_rejected_off_mainnet
+            envelope_signed_against_a_different_genesis_hash_is_rejected
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block

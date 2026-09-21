@@ -94,103 +94,64 @@ fn admin_headers_for_tests() -> HeaderMap {
     h
 }
 
-fn signed_transfer_env_for_tests(
-    from_words: &str,
-    from_wallet_id: &str,
-    to_wallet_id: &str,
-    amount_micro: u64,
-) -> crate::protocol::SignedTxEnvelopeV1 {
-    let tx = crate::protocol::TxV1::Transfer {
-        from_wallet: from_wallet_id.to_string(),
-        to_wallet: to_wallet_id.to_string(),
-        amount_micro,
-        fee_bps: 100,
-    };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
-    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(from_words).unwrap();
-    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(from_words).unwrap();
-    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
-    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
-    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
-    let mldsa_sig_bytes =
-        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
-    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
-
-    crate::protocol::SignedTxEnvelopeV1 {
-        v: 1,
-        tx,
-        sig: crate::protocol::HybridSigV1 {
-            ed25519_pubkey_hex: from_wallet_id.to_string(),
-            ed25519_sig_b64: ed_sig_b64,
-            mldsa_pubkey_b64,
-            mldsa_sig_b64,
-        },
-        attestation: crate::protocol::AttestationV1 {
-            platform: "test".to_string(),
-            report_b64: String::new(),
-        },
-    }
-}
-
-fn signed_file_fee_env_for_tests(
-    from_words: &str,
-    from_wallet_id: &str,
-    storage_wallet: &str,
-    file_id: &str,
-) -> crate::protocol::SignedTxEnvelopeV1 {
-    let tx = crate::protocol::TxV1::FileFee {
-        from_wallet: from_wallet_id.to_string(),
-        storage_wallet: storage_wallet.to_string(),
-        file_id: file_id.to_string(),
-        fee_micro: crate::files::FILE_FEE_MICRO,
-    };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
-    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(from_words).unwrap();
-    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(from_words).unwrap();
-    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
-    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
-    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
-    let mldsa_sig_bytes =
-        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
-    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
-
-    crate::protocol::SignedTxEnvelopeV1 {
-        v: 1,
-        tx,
-        sig: crate::protocol::HybridSigV1 {
-            ed25519_pubkey_hex: from_wallet_id.to_string(),
-            ed25519_sig_b64: ed_sig_b64,
-            mldsa_pubkey_b64,
-            mldsa_sig_b64,
-        },
-        attestation: crate::protocol::AttestationV1 {
-            platform: "test".to_string(),
-            report_b64: String::new(),
-        },
-    }
-}
-
-fn signed_worker_register_env_for_tests(
+/// Hybrid-signs `tx` over the **pre-2026-09-21 bare-JSON preimage** — `serde_json::to_vec(&tx)`,
+/// with no chain_id / genesis_hash / ML-DSA binding.
+///
+/// Only for the guards that prove this form is REJECTED. Nothing may use it to build an envelope
+/// it expects to be accepted.
+fn legacy_bare_json_env_for_tests(
+    tx: crate::protocol::TxV1,
     words: &str,
     wallet_id: &str,
-    hardware_id_hex: &str,
 ) -> crate::protocol::SignedTxEnvelopeV1 {
-    let tx = crate::protocol::TxV1::WorkerRegister {
-        wallet_id: wallet_id.to_string(),
-        hardware_id_hex: hardware_id_hex.to_string(),
-        hardware_profile: "cpu-prover-v1".to_string(),
-        capabilities: vec!["zk_prove".to_string()],
-        tflops_declared: 4.0,
-    };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
+    let legacy_bytes = serde_json::to_vec(&tx).unwrap();
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    crate::protocol::SignedTxEnvelopeV1 {
+        v: 1,
+        tx,
+        sig: crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: wallet_id.to_string(),
+            ed25519_sig_b64: base64::engine::general_purpose::STANDARD
+                .encode(ed_sk.sign(legacy_bytes.as_slice()).to_bytes()),
+            mldsa_pubkey_b64: base64::engine::general_purpose::STANDARD
+                .encode(mldsa_kp.public_key()),
+            mldsa_sig_b64: base64::engine::general_purpose::STANDARD.encode(
+                crate::wallet::mldsa_sign_deterministic(&mldsa_kp, legacy_bytes.as_slice())
+                    .unwrap(),
+            ),
+        },
+        attestation: crate::protocol::AttestationV1 {
+            platform: "test".to_string(),
+            report_b64: String::new(),
+        },
+    }
+}
+
+/// Hybrid-signs `tx` over the **canonical** preimage
+/// (`wallet::tx_v1_auth_message_bytes` — `tet tx v1|chain_id=..|genesis_hash=..|mldsa=..|tx=..`).
+///
+/// This is the ONLY form `verify_envelope_v1` accepts since the dev fallback was removed, so
+/// every envelope the tests build goes through here. Consequence worth knowing: the preimage
+/// reads `TET_CHAIN_ID`, `TET_TREASURY_ADDRESS` and the founder wallet from the process env, so
+/// a caller must be holding `env_lock()` and have run `set_test_env_base()` — otherwise the
+/// signature binds to a different genesis than the ledger under test and every route returns 401.
+/// One place to fix if `set_test_env_base` ever changes.
+fn signed_env_for_tests(
+    tx: crate::protocol::TxV1,
+    words: &str,
+    wallet_id: &str,
+) -> crate::protocol::SignedTxEnvelopeV1 {
     let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
     let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
     let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
-    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
-    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
-    let mldsa_sig_bytes =
-        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
-    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
+
+    let msg = crate::wallet::tx_v1_auth_message_bytes(&tx, &mldsa_pubkey_b64).unwrap();
+
+    let ed_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
 
     crate::protocol::SignedTxEnvelopeV1 {
         v: 1,
@@ -206,6 +167,51 @@ fn signed_worker_register_env_for_tests(
             report_b64: String::new(),
         },
     }
+}
+
+fn signed_transfer_env_for_tests(
+    from_words: &str,
+    from_wallet_id: &str,
+    to_wallet_id: &str,
+    amount_micro: u64,
+) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::Transfer {
+        from_wallet: from_wallet_id.to_string(),
+        to_wallet: to_wallet_id.to_string(),
+        amount_micro,
+        fee_bps: 100,
+    };
+    signed_env_for_tests(tx, from_words, from_wallet_id)
+}
+
+fn signed_file_fee_env_for_tests(
+    from_words: &str,
+    from_wallet_id: &str,
+    storage_wallet: &str,
+    file_id: &str,
+) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::FileFee {
+        from_wallet: from_wallet_id.to_string(),
+        storage_wallet: storage_wallet.to_string(),
+        file_id: file_id.to_string(),
+        fee_micro: crate::files::FILE_FEE_MICRO,
+    };
+    signed_env_for_tests(tx, from_words, from_wallet_id)
+}
+
+fn signed_worker_register_env_for_tests(
+    words: &str,
+    wallet_id: &str,
+    hardware_id_hex: &str,
+) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::WorkerRegister {
+        wallet_id: wallet_id.to_string(),
+        hardware_id_hex: hardware_id_hex.to_string(),
+        hardware_profile: "cpu-prover-v1".to_string(),
+        capabilities: vec!["zk_prove".to_string()],
+        tflops_declared: 4.0,
+    };
+    signed_env_for_tests(tx, words, wallet_id)
 }
 
 fn signed_zk_env_for_tests(
@@ -230,30 +236,7 @@ fn signed_zk_env_with_task_for_tests(
         journal_b64,
         receipt_b64,
     };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
-    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
-    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
-    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
-    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
-    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
-    let mldsa_sig_bytes =
-        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
-    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
-
-    crate::protocol::SignedTxEnvelopeV1 {
-        v: 1,
-        tx,
-        sig: crate::protocol::HybridSigV1 {
-            ed25519_pubkey_hex: wallet_id.to_string(),
-            ed25519_sig_b64: ed_sig_b64,
-            mldsa_pubkey_b64,
-            mldsa_sig_b64,
-        },
-        attestation: crate::protocol::AttestationV1 {
-            platform: "test".to_string(),
-            report_b64: String::new(),
-        },
-    }
+    signed_env_for_tests(tx, words, wallet_id)
 }
 
 fn signed_enterprise_inference_env_for_tests(
@@ -1021,30 +1004,7 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
         amount_micro,
         fee_bps: 100,
     };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
-    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&sender_words).unwrap();
-    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&sender_words).unwrap();
-    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
-    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
-    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
-    let mldsa_sig_bytes =
-        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
-    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
-
-    let env = crate::protocol::SignedTxEnvelopeV1 {
-        v: 1,
-        tx: tx.clone(),
-        sig: crate::protocol::HybridSigV1 {
-            ed25519_pubkey_hex: sender_wallet_id.clone(),
-            ed25519_sig_b64: ed_sig_b64,
-            mldsa_pubkey_b64,
-            mldsa_sig_b64,
-        },
-        attestation: crate::protocol::AttestationV1 {
-            platform: "test".to_string(),
-            report_b64: String::new(),
-        },
-    };
+    let env = signed_env_for_tests(tx.clone(), &sender_words, &sender_wallet_id);
 
     let bal_before = ledger_a.balance_micro(&sender_wallet_id).unwrap();
     let resp2 = crate::rest::handlers::ledger::post_transfer_enveloped(
@@ -2257,31 +2217,7 @@ async fn zk_verify_tx_enqueues_and_mines_into_block() {
         journal_b64: j_b64.clone(),
         receipt_b64: receipt_b64.clone(),
     };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
-
-    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
-    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words).unwrap();
-    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
-    let ed_sig = ed_sk.sign(tx_bytes.as_slice());
-    let ed_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sig.to_bytes().as_slice());
-    let mldsa_sig_bytes =
-        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap();
-    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(&mldsa_sig_bytes);
-
-    let env = crate::protocol::SignedTxEnvelopeV1 {
-        v: 1,
-        tx: tx.clone(),
-        sig: crate::protocol::HybridSigV1 {
-            ed25519_pubkey_hex: wallet_id.clone(),
-            ed25519_sig_b64: ed_sig_b64,
-            mldsa_pubkey_b64,
-            mldsa_sig_b64,
-        },
-        attestation: crate::protocol::AttestationV1 {
-            platform: "test".to_string(),
-            report_b64: String::new(),
-        },
-    };
+    let env = signed_env_for_tests(tx.clone(), &words, &wallet_id);
 
     let ledger = std::sync::Arc::new(open_temp_ledger());
     ledger.init_genesis_founder_premine_from_env().unwrap();
@@ -3525,9 +3461,17 @@ fn mainnet_rejects_legacy_tx_signature_without_chain_binding() {
     let phrase = wi.mnemonic_12.as_deref().unwrap_or_default();
     let w = crate::wallet::recover_from_mnemonic_12(phrase).unwrap();
     let bob = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    let env = signed_transfer_env_for_tests(phrase, &w.address_hex, bob, 1_000_000);
+    // Must build the LEGACY form explicitly: signed_transfer_env_for_tests now signs the
+    // canonical preimage, so using it here would assert nothing.
+    let tx = crate::protocol::TxV1::Transfer {
+        from_wallet: w.address_hex.clone(),
+        to_wallet: bob.to_string(),
+        amount_micro: 1_000_000,
+        fee_bps: 100,
+    };
+    let env = legacy_bare_json_env_for_tests(tx, phrase, &w.address_hex);
     let err = crate::rest::helpers::verify_envelope_v1(&env).unwrap_err();
-    assert!(err.contains("chain_id/genesis_hash"));
+    assert!(err.contains("chain_id/genesis_hash"), "got: {err}");
 
     unsafe {
         std::env::remove_var("TET_MAINNET");
@@ -3931,30 +3875,7 @@ fn welcome_airdrop_consensus_tx_predicts_same_root_on_all_nodes() {
     let tx = crate::protocol::TxV1::InitialAirdrop {
         wallet_id: wallet_id.clone(),
     };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
-    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
-    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words).unwrap();
-    let mldsa_pubkey_b64 =
-        base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
-    let ed_sig_b64 = base64::engine::general_purpose::STANDARD
-        .encode(ed_sk.sign(tx_bytes.as_slice()).to_bytes().as_slice());
-    let mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(
-        crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap(),
-    );
-    let env = crate::protocol::SignedTxEnvelopeV1 {
-        v: 1,
-        tx,
-        sig: crate::protocol::HybridSigV1 {
-            ed25519_pubkey_hex: wallet_id.clone(),
-            ed25519_sig_b64: ed_sig_b64,
-            mldsa_pubkey_b64,
-            mldsa_sig_b64,
-        },
-        attestation: crate::protocol::AttestationV1 {
-            platform: "test".to_string(),
-            report_b64: String::new(),
-        },
-    };
+    let env = signed_env_for_tests(tx, &words, &wallet_id);
 
     // Same tx previewed as a block on both nodes => same predicted root, distinct from genesis.
     let r1 = n1
@@ -5316,27 +5237,7 @@ fn consensus_faucet_path_keeps_nodes_in_agreement() {
     let tx = crate::protocol::TxV1::InitialAirdrop {
         wallet_id: wallet_id.clone(),
     };
-    let tx_bytes = serde_json::to_vec(&tx).unwrap();
-    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
-    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words).unwrap();
-    let env = crate::protocol::SignedTxEnvelopeV1 {
-        v: 1,
-        tx,
-        sig: crate::protocol::HybridSigV1 {
-            ed25519_pubkey_hex: wallet_id.clone(),
-            ed25519_sig_b64: base64::engine::general_purpose::STANDARD
-                .encode(ed_sk.sign(tx_bytes.as_slice()).to_bytes().as_slice()),
-            mldsa_pubkey_b64: base64::engine::general_purpose::STANDARD
-                .encode(mldsa_kp.public_key()),
-            mldsa_sig_b64: base64::engine::general_purpose::STANDARD.encode(
-                crate::wallet::mldsa_sign_deterministic(&mldsa_kp, tx_bytes.as_slice()).unwrap(),
-            ),
-        },
-        attestation: crate::protocol::AttestationV1 {
-            platform: "test".to_string(),
-            report_b64: String::new(),
-        },
-    };
+    let env = signed_env_for_tests(tx, &words, &wallet_id);
     let h = crate::consensus::tx_hash_for_env(&env).unwrap();
 
     // APPLY it on both nodes (the sibling test covers the preview arm; this covers apply).
@@ -5722,4 +5623,124 @@ async fn caac_complete_without_signature_is_rejected_and_writes_no_record() {
         "no CAAC record may be written for a wallet that did not sign — that record sets \
          leader-election weight"
     );
+}
+
+/// **SECURITY REGRESSION GUARD.** An envelope signed over bare `serde_json::to_vec(&tx)` must be
+/// rejected even with `TET_MAINNET` unset.
+///
+/// Until 2026-09-21 `verify_envelope_v1` fell back to that form off mainnet. Both signatures were
+/// still required, so it was not a forgery hole — what it dropped was the binding to `chain_id`,
+/// `genesis_hash` and the ML-DSA pubkey, which is what makes a signature non-replayable across
+/// chains. The real damage was that **testnet verified differently from mainnet**: a client
+/// signing the wrong bytes passed every test and would have failed at the genesis ceremony.
+/// `tet-cli tx send` was doing exactly that, undetected.
+///
+/// This test pins the removal: same wallet, same tx, bare-JSON signature, no TET_MAINNET → 401.
+#[tokio::test]
+async fn bare_json_signed_envelope_is_rejected_off_mainnet() {
+    let _g = env_lock();
+    set_test_env_base();
+    // Explicitly NOT mainnet — the whole point is that the loose path is gone here too.
+    unsafe {
+        std::env::remove_var("TET_MAINNET");
+    }
+
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let wallet_id = w.address_hex.to_ascii_lowercase();
+
+    let tx = crate::protocol::TxV1::InitialAirdrop {
+        wallet_id: wallet_id.clone(),
+    };
+
+    // Sign the OLD way: bare canonical JSON, no chain_id / genesis_hash / mldsa binding.
+    let legacy_env = legacy_bare_json_env_for_tests(tx.clone(), &words, &wallet_id);
+
+    // Direct verification is the contract under test.
+    assert!(
+        crate::rest::helpers::verify_envelope_v1(&legacy_env).is_err(),
+        "bare-JSON preimage must not verify, on any chain"
+    );
+
+    // And the route must refuse it rather than crediting the wallet.
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let root_before = ledger.compute_state_root().unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let resp = crate::rest::handlers::ledger::post_initial_airdrop_claim(
+        axum::extract::State(state),
+        axum::Json(legacy_env),
+    )
+    .await
+    .into_response();
+    assert_eq!(
+        resp.status(),
+        StatusCode::UNAUTHORIZED,
+        "a bare-JSON-signed claim must be 401, not accepted into the mempool"
+    );
+    assert_eq!(
+        ledger.balance_micro(&wallet_id).unwrap(),
+        0,
+        "rejected claim must not credit"
+    );
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "rejected claim must not move the state root"
+    );
+
+    // Sanity: the SAME tx signed canonically is accepted, so the test is not passing because
+    // something unrelated is broken.
+    let good = signed_env_for_tests(tx, &words, &wallet_id);
+    assert!(crate::rest::helpers::verify_envelope_v1(&good).is_ok());
+}
+
+/// **SECURITY REGRESSION GUARD.** A signature produced against a different `genesis_hash` must not
+/// verify — the cross-chain replay case the canonical preimage exists to prevent.
+///
+/// Signs under one `TET_CHAIN_ID`, then verifies under another. Nothing about the tx changes, only
+/// the chain it was bound to. With the old fallback this replayed cleanly off mainnet.
+#[tokio::test]
+async fn envelope_signed_against_a_different_genesis_hash_is_rejected() {
+    let _g = env_lock();
+    set_test_env_base();
+    unsafe {
+        std::env::remove_var("TET_MAINNET");
+    }
+
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let wallet_id = w.address_hex.to_ascii_lowercase();
+    let tx = crate::protocol::TxV1::InitialAirdrop {
+        wallet_id: wallet_id.clone(),
+    };
+
+    // Sign bound to chain A.
+    unsafe {
+        std::env::set_var("TET_CHAIN_ID", "tet-chain-a");
+    }
+    let env_chain_a = signed_env_for_tests(tx.clone(), &words, &wallet_id);
+    assert!(
+        crate::rest::helpers::verify_envelope_v1(&env_chain_a).is_ok(),
+        "must verify on the chain it was signed for"
+    );
+
+    // Same bytes, different chain.
+    unsafe {
+        std::env::set_var("TET_CHAIN_ID", "tet-chain-b");
+    }
+    assert!(
+        crate::rest::helpers::verify_envelope_v1(&env_chain_a).is_err(),
+        "a signature bound to tet-chain-a must not verify on tet-chain-b"
+    );
+
+    // Re-signing under chain B works, proving only the binding differed.
+    let env_chain_b = signed_env_for_tests(tx, &words, &wallet_id);
+    assert!(crate::rest::helpers::verify_envelope_v1(&env_chain_b).is_ok());
+
+    unsafe {
+        std::env::remove_var("TET_CHAIN_ID");
+    }
 }
