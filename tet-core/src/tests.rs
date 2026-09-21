@@ -13,6 +13,54 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
     crate::test_env::lock()
 }
 
+/// Sets an env var and restores the previous value when dropped — **including on panic**.
+///
+/// Tests that flip `TET_MAINNET` used a bare `set_var` at the top and a matching `remove_var` at
+/// the bottom. If anything between them panicked, the cleanup never ran and `TET_MAINNET=1`
+/// leaked into every test that followed, which then died in `apply_genesis_allocation` with
+/// "CRITICAL: TET_MAINNET=1 requires TET_GENESIS_FOUNDER_WALLET_ID". One broken assertion turned
+/// into twenty failures pointing at innocent code. Drop runs on the unwind path, so a guard
+/// cannot leak that way.
+///
+/// Declare it AFTER `let _g = env_lock();` so it is restored before the lock is released.
+struct EnvVarGuard {
+    key: &'static str,
+    previous: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let previous = std::env::var(key).ok();
+        // Safety: callers hold ENV_LOCK, same contract as set_test_env_base.
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        Self { key, previous }
+    }
+
+    /// Removes the var for the test's duration, restoring it on drop.
+    fn unset(key: &'static str) -> Self {
+        let previous = std::env::var(key).ok();
+        // Safety: as above.
+        unsafe {
+            std::env::remove_var(key);
+        }
+        Self { key, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // Safety: as above — the env lock is still held by the caller's guard.
+        unsafe {
+            match self.previous.as_deref() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 fn set_test_env_base() {
     // Safety: these tests serialize on ENV_LOCK.
     unsafe {
@@ -3449,13 +3497,11 @@ fn mldsa65_hybrid_transfer_sign_verify_roundtrip() {
 fn mainnet_rejects_legacy_tx_signature_without_chain_binding() {
     let _g = env_lock();
     set_test_env_base();
-    unsafe {
-        std::env::set_var("TET_MAINNET", "1");
-        std::env::set_var(
-            "TET_GENESIS_FOUNDER_WALLET_ID",
-            crate::ledger::GENESIS_FOUNDER_DEV_PUBLIC_HEX,
-        );
-    }
+    let _mainnet = EnvVarGuard::set("TET_MAINNET", "1");
+    let _founder = EnvVarGuard::set(
+        "TET_GENESIS_FOUNDER_WALLET_ID",
+        crate::ledger::GENESIS_FOUNDER_DEV_PUBLIC_HEX,
+    );
 
     let wi = crate::wallet::generate_mnemonic_12().unwrap();
     let phrase = wi.mnemonic_12.as_deref().unwrap_or_default();
@@ -3472,31 +3518,21 @@ fn mainnet_rejects_legacy_tx_signature_without_chain_binding() {
     let env = legacy_bare_json_env_for_tests(tx, phrase, &w.address_hex);
     let err = crate::rest::helpers::verify_envelope_v1(&env).unwrap_err();
     assert!(err.contains("chain_id/genesis_hash"), "got: {err}");
-
-    unsafe {
-        std::env::remove_var("TET_MAINNET");
-        std::env::remove_var("TET_GENESIS_FOUNDER_WALLET_ID");
-    }
+    // env restored by the guards, on the panic path too.
 }
 
 #[test]
 fn mainnet_panics_when_mock_zk_is_enabled() {
     let _g = env_lock();
     set_test_env_base();
-    unsafe {
-        std::env::set_var("TET_MAINNET", "1");
-        std::env::set_var("TET_ALLOW_MOCK_ZK", "1");
-    }
+    let _mainnet = EnvVarGuard::set("TET_MAINNET", "1");
+    let _mock_zk = EnvVarGuard::set("TET_ALLOW_MOCK_ZK", "1");
 
     let result = std::panic::catch_unwind(|| {
         let _ = crate::zk_verifier::verify_receipt("MOCKJ1:");
     });
     assert!(result.is_err());
-
-    unsafe {
-        std::env::remove_var("TET_MAINNET");
-        std::env::remove_var("TET_ALLOW_MOCK_ZK");
-    }
+    // env restored by the guards, on the panic path too.
 }
 
 #[tokio::test]
@@ -5098,14 +5134,15 @@ fn wallclock_time_changes_spendability_for_the_same_block() {
         .expect("mint seeds the vest lock");
     assert!(worker_net > 0, "worker must receive a vested amount");
 
-    let day_ms: u128 = 86_400_000;
-    // Same computation as the private `ledger::ledger_now_ms()`; kept local so this test needs
-    // no production-code change.
-    let t_during = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis();
-    let t_after = t_during + 91 * day_ms; // past the 90-day vest
+    // Fixed constants, NOT SystemTime::now(). A test whose whole subject is "wall-clock time
+    // leaks into consensus" must not itself read the wall clock: `mint_worker_network_reward`
+    // derives `unlock_at_ms` from the real clock internally, so a now()-derived `t_during` made
+    // the assertions depend on when the suite happened to run. These two values bracket any
+    // possible unlock_at: 1 ms after the epoch is before every lock, 2100-01-01 is after every
+    // lock, so the outcome is identical on every machine and every day.
+    const T_DURING_VEST: u128 = 1;
+    const T_AFTER_VEST: u128 = 4_102_444_800_000; // 2100-01-01T00:00:00Z
+    let (t_during, t_after) = (T_DURING_VEST, T_AFTER_VEST);
 
     let locked_during = ledger.locked_balance_micro(&worker, t_during).unwrap();
     let locked_after = ledger.locked_balance_micro(&worker, t_after).unwrap();
@@ -5641,9 +5678,7 @@ async fn bare_json_signed_envelope_is_rejected_off_mainnet() {
     let _g = env_lock();
     set_test_env_base();
     // Explicitly NOT mainnet — the whole point is that the loose path is gone here too.
-    unsafe {
-        std::env::remove_var("TET_MAINNET");
-    }
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
 
     let w = crate::wallet::generate_mnemonic_12().unwrap();
     let words = w.mnemonic_12.clone().unwrap();
@@ -5706,9 +5741,7 @@ async fn bare_json_signed_envelope_is_rejected_off_mainnet() {
 async fn envelope_signed_against_a_different_genesis_hash_is_rejected() {
     let _g = env_lock();
     set_test_env_base();
-    unsafe {
-        std::env::remove_var("TET_MAINNET");
-    }
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
 
     let w = crate::wallet::generate_mnemonic_12().unwrap();
     let words = w.mnemonic_12.clone().unwrap();
@@ -5717,10 +5750,9 @@ async fn envelope_signed_against_a_different_genesis_hash_is_rejected() {
         wallet_id: wallet_id.clone(),
     };
 
-    // Sign bound to chain A.
-    unsafe {
-        std::env::set_var("TET_CHAIN_ID", "tet-chain-a");
-    }
+    // Sign bound to chain A. The guard restores whatever TET_CHAIN_ID was, even if an assertion
+    // below fails — otherwise a stray chain id would break every later test's genesis hash.
+    let _chain = EnvVarGuard::set("TET_CHAIN_ID", "tet-chain-a");
     let env_chain_a = signed_env_for_tests(tx.clone(), &words, &wallet_id);
     assert!(
         crate::rest::helpers::verify_envelope_v1(&env_chain_a).is_ok(),
@@ -5728,9 +5760,7 @@ async fn envelope_signed_against_a_different_genesis_hash_is_rejected() {
     );
 
     // Same bytes, different chain.
-    unsafe {
-        std::env::set_var("TET_CHAIN_ID", "tet-chain-b");
-    }
+    let _chain_b = EnvVarGuard::set("TET_CHAIN_ID", "tet-chain-b");
     assert!(
         crate::rest::helpers::verify_envelope_v1(&env_chain_a).is_err(),
         "a signature bound to tet-chain-a must not verify on tet-chain-b"
@@ -5739,8 +5769,48 @@ async fn envelope_signed_against_a_different_genesis_hash_is_rejected() {
     // Re-signing under chain B works, proving only the binding differed.
     let env_chain_b = signed_env_for_tests(tx, &words, &wallet_id);
     assert!(crate::rest::helpers::verify_envelope_v1(&env_chain_b).is_ok());
+    // TET_CHAIN_ID restored by the guards.
+}
 
+/// The `EnvVarGuard` contract: a panic inside the guarded region still restores the env.
+///
+/// This is the regression for the cascade of 2026-09-21, where
+/// `mainnet_rejects_legacy_tx_signature_without_chain_binding` panicked before its manual
+/// `remove_var` and left `TET_MAINNET=1` set for every test that followed — twenty failures in
+/// unrelated code, all reported as "CRITICAL: TET_MAINNET=1 requires
+/// TET_GENESIS_FOUNDER_WALLET_ID".
+#[test]
+fn env_var_guard_restores_on_panic() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    const KEY: &str = "TET_MAINNET";
+    let before = std::env::var(KEY).ok();
+
+    let result = std::panic::catch_unwind(|| {
+        let _mainnet = EnvVarGuard::set(KEY, "1");
+        assert_eq!(std::env::var(KEY).ok().as_deref(), Some("1"));
+        panic!("simulated failure inside the guarded region");
+    });
+    assert!(result.is_err(), "the closure must have panicked");
+
+    assert_eq!(
+        std::env::var(KEY).ok(),
+        before,
+        "TET_MAINNET must be restored after a panic, not left set for the next test"
+    );
+
+    // And the common case: previously-unset stays unset.
+    let probe = "TET_ENV_GUARD_PROBE";
     unsafe {
-        std::env::remove_var("TET_CHAIN_ID");
+        std::env::remove_var(probe);
     }
+    {
+        let _p = EnvVarGuard::set("TET_ENV_GUARD_PROBE", "x");
+        assert_eq!(std::env::var(probe).as_deref(), Ok("x"));
+    }
+    assert!(
+        std::env::var(probe).is_err(),
+        "a var that did not exist must be removed again, not left as an empty string"
+    );
 }
