@@ -1,0 +1,205 @@
+# TET CI — Sprint 4 "L1 Foundation" exit criterion: *CI green on the default branch*.
+#
+# Three jobs, each closing a gap named in docs/SPRINT_PLAN.md §S4:
+#   rust  — the node actually builds and its 182 tests pass somewhere other than a laptop.
+#           Every "PASS" in the first 65 commits was a local run; this is the first enforced one.
+#   ui    — the Sovereign OS front end builds from a clean checkout.
+#   wasm  — tet-pqc-wasm builds and lands in tet-network/ui/public/pqc/. That directory is
+#           gitignored (`*`), so a fresh clone cannot sign anything until this runs; see
+#           docs/RUNNING_A_NODE.md "post-quantum WASM (required)".
+#
+# RISC0_SKIP_BUILD=1 is set workflow-wide: building the RISC Zero guests needs the risc0
+# toolchain and puts the run into the tens of minutes. The zk path is therefore NOT covered
+# here — that is the open `zk` job in docs/SPRINT_PLAN.md (v1 S3 item 1).
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch cancels the first — private-repo Actions minutes are billed.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RISC0_SKIP_BUILD: "1"
+
+jobs:
+  rust:
+    name: rust (build, test, guards)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # `ubuntu-latest` ships ~14 GB free, and this workspace does not fit: the
+      # first run died with "No space left on device" after Build and Test had
+      # both already passed. Reclaiming the preinstalled SDKs buys ~25 GB.
+      - name: Free disk space
+        run: |
+          echo "before: $(df -h / --output=avail | tail -1)"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          echo "after:  $(df -h / --output=avail | tail -1)"
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: rust-${{ hashFiles('**/Cargo.lock') }}
+
+      # Release-build only the binary that actually ships. The full
+      # `--workspace --release` compiled every crate a second time in a second
+      # profile for no coverage the debug test build does not already give, and
+      # the `docker` job release-builds this same binary inside the image.
+      - name: Build (release)
+        run: cargo build --release -p tet-core --bin TET-Core
+
+      # Debuginfo is the bulk of the debug target dir. Line tables keep test
+      # backtraces readable without carrying full DWARF for every dependency.
+      - name: Test
+        env:
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+          CARGO_PROFILE_TEST_DEBUG: line-tables-only
+        run: cargo test --workspace
+
+      - name: Disk after build+test
+        if: always()
+        run: df -h / | tail -1
+
+      # The suite above already ran these. This step re-runs them BY NAME so the workflow fails
+      # loudly if one is ever deleted or renamed rather than fixed: a `cargo test <filter>` that
+      # matches nothing exits 0, so each run is asserted to have executed exactly one test.
+      #
+      # Inventory as of 2026-09-20: FOUR tests carry `SECURITY REGRESSION GUARD` and FOUR carry
+      # `TODO(9828)`. There is no guard for the removed faucet routes (`POST /ledger/faucet`,
+      # `POST /faucet`, removed in c2416dc) — `admin_rest_faucet_once_per_wallet_and_ip_rl` still
+      # exercises the *ledger method*, which is unrouted, so nothing would catch the routes being
+      # re-added. Adding `removed_faucet_routes_are_not_reachable` alongside the /dex/* guard is
+      # the obvious next commit; add its name below when it exists.
+      - name: Security regression guards + block-9828 pins
+        env:
+          # Must match the Test step or cargo recompiles the whole test binary.
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+          CARGO_PROFILE_TEST_DEBUG: line-tables-only
+        run: |
+          set -euo pipefail
+          guards=(
+            removed_guardian_recover_route_is_not_reachable
+            removed_dex_routes_are_not_reachable
+            zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond
+            caac_complete_without_signature_is_rejected_and_writes_no_record
+          )
+          pins=(
+            wallclock_time_changes_spendability_for_the_same_block
+            state_root_paths_agree_on_unreadable_rows
+            consensus_faucet_path_keeps_nodes_in_agreement
+            ai_infer_settlement_direct_write_forks_state_root
+          )
+          fail=0
+          for t in "${guards[@]}" "${pins[@]}"; do
+            out=$(cargo test --bin TET-Core -- --exact "tests::$t" 2>&1) || { echo "$out"; fail=1; }
+            if ! grep -q '1 passed; 0 failed' <<<"$out"; then
+              echo "::error::$t did not run as exactly one passing test — renamed, deleted, or failing"
+              grep -E 'test result:' <<<"$out" || true
+              fail=1
+            else
+              echo "ok  $t"
+            fi
+          done
+          exit $fail
+
+      # NON-BLOCKING, deliberately. The tree is not clippy-clean: 37 warnings as of 2026-09-20
+      # (tet-core 28, nexus-wasm 6, tet-pqc-wasm 3), of which 3 are plain rustc `unused` warnings
+      # left by the faucet-route removal and the rest are style lints (collapsible_if,
+      # redundant_closure, too_many_arguments, needless_return, doc_lazy_continuation ...).
+      # Turning on `-D warnings` today would make CI red on arrival and teach everyone to ignore it.
+      # Clean the 37, then delete `continue-on-error` and add `-- -D warnings` in the same commit.
+      - name: Clippy (non-blocking until the tree is clean)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets 2>&1 | tee clippy.log || true
+          n=$(grep -cE '^warning: ' clippy.log || true)
+          echo "### Clippy: $n warnings (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
+          grep -E '^warning: .* generated [0-9]+ warnings' clippy.log >> "$GITHUB_STEP_SUMMARY" || true
+
+  ui:
+    name: ui (next build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: tet-network/ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tet-network/ui/package-lock.json
+
+      - run: npm ci
+
+      - run: npm run build
+
+  wasm:
+    name: wasm (tet-pqc-wasm → ui/public/pqc)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      # `cargo install` rather than the upstream installer script: the script wants to write to
+      # /usr/local/bin (sudo), and this is the command docs/RUNNING_A_NODE.md actually tells an
+      # operator to run. Swatinem/rust-cache caches ~/.cargo/bin, so this is slow once, then free.
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      # Exactly the command docs/RUNNING_A_NODE.md tells an operator to run.
+      - name: Build tet-pqc-wasm
+        run: |
+          wasm-pack build tet-pqc-wasm \
+            --target web \
+            --out-dir ../tet-network/ui/public/pqc
+
+      - name: Verify the four artifacts landed
+        run: |
+          set -euo pipefail
+          cd tet-network/ui/public/pqc
+          for f in tet_pqc_wasm.js tet_pqc_wasm_bg.wasm tet_pqc_wasm.d.ts tet_pqc_wasm_bg.wasm.d.ts; do
+            test -s "$f" || { echo "::error::$f missing or empty — the UI cannot sign without it"; exit 1; }
+            echo "ok  $f ($(stat -c%s "$f") bytes)"
+          done
+          # A wasm module that does not start with the magic bytes is not a wasm module.
+          head -c4 tet_pqc_wasm_bg.wasm | od -An -tx1 | grep -q '00 61 73 6d'
+
+      - name: Upload pqc artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tet-pqc-wasm
+          path: tet-network/ui/public/pqc/
+          retention-days: 14
