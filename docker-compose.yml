@@ -1,12 +1,57 @@
+# TET Sovereign OS — one-command local stack.
+#
+#     docker compose up --build        # node + UI
+#     open http://localhost:3000       # Sovereign OS
+#     curl http://localhost:5010/status
+#
+# Locked decision #12 requires node **and** UI from one compose file; before this
+# file only `tet-core` was wired.
+#
+# Defaults here are a LOCAL DEV chain (TET_CHAIN_ID=tet-local-dev, no peers, no
+# secrets). They are deliberately safe to commit. A real deployment supplies its
+# own values in `.env`, which is read when present and overrides everything below.
+#
+# FIRST BUILD IS SLOW. The node image defaults to RISC0_SKIP_BUILD=0 +
+# --features zk-prove, which installs the risc0 toolchain and builds the guests
+# (tens of minutes). That is the production default and is unchanged. For a fast
+# quickstart that skips the zk prover:
+#
+#     RISC0_SKIP_BUILD=1 TET_BUILD_FEATURES= docker compose up --build
+#
+# The zk path is fail-closed on mainnet and warn-only in dev, so the fast image
+# runs fine for local use.
+
 x-tet-core-common: &tet-core-common
   build:
     context: .
     dockerfile: Dockerfile
     args:
-      RISC0_SKIP_BUILD: "0"
-      TET_BUILD_FEATURES: "zk-prove"
+      RISC0_SKIP_BUILD: "${RISC0_SKIP_BUILD:-0}"
+      TET_BUILD_FEATURES: "${TET_BUILD_FEATURES-zk-prove}"
+  # Optional: absent on a fresh clone, which is why `docker compose up` used to
+  # fail before it was ever built. Present, it wins over `environment:` below.
   env_file:
-    - .env
+    - path: .env
+      required: false
+  environment:
+    # --- genesis identity -----------------------------------------------------
+    # TET_TREASURY_ADDRESS is REQUIRED — the node exits(2) without it.
+    # These two values plus the chain id determine the genesis hash, and the UI
+    # image must be built with the SAME values or every signed request is
+    # rejected. That is why the `ui` service below passes them as build args.
+    TET_TREASURY_ADDRESS: "${TET_TREASURY_ADDRESS:-fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321}"
+    TET_GENESIS_FOUNDER_WALLET_ID: "${TET_GENESIS_FOUNDER_WALLET_ID:-57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0}"
+    TET_CHAIN_ID: "${TET_CHAIN_ID:-tet-local-dev}"
+    # --- runtime --------------------------------------------------------------
+    TET_REST_BIND: "0.0.0.0:5010"
+    TET_DB_DIR: "/data/tet.db"
+    TET_AUTO_MINE: "${TET_AUTO_MINE:-1}"
+    TET_BLOCK_TIME_SEC: "${TET_BLOCK_TIME_SEC:-12}"
+    # Single-node quickstart: no bootnodes exist to dial, so the block-plane
+    # swarm is off by default. Set to 1 and supply TET_BOOTNODES to join a mesh.
+    TET_ENABLE_P2P: "${TET_ENABLE_P2P:-0}"
+    TET_P2P_LISTEN: "${TET_P2P_LISTEN:-/ip4/0.0.0.0/tcp/8002}"
+    RUST_LOG: "${RUST_LOG:-info}"
   ports:
     - "${PORT:-5010}:5010"
     - "8002:8002/tcp"
@@ -15,6 +60,9 @@ x-tet-core-common: &tet-core-common
     - tet_core_data:/data
   restart: unless-stopped
   healthcheck:
+    # /status is the liveness surface. There is no bare /health route — only
+    # /health/swarm, which reports 0 peers with P2P off and is not a liveness
+    # signal for a single node.
     test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5010/status >/dev/null 2>&1 || exit 1"]
     interval: 30s
     timeout: 5s
@@ -41,6 +89,34 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  ui:
+    build:
+      # Repository root, not tet-network/ui: stage 1 of that Dockerfile builds
+      # tet-pqc-wasm out of the Rust workspace and bakes it into public/pqc.
+      context: .
+      dockerfile: tet-network/ui/Dockerfile
+      args:
+        NEXT_PUBLIC_TET_TREASURY_ADDRESS: "${TET_TREASURY_ADDRESS:-fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321}"
+        NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID: "${TET_GENESIS_FOUNDER_WALLET_ID:-57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0}"
+        NEXT_PUBLIC_TET_CHAIN_ID: "${TET_CHAIN_ID:-tet-local-dev}"
+    container_name: tet-ui
+    environment:
+      # Server-side proxy target for /tet-node-api/* (compose DNS, not localhost:
+      # the UI container's localhost is not the node's).
+      TET_CORE_ORIGIN: "http://tet-core:5010"
+    ports:
+      - "${UI_PORT:-3000}:3000"
+    depends_on:
+      tet-core:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
 volumes:
   tet_core_data:

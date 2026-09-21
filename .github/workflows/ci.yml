@@ -203,3 +203,50 @@ jobs:
           name: tet-pqc-wasm
           path: tet-network/ui/public/pqc/
           retention-days: 14
+
+  docker:
+    name: docker (images build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Build only — nothing is run or pushed. The point is that a broken
+      # Dockerfile fails the PR instead of failing the next operator who types
+      # `docker compose up`, which is exactly how this repo shipped a UI
+      # Dockerfile that no compose service ever referenced.
+      #
+      # RISC0_SKIP_BUILD=1 here: the zk guests add tens of minutes and the
+      # Dockerfile path that installs the risc0 toolchain is unchanged by any of
+      # this. Compose still defaults to the full zk build for deployments.
+      - name: Build tet-core image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+          build-args: |
+            RISC0_SKIP_BUILD=1
+            TET_BUILD_FEATURES=
+          cache-from: type=gha,scope=tet-core
+          cache-to: type=gha,mode=max,scope=tet-core
+
+      # Context is the repo root, not tet-network/ui: stage 1 builds
+      # tet-pqc-wasm from the Rust workspace and bakes it into public/pqc.
+      - name: Build ui image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: tet-network/ui/Dockerfile
+          push: false
+          build-args: |
+            NEXT_PUBLIC_TET_TREASURY_ADDRESS=fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321
+            NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID=57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0
+            NEXT_PUBLIC_TET_CHAIN_ID=tet-local-dev
+          cache-from: type=gha,scope=ui
+          cache-to: type=gha,mode=max,scope=ui
+
+      - name: Validate docker-compose.yml
+        run: docker compose config --quiet

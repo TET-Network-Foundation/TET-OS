@@ -23,7 +23,6 @@ test-ledger/
 # Archived / unused for canonical tet-core image
 tet-core-node/
 tet-network/chain/
-tet-network/ui/
 nexus network/
 nexus-onchain/
 observability/
@@ -31,6 +30,11 @@ deploy/
 web-wallet/
 nexus-frontend/
 pwa/
+
+# NOTE: tet-network/ui/ is deliberately NOT excluded. Both images build from the
+# repository root: the UI image needs app sources AND the Rust workspace (its
+# first stage builds tet-pqc-wasm). node_modules/ and .next/ are already
+# excluded by the wildcards above, so the UI costs little context.
 
 # Logs and bulky runtime files
 *.log

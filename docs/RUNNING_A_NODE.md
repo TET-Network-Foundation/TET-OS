@@ -161,9 +161,118 @@ for p in 5010 5020 5030; do
 done
 ```
 
-### Docker alternative
+### Docker — node + UI in one command
 
-See `tet-core/README.md` and `docker compose` for `tet-node-1`…`3`. Use `./scripts/print-bootnode.sh` for Docker PeerId discovery (reads container logs). Block-plane bootstrap must use the **`[P2P-block] listening on`** multiaddr, not legacy inference-only ports.
+**Updated 2026-09-21.** `docker-compose.yml` now brings up **both** `tet-core` and the Sovereign OS
+UI (locked decision #12). Before this, compose ran the node only and `tet-network/ui/Dockerfile`
+was referenced by nothing.
+
+```bash
+# fast path: skips the RISC Zero guest build (tens of minutes)
+RISC0_SKIP_BUILD=1 TET_BUILD_FEATURES= docker compose up --build -d
+```
+
+Drop the two env vars to get the production image, which installs the risc0 toolchain and builds
+with `--features zk-prove`. Nothing else differs.
+
+No `.env` is required — `env_file` is marked `required: false` and the compose file carries local
+dev defaults (`TET_CHAIN_ID=tet-local-dev`, dev founder, dev treasury, P2P off, auto-mine on). An
+`.env` in the repo root, if present, overrides all of them.
+
+> **The PQC WASM is baked into the UI image.** Stage 1 of `tet-network/ui/Dockerfile` runs the
+> `wasm-pack` command from [§ Sovereign OS UI — post-quantum WASM](#sovereign-os-ui-tet-networkui--post-quantum-wasm-required)
+> and copies the result into `public/pqc`. You do **not** run that step by hand for Docker, and the
+> runtime image contains no Rust toolchain. That is also why **both** images build from the
+> repository root, not from `tet-network/ui`:
+>
+> ```bash
+> docker build -f tet-network/ui/Dockerfile .    # correct
+> docker build tet-network/ui                    # WRONG — no Rust workspace in that context
+> ```
+
+#### Expected output
+
+```console
+$ docker compose ps
+NAME               STATUS                    PORTS
+tet-core-mainnet   Up 13 seconds (healthy)   0.0.0.0:5010->5010/tcp, 0.0.0.0:8002->8002/tcp, 0.0.0.0:8002->8002/udp
+tet-ui             Up 7 seconds (healthy)    0.0.0.0:3000->3000/tcp
+```
+
+`tet-ui` has `depends_on: {tet-core: {condition: service_healthy}}`, so compose prints
+`tet-core-mainnet Waiting → Healthy` before it starts the UI.
+
+```console
+$ curl -sf http://127.0.0.1:5010/status
+{"founder_wallet_id":"57e0b29d...36a0","pqc_active":false,"attestation_required":false,
+ "guardian_count":0,"fee_total_tet":0.0,"cost_guard_limit_usd":50.0,"cost_guard_used_usd":0.0}
+```
+
+**`state_root` is not in `/status`** — it is in `/ledger/state`:
+
+```console
+$ curl -sf http://127.0.0.1:5010/ledger/state
+{"block_height":1,"mempool_len":0,
+ "state_root":"0x8329a23914512db8c7e429707bf52e27083d011ede8416789eb881a7d7d26f7b",
+ "synced":true,"sync":{"active":false,"lag_blocks":0,"best_peer_height":1,"best_peer_id":""}}
+```
+
+With `TET_AUTO_MINE=1` the height advances every `TET_BLOCK_TIME_SEC` (default 12) and the root
+changes with it. `pqc_active:false` is expected in dev: it is a **UI advertisement flag** that
+defaults to `is_prod`, and `quantum_shield.rs` says in as many words not to use it for
+authorization — hybrid Ed25519 + ML-DSA is required on sensitive routes regardless.
+
+There is **no bare `/health` route** (it returns 404). Liveness is `/status`, which is what both
+healthchecks poll. `/health/swarm` reports the block-plane swarm and reads `peer_count: 0` with
+P2P off, so it is not a single-node liveness signal.
+
+```console
+$ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/       # Sovereign OS
+200
+$ curl -s -o /dev/null -w '%{http_code} %{size_download} %{content_type}\n' \
+    http://127.0.0.1:3000/pqc/tet_pqc_wasm_bg.wasm
+200 274722 application/wasm
+$ curl -sf http://127.0.0.1:3000/tet-node-api/ledger/state    # UI → node, via compose DNS
+{"block_height":2,...,"state_root":"0x13a0f60b...f216","synced":true,...}
+```
+
+That last call is the one that matters: the browser only ever talks to the UI origin, and
+`app/tet-node-api/[...path]/route.ts` proxies server-side to `TET_CORE_ORIGIN`, which compose sets
+to `http://tet-core:5010`. `127.0.0.1:5010` would be the UI container's own loopback, not the node.
+
+#### Genesis values must match on both sides
+
+`NEXT_PUBLIC_*` is **inlined at build time**, so the UI image is built with the same founder,
+treasury and chain id the node runs with — compose passes one set of values to both. A mismatch
+changes the computed genesis hash and every hybrid-signed request is rejected with
+`invalid signature or missing chain_id/genesis_hash binding`. To change them, rebuild the UI image;
+editing the node's env alone is not enough.
+
+Cross-check the UI's derivation against the Rust constants:
+
+```console
+$ cd tet-network/ui && node scripts/verify-genesis-hash.mjs
+0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36
+OK: payload uses treasury= (Phase 2B), not ecosystem= / system:worker_pool
+OK: SHA-256 matches dev golden vector
+```
+
+The node does not expose its genesis hash over REST — it appears only inside signature preimages
+(`wallet.rs`), so this stays a static cross-check rather than a live comparison.
+
+#### Images
+
+| Image | Size | Notes |
+|---|---|---|
+| `nexus_network-tet-core` | 214 MB | `debian:bookworm-slim` + the release binary |
+| `nexus_network-ui` | 343 MB | `node:22-alpine`, Next `output: "standalone"`, non-root `nextjs` user, PQC baked in |
+
+#### Multi-node
+
+For `tet-node-1`…`3`, see `tet-core/README.md`. Use `./scripts/print-bootnode.sh` for Docker PeerId
+discovery (reads container logs). Block-plane bootstrap must use the **`[P2P-block] listening on`**
+multiaddr, not legacy inference-only ports. Set `TET_ENABLE_P2P=1` and `TET_BOOTNODES` — the
+single-node quickstart above ships with P2P **off**, because there is no seed to dial.
 
 ---
 

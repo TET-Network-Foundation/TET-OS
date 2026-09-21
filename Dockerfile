@@ -1,4 +1,7 @@
-FROM rust:1.86-bookworm AS build
+# Pinned to the toolchain the test suite runs on. The workspace is
+# `edition = "2024"` (needs >= 1.85) and the pin was 1.86, close enough to the
+# floor that any dependency bump breaks the image; 1.94 removes that trap.
+FROM rust:1.94-bookworm AS build
 WORKDIR /workspace
 
 ARG RISC0_SKIP_BUILD=0
@@ -32,6 +35,11 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /workspace/target/release/TET-Core /usr/local/bin/TET-Core
+
+# Matches the compose healthcheck so `docker run` without compose reports health
+# too. /status is the liveness surface; there is no bare /health route.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=5 \
+  CMD wget -qO- http://127.0.0.1:5010/status >/dev/null 2>&1 || exit 1
 
 # REST API + P2P (tcp + udp for webrtc-direct when using a fixed port).
 EXPOSE 5010
