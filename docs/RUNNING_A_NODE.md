@@ -287,6 +287,98 @@ The node does not expose its genesis hash over REST — it appears only inside s
 | `nexus_network-tet-core` | 214 MB | `debian:bookworm-slim` + the release binary |
 | `nexus_network-ui` | 343 MB | `node:22-alpine`, Next `output: "standalone"`, non-root `nextjs` user, PQC baked in |
 
+### Joining the public testnet seed
+
+**Bootnode multiaddr — canonical, verified 2026-09-22:**
+
+```
+/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
+```
+
+Helsinki (Hetzner, `ubuntu-4gb-hel1-3`). It auto-mines on a 12 s block time and is the only
+published seed, so it is currently a single point of failure — spec risk **R10**, still open.
+
+Put three lines in `.env` at the repository root and bring the stack up:
+
+```bash
+cat >> .env <<'EOF'
+TET_ENABLE_P2P=1
+TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
+TET_AUTO_MINE=0
+EOF
+
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+```
+
+`TET_AUTO_MINE=0` is the right setting for a follower: the seed produces the blocks, and a second
+independent producer on the same genesis just races it. Leave the three genesis variables alone —
+the committed compose defaults are what the seed runs, and a mismatch changes the genesis hash and
+rejects every signed request with `401 ed25519 verification failed`.
+
+Confirm you are on the seed's chain — equal tip height is *not* sufficient, because a fork can sit
+at the same height. Compare `block_id` **and** `state_root` at one height:
+
+```console
+$ H=$(curl -sf http://127.0.0.1:5010/ledger/blocks | jq '.[0].height')
+$ curl -sf http://127.0.0.1:5010/ledger/block/$H | jq '.block | {height, block_id, state_root}'
+{
+  "height": 302,
+  "block_id": "0x93740af7d62afc4c7f6855653a04bc55cfc6c49f73c8a05413658979b9bb13e7",
+  "state_root": "0xd7ef05d4c8944f5dd83ba55aae11860c100aa2d34a8991cce26900c45c82d394"
+}
+```
+
+`GET /health/swarm` should show `"peer_count": 1` once the dial lands, and the logs show the
+catch-up driver run:
+
+```
+[P2P-block] 🤝 chain_hello from 12D3KooW… height=150 local=149 diff=1 catch_up_pending=true
+[P2P-block] 📦 catch-up range from 12D3KooW… blocks=1 to_height=150
+[P2P-block] ✅ catch-up applied height=150
+```
+
+Verified 2026-09-22, Switzerland → Helsinki: a fresh node reached the seed's tip and matched
+`block_id` and `state_root` at every height compared.
+
+#### The seed's REST API is not public
+
+Only `8002/tcp` is reachable from the internet. Port 5010 is published on the seed's loopback
+interface only (`deploy/docker-compose.seed.yml`), and the seed does not run the UI. To query it:
+
+```bash
+ssh -L 15010:127.0.0.1:5010 root@95.217.158.153
+curl -sf http://127.0.0.1:15010/status
+```
+
+Note that a `ufw deny 5010` would **not** have closed that port: Docker publishes ports by writing
+DNAT rules into the nat table's `DOCKER` chain, which ufw's filter rules never see. Binding to
+`127.0.0.1` is the close that actually holds.
+
+#### Known limitation: submit transactions to a mining node
+
+**A transaction submitted to a node that does not mine will never settle.** `TXS_TOPIC`
+(`/tet/v1/txs`, `p2p.rs:357`) is declared and subscribed at `p2p.rs:1276`, but nothing in the tree
+ever publishes to it — grep it and the const and the subscribe are the only two hits. Transactions
+therefore stay in the mempool of whichever node accepted them, and only that node can mine them
+into a block.
+
+Blocks and the state they carry propagate normally, so the effect is one-directional: a follower
+sees every balance change the seed mines, but cannot get its own transactions included. Until tx
+gossip exists, point the CLI and the UI at a mining node:
+
+```bash
+# works — the seed mines it
+tet-cli --node-url http://127.0.0.1:15010 faucet claim --mnemonic "…"
+
+# accepted with {"ok":true,"status":"pending"} and then never settles
+tet-cli --node-url http://127.0.0.1:5010 faucet claim --mnemonic "…"
+```
+
+Both calls return `200`. The second one's `"status":"pending"` is indefinite, which is the part
+that makes this expensive to diagnose in the field.
+
+---
+
 ### Getting testnet TET
 
 There is **no faucet endpoint.** `POST /ledger/faucet` and `POST /faucet` were removed on
@@ -511,6 +603,30 @@ node scripts/verify-genesis-hash.mjs
 Followers must dial the **block-plane** multiaddr (same `TET_P2P_LISTEN` host/port + `/p2p/PeerId`), not the inference swarm port.
 
 **Do not** delete `libp2p_keypair.bin` on a bootnode if you want stable `TET_BOOTNODES` documentation.
+
+### The public seed
+
+| | |
+|---|---|
+| **Multiaddr** | `/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC` |
+| **Host** | Hetzner `ubuntu-4gb-hel1-3`, Helsinki — Ubuntu 24.04.3, 2 vCPU, 3.7 GB RAM, 4 GB swap |
+| **Open to the internet** | `22/tcp`, `8002/tcp`. Nothing else — REST is loopback-only, no UI |
+| **Identity** | `/data/libp2p_keypair.bin` inside the `tet_core_data` volume. Deleting that volume changes the PeerId and invalidates every line above |
+| **Provisioned by** | [`deploy/provision-seed.sh`](../deploy/provision-seed.sh) + [`deploy/docker-compose.seed.yml`](../deploy/docker-compose.seed.yml) |
+
+Re-provision or update it with:
+
+```bash
+COPYFILE_DISABLE=1 git archive --format=tar HEAD \
+  | ssh root@95.217.158.153 'mkdir -p /opt/TET-OS && tar -x -C /opt/TET-OS'
+ssh root@95.217.158.153 'cd /opt/TET-OS && bash deploy/provision-seed.sh'
+```
+
+The seed holds **no** credential — the source is pushed over the operator's own SSH session rather
+than pulled with a key, so a host whose whole job is accepting connections from strangers on 8002
+has nothing to steal. `git archive HEAD` ships tracked files only, so `deploy/secrets/` and `.env`
+stay on the workstation by construction. The trade-off is that the seed cannot update itself; run
+the two commands above to deploy a new commit.
 
 ---
 

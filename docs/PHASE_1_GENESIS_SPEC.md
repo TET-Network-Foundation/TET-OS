@@ -45,6 +45,25 @@ nodes. It is inherently non-reproducible, which is exactly what
 [`BUG_block_9828_divergence_mystery.md`](./BUG_block_9828_divergence_mystery.md) reports: it did not
 recur after a chain reset, meaning the mechanism is still in the code.
 
+### Live corroboration, 2026-09-22
+
+Cross-region sync against the Helsinki seed shows the stored block timestamp is node-local. At the
+same height, on the same chain, the two nodes agree on everything that is hashed and disagree on
+the timestamp:
+
+```
+height 151   Helsinki (producer)                 Switzerland (replayer)
+block_id     0x89a8e440…b025eb60      ==         0x89a8e440…b025eb60
+state_root   0x4179a4b5…65522574      ==         0x4179a4b5…65522574
+ts_ms        1790068236724            !=         1790068246418      (+9694 ms)
+```
+
+The delta tracks propagation latency — 9.7 s on a block the follower fetched via catch-up, 1.7 s
+and 19 ms on blocks it received by gossip. So `ts_ms` is *when this node learned about the block*,
+not when the block was produced, and it is outside `block_id` exactly as §1 describes. Any
+consensus rule that reads it is reading a different value on every node, which is the mechanism
+this section exists to remove.
+
 ### The fix
 
 1. Add a `timestamp_ms` field to the block record, set by the producer and covered by `block_id`
