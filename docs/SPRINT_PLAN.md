@@ -88,47 +88,47 @@ still cannot get its own transactions mined.
 **So: tx gossip and monitoring remain ⬜.** Five of six exit criteria pass; criterion 6 is
 half-open.
 
-### Tx gossip: what is still broken
+### Tx gossip: root cause, found 2026-09-22
 
-A follower's gossipsub `publish` to `/tet/v1/txs` fails with `InsufficientPeers`, indefinitely,
-while the seed publishes to the same topic successfully. The failure is one-directional and it is
-**not** the retry: the retry loop is running and visible in the log, re-publishing the same tx
-every 15 s, and every attempt fails the same way.
-
-Evidence, from a follower run with `RUST_LOG=libp2p_gossipsub=debug` on 2026-09-22:
+A follower's `publish` to `/tet/v1/txs` fails with `InsufficientPeers` **because its record of the
+seed's topic subscriptions is incomplete**. Instrumented at the failure point
+(`p2p.rs`, `[P2P][diag]`):
 
 ```
-HEARTBEAT: Mesh low. Topic contains: 0 needs: 4   (every topic, every heartbeat)
-RANDOM PEERS: Got 0 peers
-Updating mesh, new mesh: {}
-JOIN: Inserting 0 random peers into the mesh
-Adding explicit peer  peer=12D3KooWNcdESJUC…       (the seed, because it is our bootnode)
-SUBSCRIPTION: Adding gossip peer to topic         (×4, including /tet/v1/txs)
+[P2P][diag] topic=/tet/v1/txs connected_peers=1 mesh_peers=[]
+  peers=[12D3KooWNcdESJUC… on_topic=false
+         topics=[/tet/v1/blocks /tet/v1/files/announce /tet/v1/tmail]]
 ```
 
-The mesh is permanently empty for every topic. `get_random_peers`, which both the heartbeat and
-`publish` use to fill mesh and fanout, **excludes explicit peers** — and the follower's only peer
-is explicit, because `p2p.rs` calls `add_explicit_peer` on bootnodes (`:1475`, `:1691`, `:1706`,
-`:2032`). The seed has no bootnodes, so the follower is an ordinary peer to it, its mesh forms
-normally, and its publishes land. That is the asymmetry exactly.
+Three of the seed's four subscriptions are recorded; `/tet/v1/txs` is missing. `publish` therefore
+takes the early return at libp2p-gossipsub `behaviour.rs:635` — "no connected peer is subscribed
+to this topic" — before mesh, fanout or explicit-peer selection is even consulted.
 
-What does not yet add up, and is where the next session should start: libp2p-gossipsub 0.48
-defaults `flood_publish` to `true` (`config.rs:451`), and that path adds explicit peers regardless
-of the mesh. For it to return `InsufficientPeers` anyway, `publish` must be taking the early
-return at `behaviour.rs:635` — meaning `connected_peers[seed].topics` is empty at publish time,
-even though the subscription was recorded earlier. **Next step: log
-`connected_peers[peer].topics` at the point of publish failure** and find out what clears it. A
-plausible fix, if it is confirmed to be the explicit-peer registration, is to stop registering
-bootnodes as gossipsub explicit peers — explicit peers are a mesh-bypass mechanism for trusted
-relays and a bootnode does not need to be one — but that should not be applied before the
-measurement, because the evidence does not yet fully explain the symptom.
+**It is intermittent.** Three back-to-back runs on identical code: two settled, the third lost the
+txs subscription. All three showed the same counts — 2 connections, 4 subscription events — so the
+loss is not visible from the event tally. One of the four was a duplicate.
 
-**Why nobody noticed.** Blocks reach the follower over *two* independent paths: gossip, and the
-pull-based catch-up RPC from S1. In the run above, 9 blocks arrived by gossip and 13 by catch-up.
-The chain therefore stays perfectly in sync even when gossip is degraded, which is why a broken
-mesh presented as "everything works" for as long as nobody submitted a transaction to a follower.
-Transactions have no catch-up equivalent — gossip is their only path, so they are the only thing
-that fails loudly.
+The trigger is two near-simultaneous connections to the same peer (65 ms apart: the follower dials
+its bootnode while the seed dials back). The subscription RPC that rides the connection which then
+closes is lost, and **nothing re-sends it** — gossipsub exchanges subscriptions once, at connection
+establishment. The follower is then permanently wrong about that peer, with no retry and no
+symptom other than transactions silently not propagating.
+
+Hypotheses checked and eliminated:
+
+| # | Hypothesis | Verdict |
+|---|---|---|
+| a | The seed only subscribes to `TXS_TOPIC` under some condition (mining, REST enabled) | **No.** `p2p.rs:1423` subscribes unconditionally with `.expect()`, in the same block as blocks/tmail/files. Read, not grepped |
+| b | Subscription exchange is lossy / racy | **Yes — this is it.** Evidence above |
+| c | Small-network mesh params — `mesh_n_low` unreachable with 2 nodes | **Real, but not the cause.** The mesh *is* permanently empty (`mesh_peers=[]`, `RANDOM PEERS: Got 0 peers` every heartbeat) because `get_random_peers` excludes explicit peers and `p2p.rs` makes *every* connected peer explicit, not just bootnodes. But publish never reaches mesh selection — it fails earlier. `TET_GOSSIP_BOOTNODE_EXPLICIT=0` now exists to test this independently. An empty mesh costs redundancy, not delivery |
+
+**Why the seed is unaffected:** the failure is one-directional because it is about what *this* node
+knows about *its* peer. The seed's record of the follower happened to be complete, so its publishes
+land — which is why blocks flow and only follower-submitted transactions disappear.
+
+**Fix taken:** not a gossipsub patch. A lost subscription is unobservable from the application and
+has no retry, so the response is to stop making transaction delivery depend on it — see the
+tx-submit second path below.
 
 
 

@@ -684,7 +684,9 @@ impl BootnodeWatch {
             .filter(|p| *p != local && !exclude.contains(p))
             .collect();
         for peer in gossip_peers {
-            swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer);
+            if bootnode_explicit_peers_enabled() {
+                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer);
+            }
         }
         self.dial_known_followers(swarm, listen, peer_dial_book, dialing);
         Self::request_hello_from_connected_peers(swarm, ledger, &exclude).await;
@@ -1124,6 +1126,25 @@ pub(crate) async fn handle_tx_broadcast(
     }
 }
 
+/// Whether peers are registered as gossipsub **explicit peers** (`TET_GOSSIP_BOOTNODE_EXPLICIT`,
+/// default on — the historical behaviour).
+///
+/// Explicit peers are a mesh *bypass* for trusted relays: gossipsub sends them everything
+/// directly and `get_random_peers` excludes them, so they can never be grafted into the mesh. On
+/// a node whose only peer is its bootnode that leaves the mesh permanently empty, which is what
+/// the public seed's followers show (`Mesh low. Topic contains: 0 needs: 4` on every heartbeat).
+/// Set to `0` to dial peers as ordinary ones so they are eligible for the mesh.
+///
+/// This is a diagnostic switch, not a fix: an empty mesh is a redundancy problem, and it is NOT
+/// why a follower's publish fails — see `SPRINT_PLAN.md` § Tx gossip.
+fn bootnode_explicit_peers_enabled() -> bool {
+    std::env::var("TET_GOSSIP_BOOTNODE_EXPLICIT")
+        .ok()
+        .as_deref()
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false")))
+        .unwrap_or(true)
+}
+
 fn network_event_topics(
     msg: &str,
     blocks_topic: &gossipsub::IdentTopic,
@@ -1472,7 +1493,11 @@ async fn run_mdns_ping_swarm(
                             .behaviour_mut()
                             .kademlia
                             .add_address(&pid, dial_addr.clone());
+                        if bootnode_explicit_peers_enabled() {
+                            if bootnode_explicit_peers_enabled() {
                         swarm.behaviour_mut().gossipsub.add_explicit_peer(&pid);
+                    }
+                        }
                         println!("[P2P] Bootnode added to Kademlia: peer={pid} addr={dial_addr}");
                     }
                     match swarm.dial(addr.clone()) {
@@ -1656,6 +1681,37 @@ async fn run_mdns_ping_swarm(
                             }
                             Err(e) => {
                                 println!("[P2P] ❌ GOSSIP PUBLISH ERROR topic={} err={:?}", topic.hash(), e);
+                                // `InsufficientPeers` has two causes in libp2p-gossipsub 0.48 and
+                                // they need different fixes: the early return (behaviour.rs:635)
+                                // when no connected peer is *recorded as subscribed* to the topic,
+                                // or an empty recipient set after mesh/fanout/explicit selection.
+                                // Dump what gossipsub actually believes rather than guessing —
+                                // this is what identified the lost-subscription bug on
+                                // 2026-09-22.
+                                let gs = &swarm.behaviour().gossipsub;
+                                let want = topic.hash();
+                                let peers: Vec<String> = gs
+                                    .all_peers()
+                                    .map(|(pid, topics)| {
+                                        let subscribed = topics.iter().any(|t| **t == want);
+                                        format!(
+                                            "{pid} on_topic={subscribed} topics=[{}]",
+                                            topics
+                                                .iter()
+                                                .map(|t| t.to_string())
+                                                .collect::<Vec<_>>()
+                                                .join(" ")
+                                        )
+                                    })
+                                    .collect();
+                                let mesh: Vec<String> =
+                                    gs.mesh_peers(&want).map(|p| p.to_string()).collect();
+                                println!(
+                                    "[P2P][diag] topic={want} connected_peers={} mesh_peers={:?} peers=[{}]",
+                                    peers.len(),
+                                    mesh,
+                                    peers.join(" | ")
+                                );
                             }
                         }
                     }
@@ -1703,7 +1759,9 @@ async fn run_mdns_ping_swarm(
                 for a in info.listen_addrs {
                     swarm.behaviour_mut().kademlia.add_address(&peer_id, a.clone());
                 }
-                swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                if bootnode_explicit_peers_enabled() {
+                    swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id);
+                }
                 println!("[P2P] 🪪 IDENTIFY RECEIVED from {}", peer_id);
             }
             SwarmEvent::Behaviour(Event::Kademlia(ev)) => {
@@ -2026,10 +2084,13 @@ async fn run_mdns_ping_swarm(
                 log::info!("[p2p][mdns] connected peer_id={peer_id} endpoint={remote}");
                 peer_dial_book.insert(peer_id, remote);
                 if peer_id != *swarm.local_peer_id() {
-                    swarm
-                        .behaviour_mut()
-                        .gossipsub
-                        .add_explicit_peer(&peer_id);
+                    // NB: this makes EVERY connected peer explicit, not just bootnodes.
+                    if bootnode_explicit_peers_enabled() {
+                        swarm
+                            .behaviour_mut()
+                            .gossipsub
+                            .add_explicit_peer(&peer_id);
+                    }
                     match build_chain_hello_offloaded(&ledger).await {
                         Ok(our_hello) => {
                             swarm
