@@ -132,6 +132,20 @@ Hypotheses checked and eliminated:
 knows about *its* peer. The seed's record of the follower happened to be complete, so its publishes
 land — which is why blocks flow and only follower-submitted transactions disappear.
 
+**Live verification, 2026-09-22, after the tx-submit second path shipped.** Three consecutive
+follower submissions against the public seed, each a fresh container:
+
+| run | settled | gossip publish | tx-submit |
+|---|---|---|---|
+| 1 | 1,000 TET in ~6 s | ❌ `InsufficientPeers` | ✅ `accepted=true outcome=enqueued` |
+| 2 | 1,000 TET in ~15 s | ❌ ×2 | ✅ ×2 |
+| 3 | 1,000 TET in ~15 s | ❌ ×2 | ✅ ×2 |
+
+Gossip failed in **every** run. The lost-subscription condition is not rare on this pair — it is
+the normal state — which means the second path is not redundancy here, it is the only thing
+delivering transactions. Before the fix these three runs would all have hung on
+`"status":"pending"` indefinitely.
+
 **Fix taken:** not a gossipsub patch. A lost subscription is unobservable from the application and
 has no retry, so the response is to stop making transaction delivery depend on it — see the
 tx-submit second path below.
