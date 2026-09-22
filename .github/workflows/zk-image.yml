@@ -1,0 +1,51 @@
+name: zk image (on demand)
+
+# Builds the node image WITH the RISC Zero guests — the production default in
+# docker-compose.yml (RISC0_SKIP_BUILD=0, --features zk-prove).
+#
+# Deliberately not on push. Installing the risc0 toolchain and building the zkVM
+# guests takes tens of minutes, which is why every other job passes
+# RISC0_SKIP_BUILD=1. The cost of that was a production image path nobody built
+# for months: `cargo risczero install` was removed upstream in favour of `rzup`
+# and the image simply stopped building, discovered only when provisioning the
+# public seed on 2026-09-22.
+#
+# Run this after touching the Dockerfile, the risc0 dependency versions, or the
+# guests under methods/ and prover/.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Monthly, so the path cannot rot silently between manual runs.
+    - cron: '0 4 1 * *'
+
+permissions:
+  contents: read
+
+jobs:
+  zk-image:
+    name: build node image with zk-prove
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          df -h / | tail -1
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build (RISC0_SKIP_BUILD=0, --features zk-prove)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          load: false
+          build-args: |
+            RISC0_SKIP_BUILD=0
+            TET_BUILD_FEATURES=zk-prove
+          cache-from: type=gha,scope=zk-image
+          cache-to: type=gha,mode=max,scope=zk-image

@@ -16,10 +16,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
+# RISC Zero toolchain, for the zk-prove build only.
+#
+# This used to run `cargo binstall cargo-risczero` + `cargo risczero install`.
+# RISC Zero removed that path in favour of `rzup`, so the step failed with
+#   Error: Run `rzup install` instead
+# after about seven seconds, which meant the production image (the compose
+# default, RISC0_SKIP_BUILD=0) could not be built at all. Nothing caught it
+# because every CI job passes RISC0_SKIP_BUILD=1 — see .github/workflows/zk-image.yml,
+# which builds this path on demand so it cannot rot again unnoticed.
+# x86_64 ONLY. rzup has no linux/aarch64 build and exits with
+#   ✗ Unsupported architecture: linux/aarch64
+# so this image cannot be built natively on an Apple Silicon Mac. Use
+# `--platform linux/amd64` (slow, emulated) or the zk-image workflow. The seed
+# and GitHub runners are both x86_64, where the install was verified on
+# 2026-09-22: cargo-risczero 3.0.6, cpp 2024.1.5, r0vm 3.0.6, rust 1.97.0.
+ENV PATH="/root/.risc0/bin:${PATH}"
 RUN if [ "$RISC0_SKIP_BUILD" != "1" ]; then \
-      curl -LsSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash && \
-      cargo binstall cargo-risczero -y && \
-      cargo risczero install; \
+      curl -L https://risczero.com/install | bash && \
+      rzup install; \
     fi
 
 COPY . .
