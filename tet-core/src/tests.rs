@@ -121,6 +121,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         tmail,
         files,
         files_fetch_tx: None,
+        tx_submit_tx: None,
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
         )),
@@ -4108,7 +4109,7 @@ mod block_sync {
         let file_store = std::sync::Arc::new(
             crate::files::storage::FileStore::open(&ledger.sled_db()).expect("file store"),
         );
-        let (gossip_tx, files_fetch_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
+        let (gossip_tx, files_fetch_tx, tx_submit_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
             mempool.clone(),
             keypair,
@@ -4131,6 +4132,7 @@ mod block_sync {
         state.mempool = mempool.clone();
         state.gossip_tx = Some(gossip_tx);
         state.files_fetch_tx = Some(files_fetch_tx);
+        state.tx_submit_tx = Some(tx_submit_tx);
         state.block_sync_board = Some(block_sync_board.clone());
         if post_listen_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(post_listen_delay_ms)).await;
@@ -4731,6 +4733,95 @@ mod block_sync {
             n1.ledger.balance_micro(&wallet_id).unwrap(),
             1_000 * crate::ledger::STEVEMON,
             "the peer's block must settle the follower's transaction"
+        );
+
+        rebroadcast.abort();
+        stop(&[n1, n2]);
+    }
+
+    /// **TX SECOND-PATH GUARD.** A follower with gossip unavailable must still get its
+    /// transaction mined by its bootnode, over `/tet/v1/tx-submit`.
+    ///
+    /// Blocks have had two independent delivery paths since S1 — gossip and the pull-based
+    /// catch-up RPC — so a degraded mesh never stopped a chain from syncing. Transactions had
+    /// only gossip, and on 2026-09-22 that single path failed against the public seed in a way
+    /// invisible from the application: the follower's record of the seed's topic subscriptions
+    /// was missing `/tet/v1/txs`, so `publish` returned `InsufficientPeers` indefinitely while
+    /// the peer connection stayed healthy and blocks kept arriving.
+    ///
+    /// `gossip_tx = None` here stands in for that failure — it is the strongest possible form of
+    /// it, and it makes the test deterministic rather than dependent on mesh timing. If this
+    /// passes, a transaction reached the miner without gossip carrying it.
+    #[tokio::test]
+    async fn follower_tx_settles_on_the_mining_peer_with_gossip_disabled() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            std::env::set_var("TET_TX_REBROADCAST_SEC", "1");
+        }
+
+        let n1 = spawn_node(None, true).await; // producer
+        let boot = n1.boot_multiaddr.clone();
+        let mut n2 = spawn_node(Some(&boot), false).await; // follower
+
+        // Make gossip publishes go nowhere, without killing the node.
+        //
+        // Setting `gossip_tx = None` would drop the swarm's only publish-channel sender; the
+        // swarm loop then sees `publish_rx.recv() == None`, logs "publish channel closed" and
+        // **breaks out of the event loop entirely**. That kills block sync and the tx_submit
+        // protocol along with gossip, which is not the failure being modelled here.
+        //
+        // So: keep the real sender alive, and point the REST state at a dead-end channel whose
+        // receiver this test holds. Publishes succeed at the call site and reach no peer — which
+        // is exactly the observed production failure, where `publish` believed it had no peer
+        // subscribed to the topic.
+        let _swarm_publish_keepalive = n2.state.gossip_tx.clone();
+        let (dead_gossip_tx, _dead_gossip_rx) = tokio::sync::mpsc::channel::<String>(16);
+        n2.state.gossip_tx = Some(dead_gossip_tx);
+        assert!(
+            n2.state.tx_submit_tx.is_some(),
+            "the follower must still have the direct-submit channel"
+        );
+
+        let rebroadcast = crate::rest::RestState::spawn_mempool_rebroadcast(n2.state.clone())
+            .expect("retry loop must run on the direct path alone");
+
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let words = w.mnemonic_12.clone().unwrap();
+        let wallet_id = w.address_hex.to_ascii_lowercase();
+        let env = signed_env_for_tests(
+            crate::protocol::TxV1::InitialAirdrop {
+                wallet_id: wallet_id.clone(),
+            },
+            &words,
+            &wallet_id,
+        );
+
+        let resp = crate::rest::handlers::ledger::post_initial_airdrop_claim(
+            axum::extract::State(n2.state.clone()),
+            axum::Json(env),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+
+        // It must reach the producer with no gossip involved at all.
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            if n1.state.mempool.lock().await.len() == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tx never reached the mining peer without gossip — the second path is broken"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        mine_n(&n1.state, 1).await;
+        assert_eq!(
+            n1.ledger.balance_micro(&wallet_id).unwrap(),
+            1_000 * crate::ledger::STEVEMON,
+            "the peer's block must settle a tx that gossip never carried"
         );
 
         rebroadcast.abort();

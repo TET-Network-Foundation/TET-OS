@@ -277,6 +277,8 @@ struct TetBehaviour {
     /// File Sharing body transfer (`/tet/v1/files/fetch`, Step 4) — custom 8 MiB codec because the
     /// stock json codec caps requests at 1 MiB and is not size-configurable.
     files_fetch: request_response::Behaviour<crate::files::fetch_codec::FilesFetchCodec>,
+    /// Direct tx submission — see [`TX_SUBMIT_PROTOCOL`].
+    tx_submit: request_response::json::Behaviour<TxSubmitRequest, TxSubmitResponse>,
 }
 
 #[derive(Debug)]
@@ -290,8 +292,14 @@ enum Event {
     ChainSyncHello(request_response::Event<ChainHello, ChainHello>),
     ChainSyncRange(request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>),
     FilesFetch(request_response::Event<crate::files::FileFetchRequest, crate::files::FileFetchResponse>),
+    TxSubmit(request_response::Event<TxSubmitRequest, TxSubmitResponse>),
 }
 
+impl From<request_response::Event<TxSubmitRequest, TxSubmitResponse>> for Event {
+    fn from(e: request_response::Event<TxSubmitRequest, TxSubmitResponse>) -> Self {
+        Self::TxSubmit(e)
+    }
+}
 impl From<mdns::Event> for Event {
     fn from(e: mdns::Event) -> Self {
         Self::Mdns(e)
@@ -351,6 +359,74 @@ pub struct FilesFetchCmd {
     pub storage_node: String,
     pub file_id: uuid::Uuid,
     pub resp: tokio::sync::oneshot::Sender<Result<crate::files::FileFetchResponse, String>>,
+}
+
+/// Direct transaction submission (`/tet/v1/tx-submit`) — the second path for transactions.
+///
+/// Blocks reach a follower two ways: gossip, and the pull-based catch-up RPC. Transactions had
+/// only gossip, so any weakness in gossip made them undeliverable with no fallback — and gossip
+/// turned out to have one: a follower can end up with an incomplete record of a peer's topic
+/// subscriptions (observed 2026-09-22, `/tet/v1/txs` missing from an otherwise healthy peer), and
+/// then `publish` fails with `InsufficientPeers` forever. This protocol gives transactions the
+/// same shape blocks already have: gossip for fan-out, a direct request when you know who to ask.
+pub const TX_SUBMIT_PROTOCOL: &str = "/tet/v1/tx-submit";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TxSubmitRequest {
+    pub v: u32,
+    pub env: SignedTxEnvelopeV1,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TxSubmitResponse {
+    pub accepted: bool,
+    /// `enqueued` | `already_queued` | `already_applied` | `rejected` | `rate_limited`
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Ask peers to take a transaction directly, bypassing gossip.
+#[derive(Debug, Clone)]
+pub struct TxSubmitCmd {
+    pub env: SignedTxEnvelopeV1,
+}
+
+/// Inbound `tx_submit` budget per peer per second (`TET_TX_SUBMIT_RPS`, default 10).
+fn tx_submit_rps_from_env() -> u64 {
+    std::env::var("TET_TX_SUBMIT_RPS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(10)
+}
+
+/// Fixed-window per-peer limiter for inbound `tx_submit`. Verification is the expensive part
+/// (ML-DSA), so the budget is spent before `handle_tx_broadcast` runs, not after.
+#[derive(Default)]
+pub(crate) struct TxSubmitRateLimiter {
+    windows: std::collections::HashMap<PeerId, (std::time::Instant, u64)>,
+}
+
+impl TxSubmitRateLimiter {
+    pub(crate) fn allow(&mut self, peer: &PeerId, max_per_sec: u64) -> bool {
+        let now = std::time::Instant::now();
+        let entry = self.windows.entry(*peer).or_insert((now, 0));
+        if now.duration_since(entry.0) >= Duration::from_secs(1) {
+            *entry = (now, 0);
+        }
+        entry.1 = entry.1.saturating_add(1);
+        entry.1 <= max_per_sec
+    }
+
+    /// Drop windows for peers we have not heard from in a while so this cannot grow unbounded.
+    pub(crate) fn prune(&mut self) {
+        let now = std::time::Instant::now();
+        self.windows
+            .retain(|_, (started, _)| now.duration_since(*started) < Duration::from_secs(60));
+    }
 }
 
 pub const BLOCKS_TOPIC: &str = "/tet/v1/blocks";
@@ -722,6 +798,16 @@ fn chain_sync_hello_behaviour() -> request_response::json::Behaviour<ChainHello,
     request_response::json::Behaviour::new(
         [(
             StreamProtocol::new(CHAIN_SYNC_HELLO_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+    )
+}
+
+fn tx_submit_behaviour() -> request_response::json::Behaviour<TxSubmitRequest, TxSubmitResponse> {
+    request_response::json::Behaviour::new(
+        [(
+            StreamProtocol::new(TX_SUBMIT_PROTOCOL),
             request_response::ProtocolSupport::Full,
         )],
         request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
@@ -1126,17 +1212,14 @@ pub(crate) async fn handle_tx_broadcast(
     }
 }
 
-/// Whether peers are registered as gossipsub **explicit peers** (`TET_GOSSIP_BOOTNODE_EXPLICIT`,
+/// Whether a bootnode is registered as a gossipsub **explicit peer** (`TET_GOSSIP_BOOTNODE_EXPLICIT`,
 /// default on — the historical behaviour).
 ///
-/// Explicit peers are a mesh *bypass* for trusted relays: gossipsub sends them everything
-/// directly and `get_random_peers` excludes them, so they can never be grafted into the mesh. On
-/// a node whose only peer is its bootnode that leaves the mesh permanently empty, which is what
-/// the public seed's followers show (`Mesh low. Topic contains: 0 needs: 4` on every heartbeat).
-/// Set to `0` to dial peers as ordinary ones so they are eligible for the mesh.
-///
-/// This is a diagnostic switch, not a fix: an empty mesh is a redundancy problem, and it is NOT
-/// why a follower's publish fails — see `SPRINT_PLAN.md` § Tx gossip.
+/// Explicit peers are a mesh *bypass* for trusted relays: gossipsub sends them everything directly
+/// and, crucially, `get_random_peers` excludes them, so they can never be grafted into the mesh.
+/// On a node whose only peer is its bootnode that leaves the mesh permanently empty — which is
+/// exactly what the public seed's followers show. Set to `0` to dial bootnodes as ordinary peers
+/// so they are eligible for the mesh.
 fn bootnode_explicit_peers_enabled() -> bool {
     std::env::var("TET_GOSSIP_BOOTNODE_EXPLICIT")
         .ok()
@@ -1260,6 +1343,7 @@ async fn block_record_by_id_offloaded(
 pub type BlockSwarmHandles = (
     mpsc::Sender<String>,
     mpsc::Sender<FilesFetchCmd>,
+    mpsc::Sender<TxSubmitCmd>,
     tokio::task::JoinHandle<()>,
 );
 
@@ -1279,12 +1363,14 @@ pub fn start_mdns_ping_swarm(
 ) -> Result<BlockSwarmHandles, AnyErr> {
     let (tx, rx) = mpsc::channel::<String>(256);
     let (files_fetch_tx, files_fetch_rx) = mpsc::channel::<FilesFetchCmd>(32);
+    let (tx_submit_tx, tx_submit_rx) = mpsc::channel::<TxSubmitCmd>(256);
     let join = tokio::spawn(async move {
         if let Err(e) = run_mdns_ping_swarm(
             ledger,
             mempool,
             rx,
             files_fetch_rx,
+            tx_submit_rx,
             keypair,
             listen,
             hello_registry,
@@ -1300,7 +1386,7 @@ pub fn start_mdns_ping_swarm(
             log::warn!("[p2p][mdns] swarm exited: {e}");
         }
     });
-    Ok((tx, files_fetch_tx, join))
+    Ok((tx, files_fetch_tx, tx_submit_tx, join))
 }
 
 /// Run the block-plane libp2p swarm (gossip + chain-sync RPC).
@@ -1311,6 +1397,7 @@ async fn run_mdns_ping_swarm(
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     mut publish_rx: mpsc::Receiver<String>,
     mut files_fetch_rx: mpsc::Receiver<FilesFetchCmd>,
+    mut tx_submit_rx: mpsc::Receiver<TxSubmitCmd>,
     keypair: identity::Keypair,
     listen: Multiaddr,
     hello_registry: SharedHelloRegistry,
@@ -1414,6 +1501,7 @@ async fn run_mdns_ping_swarm(
         chain_sync_hello: chain_sync_hello_behaviour(),
         chain_sync_range: chain_sync_range_behaviour(),
         files_fetch: files_fetch_behaviour(),
+        tx_submit: tx_submit_behaviour(),
     };
     let idle_timeout = idle_timeout_from_env();
     let mut swarm = Swarm::new(
@@ -1479,6 +1567,12 @@ async fn run_mdns_ping_swarm(
         }
     }
 
+    // Who to send a direct `tx_submit` to. Bootnodes are the nodes a follower has been told to
+    // trust enough to sync from, which makes them the right default target for its own txs.
+    let mut bootnode_peer_ids: std::collections::HashSet<PeerId> = std::collections::HashSet::new();
+    let mut tx_submit_limiter = TxSubmitRateLimiter::default();
+    let tx_submit_rps = tx_submit_rps_from_env();
+
     let bootnodes = crate::vision::fluid_net::bootnode_addrs_from_env();
     if !bootnodes.is_empty() {
         println!(
@@ -1494,10 +1588,9 @@ async fn run_mdns_ping_swarm(
                             .kademlia
                             .add_address(&pid, dial_addr.clone());
                         if bootnode_explicit_peers_enabled() {
-                            if bootnode_explicit_peers_enabled() {
-                        swarm.behaviour_mut().gossipsub.add_explicit_peer(&pid);
-                    }
+                            swarm.behaviour_mut().gossipsub.add_explicit_peer(&pid);
                         }
+                        bootnode_peer_ids.insert(pid);
                         println!("[P2P] Bootnode added to Kademlia: peer={pid} addr={dial_addr}");
                     }
                     match swarm.dial(addr.clone()) {
@@ -1628,6 +1721,31 @@ async fn run_mdns_ping_swarm(
                     }
                 }
             }
+            maybe_tx = tx_submit_rx.recv() => {
+                if let Some(cmd) = maybe_tx {
+                    // Target bootnodes when we have them; otherwise every connected peer. On the
+                    // seed itself `bootnode_peer_ids` is empty and there is usually nothing to do,
+                    // which is correct — it mines its own mempool.
+                    let connected: Vec<PeerId> = swarm.connected_peers().copied().collect();
+                    let targets: Vec<PeerId> = if bootnode_peer_ids.is_empty() {
+                        connected
+                    } else {
+                        connected
+                            .into_iter()
+                            .filter(|p| bootnode_peer_ids.contains(p))
+                            .collect()
+                    };
+                    if targets.is_empty() {
+                        println!("[P2P][tx-submit] no connected target peer; gossip remains the only path");
+                    }
+                    for peer in targets {
+                        let req = TxSubmitRequest { v: 1, env: cmd.env.clone() };
+                        let _rid = swarm.behaviour_mut().tx_submit.send_request(&peer, req);
+                    }
+                } else {
+                    println!("[P2P][tx-submit] command channel closed");
+                }
+            }
             maybe_cmd = files_fetch_rx.recv() => {
                 if let Some(cmd) = maybe_cmd {
                     // Prefer the announced storage node when it is a known connected peer;
@@ -1681,13 +1799,12 @@ async fn run_mdns_ping_swarm(
                             }
                             Err(e) => {
                                 println!("[P2P] ❌ GOSSIP PUBLISH ERROR topic={} err={:?}", topic.hash(), e);
-                                // `InsufficientPeers` has two causes in libp2p-gossipsub 0.48 and
-                                // they need different fixes: the early return (behaviour.rs:635)
-                                // when no connected peer is *recorded as subscribed* to the topic,
-                                // or an empty recipient set after mesh/fanout/explicit selection.
-                                // Dump what gossipsub actually believes rather than guessing —
-                                // this is what identified the lost-subscription bug on
-                                // 2026-09-22.
+                                // TRACK A instrumentation. `InsufficientPeers` has two causes in
+                                // libp2p-gossipsub 0.48 and they need different fixes: the early
+                                // return (behaviour.rs:635) when NO connected peer is recorded as
+                                // subscribed to the topic, or an empty recipient set after mesh /
+                                // fanout / explicit selection. Dump what gossipsub actually
+                                // believes so the next reader does not have to guess.
                                 let gs = &swarm.behaviour().gossipsub;
                                 let want = topic.hash();
                                 let peers: Vec<String> = gs
@@ -1768,6 +1885,82 @@ async fn run_mdns_ping_swarm(
                 // Keep it noisy for debugging while stabilizing Phase 2 network discovery.
                 log::debug!("[p2p][kad] event={ev:?}");
             }
+            SwarmEvent::Behaviour(Event::TxSubmit(ev)) => match ev {
+                request_response::Event::Message {
+                    peer,
+                    message:
+                        request_response::Message::Request {
+                            request, channel, ..
+                        },
+                    ..
+                } => {
+                    // Spend the rate-limit budget BEFORE verifying: the hybrid ML-DSA check is
+                    // the expensive part, so a peer must not be able to make us do it at will.
+                    tx_submit_limiter.prune();
+                    let resp = if !tx_submit_limiter.allow(&peer, tx_submit_rps) {
+                        println!("[P2P][tx-submit] ⛔ rate limited peer={peer}");
+                        TxSubmitResponse {
+                            accepted: false,
+                            outcome: "rate_limited".into(),
+                            tx_hash: None,
+                            reason: Some(format!("over {tx_submit_rps} tx/s")),
+                        }
+                    } else if request.v != 1 {
+                        TxSubmitResponse {
+                            accepted: false,
+                            outcome: "rejected".into(),
+                            tx_hash: None,
+                            reason: Some("unsupported request version".into()),
+                        }
+                    } else {
+                        // Exactly the gossip admission path — same verify, same dedup, same
+                        // caps. A direct submission buys no trust it would not get over gossip.
+                        match handle_tx_broadcast(&ledger, &mempool, request.env).await {
+                            TxGossipOutcome::Enqueued { tx_hash, mempool_len } => {
+                                println!(
+                                    "[P2P][tx-submit] ✅ accepted from {peer} tx_hash={tx_hash} mempool_len={mempool_len}"
+                                );
+                                TxSubmitResponse { accepted: true, outcome: "enqueued".into(), tx_hash: Some(tx_hash), reason: None }
+                            }
+                            TxGossipOutcome::AlreadyQueued { tx_hash } => TxSubmitResponse {
+                                accepted: true,
+                                outcome: "already_queued".into(),
+                                tx_hash: Some(tx_hash),
+                                reason: None,
+                            },
+                            TxGossipOutcome::AlreadyApplied { tx_hash } => TxSubmitResponse {
+                                accepted: true,
+                                outcome: "already_applied".into(),
+                                tx_hash: Some(tx_hash),
+                                reason: None,
+                            },
+                            TxGossipOutcome::Rejected { reason } => {
+                                crate::metrics::inc_gossip_rejected();
+                                println!("[P2P][tx-submit] ❌ rejected from {peer}: {reason}");
+                                TxSubmitResponse { accepted: false, outcome: "rejected".into(), tx_hash: None, reason: Some(reason) }
+                            }
+                        }
+                    };
+                    let _ = swarm.behaviour_mut().tx_submit.send_response(channel, resp);
+                }
+                request_response::Event::Message {
+                    peer,
+                    message: request_response::Message::Response { response, .. },
+                    ..
+                } => {
+                    println!(
+                        "[P2P][tx-submit] ← {peer} accepted={} outcome={} reason={:?}",
+                        response.accepted, response.outcome, response.reason
+                    );
+                }
+                request_response::Event::OutboundFailure { peer, error, .. } => {
+                    println!("[P2P][tx-submit] outbound failure peer={peer} err={error}");
+                }
+                request_response::Event::InboundFailure { peer, error, .. } => {
+                    println!("[P2P][tx-submit] inbound failure peer={peer} err={error}");
+                }
+                _ => {}
+            },
             SwarmEvent::Behaviour(Event::ChainSyncHello(ev)) => match ev {
                 request_response::Event::Message {
                     peer,
@@ -2645,6 +2838,7 @@ mod tests {
             chain_sync_hello: chain_sync_hello_behaviour(),
             chain_sync_range: chain_sync_range_behaviour(),
             files_fetch: files_fetch_behaviour(),
+            tx_submit: tx_submit_behaviour(),
         };
 
         Swarm::new(

@@ -61,6 +61,9 @@ pub struct RestState {
     /// Command channel into the block-plane swarm for `/tet/v1/files/fetch` body pulls
     /// (Step 4; `None` when the block swarm is disabled).
     pub files_fetch_tx: Option<mpsc::Sender<crate::p2p::FilesFetchCmd>>,
+    /// Command channel for direct `/tet/v1/tx-submit` requests to bootnodes — the transaction
+    /// equivalent of the pull-based block catch-up, and independent of gossip.
+    pub tx_submit_tx: Option<mpsc::Sender<crate::p2p::TxSubmitCmd>>,
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,
     pub workers: Arc<StdMutex<WorkerRegistry>>,
     pub e2ee_jobs: Arc<StdMutex<E2eeJobQueue>>,
@@ -215,22 +218,47 @@ impl RestState {
     /// This never mutates a ledger; it only propagates the signed envelope. Peers
     /// re-verify the hybrid signature before enqueuing into their own mempool.
     pub async fn broadcast_mempool_tx(&self, env: &SignedTxEnvelopeV1) {
+        // Two independent paths, deliberately not nested: gossip for fan-out, and a direct
+        // request to our bootnodes. Either can be unavailable without disabling the other —
+        // which matters, because the failure this exists for is gossip being silently
+        // unusable while the connection to the peer is perfectly healthy.
+        if self.gossip_tx.is_some() || self.tx_submit_tx.is_some() {
+            // Record as locally-originated BEFORE publishing, not after: the first publish
+            // frequently fails. A tx submitted in the seconds after a peer connects hits
+            // gossipsub `InsufficientPeers` because the txs-topic mesh has not grafted yet.
+            // Registering first means the retry loop owns it regardless of what happens next.
+            if let Ok(tx_hash) = crate::consensus::tx_hash_for_env(env) {
+                self.pending_rebroadcast.lock().await.insert(tx_hash, 0);
+            }
+        }
+        self.gossip_mempool_tx(env).await;
+        self.direct_submit_to_peers(env).await;
+    }
+
+    /// Publish a pending tx on the block-plane `txs` gossip topic. No-op without a gossip channel.
+    pub async fn gossip_mempool_tx(&self, env: &SignedTxEnvelopeV1) {
         let Some(tx) = self.gossip_tx.as_ref() else {
             return;
         };
-        // Record the tx as locally-originated BEFORE publishing, not after: the first publish
-        // frequently fails. A tx submitted in the seconds after a peer connects hits
-        // gossipsub `InsufficientPeers` because the txs-topic mesh has not grafted yet, and the
-        // publish is one-shot. That is the exact failure that stranded a claim in a follower's
-        // mempool for 12 blocks on 2026-09-22. Registering first means the retry loop owns it
-        // regardless of what this publish does.
-        if let Ok(tx_hash) = crate::consensus::tx_hash_for_env(env) {
-            self.pending_rebroadcast.lock().await.insert(tx_hash, 0);
-        }
         let event = crate::models::NetworkEvent::TxBroadcast { env: env.clone() };
         if let Ok(json) = serde_json::to_string(&event) {
             let _ = tx.send(json).await;
         }
+    }
+
+    /// Ask bootnodes to take this tx directly, over `/tet/v1/tx-submit`.
+    ///
+    /// Runs *in addition to* gossip, never instead of it. Gossip is the efficient fan-out; this
+    /// is the path that still works when gossip does not — and on 2026-09-22 gossip did not, for
+    /// a reason invisible from here: a follower held an incomplete record of the seed's topic
+    /// subscriptions, so `publish` returned `InsufficientPeers` indefinitely while the peer
+    /// connection itself stayed healthy and blocks kept arriving. Blocks have had two paths
+    /// since S1 (gossip + pull catch-up); this gives transactions the same.
+    pub async fn direct_submit_to_peers(&self, env: &SignedTxEnvelopeV1) {
+        let Some(tx) = self.tx_submit_tx.as_ref() else {
+            return;
+        };
+        let _ = tx.send(crate::p2p::TxSubmitCmd { env: env.clone() }).await;
     }
 
     /// One rebroadcast sweep. Returns `(republished, forgotten)`.
@@ -240,9 +268,9 @@ impl RestState {
     /// only locally-submitted txs are tracked, each has a hard attempt ceiling, and anything no
     /// longer in the mempool (mined, evicted) is dropped from the map.
     pub async fn rebroadcast_pending_txs(&self) -> (usize, usize) {
-        let Some(gossip) = self.gossip_tx.as_ref() else {
+        if self.gossip_tx.is_none() && self.tx_submit_tx.is_none() {
             return (0, 0);
-        };
+        }
         let max_attempts = Self::tx_rebroadcast_max_attempts();
 
         // Snapshot under the mempool lock, then release it: publishing holds an await point and
@@ -277,10 +305,23 @@ impl RestState {
 
         let mut republished = 0usize;
         for env in to_send {
-            let event = crate::models::NetworkEvent::TxBroadcast { env };
-            if let Ok(json) = serde_json::to_string(&event)
+            let event = crate::models::NetworkEvent::TxBroadcast {
+                env: env.clone(),
+            };
+            let mut sent = false;
+            if let Some(gossip) = self.gossip_tx.as_ref()
+                && let Ok(json) = serde_json::to_string(&event)
                 && gossip.send(json).await.is_ok()
             {
+                sent = true;
+            }
+            // Retry the direct path too. A tx stuck because gossip is unusable is exactly the
+            // case this sweep exists for, so retrying only the broken path would be pointless.
+            if self.tx_submit_tx.is_some() {
+                self.direct_submit_to_peers(&env).await;
+                sent = true;
+            }
+            if sent {
                 republished += 1;
             }
         }
@@ -303,9 +344,12 @@ impl RestState {
             .unwrap_or(20)
     }
 
-    /// Background loop driving [`rebroadcast_pending_txs`]. No-op without a gossip channel.
+    /// Background loop driving [`rebroadcast_pending_txs`]. No-op when neither the gossip nor the
+    /// direct-submit channel exists.
     pub fn spawn_mempool_rebroadcast(state: RestState) -> Option<tokio::task::JoinHandle<()>> {
-        state.gossip_tx.as_ref()?;
+        if state.gossip_tx.is_none() && state.tx_submit_tx.is_none() {
+            return None;
+        }
         let period = std::time::Duration::from_secs(Self::tx_rebroadcast_interval_sec());
         Some(tokio::spawn(async move {
             let mut ticker = tokio::time::interval(period);

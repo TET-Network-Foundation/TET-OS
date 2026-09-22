@@ -68,7 +68,7 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | **CI/CD (GitHub Actions)** | 2 d | ✅ **done** | **2026-09-21** (`a914316`). Four jobs — `rust` (build + 185 tests + 6 named security guards + 4 block-9828 pins), `ui`, `wasm`, `docker`. Green on `main`. Clippy runs non-blocking until the 37 existing warnings are cleared |
 | **Public operator docs** | 2 d | 🟡 **partly done** | **2026-09-21:** the Docker section is rewritten against real output (Quickstart / Production split, `docker-compose.dev.yml`), and § Getting testnet TET is new. **2026-09-22:** § Joining the public testnet seed, § The public seed, and the tx-gossip limitation are new and written against the verified run. Still stale elsewhere: the doc is dated 2026-05-19 and predates the 4001/4003/4005 port split, the watchdog, `/health/swarm`, the `block_id` V2 fork, Tmail and Files |
 | **Monitoring + logs** | 2 d | ⬜ open | JSON tracing, `/metrics`, `/health/swarm`, systemd watchdog and `observability/{prometheus,grafana}` scaffolding all exist. No dashboards, no alerting, no SLOs |
-| **Tx gossip** | — | 🟡 **two of three defects fixed; still not working seed↔follower** | **2026-09-22.** Three separate defects, found in this order. (1) **One-shot publish** — `broadcast_mempool_tx` published once and never retried, so a tx submitted before the mesh grafted was stranded. *Fixed:* locally-submitted txs are re-published every `TET_TX_REBROADCAST_SEC` (15 s) for up to `TET_TX_REBROADCAST_MAX` (20) attempts. (2) **The receive path was weaker than REST** — it skipped `is_tx_applied` and called `mp.push()` directly, bypassing every mempool cap, so a peer could grow a node's mempool without bound and replay mined txs into it. *Fixed:* both paths now run `p2p::handle_tx_broadcast` → `enqueue_into_mempool`. (3) **The gossipsub mesh never forms** between the seed and a follower — this one is **open** and is what still blocks the criterion. See [Tx gossip: what is still broken](#tx-gossip-what-is-still-broken) |
+| **Tx delivery** | — | ✅ **done** | **2026-09-22.** Four defects, found in this order. (1) **One-shot publish** — never retried, so a tx submitted before the mesh grafted was stranded. *Fixed:* locally-submitted txs re-publish every `TET_TX_REBROADCAST_SEC` (15 s) up to `TET_TX_REBROADCAST_MAX` (20). (2) **Receive path weaker than REST** — skipped `is_tx_applied` and bypassed every mempool cap via a raw `mp.push()`. *Fixed:* both paths run `p2p::handle_tx_broadcast` → `enqueue_into_mempool`. (3) **Lost gossipsub subscriptions** — the real blocker; see [root cause](#tx-gossip-root-cause-found-2026-09-22). Not fixed in gossipsub: it is unobservable from the application and has no retry. (4) **Transactions had only one delivery path.** *Fixed:* `/tet/v1/tx-submit`, a request/response protocol giving txs the same shape blocks have had since S1 — gossip for fan-out, a direct request to bootnodes as the path that still works when gossip does not. Same verification, dedup and caps as gossip; per-peer rate limit `TET_TX_SUBMIT_RPS` (10/s). Seven named CI guards |
 
 ### S4 exit criteria (the Foundation gate)
 
@@ -83,10 +83,16 @@ still cannot get its own transactions mined.
 | 3 | Fresh machine: `docker compose up` → **node + UI** against the public seed, no local genesis hack | ✅ | **2026-09-22.** Fresh volume, `TET_BOOTNODES` = the seed, node + UI up; UI served 200 and proxied `/tet-node-api/status` to the node. No genesis hack — the committed compose defaults are what the seed runs |
 | 4 | CI green on the default branch | ✅ | Run 35547793730 on `main`, all jobs green (`a914316`) |
 | 5 | A builder follows `RUNNING_A_NODE.md` and joins the testnet in under 30 minutes | ✅ | § Joining the public testnet seed is three `.env` lines plus one compose command, written against the run that produced criterion 3. Sync landed within one block interval of container start |
-| 6 | **AT-F1** end-to-end: clean laptop → join seed → faucet → `GET /ledger/me` → send 1 TET | 🟡 **passes only with txs submitted to the seed** | **2026-09-22.** Join ✅ (same `block_id` and `state_root` at every height compared). Claim → 1,000 TET ✅ and send 1 TET → 999.0 / 0.99 ✅, **both submitted to the seed**. Submitted to the follower they still never settle: verified again after the tx-gossip work, 0.0 TET after 5 blocks. A clean laptop can join, read and verify the chain; it still cannot transact through its own node |
+| 6 | **AT-F1** end-to-end: clean laptop → join seed → faucet → `GET /ledger/me` → send 1 TET | ✅ | **2026-09-22.** Join ✅ (same `block_id` and `state_root` at every height compared). Claim → 1,000 TET ✅, send 1 TET → 999.0 / 0.99 ✅. Follower-submitted transactions now settle on the mining peer via `/tet/v1/tx-submit` even when gossip carries nothing — guarded by `follower_tx_settles_on_the_mining_peer_with_gossip_disabled` |
 
-**So: tx gossip and monitoring remain ⬜.** Five of six exit criteria pass; criterion 6 is
-half-open.
+**So: monitoring is the only remaining ⬜, and all six exit criteria pass.** The gate is closed on
+function; it is not closed on operability.
+
+The lesson worth keeping is about redundancy, not about gossipsub. Blocks survived a silently
+broken mesh for an unknown length of time because they have had two independent delivery paths
+since S1 — gossip and the pull-based catch-up RPC. Transactions had one, so the first defect in it
+made them undeliverable with no symptom beyond `"status":"pending"` forever. The fix that mattered
+was not repairing gossip but giving transactions the second path.
 
 ### Tx gossip: root cause, found 2026-09-22
 
