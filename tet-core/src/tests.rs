@@ -4827,6 +4827,90 @@ mod block_sync {
         rebroadcast.abort();
         stop(&[n1, n2]);
     }
+
+    /// **SWARM SURVIVES A CLOSED PUBLISH CHANNEL.**
+    ///
+    /// Dropping the gossip sender — which any caller does simply by clearing
+    /// `RestState::gossip_tx` — used to `break` the block-plane event loop, stopping block sync,
+    /// the chain-sync RPC and tx-submit along with gossip. One producer going away is not a
+    /// reason to stop serving everything else.
+    ///
+    /// Here the follower drops its gossip sender entirely and must still (a) keep syncing blocks
+    /// the peer mines and (b) deliver a transaction over `/tet/v1/tx-submit`. Restore the `break`
+    /// and both assertions fail.
+    #[tokio::test]
+    async fn swarm_keeps_serving_after_the_publish_channel_closes() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            std::env::set_var("TET_TX_REBROADCAST_SEC", "1");
+        }
+
+        let n1 = spawn_node(None, true).await; // producer
+        let boot = n1.boot_multiaddr.clone();
+        let mut n2 = spawn_node(Some(&boot), false).await;
+
+        // Drop the ONLY sender for the swarm's publish channel. `recv()` now returns None
+        // forever, which is exactly the condition that used to kill the loop.
+        n2.state.gossip_tx = None;
+        let rebroadcast = crate::rest::RestState::spawn_mempool_rebroadcast(n2.state.clone())
+            .expect("retry loop still runs on the direct path");
+
+        let height_at_drop = n1.ledger.block_height().unwrap_or(0);
+        mine_n(&n1.state, 2).await;
+
+        // (a) block sync still works on the follower.
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            if n2.ledger.block_height().unwrap_or(0) > height_at_drop {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "follower stopped syncing blocks after its publish channel closed — \
+                 the swarm loop died with the channel"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        // (b) tx-submit still works on the follower.
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let words = w.mnemonic_12.clone().unwrap();
+        let wallet_id = w.address_hex.to_ascii_lowercase();
+        let env = signed_env_for_tests(
+            crate::protocol::TxV1::InitialAirdrop {
+                wallet_id: wallet_id.clone(),
+            },
+            &words,
+            &wallet_id,
+        );
+        let resp = crate::rest::handlers::ledger::post_initial_airdrop_claim(
+            axum::extract::State(n2.state.clone()),
+            axum::Json(env),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            if n1.state.mempool.lock().await.len() == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tx-submit stopped working after the publish channel closed"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        mine_n(&n1.state, 1).await;
+        assert_eq!(
+            n1.ledger.balance_micro(&wallet_id).unwrap(),
+            1_000 * crate::ledger::STEVEMON
+        );
+
+        rebroadcast.abort();
+        stop(&[n1, n2]);
+    }
 }
 
 // =================================================================================================

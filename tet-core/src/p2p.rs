@@ -1636,6 +1636,18 @@ async fn run_mdns_ping_swarm(
     let mut last_kad_bootstrap_at: u64 = now_ms();
     let mut catch_up_interval = tokio::time::interval(Duration::from_secs(1));
     catch_up_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    // A closed command channel must disable its own `select!` arm and nothing else.
+    //
+    // Two failure modes this prevents, both of which have bitten. A `recv()` on a closed channel
+    // returns `None` *immediately and forever*, so an arm without a guard either spins the loop
+    // hot (burning a core and starving the other arms) or, as the publish arm used to, `break`s
+    // out of the event loop entirely — taking block sync, chain-sync RPC and tx-submit down with
+    // it because one unrelated sender was dropped. The swarm is shared infrastructure; losing one
+    // producer is not a reason to stop serving the others.
+    let mut publish_closed = false;
+    let mut tx_submit_closed = false;
+    let mut files_fetch_closed = false;
     loop {
         // Liveness beacon: every loop iteration stamps the health beacon so the systemd watchdog
         // (see `crate::swarm_health`) and `/health/swarm` can detect a stalled loop. The
@@ -1721,7 +1733,7 @@ async fn run_mdns_ping_swarm(
                     }
                 }
             }
-            maybe_tx = tx_submit_rx.recv() => {
+            maybe_tx = tx_submit_rx.recv(), if !tx_submit_closed => {
                 if let Some(cmd) = maybe_tx {
                     // Target bootnodes when we have them; otherwise every connected peer. On the
                     // seed itself `bootnode_peer_ids` is empty and there is usually nothing to do,
@@ -1743,10 +1755,12 @@ async fn run_mdns_ping_swarm(
                         let _rid = swarm.behaviour_mut().tx_submit.send_request(&peer, req);
                     }
                 } else {
-                    println!("[P2P][tx-submit] command channel closed");
+                    println!("[P2P][tx-submit] command channel closed; direct submit disabled, swarm continues");
+                    log::warn!("[p2p][tx-submit] command channel closed; direct submit disabled");
+                    tx_submit_closed = true;
                 }
             }
-            maybe_cmd = files_fetch_rx.recv() => {
+            maybe_cmd = files_fetch_rx.recv(), if !files_fetch_closed => {
                 if let Some(cmd) = maybe_cmd {
                     // Prefer the announced storage node when it is a known connected peer;
                     // otherwise fall back to the first connected peer (Phase 0 topology is tiny,
@@ -1773,7 +1787,7 @@ async fn run_mdns_ping_swarm(
                     }
                 }
             }
-            maybe_msg = publish_rx.recv() => {
+            maybe_msg = publish_rx.recv(), if !publish_closed => {
                 let now = now_ms();
                 blacklisted_peers.prune(now);
                 prune_pending_backfill(&mut pending_backfill, now, pending_backfill_max, pending_backfill_ttl_ms);
@@ -1833,8 +1847,11 @@ async fn run_mdns_ping_swarm(
                         }
                     }
                 } else {
-                    println!("[P2P] publish channel closed; stopping swarm.");
-                    break;
+                    // Was `break`. Dropping the gossip sender — which a caller can do simply by
+                    // clearing `RestState::gossip_tx` — used to stop the entire block-plane swarm.
+                    println!("[P2P] publish channel closed; gossip publishing disabled, swarm continues");
+                    log::warn!("[p2p] publish channel closed; gossip publishing disabled");
+                    publish_closed = true;
                 }
             }
             ev = swarm.select_next_some() => match ev {

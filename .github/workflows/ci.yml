@@ -124,6 +124,7 @@ jobs:
           tx_gossip=(
             block_sync::at_f1_follower_submits_tx_and_mining_peer_settles_it
             block_sync::follower_tx_settles_on_the_mining_peer_with_gossip_disabled
+            block_sync::swarm_keeps_serving_after_the_publish_channel_closes
             pending_local_tx_is_rebroadcast_until_mined_then_forgotten
             gossiped_tx_already_mined_is_dropped_not_requeued
             gossiped_tx_is_never_marked_for_rebroadcast
