@@ -259,6 +259,59 @@ COMPOSE+=(-f deploy/docker-compose.seed.yml)
 printf '    %s\n' "${COMPOSE[*]} up -d --build tet-core"
 "${COMPOSE[@]}" up -d --build tet-core
 
+# --- 8b. monitoring ---------------------------------------------------------
+# A systemd timer rather than cron: it survives reboots, logs to the journal,
+# and `systemctl status tet-healthcheck.timer` answers "is monitoring running?"
+# without grepping crontabs.
+#
+# TET_HC_URL is the healthchecks.io check URL. Without it the probe still runs
+# and still restarts a stalled node, it just has nowhere to report — so the
+# script is useful unconfigured, and configuring it is one drop-in file.
+log "Monitoring (systemd timer, every 60s)"
+install -m 0755 "$SEED_DIR/deploy/seed-healthcheck.sh" /usr/local/bin/tet-healthcheck
+mkdir -p /etc/tet
+if [ -n "${TET_HC_URL:-}" ]; then
+  printf 'TET_HC_URL=%s\n' "$TET_HC_URL" > /etc/tet/healthcheck.env
+  chmod 600 /etc/tet/healthcheck.env
+  ok "healthchecks.io URL written to /etc/tet/healthcheck.env"
+elif [ -f /etc/tet/healthcheck.env ]; then
+  ok "keeping existing /etc/tet/healthcheck.env"
+else
+  printf '# TET_HC_URL=https://hc-ping.com/<uuid>\n' > /etc/tet/healthcheck.env
+  chmod 600 /etc/tet/healthcheck.env
+  warn "no TET_HC_URL set — probe will run but not report. Add it to /etc/tet/healthcheck.env"
+fi
+
+cat > /etc/systemd/system/tet-healthcheck.service <<EOF
+[Unit]
+Description=TET seed liveness probe
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/tet/healthcheck.env
+Environment=TET_HC_COMPOSE_DIR=$SEED_DIR
+ExecStart=/usr/local/bin/tet-healthcheck
+EOF
+
+cat > /etc/systemd/system/tet-healthcheck.timer <<'EOF'
+[Unit]
+Description=Run the TET seed liveness probe every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now tet-healthcheck.timer >/dev/null 2>&1
+ok "tet-healthcheck.timer active ($(systemctl is-active tet-healthcheck.timer))"
+
 # --- 9. verify --------------------------------------------------------------
 log "Waiting for health"
 for _ in $(seq 1 60); do

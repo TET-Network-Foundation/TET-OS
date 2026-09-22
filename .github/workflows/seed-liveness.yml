@@ -1,0 +1,61 @@
+name: seed liveness
+
+# External reachability check for the public seed. This tests the one thing the
+# on-box probe cannot: that 8002 is reachable FROM THE INTERNET, i.e. that the
+# Hetzner cloud firewall and routing are intact. The on-box probe
+# (deploy/seed-healthcheck.sh) covers chain progress and host health.
+#
+# Two caveats, both real:
+#
+#  1. GitHub's scheduled runners are best-effort and are routinely 15-60+ minutes
+#     late under load. Treat the interval as nominal. The on-box probe, pinging
+#     healthchecks.io every minute, is the timely signal; this is the
+#     "is it reachable from outside" signal.
+#  2. GitHub disables scheduled workflows after 60 days with no repository
+#     activity. This project has already been dormant for three months once, so
+#     that is a realistic way for this check to stop silently. If the repo goes
+#     quiet, re-enable it in the Actions tab.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reachable:
+    name: p2p port reachable from the internet
+    runs-on: ubuntu-latest
+    steps:
+      - name: TCP connect to the seed's block-plane port
+        env:
+          SEED_HOST: 95.217.158.153
+          SEED_P2P_PORT: '8002'
+        run: |
+          set -euo pipefail
+          echo "connecting to ${SEED_HOST}:${SEED_P2P_PORT}"
+          for attempt in 1 2 3; do
+            if timeout 10 bash -c ">/dev/tcp/${SEED_HOST}/${SEED_P2P_PORT}" 2>/dev/null; then
+              echo "::notice::seed ${SEED_HOST}:${SEED_P2P_PORT} reachable (attempt ${attempt})"
+              exit 0
+            fi
+            echo "attempt ${attempt} failed"
+            sleep 10
+          done
+          echo "::error::seed ${SEED_HOST}:${SEED_P2P_PORT} NOT reachable from the internet after 3 attempts"
+          exit 1
+
+      - name: REST must NOT be reachable
+        env:
+          SEED_HOST: 95.217.158.153
+        run: |
+          set -euo pipefail
+          # 5010 is published on the seed's loopback only and blocked upstream by
+          # the Hetzner firewall. If this ever succeeds, the node's API is public.
+          if timeout 10 bash -c ">/dev/tcp/${SEED_HOST}/5010" 2>/dev/null; then
+            echo "::error::seed REST port 5010 is reachable from the internet — it must not be"
+            exit 1
+          fi
+          echo "::notice::5010 correctly not reachable"
