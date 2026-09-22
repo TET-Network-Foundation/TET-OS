@@ -1228,6 +1228,15 @@ fn bootnode_explicit_peers_enabled() -> bool {
         .unwrap_or(true)
 }
 
+/// How often to check whether peers still show us their topic subscriptions
+/// (`TET_GOSSIP_RESUBSCRIBE_SEC`, default 30; `0` disables the check).
+fn gossip_resubscribe_interval_sec() -> u64 {
+    std::env::var("TET_GOSSIP_RESUBSCRIBE_SEC")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(30)
+}
+
 fn network_event_topics(
     msg: &str,
     blocks_topic: &gossipsub::IdentTopic,
@@ -1645,6 +1654,30 @@ async fn run_mdns_ping_swarm(
     // out of the event loop entirely — taking block sync, chain-sync RPC and tx-submit down with
     // it because one unrelated sender was dropped. The swarm is shared infrastructure; losing one
     // producer is not a reason to stop serving the others.
+    // Gossip self-heal. gossipsub exchanges subscriptions ONCE, when a connection is
+    // established, and never re-sends them. A dial-dial collision (both sides dialling at the
+    // same moment) can leave the subscription RPC on the connection that then closes, and the
+    // surviving peer record is permanently missing topics — observed against the public seed on
+    // 2026-09-22, where `/tet/v1/txs` was missing while blocks, tmail and files were present, so
+    // `publish` returned `InsufficientPeers` for the life of the process. There is no retry
+    // upstream and nothing observable from the application.
+    //
+    // So: periodically ask gossipsub what each bootnode is subscribed to. If a bootnode is not
+    // showing one of our topics, unsubscribe+resubscribe — `subscribe()` alone is a no-op when
+    // already subscribed and sends no RPC, whereas the pair emits a fresh Subscribe to every
+    // connected peer, which is what repopulates their view of us and prompts theirs of us.
+    //
+    // This is a workaround for a libp2p-gossipsub behaviour, documented in
+    // docs/upstream/libp2p-gossipsub-lost-subscription.md. Remove it if upstream adds a retry.
+    let resubscribe_sec = gossip_resubscribe_interval_sec();
+    /// Minimum gap between heals of the same peer, so a peer that is broken for some other
+    /// reason cannot be put into a reconnect loop.
+    const HEAL_COOLDOWN_MS: u64 = 120_000;
+    let mut heal_cooldown: std::collections::HashMap<PeerId, u64> = std::collections::HashMap::new();
+    let mut resubscribe_interval =
+        tokio::time::interval(Duration::from_secs(resubscribe_sec.max(1)));
+    resubscribe_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
     let mut publish_closed = false;
     let mut tx_submit_closed = false;
     let mut files_fetch_closed = false;
@@ -1730,6 +1763,71 @@ async fn run_mdns_ping_swarm(
                                 log::debug!("[p2p][kad] periodic bootstrap skipped: {e:?}");
                             }
                         }
+                    }
+                }
+            }
+            _ = resubscribe_interval.tick(), if resubscribe_sec > 0 => {
+                // Only the topics EVERY node subscribes to unconditionally (p2p.rs subscribe
+                // block). `ai-workload` is deliberately excluded: a PoR node legitimately does
+                // not subscribe to it, and treating that as damage would heal in a loop forever.
+                const CORE_TOPICS: [&str; 4] =
+                    [BLOCKS_TOPIC, TXS_TOPIC, TMAIL_TOPIC, crate::files::FILES_ANNOUNCE_TOPIC];
+
+                let mut damaged: Option<(PeerId, String)> = None;
+                for (pid, their_topics) in swarm.behaviour().gossipsub.all_peers() {
+                    if !bootnode_peer_ids.contains(pid) {
+                        continue;
+                    }
+                    // A bootnode showing *some* core topics but not all is the signature: a peer
+                    // that genuinely has not subscribed yet shows none.
+                    let present = CORE_TOPICS
+                        .iter()
+                        .filter(|t| their_topics.iter().any(|h| h.as_str() == **t))
+                        .count();
+                    if present == 0 || present == CORE_TOPICS.len() {
+                        continue;
+                    }
+                    if let Some(missing) = CORE_TOPICS
+                        .iter()
+                        .find(|t| !their_topics.iter().any(|h| h.as_str() == **t))
+                    {
+                        damaged = Some((*pid, (*missing).to_string()));
+                        break;
+                    }
+                }
+
+                if let Some((pid, missing)) = damaged {
+                    let now = now_ms();
+                    let cooled = heal_cooldown
+                        .get(&pid)
+                        .map(|last| now.saturating_sub(*last) >= HEAL_COOLDOWN_MS)
+                        .unwrap_or(true);
+                    if cooled {
+                        heal_cooldown.insert(pid, now);
+                        println!(
+                            "[P2P][gossip-heal] bootnode {pid} record is missing {missing} \
+                             (partial subscription set); dropping the connection so a fresh one \
+                             re-exchanges subscriptions"
+                        );
+                        log::warn!(
+                            "[p2p][gossip-heal] reconnecting peer={pid} missing_topic={missing}"
+                        );
+                        // Re-send our own subscriptions too, repairing THEIR record of US. That
+                        // half is cheap and independent: `subscribe()` alone is a no-op when
+                        // already subscribed and emits no RPC, so the pair is required.
+                        let my_topics: Vec<gossipsub::TopicHash> =
+                            swarm.behaviour().gossipsub.topics().cloned().collect();
+                        for t in &my_topics {
+                            let ident = gossipsub::IdentTopic::new(t.as_str());
+                            let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&ident);
+                            let _ = swarm.behaviour_mut().gossipsub.subscribe(&ident);
+                        }
+                        // And drop the connection. This is the half that repairs OUR record of
+                        // THEM, which is the direction that actually blocks publishing: gossipsub
+                        // sends subscriptions once per connection and offers no way to ask a peer
+                        // to re-send, so a new connection is the only repair. The existing
+                        // bootnode redial (TET_BOOTNODE_REDIAL_SEC) brings it straight back.
+                        let _ = swarm.disconnect_peer_id(pid);
                     }
                 }
             }
