@@ -2392,8 +2392,20 @@ async fn run_mdns_ping_swarm(
                 log::info!("[p2p][mdns] connected peer_id={peer_id} endpoint={remote}");
                 peer_dial_book.insert(peer_id, remote);
                 if peer_id != *swarm.local_peer_id() {
-                    // NB: this makes EVERY connected peer explicit, not just bootnodes.
-                    if bootnode_explicit_peers_enabled() {
+                    // Bootnodes only. This used to run for EVERY connected peer, and an explicit
+                    // peer is excluded from `get_random_peers`, which fills both mesh and fanout
+                    // — so on a small network every peer was explicit, the mesh could never form
+                    // for any topic (`Mesh low. Topic contains: 0 needs: 4` on every heartbeat),
+                    // and gossip degraded to direct sends with no redundancy and no gossip
+                    // propagation between peers that were not directly connected.
+                    //
+                    // Explicit is meant for a handful of trusted relays you always talk to
+                    // directly. A bootnode qualifies; an arbitrary inbound peer does not.
+                    //
+                    // Verification note: with 3+ nodes the mesh should now actually form. That is
+                    // untested — the public testnet is two nodes today, where mesh_n_low (4) is
+                    // unreachable regardless. Re-check when a second seed exists.
+                    if bootnode_explicit_peers_enabled() && bootnode_peer_ids.contains(&peer_id) {
                         swarm
                             .behaviour_mut()
                             .gossipsub
