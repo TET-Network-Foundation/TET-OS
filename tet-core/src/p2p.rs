@@ -1822,11 +1822,23 @@ async fn run_mdns_ping_swarm(
                             let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&ident);
                             let _ = swarm.behaviour_mut().gossipsub.subscribe(&ident);
                         }
-                        // And drop the connection. This is the half that repairs OUR record of
-                        // THEM, which is the direction that actually blocks publishing: gossipsub
-                        // sends subscriptions once per connection and offers no way to ask a peer
-                        // to re-send, so a new connection is the only repair. The existing
-                        // bootnode redial (TET_BOOTNODE_REDIAL_SEC) brings it straight back.
+                        // And drop the connection, intending a fresh one to re-exchange
+                        // subscriptions.
+                        //
+                        // MEASURED 2026-09-22: this does NOT repair our record. The reconnect
+                        // lands ("New peer connected" ~2s later) but the peer sends no
+                        // subscriptions with it, so our view stays partial and publishing keeps
+                        // failing. gossipsub advertises subscriptions only on what it considers
+                        // the first connection to a peer, and an immediate redial appears to
+                        // arrive while the remote still has the old peer entry.
+                        //
+                        // Kept because the detection is correct and worth having in the log — it
+                        // is the only visible signal of this failure — and because the repair is
+                        // harmless. What actually keeps transactions moving is
+                        // /tet/v1/tx-submit, which does not depend on gossip at all.
+                        //
+                        // Next thing to try: delay the redial (5-10s) so the remote fully drops
+                        // its peer entry and treats the reconnect as first contact. Untested.
                         let _ = swarm.disconnect_peer_id(pid);
                     }
                 }

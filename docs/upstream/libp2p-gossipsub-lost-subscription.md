@@ -132,14 +132,23 @@ In rough order of cost:
    exists.
 3. Periodically re-advertise subscriptions, as a backstop for any other way a record can drift.
 
+## Note on reconnecting as a repair
+
+Disconnecting the peer and letting a redial re-establish the connection does **not** repair the
+record, at least not when the redial is immediate. Measured: the reconnect completes about two
+seconds later and is logged as a new connection, but no `Subscribe` RPC follows it, so the
+incomplete peer record survives and `publish` keeps failing. Subscriptions appear to be advertised
+only on what the remote considers the first connection to a peer, and an immediate redial arrives
+while the remote still holds the previous peer entry. A longer delay before redialling may behave
+differently; that has not been tested.
+
 ## Workaround
 
 Detect and repair from the application. Every 30 s, compare each bootnode's `all_peers()` topic
 set against the topics that every node in the network subscribes to unconditionally. A peer
 showing some of them but not all is the signature — a peer that has genuinely not subscribed yet
-shows none. On detecting that, disconnect the peer and let the normal redial re-establish the
-connection, which re-runs the subscription exchange. A per-peer cooldown prevents a reconnect loop
-when a peer is unhealthy for some unrelated reason.
+shows none. On detecting that, the most useful action is to log it: the condition is otherwise invisible, and
+as noted above an immediate disconnect/redial does not repair the record.
 
 Re-sending the local node's own subscriptions (`unsubscribe` followed by `subscribe`, since
 `subscribe` alone is a no-op when already subscribed and emits no RPC) repairs the *remote's*
