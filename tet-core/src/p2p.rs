@@ -1052,6 +1052,78 @@ fn local_node_wants_ai_workload() -> bool {
     crate::vision::caac::profile().role == crate::vision::caac::NodeRelayRole::Poc
 }
 
+/// Result of admitting a gossiped transaction. Returned rather than logged so the admission
+/// rules can be tested without a swarm.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TxGossipOutcome {
+    Enqueued { tx_hash: String, mempool_len: usize },
+    AlreadyQueued { tx_hash: String },
+    AlreadyApplied { tx_hash: String },
+    Rejected { reason: String },
+}
+
+/// Admit a transaction learned from a peer into the local mempool.
+///
+/// **A gossiped tx is never trusted more than a REST-submitted one.** Every check the REST
+/// submit path runs, runs here, in the same order:
+///
+/// 1. `tx_hash_for_env` — which calls `verify_envelope_v1`, so this covers envelope version,
+///    the hybrid Ed25519 + ML-DSA signatures, and the chain binding (chain id + genesis hash in
+///    the signed preimage). A tx signed against a different genesis cannot enter this mempool.
+/// 2. `is_tx_applied` — a tx already mined into a block is dropped rather than re-queued. The
+///    REST path has always checked this; the gossip path did not, so a peer replaying an old
+///    envelope could park a dead tx in every mempool on the network until a miner discarded it.
+/// 3. mempool duplicate check.
+/// 4. `enqueue_into_mempool` — the byte/count caps and lowest-fee eviction. The previous code
+///    called `mp.push()` directly and bypassed all of it, which let a peer grow this node's
+///    mempool without bound.
+///
+/// This never mutates the ledger and never re-publishes: a tx received here is not added to
+/// `pending_rebroadcast`, so it is forwarded onward only by gossipsub's own mesh propagation,
+/// never amplified by us.
+pub(crate) async fn handle_tx_broadcast(
+    ledger: &Arc<crate::ledger::Ledger>,
+    mempool: &Arc<tokio::sync::Mutex<Vec<crate::protocol::SignedTxEnvelopeV1>>>,
+    env: crate::protocol::SignedTxEnvelopeV1,
+) -> TxGossipOutcome {
+    let tx_hash = match crate::consensus::tx_hash_for_env(&env) {
+        Ok(h) => h,
+        Err(e) => {
+            return TxGossipOutcome::Rejected {
+                reason: format!("bad signature: {e}"),
+            };
+        }
+    };
+
+    if ledger.is_tx_applied(&tx_hash).unwrap_or(false) {
+        return TxGossipOutcome::AlreadyApplied { tx_hash };
+    }
+
+    {
+        let mp = mempool.lock().await;
+        if mp.iter().any(|e| {
+            crate::consensus::tx_hash_for_env(e)
+                .map(|h| h == tx_hash)
+                .unwrap_or(false)
+        }) {
+            return TxGossipOutcome::AlreadyQueued { tx_hash };
+        }
+    }
+
+    match crate::rest::state::enqueue_into_mempool(mempool, env).await {
+        Ok(_evicted) => {
+            let mempool_len = mempool.lock().await.len();
+            TxGossipOutcome::Enqueued {
+                tx_hash,
+                mempool_len,
+            }
+        }
+        Err(e) => TxGossipOutcome::Rejected {
+            reason: format!("mempool admission: {e}"),
+        },
+    }
+}
+
 fn network_event_topics(
     msg: &str,
     blocks_topic: &gossipsub::IdentTopic,
@@ -2272,31 +2344,25 @@ async fn run_mdns_ping_swarm(
                                 }
                             }
                             NetworkEvent::TxBroadcast { env } => {
-                                // Pending mempool tx from a peer: verify the hybrid signature
-                                // and enqueue locally so a producer can mine it. Never mutate
-                                // the ledger here.
-                                match crate::consensus::tx_hash_for_env(&env) {
-                                    Ok(tx_hash) => {
-                                        let mut mp = mempool.lock().await;
-                                        let dup = mp.iter().any(|e| {
-                                            crate::consensus::tx_hash_for_env(e)
-                                                .map(|h| h == tx_hash)
-                                                .unwrap_or(false)
-                                        });
-                                        if dup {
-                                            println!(
-                                                "[P2P] ⏭️ MEMPOOL TX ALREADY QUEUED tx_hash={tx_hash}"
-                                            );
-                                        } else {
-                                            mp.push(env);
-                                            println!(
-                                                "[P2P] ✅ MEMPOOL TX ENQUEUED tx_hash={tx_hash} mempool_len={}",
-                                                mp.len()
-                                            );
-                                        }
+                                match handle_tx_broadcast(&ledger, &mempool, env).await {
+                                    TxGossipOutcome::Enqueued { tx_hash, mempool_len } => {
+                                        println!(
+                                            "[P2P] ✅ MEMPOOL TX ENQUEUED tx_hash={tx_hash} mempool_len={mempool_len}"
+                                        );
                                     }
-                                    Err(e) => {
-                                        println!("[P2P] ❌ MEMPOOL TX REJECTED (bad signature): {e}");
+                                    TxGossipOutcome::AlreadyQueued { tx_hash } => {
+                                        println!(
+                                            "[P2P] ⏭️ MEMPOOL TX ALREADY QUEUED tx_hash={tx_hash}"
+                                        );
+                                    }
+                                    TxGossipOutcome::AlreadyApplied { tx_hash } => {
+                                        println!(
+                                            "[P2P] ⏭️ MEMPOOL TX ALREADY MINED tx_hash={tx_hash}"
+                                        );
+                                    }
+                                    TxGossipOutcome::Rejected { reason } => {
+                                        crate::metrics::inc_gossip_rejected();
+                                        println!("[P2P] ❌ MEMPOOL TX REJECTED: {reason}");
                                     }
                                 }
                             }

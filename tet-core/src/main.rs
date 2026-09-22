@@ -665,6 +665,7 @@ async fn main() -> Result<(), AnyErr> {
         block_sync_board: block_sync_board.clone(),
         swarm_health: Some(swarm_health.clone()),
         mempool,
+        pending_rebroadcast: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         tmail: tmail_store,
         files: file_store,
         files_fetch_tx,
@@ -675,6 +676,19 @@ async fn main() -> Result<(), AnyErr> {
         log_tx,
         log_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
+
+    // Pending txs this node admitted over REST are re-published on a timer until they are mined.
+    // Without it a tx submitted before the gossipsub txs-topic mesh grafts is published once,
+    // fails with InsufficientPeers, and is never retried — it then sits in this node's mempool
+    // forever unless this node happens to be a producer.
+    match RestState::spawn_mempool_rebroadcast(state.clone()) {
+        Some(_h) => log::info!(
+            "[startup] mempool rebroadcast every {}s, max {} attempts/tx",
+            RestState::tx_rebroadcast_interval_sec(),
+            RestState::tx_rebroadcast_max_attempts()
+        ),
+        None => log::info!("[startup] mempool rebroadcast skipped (no gossip channel)"),
+    }
 
     // --- Step 6: REST API ---
     log::info!("[startup] REST API listening on {addr}");

@@ -41,7 +41,7 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | **S1** | Block sync MVP — pull-based catch-up, 3-node E2E | ✅ | `7264191`, `499bb00`; `DAILY_LOG_2026-05-19` |
 | **S2** | Consensus hardening + economics — validator set, leader-only mine, parent metadata, Treasury 25/50/25, ZK-Court §14.1 | ✅ | `5382397`, `68a4b94` |
 | **S3** | UI Send Coins — genesis hash sync, sync status, hybrid-signed transfer; consensus-grade refactor | ✅ | `aad734c`…`d157c77`, `df59517`, `8f52db7`, `2ce9024`; `DAILY_LOG_2026-05-20`, `05-31` |
-| **S4** | **L1 Foundation** — public seed, faucet, Docker (node + UI), CI/CD, operator docs, monitoring | 🟡 | Faucet ✅, Docker ✅, CI ✅, docs ✅, **public seed ✅ (2026-09-22)**. Monitoring remains, and AT-F1 exposed a new blocker: tx gossip is not implemented. See [S4 detail](#s4--l1-foundation-detail) |
+| **S4** | **L1 Foundation** — public seed, faucet, Docker (node + UI), CI/CD, operator docs, monitoring | 🟡 | **Five of six exit criteria pass (2026-09-22).** Public seed ✅, faucet ✅, CI ✅, Docker 🟡. AT-F1 passes except that a follower still cannot get its own txs mined — the gossipsub mesh does not form. Open: tx gossip, monitoring, production (zk) image does not build. See [S4 detail](#s4--l1-foundation-detail) |
 | **S5** | Tmail protocol — `/tet/v1/tmail` gossip, `TmailEnvelopeV1`, REST, store | ✅ *(fee/audit deferred)* | `9e9a4a7`, `4d3fc72` |
 | **S6** | Win95 shell + Basic Tmail UI | 🟡 | `1d3173f`, `356df5e`, `ad3fb3f`, `a3f2720`…`31299c3`. E2EE verified cross-region (CH→FI, 1.3 s). Shell is **tabbed**, not a window manager — no taskbar, no boot sequence, no sounds |
 | **S7** | Time-lock + Burn + Pin stake | ⬜ | Gates marketing (locked decision #6, AT-3/AT-4) |
@@ -68,14 +68,13 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | **CI/CD (GitHub Actions)** | 2 d | ✅ **done** | **2026-09-21** (`a914316`). Four jobs — `rust` (build + 185 tests + 6 named security guards + 4 block-9828 pins), `ui`, `wasm`, `docker`. Green on `main`. Clippy runs non-blocking until the 37 existing warnings are cleared |
 | **Public operator docs** | 2 d | 🟡 **partly done** | **2026-09-21:** the Docker section is rewritten against real output (Quickstart / Production split, `docker-compose.dev.yml`), and § Getting testnet TET is new. **2026-09-22:** § Joining the public testnet seed, § The public seed, and the tx-gossip limitation are new and written against the verified run. Still stale elsewhere: the doc is dated 2026-05-19 and predates the 4001/4003/4005 port split, the watchdog, `/health/swarm`, the `block_id` V2 fork, Tmail and Files |
 | **Monitoring + logs** | 2 d | ⬜ open | JSON tracing, `/metrics`, `/health/swarm`, systemd watchdog and `observability/{prometheus,grafana}` scaffolding all exist. No dashboards, no alerting, no SLOs |
-| **Tx gossip** | — | ⬜ **new blocker** | Found by AT-F1 on 2026-09-22. `TXS_TOPIC` (`p2p.rs:357`) is subscribed (`p2p.rs:1276`) but **never published to** — those two lines are the only hits in the tree. A tx settles only on the node that accepted it; a follower can never get one mined. Not in the original S4 scope, but it makes "join the testnet and transact" false, so it belongs to the Foundation gate |
+| **Tx gossip** | — | 🟡 **two of three defects fixed; still not working seed↔follower** | **2026-09-22.** Three separate defects, found in this order. (1) **One-shot publish** — `broadcast_mempool_tx` published once and never retried, so a tx submitted before the mesh grafted was stranded. *Fixed:* locally-submitted txs are re-published every `TET_TX_REBROADCAST_SEC` (15 s) for up to `TET_TX_REBROADCAST_MAX` (20) attempts. (2) **The receive path was weaker than REST** — it skipped `is_tx_applied` and called `mp.push()` directly, bypassing every mempool cap, so a peer could grow a node's mempool without bound and replay mined txs into it. *Fixed:* both paths now run `p2p::handle_tx_broadcast` → `enqueue_into_mempool`. (3) **The gossipsub mesh never forms** between the seed and a follower — this one is **open** and is what still blocks the criterion. See [Tx gossip: what is still broken](#tx-gossip-what-is-still-broken) |
 
 ### S4 exit criteria (the Foundation gate)
 
-**Updated 2026-09-22.** The seed exists, so criteria 1, 3 and 5 close and 6 closes in substance.
-What the seed's arrival did *not* do is make the gate pass: exercising AT-F1 against a real remote
-node surfaced that transactions do not propagate between peers, which is a harder blocker than the
-one it replaced.
+**Updated 2026-09-22 (second pass).** Five of six pass. The seed closed criteria 1, 3 and 5.
+Criterion 6 is half-open: AT-F1 completes with transactions submitted to the seed, but a follower
+still cannot get its own transactions mined.
 
 | # | Criterion | State | Evidence / what is left |
 |---|---|---|---|
@@ -84,23 +83,54 @@ one it replaced.
 | 3 | Fresh machine: `docker compose up` → **node + UI** against the public seed, no local genesis hack | ✅ | **2026-09-22.** Fresh volume, `TET_BOOTNODES` = the seed, node + UI up; UI served 200 and proxied `/tet-node-api/status` to the node. No genesis hack — the committed compose defaults are what the seed runs |
 | 4 | CI green on the default branch | ✅ | Run 35547793730 on `main`, all jobs green (`a914316`) |
 | 5 | A builder follows `RUNNING_A_NODE.md` and joins the testnet in under 30 minutes | ✅ | § Joining the public testnet seed is three `.env` lines plus one compose command, written against the run that produced criterion 3. Sync landed within one block interval of container start |
-| 6 | **AT-F1** end-to-end: clean laptop → join seed → faucet → `GET /ledger/me` → send 1 TET | 🟡 **passes, with the tx submitted to the seed** | **2026-09-22, Switzerland → Helsinki.** Join ✅ (same `block_id` + `state_root` at every height compared). Claim → 1,000 TET ✅. Send 1 TET → sender 999.0, recipient 0.99 after the 1% fee, **identical on both nodes** ✅. The asterisk: both txs had to be submitted to the *seed*. Submitted to the joined node they returned `200 {"status":"pending"}` and never settled — see the Tx gossip row. A clean laptop can join, read and verify the chain, but cannot yet transact through its own node |
+| 6 | **AT-F1** end-to-end: clean laptop → join seed → faucet → `GET /ledger/me` → send 1 TET | 🟡 **passes only with txs submitted to the seed** | **2026-09-22.** Join ✅ (same `block_id` and `state_root` at every height compared). Claim → 1,000 TET ✅ and send 1 TET → 999.0 / 0.99 ✅, **both submitted to the seed**. Submitted to the follower they still never settle: verified again after the tx-gossip work, 0.0 TET after 5 blocks. A clean laptop can join, read and verify the chain; it still cannot transact through its own node |
 
-**So: tx gossip and monitoring are the remaining ⬜.** Provisioning the seed converted four rows
-at once, as predicted — and then AT-F1, run for the first time against a node that is not also the
-node doing the mining, exposed the gap that single-node testing structurally could not: a
-transaction never leaves the mempool of the node that accepted it. Every earlier AT-F1 run passed
-because submit-node and mining-node were the same process.
+**So: tx gossip and monitoring remain ⬜.** Five of six exit criteria pass; criterion 6 is
+half-open.
 
-That is the shape of this whole sprint. The Foundation gate is not a checklist of artifacts; it is
-the first configuration in which the artifacts are forced to talk to each other over a real
-network, and it keeps finding things that a laptop cannot.
+### Tx gossip: what is still broken
 
-Still ⬜: **tx gossip** (new, and the blocker for a genuinely joinable testnet) and **monitoring**
-(dashboards, alerting, SLOs; the `/metrics`, `/health/swarm` and `observability/` scaffolding all
-exists already).
+A follower's gossipsub `publish` to `/tet/v1/txs` fails with `InsufficientPeers`, indefinitely,
+while the seed publishes to the same topic successfully. The failure is one-directional and it is
+**not** the retry: the retry loop is running and visible in the log, re-publishing the same tx
+every 15 s, and every attempt fails the same way.
 
----
+Evidence, from a follower run with `RUST_LOG=libp2p_gossipsub=debug` on 2026-09-22:
+
+```
+HEARTBEAT: Mesh low. Topic contains: 0 needs: 4   (every topic, every heartbeat)
+RANDOM PEERS: Got 0 peers
+Updating mesh, new mesh: {}
+JOIN: Inserting 0 random peers into the mesh
+Adding explicit peer  peer=12D3KooWNcdESJUC…       (the seed, because it is our bootnode)
+SUBSCRIPTION: Adding gossip peer to topic         (×4, including /tet/v1/txs)
+```
+
+The mesh is permanently empty for every topic. `get_random_peers`, which both the heartbeat and
+`publish` use to fill mesh and fanout, **excludes explicit peers** — and the follower's only peer
+is explicit, because `p2p.rs` calls `add_explicit_peer` on bootnodes (`:1475`, `:1691`, `:1706`,
+`:2032`). The seed has no bootnodes, so the follower is an ordinary peer to it, its mesh forms
+normally, and its publishes land. That is the asymmetry exactly.
+
+What does not yet add up, and is where the next session should start: libp2p-gossipsub 0.48
+defaults `flood_publish` to `true` (`config.rs:451`), and that path adds explicit peers regardless
+of the mesh. For it to return `InsufficientPeers` anyway, `publish` must be taking the early
+return at `behaviour.rs:635` — meaning `connected_peers[seed].topics` is empty at publish time,
+even though the subscription was recorded earlier. **Next step: log
+`connected_peers[peer].topics` at the point of publish failure** and find out what clears it. A
+plausible fix, if it is confirmed to be the explicit-peer registration, is to stop registering
+bootnodes as gossipsub explicit peers — explicit peers are a mesh-bypass mechanism for trusted
+relays and a bootnode does not need to be one — but that should not be applied before the
+measurement, because the evidence does not yet fully explain the symptom.
+
+**Why nobody noticed.** Blocks reach the follower over *two* independent paths: gossip, and the
+pull-based catch-up RPC from S1. In the run above, 9 blocks arrived by gossip and 13 by catch-up.
+The chain therefore stays perfectly in sync even when gossip is degraded, which is why a broken
+mesh presented as "everything works" for as long as nobody submitted a transaction to a follower.
+Transactions have no catch-up equivalent — gossip is their only path, so they are the only thing
+that fails loudly.
+
+
 
 ## Superseded scope
 

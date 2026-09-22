@@ -82,8 +82,9 @@ jobs:
       # loudly if one is ever deleted or renamed rather than fixed: a `cargo test <filter>` that
       # matches nothing exits 0, so each run is asserted to have executed exactly one test.
       #
-      # Inventory as of 2026-09-21: SIX tests carry `SECURITY REGRESSION GUARD` and FOUR carry
-      # `TODO(9828)`. The two newest guard the removal of the dev signature fallback, so testnet
+      # Inventory as of 2026-09-22: SIX tests carry `SECURITY REGRESSION GUARD`, FOUR carry
+      # `TODO(9828)`, and SIX guard transaction gossip (added 2026-09-22 with the fix for the
+      # one-shot publish that stranded a follower's tx on the public seed). The two newest guard the removal of the dev signature fallback, so testnet
       # verifies exactly like mainnet. A related non-guard test,
       # `mainnet_rejects_legacy_tx_signature_without_chain_binding`, covers the mainnet side and
       # runs with the rest of the suite.
@@ -114,8 +115,20 @@ jobs:
             consensus_faucet_path_keeps_nodes_in_agreement
             ai_infer_settlement_direct_write_forks_state_root
           )
+          # Transaction gossip — the S4 Foundation gate. A follower must be able to submit a tx
+          # its peer mines; a gossiped tx must clear the same bar as a REST-submitted one; and
+          # receiving a tx must never make us re-publish it. Note the first name is
+          # module-qualified: it lives in `mod block_sync` because it needs two real swarms.
+          tx_gossip=(
+            block_sync::at_f1_follower_submits_tx_and_mining_peer_settles_it
+            pending_local_tx_is_rebroadcast_until_mined_then_forgotten
+            gossiped_tx_already_mined_is_dropped_not_requeued
+            gossiped_tx_is_never_marked_for_rebroadcast
+            gossiped_tx_with_a_broken_signature_is_rejected
+            gossiped_tx_duplicate_is_queued_once
+          )
           fail=0
-          for t in "${guards[@]}" "${pins[@]}"; do
+          for t in "${guards[@]}" "${pins[@]}" "${tx_gossip[@]}"; do
             out=$(cargo test --bin TET-Core -- --exact "tests::$t" 2>&1) || { echo "$out"; fail=1; }
             if ! grep -q '1 passed; 0 failed' <<<"$out"; then
               echo "::error::$t did not run as exactly one passing test — renamed, deleted, or failing"

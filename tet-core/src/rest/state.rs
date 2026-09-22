@@ -48,6 +48,12 @@ pub struct RestState {
     pub swarm_health: Option<crate::swarm_health::SharedSwarmHealth>,
     /// In-memory pending transactions (Phase 2 mempool).
     pub mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    /// Rebroadcast bookkeeping for txs **this node admitted over REST**: `tx_hash -> attempts`.
+    ///
+    /// Membership is the origin marker. `broadcast_mempool_tx` is called only from REST submit
+    /// handlers, so a tx learned from a peer is never in this map and is therefore never
+    /// re-published by us — that is what keeps a rebroadcast from becoming a gossip storm.
+    pub pending_rebroadcast: Arc<Mutex<std::collections::HashMap<String, u32>>>,
     /// Tmail node-local TTL buffer + key directory (off-ledger; spec §A.1).
     pub tmail: Arc<crate::tmail::store::TmailStore>,
     /// File Sharing node-local blob/meta/inbox store (off-ledger; spec `PHASE_0_FILE_SHARING_SPEC.md`).
@@ -131,13 +137,31 @@ impl RestState {
         }
     }
 
+    /// Enqueue a tx submitted over REST. Thin wrapper over [`enqueue_into_mempool`] — the
+    /// admission rules live there so the gossip path (`p2p::handle_tx_broadcast`) enforces
+    /// byte-for-byte the same caps. A peer must never get a cheaper seat than a REST client.
     pub async fn enqueue_mempool_tx(
         &self,
         env: SignedTxEnvelopeV1,
     ) -> Result<bool, MempoolEnqueueError> {
-        let max_txs = Self::mempool_max_txs();
-        let max_bytes = Self::mempool_max_bytes();
-        let incoming_bytes = Self::tx_estimated_bytes(&env);
+        enqueue_into_mempool(&self.mempool, env).await
+    }
+}
+
+/// Mempool admission: size caps, byte caps, and lowest-fee eviction.
+///
+/// Free function rather than a `RestState` method because the block-plane swarm task holds only
+/// the mempool `Arc`, not a `RestState`. Before this existed the gossip path called `mp.push(env)`
+/// directly and bypassed every cap here, so a peer could grow this node's mempool without bound.
+pub async fn enqueue_into_mempool(
+    mempool: &Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    env: SignedTxEnvelopeV1,
+) -> Result<bool, MempoolEnqueueError> {
+    use RestState as S;
+    {
+        let max_txs = S::mempool_max_txs();
+        let max_bytes = S::mempool_max_bytes();
+        let incoming_bytes = S::tx_estimated_bytes(&env);
         if incoming_bytes > max_bytes {
             return Err(MempoolEnqueueError::TxTooLarge {
                 bytes: incoming_bytes,
@@ -145,9 +169,9 @@ impl RestState {
             });
         }
 
-        let incoming_fee = Self::tx_fee_score(&env);
-        let mut mp = self.mempool.lock().await;
-        let mut total_bytes = mp.iter().map(Self::tx_estimated_bytes).sum::<usize>();
+        let incoming_fee = S::tx_fee_score(&env);
+        let mut mp = mempool.lock().await;
+        let mut total_bytes = mp.iter().map(S::tx_estimated_bytes).sum::<usize>();
         let mut evicted = false;
 
         while (mp.len() >= max_txs || total_bytes.saturating_add(incoming_bytes) > max_bytes)
@@ -156,7 +180,7 @@ impl RestState {
             let Some((idx, lowest_fee)) = mp
                 .iter()
                 .enumerate()
-                .map(|(idx, existing)| (idx, Self::tx_fee_score(existing)))
+                .map(|(idx, existing)| (idx, S::tx_fee_score(existing)))
                 .min_by_key(|(_, fee)| *fee)
             else {
                 break;
@@ -168,7 +192,7 @@ impl RestState {
                 });
             }
             let removed = mp.remove(idx);
-            total_bytes = total_bytes.saturating_sub(Self::tx_estimated_bytes(&removed));
+            total_bytes = total_bytes.saturating_sub(S::tx_estimated_bytes(&removed));
             evicted = true;
         }
 
@@ -181,6 +205,9 @@ impl RestState {
         mp.push(env);
         Ok(evicted)
     }
+}
+
+impl RestState {
 
     /// Best-effort broadcast of a pending mempool tx to peers over the block-plane
     /// gossip (`txs` topic), so that any producer node can include it in a block.
@@ -191,10 +218,108 @@ impl RestState {
         let Some(tx) = self.gossip_tx.as_ref() else {
             return;
         };
+        // Record the tx as locally-originated BEFORE publishing, not after: the first publish
+        // frequently fails. A tx submitted in the seconds after a peer connects hits
+        // gossipsub `InsufficientPeers` because the txs-topic mesh has not grafted yet, and the
+        // publish is one-shot. That is the exact failure that stranded a claim in a follower's
+        // mempool for 12 blocks on 2026-09-22. Registering first means the retry loop owns it
+        // regardless of what this publish does.
+        if let Ok(tx_hash) = crate::consensus::tx_hash_for_env(env) {
+            self.pending_rebroadcast.lock().await.insert(tx_hash, 0);
+        }
         let event = crate::models::NetworkEvent::TxBroadcast { env: env.clone() };
         if let Ok(json) = serde_json::to_string(&event) {
             let _ = tx.send(json).await;
         }
+    }
+
+    /// One rebroadcast sweep. Returns `(republished, forgotten)`.
+    ///
+    /// Re-publishes every still-pending, locally-originated mempool tx, up to
+    /// `TET_TX_REBROADCAST_MAX` attempts each. Bounded three ways so it cannot amplify:
+    /// only locally-submitted txs are tracked, each has a hard attempt ceiling, and anything no
+    /// longer in the mempool (mined, evicted) is dropped from the map.
+    pub async fn rebroadcast_pending_txs(&self) -> (usize, usize) {
+        let Some(gossip) = self.gossip_tx.as_ref() else {
+            return (0, 0);
+        };
+        let max_attempts = Self::tx_rebroadcast_max_attempts();
+
+        // Snapshot under the mempool lock, then release it: publishing holds an await point and
+        // the auto-miner needs this lock every block.
+        let pending: Vec<(String, SignedTxEnvelopeV1)> = {
+            let mp = self.mempool.lock().await;
+            mp.iter()
+                .filter_map(|e| {
+                    crate::consensus::tx_hash_for_env(e)
+                        .ok()
+                        .map(|h| (h, e.clone()))
+                })
+                .collect()
+        };
+        let still_pending: std::collections::HashSet<&String> =
+            pending.iter().map(|(h, _)| h).collect();
+
+        let mut to_send: Vec<SignedTxEnvelopeV1> = Vec::new();
+        let forgotten;
+        {
+            let mut tracker = self.pending_rebroadcast.lock().await;
+            let before = tracker.len();
+            tracker.retain(|h, attempts| still_pending.contains(h) && *attempts < max_attempts);
+            forgotten = before.saturating_sub(tracker.len());
+            for (hash, env) in &pending {
+                if let Some(attempts) = tracker.get_mut(hash) {
+                    *attempts += 1;
+                    to_send.push(env.clone());
+                }
+            }
+        }
+
+        let mut republished = 0usize;
+        for env in to_send {
+            let event = crate::models::NetworkEvent::TxBroadcast { env };
+            if let Ok(json) = serde_json::to_string(&event)
+                && gossip.send(json).await.is_ok()
+            {
+                republished += 1;
+            }
+        }
+        (republished, forgotten)
+    }
+
+    pub fn tx_rebroadcast_interval_sec() -> u64 {
+        std::env::var("TET_TX_REBROADCAST_SEC")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(15)
+    }
+
+    pub fn tx_rebroadcast_max_attempts() -> u32 {
+        std::env::var("TET_TX_REBROADCAST_MAX")
+            .ok()
+            .and_then(|v| v.trim().parse::<u32>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(20)
+    }
+
+    /// Background loop driving [`rebroadcast_pending_txs`]. No-op without a gossip channel.
+    pub fn spawn_mempool_rebroadcast(state: RestState) -> Option<tokio::task::JoinHandle<()>> {
+        state.gossip_tx.as_ref()?;
+        let period = std::time::Duration::from_secs(Self::tx_rebroadcast_interval_sec());
+        Some(tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(period);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                let (republished, forgotten) = state.rebroadcast_pending_txs().await;
+                if republished > 0 || forgotten > 0 {
+                    log::info!(
+                        "[mempool][rebroadcast] republished={republished} forgotten={forgotten}"
+                    );
+                }
+            }
+        }))
     }
 
     /// Broadcast a Tmail Basic E2EE envelope to peers over the `/tet/v1/tmail` gossip plane.

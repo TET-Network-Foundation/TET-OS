@@ -117,6 +117,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         block_sync_board: None,
         swarm_health: None,
         mempool: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        pending_rebroadcast: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         tmail,
         files,
         files_fetch_tx: None,
@@ -4019,7 +4020,7 @@ fn test_p2p_keystore_persistence() {
 
 /// Sprint 1 Phase C — in-process multi-node block sync integration tests.
 mod block_sync {
-    use super::{env_lock, rest_state_for_tests, set_test_env_base};
+    use super::{env_lock, rest_state_for_tests, set_test_env_base, signed_env_for_tests};
     use libp2p::Multiaddr;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU16, Ordering};
@@ -4109,7 +4110,7 @@ mod block_sync {
         );
         let (gossip_tx, files_fetch_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
-            mempool,
+            mempool.clone(),
             keypair,
             listen,
             hello_registry,
@@ -4122,6 +4123,12 @@ mod block_sync {
         .expect("block swarm");
 
         let mut state = rest_state_for_tests(ledger);
+        // Share ONE mempool between the swarm and the REST state, as `main.rs` does
+        // (`mempool.clone()` into the swarm at :591, the same Arc into RestState at :667).
+        // `rest_state_for_tests` allocates its own, so without this line the swarm enqueues
+        // gossiped txs into a mempool no REST handler and no miner can see — a node that looks
+        // like it dropped every transaction it received.
+        state.mempool = mempool.clone();
         state.gossip_tx = Some(gossip_tx);
         state.files_fetch_tx = Some(files_fetch_tx);
         state.block_sync_board = Some(block_sync_board.clone());
@@ -4628,6 +4635,106 @@ mod block_sync {
         );
 
         stop(&[n1, n2, n3]);
+    }
+
+    /// **AT-F1 FOLLOWER-TRANSACT GUARD.**
+    ///
+    /// The S4 exit criterion in one test: a node that does not mine must be able to accept a
+    /// transaction over REST and have a *peer* settle it. Node 2 submits, node 1 mines.
+    ///
+    /// What this pins is a failure that reached the public seed on 2026-09-22. Transaction
+    /// gossip was wired end to end — `broadcast_mempool_tx` published and the receiver enqueued
+    /// — but the publish was **one-shot**. A tx submitted in the seconds after a peer connects
+    /// hits gossipsub `InsufficientPeers`, because the txs-topic mesh has not grafted yet, and
+    /// nothing ever retried it. The tx then sat in the submitter's mempool forever: a follower
+    /// could read the chain but never transact on it.
+    ///
+    /// **Scope, stated precisely.** On loopback the mesh grafts in well under a second, so this
+    /// test reaches the submit *after* the graft and its first publish succeeds. It therefore
+    /// guards the wire path — publish, receive, admit, mine — and the registration of a local tx
+    /// for retry, but it does NOT reproduce the InsufficientPeers race: it was verified to still
+    /// pass with the rebroadcast loop removed. The retry semantics that actually fix the bug are
+    /// guarded deterministically by `pending_local_tx_is_rebroadcast_until_mined_then_forgotten`.
+    /// Nothing currently guards the `spawn_mempool_rebroadcast` call in `main.rs` itself.
+    #[tokio::test]
+    async fn at_f1_follower_submits_tx_and_mining_peer_settles_it() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            // Retry fast so the test does not wait on the production 15 s cadence.
+            std::env::set_var("TET_TX_REBROADCAST_SEC", "1");
+        }
+
+        let n1 = spawn_node(None, true).await; // producer
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await; // follower: submits, never mines
+
+        let rebroadcast = crate::rest::RestState::spawn_mempool_rebroadcast(n2.state.clone())
+            .expect("follower must have a gossip channel");
+
+        // A welcome-airdrop claim needs no prior balance and is signed by the claimant, so it is
+        // the smallest tx that exercises the whole submit -> gossip -> mine -> apply path. It is
+        // also literally the transaction AT-F1 specifies.
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let words = w.mnemonic_12.clone().unwrap();
+        let wallet_id = w.address_hex.to_ascii_lowercase();
+        let env = signed_env_for_tests(
+            crate::protocol::TxV1::InitialAirdrop {
+                wallet_id: wallet_id.clone(),
+            },
+            &words,
+            &wallet_id,
+        );
+
+        let resp = crate::rest::handlers::ledger::post_initial_airdrop_claim(
+            axum::extract::State(n2.state.clone()),
+            axum::Json(env),
+        )
+        .await;
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::ACCEPTED,
+            "follower must accept the claim locally"
+        );
+        assert_eq!(
+            n2.state.mempool.lock().await.len(),
+            1,
+            "submitter holds the tx in its own mempool"
+        );
+        assert_eq!(
+            n2.state.pending_rebroadcast.lock().await.len(),
+            1,
+            "a REST-submitted tx must be registered for retry — without it the publish is \
+             one-shot and a tx that races the mesh graft is stranded forever"
+        );
+        assert_eq!(
+            n1.ledger.balance_micro(&wallet_id).unwrap(),
+            0,
+            "nothing may be credited before a block is mined"
+        );
+
+        // The tx must cross the wire on its own. This is the assertion the old code failed.
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            if n1.state.mempool.lock().await.len() == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "tx never reached the mining peer's mempool — tx gossip is broken"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        mine_n(&n1.state, 1).await;
+        assert_eq!(
+            n1.ledger.balance_micro(&wallet_id).unwrap(),
+            1_000 * crate::ledger::STEVEMON,
+            "the peer's block must settle the follower's transaction"
+        );
+
+        rebroadcast.abort();
+        stop(&[n1, n2]);
     }
 }
 
@@ -5813,4 +5920,197 @@ fn env_var_guard_restores_on_panic() {
         std::env::var(probe).is_err(),
         "a var that did not exist must be removed again, not left as an empty string"
     );
+}
+
+// =================================================================================================
+// Transaction gossip admission — a tx learned from a peer is never trusted more than one
+// submitted over REST, and receiving one never causes us to re-publish it.
+//
+// Companion to the swarm-level `at_f1_follower_submits_tx_and_mining_peer_settles_it`: that test
+// proves a tx crosses the wire, these prove what happens to it when it lands.
+// =================================================================================================
+
+/// Build a signed welcome-airdrop envelope for a fresh wallet. Returns (wallet_id, envelope).
+fn airdrop_env_for_tests() -> (String, crate::protocol::SignedTxEnvelopeV1) {
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let wallet_id = w.address_hex.to_ascii_lowercase();
+    let env = signed_env_for_tests(
+        crate::protocol::TxV1::InitialAirdrop {
+            wallet_id: wallet_id.clone(),
+        },
+        &words,
+        &wallet_id,
+    );
+    (wallet_id, env)
+}
+
+fn gossip_test_ledger() -> std::sync::Arc<crate::ledger::Ledger> {
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    ledger
+}
+
+/// A peer replaying an envelope that is already in a block must not get it re-queued.
+///
+/// The REST submit path has always checked `is_tx_applied`; the gossip path did not, so a peer
+/// could park an already-mined envelope in every mempool on the network and it would survive
+/// until a producer tried to mine it and discarded it.
+#[tokio::test]
+async fn gossiped_tx_already_mined_is_dropped_not_requeued() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = gossip_test_ledger();
+    let state = rest_state_for_tests(ledger.clone());
+    let (wallet_id, env) = airdrop_env_for_tests();
+
+    state.enqueue_mempool_tx(env.clone()).await.unwrap();
+    crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
+        .await
+        .expect("mine");
+    let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
+    assert!(ledger.is_tx_applied(&tx_hash).unwrap());
+    assert_eq!(
+        ledger.balance_micro(&wallet_id).unwrap(),
+        1_000 * crate::ledger::STEVEMON
+    );
+    assert!(state.mempool.lock().await.is_empty());
+
+    let outcome = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, env).await;
+    assert_eq!(
+        outcome,
+        crate::p2p::TxGossipOutcome::AlreadyApplied { tx_hash }
+    );
+    assert!(
+        state.mempool.lock().await.is_empty(),
+        "an already-mined tx must not re-enter the mempool"
+    );
+}
+
+/// A gossiped tx must never enter this node's rebroadcast set.
+///
+/// Membership in `pending_rebroadcast` is what makes the retry loop re-publish a tx. If receiving
+/// a tx also registered it, every node would re-publish every tx on every tick and the retry loop
+/// would be an amplifier. Only `broadcast_mempool_tx` — called solely from REST submit handlers —
+/// may add to that map.
+#[tokio::test]
+async fn gossiped_tx_is_never_marked_for_rebroadcast() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = gossip_test_ledger();
+    let state = rest_state_for_tests(ledger.clone());
+    let (_wallet_id, env) = airdrop_env_for_tests();
+
+    let outcome = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, env).await;
+    assert!(matches!(
+        outcome,
+        crate::p2p::TxGossipOutcome::Enqueued { .. }
+    ));
+    assert_eq!(state.mempool.lock().await.len(), 1, "it is queued to mine");
+    assert!(
+        state.pending_rebroadcast.lock().await.is_empty(),
+        "receiving a tx must not schedule us to re-publish it"
+    );
+}
+
+/// The same envelope arriving twice is queued once.
+#[tokio::test]
+async fn gossiped_tx_duplicate_is_queued_once() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = gossip_test_ledger();
+    let state = rest_state_for_tests(ledger.clone());
+    let (_wallet_id, env) = airdrop_env_for_tests();
+
+    let first = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, env.clone()).await;
+    assert!(matches!(
+        first,
+        crate::p2p::TxGossipOutcome::Enqueued { .. }
+    ));
+    let second = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, env).await;
+    assert!(matches!(
+        second,
+        crate::p2p::TxGossipOutcome::AlreadyQueued { .. }
+    ));
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+/// A gossiped envelope runs the same `verify_envelope_v1` the REST path runs.
+#[tokio::test]
+async fn gossiped_tx_with_a_broken_signature_is_rejected() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = gossip_test_ledger();
+    let state = rest_state_for_tests(ledger.clone());
+    let (_wallet_id, mut env) = airdrop_env_for_tests();
+
+    // Same wallet, same tx body, signature no longer covers it.
+    env.sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode([7u8; 64]);
+
+    let outcome = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, env).await;
+    assert!(
+        matches!(outcome, crate::p2p::TxGossipOutcome::Rejected { .. }),
+        "got {outcome:?}"
+    );
+    assert!(
+        state.mempool.lock().await.is_empty(),
+        "an unverifiable tx must not reach the mempool"
+    );
+}
+
+/// The rebroadcast sweep re-publishes a pending local tx, stops once it is mined, and never
+/// exceeds its attempt ceiling.
+#[tokio::test]
+async fn pending_local_tx_is_rebroadcast_until_mined_then_forgotten() {
+    let _g = env_lock();
+    set_test_env_base();
+    unsafe {
+        std::env::set_var("TET_TX_REBROADCAST_MAX", "3");
+    }
+    let ledger = gossip_test_ledger();
+    let mut state = rest_state_for_tests(ledger.clone());
+    let (_wallet_id, env) = airdrop_env_for_tests();
+
+    // A gossip channel nobody drains, standing in for "peers exist but the publish did not land".
+    // Held for the whole test: dropping the receiver closes the channel and `send` fails.
+    let (gossip_tx, _gossip_rx) = tokio::sync::mpsc::channel::<String>(64);
+    state.gossip_tx = Some(gossip_tx);
+
+    state.enqueue_mempool_tx(env.clone()).await.unwrap();
+    state.broadcast_mempool_tx(&env).await;
+    assert_eq!(
+        state.pending_rebroadcast.lock().await.len(),
+        1,
+        "a REST-submitted tx is tracked for retry"
+    );
+
+    let (republished, _) = state.rebroadcast_pending_txs().await;
+    assert_eq!(republished, 1, "a still-pending local tx is re-published");
+    let (republished, _) = state.rebroadcast_pending_txs().await;
+    assert_eq!(republished, 1);
+
+    // Attempt ceiling: the first publish plus three sweeps exhausts TET_TX_REBROADCAST_MAX=3.
+    let (republished, forgotten) = state.rebroadcast_pending_txs().await;
+    assert_eq!(republished, 1);
+    assert_eq!(forgotten, 0);
+    let (republished, forgotten) = state.rebroadcast_pending_txs().await;
+    assert_eq!(republished, 0, "must stop after the attempt ceiling");
+    assert_eq!(forgotten, 1);
+    assert!(state.pending_rebroadcast.lock().await.is_empty());
+
+    // And a mined tx is dropped from the set even with attempts left.
+    state.pending_rebroadcast.lock().await.clear();
+    state.broadcast_mempool_tx(&env).await;
+    crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
+        .await
+        .expect("mine");
+    assert!(state.mempool.lock().await.is_empty());
+    let (republished, forgotten) = state.rebroadcast_pending_txs().await;
+    assert_eq!(republished, 0, "a mined tx is never re-published");
+    assert_eq!(forgotten, 1);
+
+    unsafe {
+        std::env::remove_var("TET_TX_REBROADCAST_MAX");
+    }
 }

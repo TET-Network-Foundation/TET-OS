@@ -354,28 +354,53 @@ Note that a `ufw deny 5010` would **not** have closed that port: Docker publishe
 DNAT rules into the nat table's `DOCKER` chain, which ufw's filter rules never see. Binding to
 `127.0.0.1` is the close that actually holds.
 
-#### Known limitation: submit transactions to a mining node
+#### Transaction propagation — submit to a mining node
 
-**A transaction submitted to a node that does not mine will never settle.** `TXS_TOPIC`
-(`/tet/v1/txs`, `p2p.rs:357`) is declared and subscribed at `p2p.rs:1276`, but nothing in the tree
-ever publishes to it — grep it and the const and the subscribe are the only two hits. Transactions
-therefore stay in the mempool of whichever node accepted them, and only that node can mine them
-into a block.
-
-Blocks and the state they carry propagate normally, so the effect is one-directional: a follower
-sees every balance change the seed mines, but cannot get its own transactions included. Until tx
-gossip exists, point the CLI and the UI at a mining node:
+**Known limitation, open as of 2026-09-22: a transaction submitted to a follower does not
+currently reach the producers.** Submit transactions to a node that mines. Against the public
+seed that means pointing the CLI and the UI at the seed over an SSH tunnel, not at your local
+node:
 
 ```bash
-# works — the seed mines it
+ssh -L 15010:127.0.0.1:5010 root@95.217.158.153
 tet-cli --node-url http://127.0.0.1:15010 faucet claim --mnemonic "…"
-
-# accepted with {"ok":true,"status":"pending"} and then never settles
-tet-cli --node-url http://127.0.0.1:5010 faucet claim --mnemonic "…"
 ```
 
-Both calls return `200`. The second one's `"status":"pending"` is indefinite, which is the part
-that makes this expensive to diagnose in the field.
+Submitted to a follower, the call returns `200 {"status":"pending"}` and then never settles. The
+`200` is not a lie — the tx is validly signed and admitted to that node's mempool — but `pending`
+has no timeout, so it is indistinguishable from "waiting for the next block". If a claim or
+transfer has not settled after two block intervals, this is almost certainly why.
+
+Check the submitting node's log:
+
+```
+[P2P] ❌ GOSSIP PUBLISH ERROR topic=/tet/v1/txs err=InsufficientPeers
+[mempool][rebroadcast] republished=1 forgotten=0
+```
+
+Those two lines repeating together mean the retry is working and the publish is not. The cause is
+that the gossipsub mesh does not form on a follower whose only peer is its bootnode; see
+`SPRINT_PLAN.md` § Tx gossip: what is still broken for the diagnosis and the next step.
+
+Blocks are unaffected — they reach followers over the pull-based catch-up RPC as well as gossip,
+so the chain stays in sync regardless. Transactions have no such second path.
+
+**What is already fixed.** Publishing is no longer one-shot: a tx this node admitted over REST is
+re-published every `TET_TX_REBROADCAST_SEC` (default 15 s) for up to `TET_TX_REBROADCAST_MAX`
+(default 20) attempts, or until it is mined. A tx learned from a peer is never added to that set,
+so receiving one never makes this node re-publish it.
+
+**What a peer's transaction is subjected to.** A gossiped tx is never trusted more than a
+REST-submitted one. `p2p::handle_tx_broadcast` runs, in order: `verify_envelope_v1` (envelope
+version, hybrid Ed25519 + ML-DSA signatures, and the chain binding — so a tx signed against a
+different genesis cannot enter), `is_tx_applied` (an already-mined envelope is dropped, not
+re-queued), a mempool duplicate check, then the same byte/count caps and lowest-fee eviction that
+REST submissions face.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TET_TX_REBROADCAST_SEC` | **15** | Seconds between rebroadcast sweeps. |
+| `TET_TX_REBROADCAST_MAX` | **20** | Republish attempts per tx before it is abandoned. Five minutes at the default cadence. |
 
 ---
 
