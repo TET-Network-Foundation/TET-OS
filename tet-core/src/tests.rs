@@ -6289,3 +6289,61 @@ async fn pending_local_tx_is_rebroadcast_until_mined_then_forgotten() {
         std::env::remove_var("TET_TX_REBROADCAST_MAX");
     }
 }
+
+/// **SECURITY REGRESSION GUARD — gossiped AiResult writes no balance.**
+///
+/// The gossip receive path in `p2p_network.rs` used to call
+/// `Ledger::settle_ai_utility_payment` on an inbound `AiResult`, moving funds between two wallets
+/// outside the block pipeline. `compute_state_root` iterates the balances tree, so whichever node
+/// happened to receive that message forked its `state_root` while block history stayed
+/// byte-identical — the block-9828 signature.
+///
+/// It was the worst of the direct-write paths because of its trigger: the only one reachable by a
+/// **remote peer** rather than an HTTP client. On the public seed the REST port is bound to
+/// loopback; 8002 is open to the internet.
+///
+/// Two assertions, because the gossip arm sits inside `run_swarm_loop` and cannot be invoked
+/// directly without a swarm:
+///
+/// 1. **Behavioural** — `settle_ai_utility_payment` really does fork `state_root`. Without this
+///    the source check below would be guarding something harmless.
+/// 2. **Source** — no caller of it remains in `p2p_network.rs`.
+///
+/// Together: a forking write exists, and the gossip path cannot reach it.
+#[tokio::test]
+async fn gossiped_ai_result_writes_no_balance() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    // (1) the call, if reachable, forks state_root.
+    let ledger_a = std::sync::Arc::new(open_temp_ledger());
+    ledger_a.init_genesis_founder_premine_from_env().unwrap();
+    ledger_a.apply_genesis_allocation("founder").unwrap();
+    let ledger_b = std::sync::Arc::new(open_temp_ledger());
+    ledger_b.init_genesis_founder_premine_from_env().unwrap();
+    ledger_b.apply_genesis_allocation("founder").unwrap();
+    assert_eq!(
+        ledger_a.compute_state_root().unwrap(),
+        ledger_b.compute_state_root().unwrap(),
+        "two identically-seeded ledgers must start with the same root"
+    );
+
+    let payer = "founder";
+    let worker = "worker-guard-wallet";
+    let _ = ledger_a.settle_ai_utility_payment(payer, worker, 1_000);
+    assert_ne!(
+        ledger_a.compute_state_root().unwrap(),
+        ledger_b.compute_state_root().unwrap(),
+        "settle_ai_utility_payment must fork state_root — if it no longer does, this guard is \
+         pointing at the wrong function and the source check below proves nothing"
+    );
+
+    // (2) the gossip plane holds no caller.
+    let src = include_str!("p2p_network.rs");
+    let callers = src.matches(".settle_ai_utility_payment(").count();
+    assert_eq!(
+        callers, 0,
+        "p2p_network.rs must not settle balances from an inbound gossip message; settlement is \
+         deferred to PHASE_1_GENESIS_SPEC §2, which needs a client-signed tx and a consensus rule"
+    );
+}

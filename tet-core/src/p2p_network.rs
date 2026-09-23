@@ -1182,7 +1182,27 @@ pub async fn run_swarm_loop(
                                             }
                                         }
 
-                                        // Settle using ZK-bound cost; clamp by gossip envelope as defense-in-depth (matches worker receipt cap).
+                                        // SETTLEMENT REMOVED — this arm writes no balance.
+                                        //
+                                        // It used to call `settle_ai_utility_payment` here, which
+                                        // moved funds between two wallets directly, outside the
+                                        // block pipeline. `compute_state_root` (ledger.rs:1359)
+                                        // iterates the balances tree, so whichever node happened
+                                        // to receive this gossip message forked its state_root
+                                        // while block history stayed byte-identical — the block
+                                        // 9828 signature.
+                                        //
+                                        // What made this the worst of the direct-write paths is
+                                        // the trigger: it is the only one reachable by a **remote
+                                        // peer** rather than an HTTP client. Every other one at
+                                        // least required reaching the REST port, which on the
+                                        // public seed is bound to loopback. 8002 is not.
+                                        //
+                                        // The result is still recorded for the UI below; only the
+                                        // money movement is gone. Settlement joins the other AI
+                                        // paths in PHASE_1_GENESIS_SPEC §2: it needs a signed
+                                        // client-side tx and a consensus rule, neither of which
+                                        // can be synthesised from an inbound gossip message.
                                         let client = local_worker_id.trim();
                                         let worker = res.worker_id.trim();
                                         let cost = journal
@@ -1190,14 +1210,10 @@ pub async fn run_swarm_loop(
                                             .max(1)
                                             .min(res.cost_micro_tet.max(1));
                                         if !client.is_empty() && !worker.is_empty() && client != worker {
-                                            match ledger.settle_ai_utility_payment(client, worker, cost) {
-                                                Ok((_w, _t, _b)) => {
-                                                    log::info!("💸 [p2p][settlement] SETTLED gross={} Stevemon from {} to {} (ZK journal, micropayment cap)!", cost, client, worker);
-                                                }
-                                                Err(e) => {
-                                                    log::error!("[p2p][settlement] settlement failed gross_micro={} from={} to={} err={e}", cost, client, worker);
-                                                }
-                                            }
+                                            log::info!(
+                                                "[p2p][settlement] NOT settled (deferred to Phase 1): \
+                                                 would_have_moved_micro={cost} from={client} to={worker}"
+                                            );
                                         }
 
                                         // Phase 4.7: Store last verified inference for browser UI (trustless verification demo).
