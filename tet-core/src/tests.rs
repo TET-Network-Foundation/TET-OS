@@ -7538,3 +7538,108 @@ async fn tmail_read_receipt_route_is_mounted() {
     );
     assert!(state.tmail.get_inbox(&receiver, 50).is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// S7-1 item 4 — Rust <-> TS interop for the burn revoke preimage.
+// ---------------------------------------------------------------------------
+
+/// The §A.3.2 pre-image, pinned byte-for-byte. The identical literal is asserted on the TypeScript
+/// side by `tet-network/ui/scripts/tmail_burn_preimage_golden.mjs`, so the two implementations
+/// cannot drift apart silently.
+///
+/// Why this matters more than it looks: the pre-image is the only thing the browser and the node
+/// must agree on exactly. One extra separator, one un-lowercased wallet id, one reordered field and
+/// every revoke the UI sends is a 401 — with the message still sitting on every node, which is the
+/// one outcome burn-after-read must never produce quietly.
+const TMAIL_BURN_REVOKE_GOLDEN_PREIMAGE: &str = "tet tmail burn revoke v1|chain_id=tet-interop-golden|genesis_hash=00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff|msg_id=golden-msg-1|reader=abababababababababababababababababababababababababababababababab|read_at_ms=1700000000000|mldsa_pk=Z29sZGVuLXBr";
+
+fn golden_revoke_for_tests(reader: &str) -> crate::tmail::burn::TmailBurnRevokeV1 {
+    crate::tmail::burn::TmailBurnRevokeV1 {
+        v: 1,
+        kind: crate::tmail::burn::TMAIL_BURN_REVOKE_KIND.to_string(),
+        msg_id: "golden-msg-1".to_string(),
+        reader_wallet_id: reader.to_string(),
+        read_at_ms: 1_700_000_000_000,
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: reader.to_ascii_lowercase(),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: "Z29sZGVuLXBr".to_string(),
+            mldsa_sig_b64: String::new(),
+        },
+    }
+}
+
+#[test]
+fn tmail_burn_revoke_preimage_matches_the_cross_language_golden_vector() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _chain = EnvVarGuard::set("TET_CHAIN_ID", "tet-interop-golden");
+    let _genesis = EnvVarGuard::set(
+        "TET_GENESIS_HASH",
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    );
+
+    let rev = golden_revoke_for_tests(&"ab".repeat(32));
+    let bytes =
+        crate::tmail::burn::tmail_burn_revoke_auth_message_bytes(&rev, &rev.hybrid_sig.mldsa_pubkey_b64);
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        TMAIL_BURN_REVOKE_GOLDEN_PREIMAGE,
+        "the Rust burn-revoke pre-image changed; update the TS side and the golden in \
+         scripts/tmail_burn_preimage_golden.mjs together or the UI's revokes become 401s"
+    );
+}
+
+/// The pre-image lowercases and trims the reader, like every other Tmail/wallet pre-image. A
+/// wallet id that differs only in case must produce identical bytes.
+#[test]
+fn tmail_burn_revoke_preimage_normalizes_the_reader_wallet() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _chain = EnvVarGuard::set("TET_CHAIN_ID", "tet-interop-golden");
+    let _genesis = EnvVarGuard::set(
+        "TET_GENESIS_HASH",
+        "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    );
+
+    let rev = golden_revoke_for_tests(&format!("  {}  ", "AB".repeat(32)));
+    let bytes =
+        crate::tmail::burn::tmail_burn_revoke_auth_message_bytes(&rev, &rev.hybrid_sig.mldsa_pubkey_b64);
+    assert_eq!(
+        String::from_utf8(bytes).unwrap(),
+        TMAIL_BURN_REVOKE_GOLDEN_PREIMAGE,
+        "case and whitespace in the reader wallet id must not change the signed bytes"
+    );
+}
+
+/// The revoke pre-image must be distinct from the envelope pre-image, so a signature harvested
+/// from one can never be replayed as the other.
+#[test]
+fn tmail_burn_revoke_preimage_cannot_collide_with_an_envelope_preimage() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+    let env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "shared-id",
+        tmail_flags_for_tests(true),
+        None,
+    );
+    let env_bytes =
+        crate::tmail::envelope::tmail_envelope_auth_message_bytes(&env, &env.hybrid_sig.mldsa_pubkey_b64)
+            .unwrap();
+    let rev = signed_burn_revoke_for_tests(&words, &sender, "shared-id");
+    let rev_bytes =
+        crate::tmail::burn::tmail_burn_revoke_auth_message_bytes(&rev, &rev.hybrid_sig.mldsa_pubkey_b64);
+
+    assert_ne!(
+        env_bytes, rev_bytes,
+        "envelope and revoke pre-images must never coincide, even for the same msg_id and signer"
+    );
+    assert!(
+        String::from_utf8(rev_bytes).unwrap().starts_with("tet tmail burn revoke v1|"),
+        "the revoke pre-image must carry its own domain separator"
+    );
+}

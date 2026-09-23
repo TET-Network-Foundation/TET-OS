@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "verify:genesis": "node scripts/verify-genesis-hash.mjs",
-    "verify:ed25519": "node scripts/verify-ed25519-tet-parity.mjs"
+    "verify:ed25519": "node scripts/verify-ed25519-tet-parity.mjs",
+    "verify:tmail-burn": "node scripts/tmail_burn_preimage_golden.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "^1.3.0",

@@ -4,7 +4,10 @@
  * Messages tab — Tmail Basic E2EE (Sovereign OS Messages).
  *
  *   A. Compose — look up the recipient's KEM keys, encrypt client-side, POST /tmail/send.
+ *                Optional burn-after-read (spec §A.3) rides the signed `flags`.
  *   B. Inbox   — poll GET /tmail/inbox/:wallet_id (5s), decrypt with this wallet's KEM secret keys.
+ *                Burn-after-read mail stays sealed until the reader opens it, which posts
+ *                POST /tmail/read-receipt and destroys it network-wide (best-effort, §A.3.2 L3).
  *   C. Status  — show/auto-register this wallet's messaging keys (PUT /tmail/keys/:wallet_id).
  *
  * All crypto runs in the browser; the node only routes opaque ciphertext.
@@ -15,10 +18,12 @@ import {
   getTmailInbox,
   getTmailKeys,
   normalizeWalletId64,
+  postTmailReadReceipt,
   postTmailSend,
   putTmailKeys,
 } from "../lib/tet_core_http";
 import { buildTmailEnvelopeV1, TMAIL_MAX_PLAINTEXT_CHARS, type TmailEnvelopeV1 } from "../lib/tmail";
+import { buildTmailBurnRevokeV1, TMAIL_BURN_DISCLOSURE } from "../lib/tmail_burn";
 import { buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { decryptForReceiver } from "../lib/tmail_e2ee";
 import { getTmailKeySession } from "../lib/tmail_session";
@@ -32,7 +37,15 @@ type DecryptedItem = {
   sender: string;
   sentAtMs: number;
   text: string;
+  /** Signed `flags.burn_after_read` from the envelope — the node's authority, not a local guess. */
+  burnAfterRead: boolean;
 };
+
+/** Per-message burn state, once the reader has opened a burn-after-read message. */
+type BurnState =
+  | { state: "burning" }
+  | { state: "burned" }
+  | { state: "error"; reason: string };
 
 type KeyStatus =
   | { state: "loading" }
@@ -54,6 +67,7 @@ export default function MessagesPanel(props: {
   // --- Compose ---
   const [recipient, setRecipient] = useState("");
   const [messageText, setMessageText] = useState("");
+  const [burnAfterRead, setBurnAfterRead] = useState(false);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -63,6 +77,9 @@ export default function MessagesPanel(props: {
   const [items, setItems] = useState<DecryptedItem[]>([]);
   const [showOlder, setShowOlder] = useState(false);
   const [inboxErr, setInboxErr] = useState<string>("");
+  // Burn-after-read messages stay sealed until the reader opens them: polling decrypts in the
+  // background, and destroying a message the user never actually looked at would be a lie.
+  const [opened, setOpened] = useState<Record<string, BurnState>>({});
 
   // --- Status ---
   const [keyStatus, setKeyStatus] = useState<KeyStatus>(() =>
@@ -112,6 +129,7 @@ export default function MessagesPanel(props: {
           sender: env.sender_wallet_id,
           sentAtMs: env.sent_at_ms,
           text: new TextDecoder().decode(plaintext),
+          burnAfterRead: env.flags?.burn_after_read === true,
         };
       } catch {
         return null;
@@ -218,6 +236,7 @@ export default function MessagesPanel(props: {
         receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
         receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
         baseUrl,
+        burnAfterRead,
       });
       const sent = await postTmailSend(baseUrl, env);
       if (!mountedRef.current) return;
@@ -265,6 +284,41 @@ export default function MessagesPanel(props: {
     }
   }
 
+  /**
+   * Open a burn-after-read message: reveal the plaintext this session and post the read receipt,
+   * which destroys the ciphertext on this node and announces the revoke to peers.
+   *
+   * The plaintext stays on screen afterwards. The reader has read it — blanking it would be
+   * theatre, and §A.3.2 Layer 3 is explicit that this is a network burn, not local amnesia.
+   */
+  async function onOpenAndBurn(msgId: string) {
+    setOpened((prev) => ({ ...prev, [msgId]: { state: "burning" } }));
+    try {
+      const revoke = await buildTmailBurnRevokeV1({
+        msgId,
+        readerWalletId: myWalletId,
+        baseUrl,
+      });
+      const r = await postTmailReadReceipt(baseUrl, revoke);
+      if (!mountedRef.current) return;
+      if (r.ok) {
+        setOpened((prev) => ({ ...prev, [msgId]: { state: "burned" } }));
+      } else {
+        setOpened((prev) => ({
+          ...prev,
+          [msgId]: { state: "error", reason: r.text ?? `HTTP ${r.status}` },
+        }));
+      }
+    } catch (e: unknown) {
+      if (mountedRef.current) {
+        setOpened((prev) => ({
+          ...prev,
+          [msgId]: { state: "error", reason: e instanceof Error ? e.message : String(e) },
+        }));
+      }
+    }
+  }
+
   const shortId = (id: string) => (id.length > 16 ? `${id.slice(0, 10)}…${id.slice(-6)}` : id);
   const visible = showOlder ? items : items.slice(0, INBOX_VISIBLE);
   const hidden = Math.max(0, items.length - INBOX_VISIBLE);
@@ -293,6 +347,18 @@ export default function MessagesPanel(props: {
           placeholder="Type your message — encrypted on this device before it leaves."
           className={`${inset} w-full bg-white px-2 py-1 text-sm outline-none resize-y`}
         />
+        <label className="flex items-start gap-2 text-[11px] text-black/80">
+          <input
+            type="checkbox"
+            checked={burnAfterRead}
+            onChange={(e) => setBurnAfterRead(e.target.checked)}
+            className="mt-[2px]"
+          />
+          <span>
+            <span className="font-semibold">Burn after reading</span>
+            <span className="block text-black/60">{TMAIL_BURN_DISCLOSURE}</span>
+          </span>
+        </label>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-black/60">
             {messageText.length}/{TMAIL_MAX_PLAINTEXT_CHARS}
@@ -303,7 +369,7 @@ export default function MessagesPanel(props: {
             onClick={() => void onSend()}
             className={`${winBtn} bg-[#DAD8D2] px-4 py-1 text-sm ${sendBusy ? "opacity-60" : ""}`}
           >
-            {sendBusy ? "Encrypting…" : "Send Encrypted Message"}
+            {sendBusy ? "Encrypting…" : burnAfterRead ? "Send Burn-After-Read" : "Send Encrypted Message"}
           </button>
         </div>
         {sendNotice ? (
@@ -330,17 +396,68 @@ export default function MessagesPanel(props: {
           <div className="text-[11px] text-black/60">No decryptable messages yet.</div>
         ) : (
           <div className="space-y-2">
-            {visible.map((m) => (
-              <div key={m.msgId} className={`${outset} bg-white p-2`}>
-                <div className="flex items-center justify-between text-[10px] font-mono text-black/60">
-                  <span title={m.sender}>from {shortId(m.sender)}</span>
-                  <span>{new Date(m.sentAtMs).toLocaleString()}</span>
+            {visible.map((m) => {
+              const burn = opened[m.msgId];
+              const sealed = m.burnAfterRead && !burn;
+              return (
+                <div key={m.msgId} className={`${outset} bg-white p-2`}>
+                  <div className="flex items-center justify-between text-[10px] font-mono text-black/60">
+                    <span title={m.sender}>from {shortId(m.sender)}</span>
+                    <span className="flex items-center gap-2">
+                      {m.burnAfterRead ? (
+                        <span className="font-semibold text-[#8a1f1f]">BURN AFTER READING</span>
+                      ) : null}
+                      <span>{new Date(m.sentAtMs).toLocaleString()}</span>
+                    </span>
+                  </div>
+
+                  {sealed ? (
+                    <div className="mt-1 space-y-1">
+                      <div className="text-[11px] text-black/70">
+                        Sealed. Opening this message destroys it on the network.
+                      </div>
+                      <div className="text-[10px] text-black/55">{TMAIL_BURN_DISCLOSURE}</div>
+                      <button
+                        type="button"
+                        onClick={() => void onOpenAndBurn(m.msgId)}
+                        className={`${winBtn} bg-[#DAD8D2] px-3 py-0.5 text-xs`}
+                      >
+                        Read once &amp; burn
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="mt-1 text-sm text-black whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                        {m.text}
+                      </div>
+                      {burn?.state === "burning" ? (
+                        <div className="mt-1 text-[10px] text-black/60">Burning…</div>
+                      ) : null}
+                      {burn?.state === "burned" ? (
+                        <div className="mt-1 text-[10px] text-black/55">
+                          <span className="font-semibold text-[#8a1f1f]">Burned. </span>
+                          {TMAIL_BURN_DISCLOSURE}
+                        </div>
+                      ) : null}
+                      {burn?.state === "error" ? (
+                        <div className="mt-1 space-y-1">
+                          <div className="text-[10px] text-[#8a1f1f]">
+                            Burn failed: {burn.reason}. The message may still be on the network.
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => void onOpenAndBurn(m.msgId)}
+                            className={`${winBtn} bg-[#DAD8D2] px-3 py-0.5 text-xs`}
+                          >
+                            Retry burn
+                          </button>
+                        </div>
+                      ) : null}
+                    </>
+                  )}
                 </div>
-                <div className="mt-1 text-sm text-black whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                  {m.text}
-                </div>
-              </div>
-            ))}
+              );
+            })}
             {!showOlder && hidden > 0 ? (
               <button
                 type="button"

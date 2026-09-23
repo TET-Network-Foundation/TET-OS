@@ -18,6 +18,7 @@ import {
   type WalletTransferNonceResp,
 } from "./transfer";
 import type { TmailEnvelopeV1 } from "./tmail";
+import type { TmailBurnRevokeV1 } from "./tmail_burn";
 import type { TmailKeyRegistrationV1 } from "./tmail_keys";
 import type { FileDeleteRequestV1, FileEnvelopeV1 } from "./files";
 
@@ -826,6 +827,39 @@ export async function postTmailSend(baseUrl: string, env: TmailEnvelopeV1): Prom
   }
   if (r.status === 409) {
     return { ok: true, status: r.status, msgId: env.msg_id, duplicate: true };
+  }
+  return { ok: false, status: r.status, text: r.text };
+}
+
+export type TmailReadReceiptResult = {
+  ok: boolean;
+  status: number;
+  /** `true` when this node had already burned the message (idempotent replay). */
+  alreadyBurned?: boolean;
+  text?: string;
+};
+
+/**
+ * `POST /tmail/read-receipt` — destroy a burn-after-read message on this node and announce the
+ * revoke to peers (spec §A.3.2 Layer 1).
+ *
+ * `202` burned, `200` already burned (both success). `404` means this node does not hold the
+ * message and therefore cannot authorize the revoke.
+ */
+export async function postTmailReadReceipt(
+  baseUrl: string,
+  revoke: TmailBurnRevokeV1,
+): Promise<TmailReadReceiptResult> {
+  const r = await fetchJson<{ ok?: boolean; msg_id?: string; status?: string }>(
+    tetCoreUrl(baseUrl, "/tmail/read-receipt"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(revoke),
+    },
+  );
+  if (r.ok) {
+    return { ok: true, status: r.status, alreadyBurned: r.data?.status === "already_burned" };
   }
   return { ok: false, status: r.status, text: r.text };
 }

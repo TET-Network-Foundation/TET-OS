@@ -1,10 +1,11 @@
 /**
- * Tmail envelope builder — constructs a hybrid-signed Basic E2EE `TmailEnvelopeV1` in the browser,
+ * Tmail envelope builder — constructs a hybrid-signed E2EE `TmailEnvelopeV1` in the browser,
  * byte-compatible with tet-core `src/tmail/envelope.rs` (struct serde shape + §A.1.3 preimage).
  *
  * Pipeline: generate `msg_id` → E2EE the plaintext for the receiver → `payload_sha256` over the raw
  * ciphertext → canonical flags → build the §A.1.3 preimage → hybrid (Ed25519 + ML-DSA) sign →
- * assemble the envelope (optional anonymous/time_lock/burn blocks omitted in the Basic build).
+ * assemble the envelope. Burn-after-read rides the signed `flags`; the optional
+ * anonymous/time_lock/burn blocks are omitted entirely.
  */
 
 import { encryptForReceiver } from "./tmail_e2ee";
@@ -124,11 +125,17 @@ export type BuildTmailEnvelopeOpts = {
   baseUrl?: string;
   feePaidMicro?: number;
   ttlMs?: number;
+  /**
+   * Burn-after-read (spec §A.3). The flag is part of the §A.1.3 signed preimage, so it cannot be
+   * flipped in transit. The optional `burn` block is deliberately NOT sent: it is outside the
+   * preimage, and the node rejects one that disagrees with this flag.
+   */
+  burnAfterRead?: boolean;
 };
 
 /**
- * Build a hybrid-signed Basic E2EE {@link TmailEnvelopeV1}. Requires an unlocked hybrid signer
- * session whose `walletIdHex64` matches `senderWalletId`.
+ * Build a hybrid-signed E2EE {@link TmailEnvelopeV1} — Basic, optionally burn-after-read. Requires
+ * an unlocked hybrid signer session whose `walletIdHex64` matches `senderWalletId`.
  */
 export async function buildTmailEnvelopeV1(opts: BuildTmailEnvelopeOpts): Promise<TmailEnvelopeV1> {
   const sess = requireHybridSignerSession();
@@ -148,7 +155,7 @@ export async function buildTmailEnvelopeV1(opts: BuildTmailEnvelopeOpts): Promis
   const flags: TmailFlags = {
     basic: true,
     time_lock: false,
-    burn_after_read: false,
+    burn_after_read: opts.burnAfterRead === true,
     anonymous: false,
   };
   const feePaidMicro = opts.feePaidMicro ?? TMAIL_DEFAULT_FEE_MICRO;
