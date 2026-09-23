@@ -3218,76 +3218,6 @@ impl Ledger {
         Ok(())
     }
 
-    /// ZK-Court: forfeit **entire** worker bond, burn from total supply, clear bond row.
-    pub fn slash_worker_bond_zk_court_burn_all(&self, wallet: &str) -> Result<u64, LedgerError> {
-        let w = wallet.trim().to_ascii_lowercase();
-        if w.is_empty() {
-            return Err(LedgerError::Invalid("wallet required".into()));
-        }
-        let w_k = w.as_bytes().to_vec();
-        let res: Result<u64, TransactionError<sled::Error>> = (&self.meta, &self.worker_stakes)
-            .transaction(|(m, ws)| {
-                let cur_bond = ws
-                    .get(&w_k)?
-                    .as_deref()
-                    .map(|v| self.decrypt_value(v))
-                    .transpose()?
-                    .as_deref()
-                    .map(bytes_to_u64)
-                    .unwrap_or(0);
-                if cur_bond == 0 {
-                    return Err(ConflictableTransactionError::Abort(
-                        sled::Error::Unsupported("zero_worker_bond".into()),
-                    ));
-                }
-                ws.remove(w_k.clone())?;
-                let burned_prev = m
-                    .get(META_TOTAL_BURNED)?
-                    .as_deref()
-                    .map(|v| self.decrypt_value(v))
-                    .transpose()?
-                    .as_deref()
-                    .map(bytes_to_u64)
-                    .unwrap_or(0);
-                m.insert(
-                    META_TOTAL_BURNED,
-                    self.encrypt_value(&u64_to_bytes(burned_prev.saturating_add(cur_bond)))?,
-                )?;
-                let supply = m
-                    .get(META_TOTAL_SUPPLY)?
-                    .as_deref()
-                    .map(|v| self.decrypt_value(v))
-                    .transpose()?
-                    .as_deref()
-                    .map(bytes_to_u64)
-                    .unwrap_or(0);
-                m.insert(
-                    META_TOTAL_SUPPLY,
-                    self.encrypt_value(&u64_to_bytes(supply.saturating_sub(cur_bond)))?,
-                )?;
-                Ok(cur_bond)
-            });
-        match res {
-            Ok(bond) => {
-                let audit = serde_json::json!({
-                    "v": 1,
-                    "action": "zk_court_worker_bond_slash_burn_v1",
-                    "wallet": w,
-                    "bond_burned_micro": bond,
-                });
-                let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
-                self.persist_snapshot_best_effort();
-                Ok(bond)
-            }
-            Err(TransactionError::Abort(e) | TransactionError::Storage(e)) => {
-                if e.to_string().contains("zero_worker_bond") {
-                    Err(LedgerError::Invalid("no worker bond to slash".into()))
-                } else {
-                    Err(LedgerError::Sled(e))
-                }
-            }
-        }
-    }
 
     fn zkcourt_bond_key(inference_id: &str, challenger: &str) -> Vec<u8> {
         format!(
@@ -3599,113 +3529,6 @@ impl Ledger {
         Ok((amount_micro, new_stake))
     }
 
-    /// ZK-Court / fraud slash: debit liquid balance up to `penalty_micro`, burn entirely from total supply.
-    ///
-    /// Matches burn accounting used elsewhere: credit burn sink, bump [`META_TOTAL_BURNED`], reduce [`META_TOTAL_SUPPLY`].
-    pub fn slash_wallet_liquid_burn_micro(
-        &self,
-        wallet: &str,
-        penalty_micro: u64,
-    ) -> Result<u64, LedgerError> {
-        let w = wallet.trim().to_ascii_lowercase();
-        if w.is_empty() {
-            return Err(LedgerError::Invalid("wallet required".into()));
-        }
-        if penalty_micro == 0 {
-            return Err(LedgerError::Invalid("penalty must be > 0".into()));
-        }
-
-        let burn_wallet = self.ai_burn_wallet();
-        let burn_k = burn_wallet.as_bytes().to_vec();
-        let wallet_k = w.as_bytes().to_vec();
-
-        let res: Result<u64, TransactionError<sled::Error>> = (&self.meta, &self.balances)
-            .transaction(|(m, b)| {
-                let bal = b
-                    .get(&wallet_k)?
-                    .as_deref()
-                    .map(|v| self.decrypt_value(v))
-                    .transpose()?
-                    .as_deref()
-                    .map(bytes_to_u64)
-                    .unwrap_or(0);
-                let take = bal.min(penalty_micro);
-                if take == 0 {
-                    return Err(ConflictableTransactionError::Abort(
-                        sled::Error::Unsupported("zero_slashable_balance".into()),
-                    ));
-                }
-
-                b.insert(
-                    wallet_k.clone(),
-                    self.encrypt_value(&u64_to_bytes(bal.saturating_sub(take)))?,
-                )?;
-
-                let total = m
-                    .get(META_TOTAL_SUPPLY)?
-                    .as_deref()
-                    .map(|v| self.decrypt_value(v))
-                    .transpose()?
-                    .as_deref()
-                    .map(bytes_to_u64)
-                    .unwrap_or(0);
-
-                let b_cur = b
-                    .get(&burn_k)?
-                    .as_deref()
-                    .map(|v| self.decrypt_value(v))
-                    .transpose()?
-                    .as_deref()
-                    .map(bytes_to_u64)
-                    .unwrap_or(0);
-                b.insert(
-                    burn_k.clone(),
-                    self.encrypt_value(&u64_to_bytes(b_cur.saturating_add(take)))?,
-                )?;
-
-                let burned_prev = m
-                    .get(META_TOTAL_BURNED)?
-                    .as_deref()
-                    .map(|v| self.decrypt_value(v))
-                    .transpose()?
-                    .as_deref()
-                    .map(bytes_to_u64)
-                    .unwrap_or(0);
-                m.insert(
-                    META_TOTAL_BURNED,
-                    self.encrypt_value(&u64_to_bytes(burned_prev.saturating_add(take)))?,
-                )?;
-
-                m.insert(
-                    META_TOTAL_SUPPLY,
-                    self.encrypt_value(&u64_to_bytes(total.saturating_sub(take)))?,
-                )?;
-
-                Ok(take)
-            });
-
-        let taken = res.map_err(|e| match e {
-            TransactionError::Abort(e) | TransactionError::Storage(e) => {
-                if e.to_string().contains("zero_slashable_balance") {
-                    LedgerError::InsufficientFunds
-                } else {
-                    LedgerError::Sled(e)
-                }
-            }
-        })?;
-
-        let audit = serde_json::json!({
-            "v": 1,
-            "action": "zk_court_slash_liquid_burn_v1",
-            "wallet": w,
-            "burn_wallet": burn_wallet,
-            "slash_micro": taken,
-            "penalty_micro_requested": penalty_micro,
-        });
-        let _ = self.audit_write(&serde_json::to_vec(&audit).unwrap_or_default());
-        self.persist_snapshot_best_effort();
-        Ok(taken)
-    }
 
     /// Last committed nonce for [`Ledger::settle_transfer_internal`] when `signed_transfer_nonce` is set.
     /// Missing entry is treated as **0** (first valid client nonce is **1**).
@@ -5018,29 +4841,6 @@ impl Ledger {
         self.genesis_1k_filled_count()
     }
 
-    /// Claim Genesis 1,000 bonus once per wallet while slots remain. Caller must serialize claims (e.g. HTTP mutex).
-    /// Mint + genesis bookkeeping occur in **one** sled transaction (see `mint_reward_with_proof`).
-    pub fn genesis_1k_claim(&self, wallet: &str) -> Result<u64, LedgerError> {
-        let wallet = wallet.trim();
-        if wallet.is_empty() {
-            return Err(LedgerError::Invalid("wallet required".into()));
-        }
-        let gross_micro = GENESIS_1K_BONUS_TET.saturating_mul(STEVEMON);
-        let payload = format!("genesis1000:{wallet}:v1");
-        self.mint_reward_with_proof(wallet, gross_micro, payload.as_bytes(), None, true)?;
-        let k_slot = genesis_1k_wallet_slot_meta_key(wallet);
-        let slot = self
-            .meta
-            .get(&k_slot)?
-            .as_deref()
-            .map(|v| self.decrypt_value(v))
-            .transpose()?
-            .as_deref()
-            .map(bytes_to_u64)
-            .ok_or_else(|| LedgerError::Invalid("genesis 1k slot read failed".into()))?;
-        std::mem::drop(self.db.flush_async());
-        Ok(slot)
-    }
 
     /// One-time **1,000 TET** transfer from [`WALLET_SYSTEM_WORKER_POOL`] to `wallet_id`, for the first
     /// [`FAUCET_INITIAL_AIRDROP_MAX_RECIPIENTS`] distinct wallets. All checks and updates run in **one** sled transaction
@@ -5053,6 +4853,9 @@ impl Ledger {
     /// Retained only for the legacy unit tests that pin the historical balance effect; do NOT call
     /// this from any handler or consensus path.
     #[allow(dead_code)]
+    /// **No production caller.** Kept only because the test-suite exercises it as a
+    /// direct-write reference point; its REST route was removed in the 2026-09 sweep.
+    #[cfg(test)]
     pub fn claim_initial_airdrop(
         &self,
         wallet_id: &str,
@@ -5168,6 +4971,9 @@ impl Ledger {
         }
     }
 
+    /// **No production caller.** Kept only because the test-suite exercises it as a
+    /// direct-write reference point; its REST route was removed in the 2026-09 sweep.
+    #[cfg(test)]
     /// Admin HTTP faucet: move `amount_micro` from [`WALLET_SYSTEM_WORKER_POOL`] → `wallet_id` exactly once per wallet,
     /// with per-IP rolling-window limits enforced in the **same** sled transaction as the balance updates when
     /// `bypass_limits` is false.
@@ -6238,6 +6044,9 @@ impl Ledger {
             .unwrap_or(0))
     }
 
+    /// **No production caller.** Kept only because the test-suite exercises it as a
+    /// direct-write reference point; its REST route was removed in the 2026-09 sweep.
+    #[cfg(test)]
     /// Swiss CHF top-up (Stripe placeholder): `chf_amount_micro` = millionths CHF; 1 CHF = 1 TET peg.
     pub fn mint_fiat_chf_topup(
         &self,
