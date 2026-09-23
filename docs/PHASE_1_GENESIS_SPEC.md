@@ -269,8 +269,8 @@ consensus. Two nodes serving the same signed request still diverge.
 | 9 | `POST /ai/proxy` → `mint_worker_network_reward` | `ai_proxy.rs` | new mint variant, consensus-validated amount |
 | 10 | `POST /v1/compute` → `mint_worker_network_reward` | `network.rs:292` | as #9 |
 | 11 | `POST /enterprise/inference` → `settle_ai_utility_payment` | `enterprise.rs:216` | as #8 |
-| 12 | `POST /ledger/genesis_bridge` → `transfer_no_fee` | `ledger.rs:625` | `TxV1::GenesisBridge` already exists — route through the mempool |
-| 13 | `POST /ledger/zk_verify` → `slash_worker_bond_to_ecosystem_all` | `ledger.rs:992` | `TxV1::VerifyZkProof` exists; move the slash to block-apply |
+| 12 | `POST /ledger/genesis_bridge` → `transfer_no_fee` | `ledger.rs:625` | **needs a `GenesisBridge` apply arm.** The variant is signable but `apply_consensus_block_batch` has no arm for it — see below |
+| 13 | `POST /ledger/zk_verify` → `slash_worker_bond_to_ecosystem_all` | `ledger.rs:992` | **slashing must become a consensus tx (new variant), not a REST side effect** |
 | 14 | `POST /wallet/slash` → `slash_stake_micro` | `wallet.rs:294` | admin-gated; needs a slash variant |
 | 17 | ZK-Court → `zkcourt_settle_challenger_bond` | `vision/zk_court.rs` | settle at block-apply, not at challenge submission |
 
@@ -281,9 +281,35 @@ whitepaper specifies (§5.1, §8 ZK-Court) and which is not built — ZK-Court h
 incentive, so the dispute path is never exercised. Settling that model is a prerequisite for #7,
 #8, #9, #10 and #11, not a consequence of them.
 
-**Two do not wait on it.** #12 and #13 already have their `TxV1` variants and write directly out
-of habit, not necessity. Either could be mempool-routed in a sprint with no genesis change; they
-are listed here only to keep the batch in one place.
+#### Correction: neither #12 nor #13 is a cheap sprint win
+
+An earlier draft of this section claimed #12 and #13 "already have their `TxV1` variants and write
+directly out of habit". That was derived from the enum and the signing path without reading the
+apply path, and it is wrong in both cases.
+
+**#12 would halt block production.** `apply_consensus_block_batch` (`ledger.rs:1641`) has arms for
+exactly six variants — `Transfer`, `VerifyZkProof`, `EnterpriseInference`, `FileFee`,
+`WorkerRegister`, `InitialAirdrop` — and its catch-all does not ignore the rest:
+
+```rust
+_ => {
+    return Err(LedgerError::Invalid("unsupported tx in consensus block".into()));
+}
+```
+
+`TxV1::GenesisBridge` hits that arm. Its only other appearance in `ledger.rs` is line 610, mapping
+the variant to the string `"genesis_bridge"`. So enqueueing a bridge tx would put it in a block
+and **every node would reject that block** — block production stops the first time anyone bridges.
+A variant being *signable* is not the same as being *appliable*. Adding the apply arm changes what
+every node computes for the same block, so this is a consensus change and belongs in this section,
+not in a sprint.
+
+**#13 was already routed; the direct write was on the failure path.** The handler enqueues the
+`VerifyZkProof` tx normally. The slash happened only when `verify_tx_receipt_and_journal` failed,
+and that path returned `400` *without* enqueuing — so consensus never saw the tx and "let consensus
+handle the slash" would have deleted the penalty rather than relocating it. Resolved by deleting
+the REST-side slash outright (see §4); making the penalty itself consensus-routed needs a new
+slash tx variant, which is why it stays in this section.
 
 ## 3. Fixed before Phase 1 — do not redo
 
@@ -313,7 +339,8 @@ balances tree and reading every caller.
 
 **The fork test is objective:** `compute_state_root` (`ledger.rs:1359`) iterates `self.balances`,
 so any method that changes a balance outside block-apply forks the serving node's root while block
-history stays identical.
+history stays identical. Note that block *validation* counts too: a write that survives a rejected
+block is a write no other node made.
 
 | # | path | trigger | forks? | status |
 |---|---|---|---|---|
@@ -328,9 +355,20 @@ history stays identical.
 | 15 | `POST /ledger/mint_demo` → `mint_reward_with_proof` | REST, admin + signed | yes | ✅ removed `4d8d7ea` |
 | 16 | startup dev faucet → `mint_reward_with_proof` | internal, `TET_DEV_FAUCET_MICRO`, `!is_prod` | yes | open — not network-reachable, off by default, refused on mainnet |
 | 17 | ZK-Court → `zkcourt_settle_challenger_bond` | internal, `submit_challenge` | yes | **open** — §2.5 |
-| — | `validate_zk_task_claims` → `slash_worker_bond_to_ecosystem_all` | block-apply (`consensus.rs:971`, `:1071`) | no | ✅ already consensus-routed |
+| 18 | `validate_zk_task_claims` → `slash_worker_bond_to_ecosystem_all` | **block validation, reachable from 8002 via a malicious candidate block** | **yes** | **open** — see correction below |
 | — | `admin_rest_faucet`, `claim_initial_airdrop`, `mint_fiat_chf_topup` | no production caller | n/a | ✅ `#[cfg(test)]` `6df13f9` |
 | — | `slash_worker_bond_zk_court_burn_all`, `slash_wallet_liquid_burn_micro` | no caller at all | n/a | ✅ deleted `6df13f9` |
+
+**Correction on record — #18 is not consensus-routed.** The first version of this table recorded
+`validate_zk_task_claims` (`consensus.rs:571`) as "✅ already consensus-routed, no fork", on the
+grounds that it is called from block validation. Reading it settles otherwise: on an invalid
+receipt it slashes the worker's bond **and then returns `Err`**, rejecting the block
+(`consensus.rs:971` `validate_and_record_backfill_candidate`, `:1071` `apply_block_record_forward`).
+
+The slash persists; the block does not. A node that received the bad candidate slashes, a node
+that never saw it does not, and the two diverge — with no block in the canonical chain to explain
+why. It is reachable by any peer that can send a block candidate, which on the public seed means
+anyone who can reach 8002.
 
 **Correction on record.** The first pass labelled #1, #3, #4 and #5 "unauthenticated". They are
 not: each verifies a hybrid Ed25519 + ML-DSA signature, but by hand
