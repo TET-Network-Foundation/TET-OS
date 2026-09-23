@@ -825,20 +825,26 @@ pub async fn post_ledger_zk_verify(
     if let Err(e) =
         crate::zk_verifier::verify_tx_receipt_and_journal(image_id, &journal_b64, &receipt_b64)
     {
+        // Rejected, and nothing is written.
+        //
+        // This arm used to call `slash_worker_bond_to_ecosystem_all` — a direct balance write
+        // outside the block pipeline, on a request that then returned 400 and never entered the
+        // mempool. Only the node that served the request slashed, so its `state_root` diverged
+        // from every peer with no block to account for it.
+        //
+        // Moving the penalty into consensus was not possible here: a tx that fails verification
+        // never reaches a block, so consensus never sees it. Punishing it on-chain needs a slash
+        // tx variant that a producer can include — recorded in PHASE_1_GENESIS_SPEC §2. Until
+        // that exists an invalid receipt is refused and unpunished, which is the correct trade:
+        // an unenforced penalty is better than a penalty that forks the chain.
         let worker = env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase();
-        let slashed = state
-            .ledger
-            .slash_worker_bond_to_ecosystem_all(&worker)
-            .unwrap_or(0);
         log::error!(
-            "[zk-slash] invalid receipt submission worker={} slashed_micro={} err={}",
-            worker,
-            slashed,
-            e
+            "[zk-verify] invalid receipt submission rejected worker={worker} err={e} \
+             (no bond slashed: slashing must be a consensus tx, see PHASE_1_GENESIS_SPEC §2)"
         );
         return (
             StatusCode::BAD_REQUEST,
-            format!("receipt verify error: {e}; worker bond slashed_micro={slashed}"),
+            format!("receipt verify error: {e}"),
         )
             .into_response();
     }

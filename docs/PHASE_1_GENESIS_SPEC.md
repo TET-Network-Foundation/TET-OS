@@ -270,7 +270,7 @@ consensus. Two nodes serving the same signed request still diverge.
 | 10 | `POST /v1/compute` → `mint_worker_network_reward` | `network.rs:292` | as #9 |
 | 11 | `POST /enterprise/inference` → `settle_ai_utility_payment` | `enterprise.rs:216` | as #8 |
 | 12 | `POST /ledger/genesis_bridge` → `transfer_no_fee` | `ledger.rs:625` | **needs a `GenesisBridge` apply arm.** The variant is signable but `apply_consensus_block_batch` has no arm for it — see below |
-| 13 | `POST /ledger/zk_verify` → `slash_worker_bond_to_ecosystem_all` | `ledger.rs:992` | **slashing must become a consensus tx (new variant), not a REST side effect** |
+| 13 | ~~`POST /ledger/zk_verify` → `slash_worker_bond_to_ecosystem_all`~~ | `ledger.rs:992` | ✅ REST-side slash deleted. **Slashing must be a consensus tx (new variant), not a REST side effect** — until that variant exists, an invalid receipt is refused and unpunished |
 | 14 | `POST /wallet/slash` → `slash_stake_micro` | `wallet.rs:294` | admin-gated; needs a slash variant |
 | 17 | ZK-Court → `zkcourt_settle_challenger_bond` | `vision/zk_court.rs` | settle at block-apply, not at challenge submission |
 

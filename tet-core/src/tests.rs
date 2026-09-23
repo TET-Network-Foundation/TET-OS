@@ -6447,3 +6447,84 @@ async fn removed_mint_demo_route_is_not_reachable() {
         "a request to the removed mint route must not mutate ledger state"
     );
 }
+
+/// **SECURITY REGRESSION GUARD.** An invalid ZK receipt is refused and writes nothing.
+///
+/// `POST /ledger/zk_verify` used to slash the submitting worker's entire bond
+/// (`slash_worker_bond_to_ecosystem_all`) when receipt verification failed — a direct balance
+/// write on a request that then returned `400` and never entered the mempool. Only the node that
+/// served the request slashed, so its `state_root` diverged from every peer with no block to
+/// account for it.
+///
+/// The penalty could not simply be moved into consensus: a tx that fails verification never
+/// reaches a block, so consensus never sees it. Punishing it on-chain needs a slash tx variant
+/// (PHASE_1_GENESIS_SPEC §2). Until then an invalid receipt is refused and unpunished — an
+/// unenforced penalty beats one that forks the chain.
+///
+/// Asserts the refusal **and** that both the bond and the root are untouched. Checking only the
+/// status code would pass even if the slash were still there.
+#[tokio::test]
+async fn invalid_zk_receipt_is_rejected_without_slashing() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    // A worker with a real bond, so "bond unchanged" is a meaningful assertion.
+    let worker = crate::wallet::generate_mnemonic_12().unwrap();
+    let worker_words = worker.mnemonic_12.clone().unwrap();
+    let worker_id = worker.address_hex.to_ascii_lowercase();
+    ledger
+        .admin_rest_faucet(&worker_id, 100 * crate::ledger::STEVEMON, "127.0.0.1", true, 1, 1)
+        .unwrap();
+    ledger
+        .stake_worker_bond_micro(&worker_id, 10 * crate::ledger::STEVEMON, None)
+        .unwrap();
+    let bond_before = ledger.worker_bond_micro(&worker_id).unwrap();
+    assert!(bond_before > 0, "the worker must hold a bond for this guard to mean anything");
+
+    let root_before = ledger.compute_state_root().unwrap();
+
+    // Correct image_id and an empty task_id so the request reaches receipt verification, which
+    // then fails on the garbage receipt. A wrong image_id would 400 earlier and prove nothing.
+    let env = signed_env_for_tests(
+        crate::protocol::TxV1::VerifyZkProof {
+            task_id: String::new(),
+            image_id: methods::NEXUS_GUEST_ID,
+            journal_b64: base64::engine::general_purpose::STANDARD.encode(b"not-a-journal"),
+            receipt_b64: base64::engine::general_purpose::STANDARD.encode(b"not-a-receipt"),
+        },
+        &worker_words,
+        &worker_id,
+    );
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ledger/zk_verify")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::to_vec(&env).unwrap()))
+        .unwrap();
+    let resp = crate::rest::routes::build_router(rest_state_for_tests(ledger.clone()))
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::BAD_REQUEST,
+        "an unverifiable receipt must be refused"
+    );
+
+    assert_eq!(
+        ledger.worker_bond_micro(&worker_id).unwrap(),
+        bond_before,
+        "a refused receipt must not slash the worker's bond from a REST handler"
+    );
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "a refused receipt must leave state_root untouched"
+    );
+}
