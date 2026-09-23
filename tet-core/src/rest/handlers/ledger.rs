@@ -434,87 +434,6 @@ async fn post_transfer_enveloped_impl(
         .into_response()
 }
 
-async fn post_mint_demo_impl(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-    Json(req): Json<MintDemoReq>,
-) -> impl IntoResponse {
-    if let Err(r) = require_admin_bearer(&headers) {
-        return r;
-    }
-    if !req.amount_tet.is_finite() || req.amount_tet <= 0.0 {
-        return (StatusCode::BAD_REQUEST, "invalid amount").into_response();
-    }
-    if req.amount_tet > 10_000_000_000.0 {
-        return (StatusCode::BAD_REQUEST, "amount exceeds hard cap").into_response();
-    }
-    let gross_micro = (req.amount_tet * STEVEMON as f64).round().max(0.0) as u64;
-    if gross_micro == 0 || gross_micro > MAX_SUPPLY_MICRO {
-        return (StatusCode::BAD_REQUEST, "amount exceeds hard cap").into_response();
-    }
-    let note = req.energy_note.unwrap_or_default();
-    let payload = format!("energy_note:{note}").into_bytes();
-    let wallet = headers
-        .get("x-tet-wallet-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if wallet.len() != 64 || !wallet.chars().all(|c| c.is_ascii_hexdigit()) {
-        return (StatusCode::BAD_REQUEST, "missing/invalid x-tet-wallet-id").into_response();
-    }
-    let msg = format!(
-        "tet-tx-v1|mint_demo|to={}|gross_micro={}|payload_sha256={}",
-        wallet,
-        gross_micro,
-        hex::encode(sha2::Sha256::digest(&payload))
-    );
-    if let Err(r) = require_hybrid_sig(&headers, &wallet, msg.as_bytes()) {
-        return r;
-    }
-    let ed_sig = headers
-        .get("x-tet-ed25519-sig-b64")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-    let mldsa_pk = headers
-        .get("x-tet-mldsa-pubkey-b64")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-    let mldsa_sig = headers
-        .get("x-tet-mldsa-sig-b64")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string());
-    match state
-        .ledger
-        .mint_reward_with_proof(&wallet, gross_micro, &payload, None, false)
-    {
-        Ok((_gross, _net, _fee, proof_id)) => {
-            if let Ok(p) = state.ledger.get_proof(proof_id) {
-                if let Some(tx) = state.p2p_tx.as_ref()
-                    && let Ok(bytes) =
-                        serde_json::to_vec(&crate::network::LedgerGossip::ProofAnnounce {
-                            signer_wallet_id: wallet.clone(),
-                            id: p.id,
-                            hash_sha256_hex: p.hash_sha256_hex.clone(),
-                            ed25519_sig_b64: ed_sig.clone(),
-                            mldsa_pubkey_b64: mldsa_pk.clone(),
-                            mldsa_sig_b64: mldsa_sig.clone(),
-                        })
-                {
-                    let _ = tx.send(bytes);
-                }
-
-                // NOTE: mint_demo is a local-only mint helper; do not sync as a transfer event.
-                (StatusCode::OK, Json(p)).into_response()
-            } else {
-                (StatusCode::OK, "ok").into_response()
-            }
-        }
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
-}
-
-
 async fn post_genesis_bridge_enveloped_impl(
     State(state): State<RestState>,
     _headers: HeaderMap,
@@ -815,13 +734,6 @@ pub async fn post_transfer_enveloped(
     post_transfer_enveloped_impl(State(state), headers, Json(env)).await
 }
 
-pub async fn post_mint_demo(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-    Json(req): Json<MintDemoReq>,
-) -> impl IntoResponse {
-    post_mint_demo_impl(State(state), headers, Json(req)).await
-}
 
 
 pub async fn post_ledger_mine(

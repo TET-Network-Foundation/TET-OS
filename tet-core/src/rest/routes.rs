@@ -166,10 +166,6 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/ledger/zk_verify",
             axum::routing::post(super::handlers::ledger::post_ledger_zk_verify),
         )
-        .route(
-            "/ledger/mint_demo",
-            axum::routing::post(super::handlers::ledger::post_mint_demo),
-        )
         // Dev alias (same handler as `/ledger/faucet`): admin Bearer mint from worker pool.
         .route(
             "/ledger/proof",

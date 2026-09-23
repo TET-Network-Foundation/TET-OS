@@ -106,6 +106,7 @@ jobs:
           guards=(
             gossiped_ai_result_writes_no_balance
             removed_genesis_1k_claim_route_is_not_reachable
+            removed_mint_demo_route_is_not_reachable
             removed_guardian_recover_route_is_not_reachable
             removed_dex_routes_are_not_reachable
             zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond

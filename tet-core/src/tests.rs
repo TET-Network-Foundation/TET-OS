@@ -6391,3 +6391,55 @@ async fn removed_genesis_1k_claim_route_is_not_reachable() {
         "a request to the removed claim route must not mutate ledger state"
     );
 }
+
+/// **SECURITY REGRESSION GUARD.** `POST /ledger/mint_demo` must stay removed.
+///
+/// It minted an arbitrary caller-supplied amount to an arbitrary wallet via
+/// `Ledger::mint_reward_with_proof` — a direct balance write outside the block pipeline, so every
+/// call forked the serving node's `state_root` while block history stayed identical.
+///
+/// Unlike the other removed routes this one *was* gated (admin bearer **and** a hybrid signature),
+/// so it was not reachable by an anonymous caller. It is removed anyway because an
+/// unbounded-amount mint has no place on a REST surface at all: the gate limits who can fork the
+/// chain, not whether forking is possible.
+///
+/// The dev-only startup faucet (`TET_DEV_FAUCET_MICRO`, `main.rs`) still calls the same ledger
+/// method. That path is not reachable over the network, is off unless the env var is set, and is
+/// refused on mainnet by the `is_prod` check.
+#[tokio::test]
+async fn removed_mint_demo_route_is_not_reachable() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let root_before = ledger.compute_state_root().unwrap();
+
+    // Try it the way an operator would have: with the admin bearer it used to require.
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ledger/mint_demo")
+        .header("content-type", "application/json")
+        .header("authorization", "Bearer test-admin-key")
+        .body(axum::body::Body::from(
+            r#"{"wallet_id":"founder","amount_micro":1000000}"#,
+        ))
+        .unwrap();
+    let resp = crate::rest::routes::build_router(rest_state_for_tests(ledger.clone()))
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "POST /ledger/mint_demo must stay removed, admin bearer or not"
+    );
+
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "a request to the removed mint route must not mutate ledger state"
+    );
+}
