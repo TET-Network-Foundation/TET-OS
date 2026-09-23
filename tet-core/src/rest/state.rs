@@ -399,6 +399,23 @@ impl RestState {
         }
     }
 
+    /// Broadcast a burn-after-read revoke to peers over the `/tet/v1/tmail` gossip plane
+    /// (spec §A.3.2 Layer 1). Same wiring as [`broadcast_tmail`]; off-ledger.
+    ///
+    /// Only ever called for a revoke this node has already authorized against its own store, so a
+    /// node never amplifies a revoke it could not verify the right to make.
+    pub async fn broadcast_tmail_burn_revoke(&self, rev: &crate::tmail::burn::TmailBurnRevokeV1) {
+        let Some(tx) = self.gossip_tx.as_ref() else {
+            return;
+        };
+        let event = crate::models::NetworkEvent::TmailBurnRevoke {
+            revoke: rev.clone(),
+        };
+        if let Ok(json) = serde_json::to_string(&event) {
+            let _ = tx.send(json).await;
+        }
+    }
+
     /// Broadcast a File Sharing announce envelope to peers over the `/tet/v1/files/announce` gossip
     /// plane. Same wiring as [`broadcast_tmail`]; off-ledger, body not carried.
     pub async fn broadcast_file_announce(&self, env: &crate::files::FileEnvelopeV1) {

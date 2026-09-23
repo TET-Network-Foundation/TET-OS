@@ -13,6 +13,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::rest::RestState;
+use crate::tmail::burn::{BurnRevokeOutcome, TmailBurnRevokeError, TmailBurnRevokeV1};
 use crate::tmail::envelope::{TmailEnvelopeError, TmailEnvelopeV1, verify_tmail_envelope_v1};
 use crate::tmail::keys::{TmailKeyError, TmailKeyRegistrationV1, verify_tmail_key_registration_v1};
 
@@ -181,4 +182,82 @@ pub async fn put_tmail_keys(
             .into_response();
     }
     register_key_response(&state, reg)
+}
+
+/// HTTP status for a revoke rejection: signature/identity is `401`, policy is `403`, shape is
+/// `400`. A node-local storage failure is the caller's problem only insofar as nothing happened.
+fn burn_revoke_error_status(e: &TmailBurnRevokeError) -> StatusCode {
+    match e {
+        TmailBurnRevokeError::Signature(_) | TmailBurnRevokeError::SignerMismatch => {
+            StatusCode::UNAUTHORIZED
+        }
+        TmailBurnRevokeError::NotAParty | TmailBurnRevokeError::NotBurnable => {
+            StatusCode::FORBIDDEN
+        }
+        TmailBurnRevokeError::Store(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
+    }
+}
+
+/// `POST /tmail/read-receipt` — a party signals it has read a burn-after-read message, which
+/// destroys the ciphertext here and announces the revoke to peers (spec §A.3.2 Layer 1).
+///
+/// Body is a hybrid-signed [`TmailBurnRevokeV1`]. Authorization is
+/// [`crate::tmail::burn::apply_burn_revoke`] — the same function the gossip receive path uses, so
+/// REST and gossip cannot diverge. In practice the caller is the **receiver** (that is what a read
+/// receipt is); the sender is also a party and may revoke what they sent.
+///
+/// **Burn locally first, announce second.** A node only gossips a revoke it was able to authorize
+/// against its own copy of the message, so an unauthorizable revoke is never amplified onward. If
+/// this node does not hold the message there is nothing to authorize against and the call is a
+/// `404` — the caller should retry against a node that has it.
+///
+/// Best-effort by construction (§A.3.2 Layer 3, locked decision #2): cooperating nodes purge,
+/// non-cooperating peers may retain encrypted copies. Nothing here makes that claim stronger.
+pub async fn post_tmail_read_receipt(
+    State(state): State<RestState>,
+    Json(rev): Json<TmailBurnRevokeV1>,
+) -> Response {
+    let outcome = match crate::tmail::burn::apply_burn_revoke(&state.tmail, &rev) {
+        Ok(o) => o,
+        Err(e) => return (burn_revoke_error_status(&e), format!("{e}")).into_response(),
+    };
+    match outcome {
+        BurnRevokeOutcome::Burned { msg_id } => {
+            crate::metrics::inc_tmail_burned();
+            state.broadcast_tmail_burn_revoke(&rev).await;
+            (
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "ok": true,
+                    "msg_id": msg_id,
+                    "status": "burned",
+                    "note": "Best-effort burn. Cooperating nodes will purge after read receipt. \
+                             Non-cooperating peers may retain encrypted copies.",
+                })),
+            )
+                .into_response()
+        }
+        // Idempotent: gossip delivers duplicates, and re-announcing would keep the revoke
+        // circulating forever.
+        BurnRevokeOutcome::AlreadyBurned { msg_id } => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "msg_id": msg_id,
+                "status": "already_burned",
+            })),
+        )
+            .into_response(),
+        BurnRevokeOutcome::UnknownMessage { msg_id } => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "ok": false,
+                "msg_id": msg_id,
+                "status": "unknown_message",
+                "error": "this node does not hold that message, so it cannot authorize the revoke",
+            })),
+        )
+            .into_response(),
+    }
 }

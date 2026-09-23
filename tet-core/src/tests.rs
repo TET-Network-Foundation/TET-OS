@@ -7326,3 +7326,215 @@ fn tmail_burn_revoke_round_trips_as_a_network_event() {
         other => panic!("wrong event kind after round-trip: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// S7-1 item 3 — POST /tmail/read-receipt.
+// ---------------------------------------------------------------------------
+
+/// Builds a RestState whose Tmail store already holds one live burn-flagged message.
+/// Returns (state, sender_words, sender, receiver_words, receiver, msg_id).
+fn rest_state_with_burn_message_for_tests() -> (
+    crate::rest::RestState,
+    String,
+    String,
+    String,
+    String,
+    String,
+) {
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "receipt-target-1".to_string();
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        &msg_id,
+        tmail_flags_for_tests(true),
+        None,
+    );
+    assert!(state.tmail.store_tmail(&env).unwrap());
+    assert_eq!(
+        state.tmail.get_inbox(&receiver, 50).len(),
+        1,
+        "precondition: the fixture is live in the inbox"
+    );
+    (
+        state,
+        sender_words,
+        sender,
+        receiver_words,
+        receiver,
+        msg_id,
+    )
+}
+
+async fn read_receipt_status(
+    state: &crate::rest::RestState,
+    rev: &crate::tmail::burn::TmailBurnRevokeV1,
+) -> StatusCode {
+    crate::rest::handlers::tmail::post_tmail_read_receipt(
+        axum::extract::State(state.clone()),
+        axum::Json(rev.clone()),
+    )
+    .await
+    .status()
+}
+
+/// The receiver posts a read receipt → `202` and the ciphertext is gone from this node.
+#[tokio::test]
+async fn tmail_read_receipt_burns_the_message() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (state, _sw, _s, receiver_words, receiver, msg_id) = rest_state_with_burn_message_for_tests();
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+    assert_eq!(
+        read_receipt_status(&state, &rev).await,
+        StatusCode::ACCEPTED,
+        "a receiver's read receipt must be accepted"
+    );
+    assert!(
+        state.tmail.get_inbox(&receiver, 50).is_empty(),
+        "the ciphertext must be gone from the node after a read receipt"
+    );
+    assert!(state.tmail.is_burned(&msg_id));
+}
+
+/// The endpoint enforces exactly what gossip enforces — it shares `apply_burn_revoke`. A stranger
+/// gets `403`, not a burn.
+#[tokio::test]
+async fn tmail_read_receipt_from_a_third_party_is_forbidden() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (state, _sw, _s, _rw, receiver, msg_id) = rest_state_with_burn_message_for_tests();
+    let (stranger_words, stranger) = tmail_party_for_tests();
+
+    let rev = signed_burn_revoke_for_tests(&stranger_words, &stranger, &msg_id);
+    assert_eq!(
+        read_receipt_status(&state, &rev).await,
+        StatusCode::FORBIDDEN,
+        "a stranger's read receipt must be refused"
+    );
+    assert_eq!(
+        state.tmail.get_inbox(&receiver, 50).len(),
+        1,
+        "and must not destroy the message"
+    );
+}
+
+/// A forged signature is `401` and destroys nothing.
+#[tokio::test]
+async fn tmail_read_receipt_with_a_forged_signature_is_unauthorized() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (state, _sw, _s, receiver_words, receiver, msg_id) = rest_state_with_burn_message_for_tests();
+
+    let mut rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+    let forged = signed_burn_revoke_for_tests(&receiver_words, &receiver, "a-different-msg");
+    rev.hybrid_sig.ed25519_sig_b64 = forged.hybrid_sig.ed25519_sig_b64;
+    rev.hybrid_sig.mldsa_sig_b64 = forged.hybrid_sig.mldsa_sig_b64;
+
+    assert_eq!(
+        read_receipt_status(&state, &rev).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(state.tmail.get_inbox(&receiver, 50).len(), 1);
+}
+
+/// A receipt for a message this node does not hold is `404`, because there is nothing to
+/// authorize against — and nothing is announced onward.
+#[tokio::test]
+async fn tmail_read_receipt_for_an_unknown_message_is_not_found() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (receiver_words, receiver) = tmail_party_for_tests();
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, "never-seen-here");
+    assert_eq!(
+        read_receipt_status(&state, &rev).await,
+        StatusCode::NOT_FOUND
+    );
+    assert!(
+        !state.tmail.is_burned("never-seen-here"),
+        "a 404 must leave no tombstone behind"
+    );
+}
+
+/// A non-burn message cannot be destroyed through the read-receipt endpoint either.
+#[tokio::test]
+async fn tmail_read_receipt_cannot_destroy_a_non_burn_message() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "plain-via-rest";
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        msg_id,
+        tmail_flags_for_tests(false),
+        None,
+    );
+    state.tmail.store_tmail(&env).unwrap();
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, msg_id);
+    assert_eq!(
+        read_receipt_status(&state, &rev).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(state.tmail.get_inbox(&receiver, 50).len(), 1);
+}
+
+/// Replaying the same receipt is `200 already_burned`, not an error and not a second burn.
+#[tokio::test]
+async fn tmail_read_receipt_replay_is_idempotent() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (state, _sw, _s, receiver_words, receiver, msg_id) = rest_state_with_burn_message_for_tests();
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+    assert_eq!(
+        read_receipt_status(&state, &rev).await,
+        StatusCode::ACCEPTED
+    );
+    assert_eq!(
+        read_receipt_status(&state, &rev).await,
+        StatusCode::OK,
+        "a replayed receipt must be a quiet no-op, not a 4xx"
+    );
+}
+
+/// The route is actually mounted. Without this, every assertion above could pass against a handler
+/// no HTTP client can reach.
+#[tokio::test]
+async fn tmail_read_receipt_route_is_mounted() {
+    let _g = env_lock();
+    set_test_env_base();
+    use tower::ServiceExt as _;
+    let (state, _sw, _s, receiver_words, receiver, msg_id) = rest_state_with_burn_message_for_tests();
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/tmail/read-receipt")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::to_vec(&rev).unwrap()))
+        .unwrap();
+    let resp = crate::rest::routes::build_router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::ACCEPTED,
+        "POST /tmail/read-receipt must be reachable over HTTP, not just as a function"
+    );
+    assert!(state.tmail.get_inbox(&receiver, 50).is_empty());
+}
