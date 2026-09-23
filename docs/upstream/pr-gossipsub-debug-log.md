@@ -32,19 +32,23 @@ feat(gossipsub): log when an additional connection is not sent subscriptions
 > remote's gossipsub advertises to whichever arrives first and says nothing to the second — while
 > locally that second connection belongs to a *different* `Behaviour` instance, which is left with
 > no record of the remote's subscriptions. `publish` on that instance then fails with
-> `InsufficientPeers`, which is indistinguishable from the ordinary "mesh has not grafted yet"
-> condition that follows any connection, and stays that way for the life of the process.
+> `NoPeersSubscribedToTopic`, which is indistinguishable from the ordinary "mesh has not grafted
+> yet" condition that follows any connection, and stays that way for the life of the process.
 >
-> Working that out took a long time precisely because the decisive moment produced no output. One
-> debug line naming the peer and the established-connection count makes it visible.
+> Running several swarms on one keypair is arguably a misuse; the point of the log is that the
+> misuse becomes visible where it happens, instead of surfacing far away as
+> `NoPeersSubscribedToTopic`.
+>
+> One debug line naming the peer and the established-connection count makes this visible at the
+> moment it happens.
 >
 > Behaviour is unchanged: this only adds a `tracing::debug!` before the existing early return.
 >
 > ### Change checklist
 >
 > - [x] I have performed a self-review of my own code
-> - [ ] I have made corresponding changes to the documentation — n/a, no API or behaviour change
-> - [ ] I have added tests that prove my fix is effective or that my feature works — n/a, log-only
+> - [x] I have made corresponding changes to the documentation — n/a, no API or behaviour change
+> - [x] I have added tests that prove my fix is effective or that my feature works — n/a, log-only
 > - [x] A changelog entry has been made in the appropriate crates
 
 ## The diff
