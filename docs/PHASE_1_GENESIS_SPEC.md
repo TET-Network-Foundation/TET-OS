@@ -103,6 +103,7 @@ These are all consensus- or schema-breaking and are cheap only at a ceremony.
 | **FIPS-203 ML-KEM migration** | WP §17.17 | Tmail/Files KEM keys are mnemonic-derived; changing the algorithm invalidates every messaging identity. Free when the key directory is discarded anyway |
 | **Minimum ML-DSA level** | WP §7.1 | Verification infers the level from pubkey length and accepts 44/65/87, so the effective security level is the signer's choice. Pinning a floor is a consensus rule |
 | **Protocol reserve allocation** | WP §11.4 | `WALLET_PROTOCOL_RESERVE` mints 0 and is committed in the genesis hash. Changing it needs a new ceremony |
+| **Per-plane libp2p keypairs** | [post-mortem 2026-09](./postmortems/2026-09-gossip-lost-subscriptions.md), this doc §2.4 | Changes every node's `PeerId` on at least two planes, so every published bootnode multiaddr must be reissued. Free at a ceremony, disruptive on a live network |
 | **Denomination naming** | `WHITEPAPER_v1.0_GAPS.md` §10.1 | "Stevemon" vs "micro-TET" is cosmetic in code but appears in the genesis hash payload |
 | **Per-block `state_root` checkpoints** | `BUG_block_9828_divergence_mystery.md` | Validation is tip-only today, so divergence surfaces at an arbitrary later block rather than the one that caused it. Changes what nodes exchange |
 
@@ -186,6 +187,70 @@ Related: WP §17.5, which this is a concrete instance of.
 
 
 ---
+
+### 2.4 Per-plane libp2p keypairs
+
+**Why this is here:** the node runs three `Swarm`s — block plane (`p2p.rs`, 8002), inference plane
+(`p2p_network.rs`, 4003) and ledger plane (`network.rs`, 4005) — and all three are built from the
+same `libp2p_keypair` (`main.rs:525/551/587`). They are therefore **indistinguishable on the
+wire**: one `PeerId`, three independent `Behaviour` instances.
+
+On 2026-09-22 that cost the public testnet its transaction path. The inference plane read
+`TET_BOOTNODES` and dialled the block plane's address, so a follower opened two connections to one
+remote listener under one `PeerId`. The remote's gossipsub advertised its subscriptions on the
+first (`other_established == 0`) and said nothing on the second (`behaviour.rs:2912-2914`) — and
+locally that second connection belonged to a *different* `Behaviour`, which was left with no
+record of the peer's topics and could not publish. Intermittently, depending on dial order. Full
+account in the [post-mortem](./postmortems/2026-09-gossip-lost-subscriptions.md).
+
+That instance is fixed by scoping the env var (`TET_NEXUS_BOOTNODES`, empty by default). **The
+class is not.** Nothing stops the next plane from being pointed at another plane's address, and
+the failure is silent when it happens.
+
+#### The fix
+
+Derive a keypair per plane from the persisted node key:
+
+```
+plane_key = HKDF-SHA256(
+    ikm  = <libp2p_keypair.bin secret>,
+    info = "tet/plane/block" | "tet/plane/nexus" | "tet/plane/ledger",
+)
+```
+
+seeding an Ed25519 identity per plane. Each plane then has its own stable `PeerId` derived from
+the same root secret, so a cross-plane dial arrives as an ordinary first connection from an
+unknown peer and is advertised to normally. The failure becomes **structurally impossible** rather
+than merely unconfigured. `libp2p_keypair.bin` stays the single root secret — no new key material
+to generate, distribute or back up, and identities remain stable across restarts.
+
+#### Two costs, both found by reading the code
+
+1. **`FileAnnounce.storage_node` must remain the block-plane `PeerId`.** It is a `PeerId` string
+   that `files_fetch` resolves on the block plane, and it is **bound into the signed envelope
+   pre-image** (`files/mod.rs:134-144`). Deriving it from the wrong plane does not fail loudly —
+   it invalidates envelopes at signature-verification time, far from the cause. Whatever populates
+   that field must be pinned to the block-plane identity explicitly, with a test.
+
+2. **Every existing bootnode multiaddr must be republished.** Any plane whose label differs from
+   today's derivation gets a new `PeerId`, including the block plane unless its label is chosen to
+   reproduce the current key. The published seed multiaddr in
+   [`RUNNING_A_NODE.md`](./RUNNING_A_NODE.md) § The public seed, and `TET_BOOTNODES` on every node,
+   change with it. On a live network that is a coordinated restart; at a genesis ceremony the
+   addresses are being reissued anyway.
+
+Everything else surveyed is unaffected: `WorkerRegistry` is keyed by wallet id, Tmail by
+sender/receiver wallet ids, and the ledger holds no `PeerId` at all. The block plane's own
+`PeerId`-keyed state (hello registry, bootnode watch, catch-up driver, blacklist) lives entirely
+within one plane.
+
+#### Related rename, cosmetic but overdue
+
+**`TET_PEER_ID` is not a libp2p peer id.** It is a string label for the producer / wallet identity
+(`main.rs:100`, `consensus.rs:342`) and has nothing to do with `PeerId`. The name actively misleads
+in exactly the area this section is about, and it is read in only two places. Rename it to
+`TET_NODE_LABEL` (or fold it into `TET_WALLET_ID`) at the ceremony, when changing an env var
+contract is free.
 
 ## 3. Fixed before Phase 1 — do not redo
 
