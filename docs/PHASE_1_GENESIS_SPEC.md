@@ -350,14 +350,19 @@ block is a write no other node made.
 | 4 | `POST /ledger/unstake` → `unstake_worker_bond_micro` | REST, hybrid-signed | yes | **open** — §2 |
 | 5 | `POST /genesis/1000/claim` → `genesis_1k_claim` | REST, hybrid-signed | yes | ✅ removed `0c64dd4`; method deleted `6df13f9` |
 | 6 | gossip `AiResult` → `settle_ai_utility_payment` | **remote peer, gossip on 8002** | yes | ✅ removed `33b521a` |
-| 7–13 | AI settlement, mints, bridge, zk-verify slash | REST, hybrid-signed | yes | **open** — §2.5 |
+| 7–12 | AI settlement, mints, genesis bridge | REST, hybrid-signed | yes | **open** — §2.5 |
+| 13 | ~~`POST /ledger/zk_verify` → slash on verification failure~~ | REST, hybrid-signed | yes | ✅ removed `ff6bfa4`; penalty needs a slash tx variant (§2) |
 | 14 | `POST /wallet/slash` → `slash_stake_micro` | REST, admin bearer | yes | **open** — §2.5 |
 | 15 | `POST /ledger/mint_demo` → `mint_reward_with_proof` | REST, admin + signed | yes | ✅ removed `4d8d7ea` |
 | 16 | startup dev faucet → `mint_reward_with_proof` | internal, `TET_DEV_FAUCET_MICRO`, `!is_prod` | yes | open — not network-reachable, off by default, refused on mainnet |
 | 17 | ZK-Court → `zkcourt_settle_challenger_bond` | internal, `submit_challenge` | yes | **open** — §2.5 |
-| 18 | `validate_zk_task_claims` → `slash_worker_bond_to_ecosystem_all` | **block validation, reachable from 8002 via a malicious candidate block** | **yes** | **open** — see correction below |
+| 18 | ~~`validate_zk_task_claims` → `slash_worker_bond_to_ecosystem_all`~~ | block validation, was reachable from 8002 via a malicious candidate | yes | ✅ removed `dbe1b24` — fork removal, block validity unchanged |
 | — | `admin_rest_faucet`, `claim_initial_airdrop`, `mint_fiat_chf_topup` | no production caller | n/a | ✅ `#[cfg(test)]` `6df13f9` |
 | — | `slash_worker_bond_zk_court_burn_all`, `slash_wallet_liquid_burn_micro` | no caller at all | n/a | ✅ deleted `6df13f9` |
+
+**Nine paths remain open** (#1, #3, #4, #7–12, #14, #16, #17 — of which #16 is not
+network-reachable). Closed so far: #2 writes no balance, #5, #6, #13, #15 and #18 are removed, and
+the dead methods are deleted or gated to the test build.
 
 **Correction on record — #18 is not consensus-routed.** The first version of this table recorded
 `validate_zk_task_claims` (`consensus.rs:571`) as "✅ already consensus-routed, no fork", on the
