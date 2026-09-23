@@ -6351,10 +6351,14 @@ async fn gossiped_ai_result_writes_no_balance() {
 /// **SECURITY REGRESSION GUARD.** `POST /genesis/1000/claim` must stay removed.
 ///
 /// It credited `GENESIS_1K_BONUS_TET` (10,000 TET) via `Ledger::genesis_1k_claim`, a direct
-/// balance write outside the block pipeline, with **no authentication of any kind** — no admin
-/// bearer, no signature over the claim, nothing but a wallet id in the body. Any caller who could
-/// reach the REST port could mint themselves 10,000 TET up to the 10,000-slot cap, and every
-/// claim forked the serving node's `state_root` while block history stayed identical.
+/// balance write outside the block pipeline, so every claim forked the serving node's
+/// `state_root` while block history stayed byte-identical.
+///
+/// **Correction to `0c64dd4`'s commit message,** which described this route as having "no
+/// authentication of any kind". That is wrong: it required a hybrid signature supplied via the
+/// `x-tet-ed25519-sig-b64` / `x-tet-mldsa-sig-b64` headers and returned 401 without them. The
+/// removal still stands on its own grounds — an unbounded direct mint forks consensus regardless
+/// of who is authorised to call it — but it was not an open door.
 ///
 /// `GET /genesis/1000/status` is deliberately left in place: it reads a counter and writes
 /// nothing.
