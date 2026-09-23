@@ -117,10 +117,51 @@ consensus each feature touches, which is not the order the spec presents them in
 
 | # | Item | Consensus? | Status | Ships in |
 |---|---|---|---|---|
-| **S7-1** | Burn-after-read (AT-4) | No | ⬜ | Phase 0 |
+| **S7-1** | Burn-after-read (AT-4) | No | ✅ | Phase 0 — [live evidence](#s7-1-at-4-verified-live-2026-09-23) |
 | **S7-2** | Time-lock (AT-3) | No | ⬜ | Phase 0 |
 | **S7-0** | Server-side 5-message retention | No | ⬜ | Phase 0 — precondition for Pin |
 | **S7-3** | Pin stake (AT-7) | **Yes** | ⛔ **deferred** | **Phase 1 genesis** |
+
+### S7-1: AT-4 verified live, 2026-09-23
+
+**Two local nodes on the S7-1 binary, real libp2p gossip, 19/19 steps green.** Driver:
+`tet-network/ui/scripts/tmail_burn_interop_step5.mjs` (`N1_URL`/`N2_URL`), which replicates the
+browser's crypto exactly as `tmail_interop_step4.mjs` does — same Ed25519 + ML-DSA-44 signing, same
+X25519 + Kyber-768 E2EE, same §A.1.3 / §A.3.2 pre-images.
+
+| Step | Result |
+|---|---|
+| Envelope with `burn_after_read=1` accepted | `202` on N1 |
+| Reaches N2 over gossip, flag intact | **1–2 ms**, `flags.burn_after_read=true` on the wire |
+| B decrypts on N2 before burning | plaintext matches — it was genuinely readable |
+| B posts `/tmail/read-receipt` | `202`, body carries the locked §A.3.2 copy |
+| **AT-4: ciphertext gone from BOTH stores** | **1 ms** (second run; 508 ms on the first) |
+| Re-submitting the burned envelope | `409`, tombstone holds, stays gone |
+| Sender may burn what they sent | `202`, both nodes cleared |
+
+Three live controls, so the run measures the burn and not merely that messages vanish:
+
+| Control | Result |
+|---|---|
+| Read receipt on a **non-burn** message | `403 not burn-after-read`; message survives on both |
+| Read receipt from a **third party** | `403 neither the sender nor the receiver`; survives on both |
+| Plain message through the identical run | present on both nodes throughout |
+
+**Mixed-version finding — the seed must be redeployed before burn is usable.** Probed against the
+live seed and a local pre-S7-1 container:
+
+| Behaviour on a node that has **not** been upgraded | Observed |
+|---|---|
+| `POST /tmail/read-receipt` | **404** — the route does not exist (verified on the Helsinki seed) |
+| `POST /tmail/send` with `burn_after_read=1` | **400** `only the basic flag is supported in this build` — rejected at the flag gate, so it is never stored and never relayed |
+| Receiving a `tmail_burn_revoke_v1` over gossip | `NetworkEvent` fails to deserialize → `p2p.rs:2907` reports `MessageAcceptance::Reject` to gossipsub |
+
+The third row is the one worth acting on. `Reject` is not a silent ignore: gossipsub applies an
+invalid-message penalty to the **propagation source**, so a new node publishing revokes into a
+mixed network takes a peer-score hit from every old node that sees them. Nothing forks — Tmail is
+off-ledger — but burn-after-read does not function across versions and emitting revokes before the
+upgrade is actively counterproductive. The seed is the only block producer and the main gossip hub,
+so it upgrades first.
 
 ### Why time-lock is not the expensive one
 
