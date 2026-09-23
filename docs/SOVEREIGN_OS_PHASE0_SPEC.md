@@ -1081,6 +1081,23 @@ Host verification extends [`zk_verifier.rs`](../../tet-core/src/zk_verifier.rs) 
 
 ## K.2 Pin economics
 
+> **Superseded 2026-09-23 — steps 2-4 only.** Pin ships as the **Appendix C flat fee**: 1 000 µTET,
+> settled **50% treasury / 50% burn**, with no lock, no expiry and no slash. The locked-stake design
+> below is **not** what will be built.
+>
+> **Why.** A locked stake is a `VestLockV1` row carrying `unlock_at_ms`, and locked rows are read by
+> [`locked_balance_micro`](../tet-core/src/ledger.rs) — the time-gated function that
+> [`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) §1 identifies as *the* wall-clock-in-apply
+> defect and exists to remove. Shipping K.2 would add a second wall-clock-dependent consensus input
+> immediately after §1 documented the first. The Appendix C fee has no time component in apply at all.
+>
+> **Also deferred:** the `TxV1::TmailPin` variant itself is batched into `PHASE_1_GENESIS_SPEC.md` §2
+> rather than shipped as a flag-day upgrade. See [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) § S7 for both
+> decisions and the reasoning.
+>
+> Step 1 (the `POST /tmail/pin` request shape) stands, minus `stake_micro` → `fee_micro`.
+> Steps 2-4 are preserved verbatim below as the superseded design.
+
 1. User clicks **Pin** on thread → `POST /tmail/pin { thread_root_msg_id, stake_micro }` (**1000 Stevemon** default — see Appendix C).
 2. Ledger locks stake → `tmail_pin_v1` audit.
 3. Node store: `pin_expiry_ms = now + 30d` per pin.

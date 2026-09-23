@@ -44,7 +44,7 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | **S4** | **L1 Foundation** — public seed, faucet, Docker (node + UI), CI/CD, operator docs, monitoring | 🟡 | **Five of six exit criteria pass (2026-09-22).** Public seed ✅, faucet ✅, CI ✅, Docker 🟡. AT-F1 passes on the follower path (2026-09-23): a follower can join, read, verify **and send money**. Open: tx gossip, monitoring, production (zk) image does not build. See [S4 detail](#s4--l1-foundation-detail) |
 | **S5** | Tmail protocol — `/tet/v1/tmail` gossip, `TmailEnvelopeV1`, REST, store | ✅ *(fee/audit deferred)* | `9e9a4a7`, `4d3fc72` |
 | **S6** | Win95 shell + Basic Tmail UI | 🟡 | `1d3173f`, `356df5e`, `ad3fb3f`, `a3f2720`…`31299c3`. E2EE verified cross-region (CH→FI, 1.3 s). Shell is **tabbed**, not a window manager — no taskbar, no boot sequence, no sounds |
-| **S7** | Time-lock + Burn + Pin stake | ⬜ | Gates marketing (locked decision #6, AT-3/AT-4) |
+| **S7** | Time-lock + Burn + Pin stake | 🟡 | **Ordered and scoped 2026-09-23** (burn → time-lock → pin). Burn and time-lock are consensus-free and ship in Phase 0; **Pin is deferred to Phase 1** — see [S7 detail](#s7--time-lock--burn--pin-detail). Gates marketing (locked decision #6, AT-3/AT-4) |
 | **S8** | Anonymous Mode — RISC0 guest, escrow, anchor audit | ⬜ | **Critical path.** Gates marketing (AT-5). Risk R1: never ship placeholder UI |
 | **S9** | Files — upload, libp2p fetch codec, on-chain fee | ✅ | `dbfa7ab`, `bd98cdc`, `ed9b9bc` |
 | **S10** | Mini-apps — Calculator, Clock, Notes | ⬜ | AT-8 |
@@ -108,6 +108,87 @@ churn.
 Full write-up, including the identity inventory and a recommended per-plane-keypair fix:
 [`docs/postmortems/2026-09-gossip-lost-subscriptions.md`](./postmortems/2026-09-gossip-lost-subscriptions.md).
 
+
+
+## S7 — Time-lock + Burn + Pin (detail)
+
+**Ordering decided 2026-09-23: burn-after-read → time-lock → pin.** The order follows how much
+consensus each feature touches, which is not the order the spec presents them in.
+
+| # | Item | Consensus? | Status | Ships in |
+|---|---|---|---|---|
+| **S7-1** | Burn-after-read (AT-4) | No | ⬜ | Phase 0 |
+| **S7-2** | Time-lock (AT-3) | No | ⬜ | Phase 0 |
+| **S7-0** | Server-side 5-message retention | No | ⬜ | Phase 0 — precondition for Pin |
+| **S7-3** | Pin stake (AT-7) | **Yes** | ⛔ **deferred** | **Phase 1 genesis** |
+
+### Why time-lock is not the expensive one
+
+The spec's §A.2 reads as though time-lock is the hard feature, and
+[`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) §1 makes wall-clock reads look disqualifying.
+Neither applies. §1 indicts `ledger_now_ms()` reached from `apply_consensus_block_batch`
+(`ledger.rs:1641`) and `compute_state_root_after_remote_block` (`ledger.rs:1399`) — paths where every
+node must derive the same `state_root` from the same block. Time-lock's `now >= release_at_ms` check
+lives in a REST handler and the node-local store; its outcome affects one node's HTTP response, never
+a `state_root`, and two nodes disagreeing about it produce no fork. Same class as
+`spendable_balance_micro_now` at admission (`handlers/files.rs:341`), which §1 does not indict either.
+
+So time-lock needs **no** `block.timestamp` and is the second-cheapest item, not the most expensive.
+Deferred from it: the optional `time_lock_stake_micro` forfeit (§A.2.2 item 4) and the VDF — both
+Phase 0.1 by locked decision #1.
+
+What time-lock cannot claim is enforcement. The node never decrypts (there is no `/tmail/decrypt`
+route; decryption is client-side in `ui/app/lib/tmail_e2ee.ts`), so a time-locked ciphertext sits in
+every peer's store from `sent_at_ms` and anyone holding the receiver key can open it immediately.
+The node-side 423 is a convention. Ship it as §A.2.2 selection **C** with locked decision #1 / risk
+**R6** marketing copy ("scheduled release"), and withhold the `e2ee` block from `GET /tmail/inbox`
+until release so the bar is at least "whoever saw the gossip".
+
+### Pin: two decisions, both taken 2026-09-23
+
+**1. Pin is a fee, not a locked stake.** Appendix C and Appendix K.2 specify different mechanisms:
+C says a **1 000 µTET fee settled 50% treasury / 50% burn**, K.2 says the ledger **locks** stake with
+`pin_expiry_ms = now + 30d` and slashes to treasury on expiry. **Appendix C wins; K.2 is marked
+superseded.** A locked stake is a `VestLockV1` row with `unlock_at_ms`, read by `locked_balance_micro`
+(`ledger.rs:4571`) — precisely the wall-clock-in-apply defect `PHASE_1_GENESIS_SPEC.md` §1 exists to
+remove. Building K.2 would add a second one immediately after §1 documented the first. The fee has no
+time component in apply.
+
+**2. The `TxV1::TmailPin` variant is batched into Phase 1, not shipped as a flag-day upgrade.**
+Adding a variant is not an apply-arm edit. `TxV1` is `#[serde(tag = "kind")]` and blocks carry
+`Vec<SignedTxEnvelopeV1>` (`consensus.rs:81`), so a node on the current binary cannot **deserialize**
+a block containing `kind: "tmail_pin"` — it fails before reaching the
+`"unsupported tx in consensus block"` catch-all (`ledger.rs:1877`, the trap `CLAUDE.md` describes).
+Every node on the network must upgrade before the first pin is mined. `PHASE_1_GENESIS_SPEC.md` §2
+already queues eight-plus variants for the ceremony; Pin joins them there.
+
+Ten sites a new appliable variant touches, from the `FileFee` precedent: `protocol.rs:30` (enum) ·
+`ledger.rs:604` (`tx_kind`) · `ledger.rs:644` (`prepare_block_undo`) · `ledger.rs:1399` (preview arm,
+must match apply byte-for-byte) · `ledger.rs:1641` (apply arm) · `consensus.rs:498`
+(`compute_reward_for_block`, whose own `_ =>` also rejects the block) · `rest/state.rs:137`
+(`tx_fee_score`) · `rest/handlers/ledger.rs:533` (dispatch) · a `POST /tmail/pin` handler shaped like
+`post_files_fee` (`handlers/files.rs:296`) · `fees.rs:92` (a fifth `FeeKind` — today's four are
+`Transfer`, `AiUtility`, `AiInference`, `File`, and none carries a 50/50 treasury/burn schedule).
+
+### AT-7 is vacuous today — S7-0
+
+**AT-7 ("pay 1000 Stevemon stake; conversation retains >5 messages") passes right now, with the
+feature entirely absent.** The 5-message cap is client-side display only: `MessagesPanel.tsx:28`
+`INBOX_VISIBLE = 5` and line 269 `showOlder ? items : items.slice(0, INBOX_VISIBLE)` — a "show older"
+button already reveals everything, and the store returns up to 50 regardless (`store.rs`,
+`get_inbox`). This is the decorative-guard failure mode `CLAUDE.md` names, sitting in an acceptance
+test.
+
+**S7-0** makes the cap a real server-side retention rule so that Pin has something to buy: what a pin
+should extend is the store's TTL (`store.rs:21-22`, 7 d default / 30 d max), not a UI list's
+visibility. AT-7 is rewritten to **fail** today — it asserts the 6th message is *gone* — and stays red
+until Pin lands in Phase 1.
+
+### Why Pin last does not block the marketing gate
+
+Locked decision #6 gates marketing on **AT-3 + AT-4 + AT-5** — time-lock, burn, anonymous. **AT-7
+(Pin) is not in that set.** Deferring Pin to Phase 1 costs the gate nothing, and the two features
+that do gate it (S7-1, S7-2) are the two that touch no consensus.
 
 
 ## Superseded scope
