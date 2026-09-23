@@ -5,7 +5,7 @@ what only a human can do.
 
 - **Fork:** `Nexus-Network-Foundation/rust-libp2p` (local clone at `../rust-libp2p`)
 - **Branch:** `gossipsub/log-secondary-connection`, off `master`
-- **Commit:** `e894b7f1c`
+- **Commit:** `bcd75ec58`
 - **Diff:** 2 files, +9 −0 (`protocols/gossipsub/src/behaviour.rs`, `protocols/gossipsub/CHANGELOG.md`)
 
 ---
