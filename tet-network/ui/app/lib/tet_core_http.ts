@@ -17,7 +17,7 @@ import {
   type WalletTransferAcceptedResp,
   type WalletTransferNonceResp,
 } from "./transfer";
-import type { TmailEnvelopeV1 } from "./tmail";
+import type { TmailEnvelopeV1, TmailInboxRowV1 } from "./tmail";
 import type { TmailBurnRevokeV1 } from "./tmail_burn";
 import type { TmailKeyRegistrationV1 } from "./tmail_keys";
 import type { FileDeleteRequestV1, FileEnvelopeV1 } from "./files";
@@ -867,8 +867,11 @@ export async function postTmailReadReceipt(
 export type TmailInboxResult = {
   ok: boolean;
   status: number;
-  messages: TmailEnvelopeV1[];
+  /** Rows, not envelopes: a scheduled message arrives without its `e2ee` block (spec §A.2.4). */
+  messages: TmailInboxRowV1[];
   count: number;
+  /** How many rows are still scheduled. */
+  lockedCount: number;
   text?: string;
 };
 
@@ -882,14 +885,34 @@ export async function getTmailInbox(
   limit = 50,
 ): Promise<TmailInboxResult> {
   const wid = normalizeWalletId64(walletId);
-  if (!wid) return { ok: false, status: 400, messages: [], count: 0, text: "wallet_id must be 64 hex chars" };
+  if (!wid) {
+    return {
+      ok: false,
+      status: 400,
+      messages: [],
+      count: 0,
+      lockedCount: 0,
+      text: "wallet_id must be 64 hex chars",
+    };
+  }
   const clamped = Math.max(1, Math.min(200, Math.floor(limit)));
-  const r = await fetchJson<{ ok?: boolean; count?: number; messages?: TmailEnvelopeV1[] }>(
-    tetCoreUrl(baseUrl, `/tmail/inbox/${wid}`, { limit: String(clamped) }),
-  );
-  if (!r.ok) return { ok: false, status: r.status, messages: [], count: 0, text: r.text };
+  const r = await fetchJson<{
+    ok?: boolean;
+    count?: number;
+    locked_count?: number;
+    messages?: TmailInboxRowV1[];
+  }>(tetCoreUrl(baseUrl, `/tmail/inbox/${wid}`, { limit: String(clamped) }));
+  if (!r.ok) {
+    return { ok: false, status: r.status, messages: [], count: 0, lockedCount: 0, text: r.text };
+  }
   const messages = Array.isArray(r.data?.messages) ? r.data!.messages! : [];
-  return { ok: true, status: r.status, messages, count: messages.length };
+  return {
+    ok: true,
+    status: r.status,
+    messages,
+    count: messages.length,
+    lockedCount: r.data?.locked_count ?? messages.filter((m) => m.locked === true).length,
+  };
 }
 
 export type TmailKeysResult = {

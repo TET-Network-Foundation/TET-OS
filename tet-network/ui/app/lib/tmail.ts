@@ -131,6 +131,25 @@ export type BuildTmailEnvelopeOpts = {
    * preimage, and the node rejects one that disagrees with this flag.
    */
   burnAfterRead?: boolean;
+  /**
+   * Scheduled release (spec §A.2). Absolute epoch-ms, and must be strictly after `sent_at_ms` —
+   * the node refuses a schedule in the past rather than releasing immediately under a "scheduled"
+   * label. Signed, so it cannot be moved in transit. Sets `flags.time_lock`.
+   *
+   * Not an enforced lock: see `TMAIL_TIME_LOCK_DISCLOSURE`.
+   */
+  releaseAtMs?: number;
+};
+
+/** One row of `GET /tmail/inbox` (mirrors Rust `TmailInboxRowV1`). */
+export type TmailInboxRowV1 = Omit<TmailEnvelopeV1, "e2ee"> & {
+  /**
+   * **Absent while the message is still scheduled.** Treat missing as "not yet released", never as
+   * an empty payload.
+   */
+  e2ee?: TmailE2eeBlock;
+  locked?: boolean;
+  locked_note?: string;
 };
 
 /**
@@ -152,17 +171,21 @@ export async function buildTmailEnvelopeV1(opts: BuildTmailEnvelopeOpts): Promis
   const bundle = await encryptForReceiver(plaintext, opts.receiverX25519Pub, opts.receiverMlkemPub);
 
   const payloadSha256Hex = bytesToHex(sha256(bundle.ciphertext));
+  const sentAtMsEarly = Date.now();
+  const releaseAtMs = opts.releaseAtMs ?? 0;
+  if (releaseAtMs !== 0 && releaseAtMs <= sentAtMsEarly) {
+    throw new Error("Scheduled release must be in the future.");
+  }
   const flags: TmailFlags = {
     basic: true,
-    time_lock: false,
+    time_lock: releaseAtMs !== 0,
     burn_after_read: opts.burnAfterRead === true,
     anonymous: false,
   };
   const feePaidMicro = opts.feePaidMicro ?? TMAIL_DEFAULT_FEE_MICRO;
   const ttlMs = opts.ttlMs ?? TMAIL_DEFAULT_TTL_MS;
-  const releaseAtMs = 0;
   const msgId = newMsgId();
-  const sentAtMs = Date.now();
+  const sentAtMs = sentAtMsEarly;
 
   const { chainId, genesisHash } = await expectedChainBinding(opts.baseUrl);
   const msg = tmailEnvelopeAuthMessageBytes({

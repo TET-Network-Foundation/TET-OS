@@ -4,7 +4,8 @@
  * Messages tab — Tmail Basic E2EE (Sovereign OS Messages).
  *
  *   A. Compose — look up the recipient's KEM keys, encrypt client-side, POST /tmail/send.
- *                Optional burn-after-read (spec §A.3) rides the signed `flags`.
+ *                Optional burn-after-read (spec §A.3) and scheduled release (§A.2) ride the
+ *                signed `flags` / `release_at_ms`.
  *   B. Inbox   — poll GET /tmail/inbox/:wallet_id (5s), decrypt with this wallet's KEM secret keys.
  *                Renders exactly what the node returns: retention is the node's
  *                per-conversation rule (S7-0), not a client-side slice.
@@ -24,8 +25,15 @@ import {
   postTmailSend,
   putTmailKeys,
 } from "../lib/tet_core_http";
-import { buildTmailEnvelopeV1, TMAIL_MAX_PLAINTEXT_CHARS, type TmailEnvelopeV1 } from "../lib/tmail";
+import { buildTmailEnvelopeV1, TMAIL_MAX_PLAINTEXT_CHARS, type TmailInboxRowV1 } from "../lib/tmail";
 import { buildTmailBurnRevokeV1, TMAIL_BURN_DISCLOSURE } from "../lib/tmail_burn";
+import {
+  formatReleaseAt,
+  timeUntilRelease,
+  TMAIL_MAX_SCHEDULE_MINUTES,
+  TMAIL_MIN_SCHEDULE_MINUTES,
+  TMAIL_TIME_LOCK_DISCLOSURE,
+} from "../lib/tmail_timelock";
 import { buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { decryptForReceiver } from "../lib/tmail_e2ee";
 import { getTmailKeySession } from "../lib/tmail_session";
@@ -33,14 +41,18 @@ import { b64ToBytes } from "../lib/encoding";
 
 const INBOX_POLL_MS = 5_000;
 
-type DecryptedItem = {
+type InboxItem = {
   msgId: string;
   sender: string;
   sentAtMs: number;
-  text: string;
   /** Signed `flags.burn_after_read` from the envelope — the node's authority, not a local guess. */
   burnAfterRead: boolean;
-};
+} & (
+  | { state: "open"; text: string }
+  // The node withheld the ciphertext: there is nothing to decrypt yet, and the client does not
+  // pretend otherwise. `note` is the node's own R6 disclosure, shown as sent.
+  | { state: "scheduled"; releaseAtMs: number; note: string }
+);
 
 /** Per-message burn state, once the reader has opened a burn-after-read message. */
 type BurnState =
@@ -69,13 +81,15 @@ export default function MessagesPanel(props: {
   const [recipient, setRecipient] = useState("");
   const [messageText, setMessageText] = useState("");
   const [burnAfterRead, setBurnAfterRead] = useState(false);
+  const [scheduled, setScheduled] = useState(false);
+  const [scheduleMinutes, setScheduleMinutes] = useState(60);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   // --- Inbox ---
-  const decryptedRef = useRef<Map<string, DecryptedItem>>(new Map());
+  const decryptedRef = useRef<Map<string, InboxItem>>(new Map());
   const skipRef = useRef<Set<string>>(new Set());
-  const [items, setItems] = useState<DecryptedItem[]>([]);
+  const [items, setItems] = useState<InboxItem[]>([]);
   const [inboxErr, setInboxErr] = useState<string>("");
   // Burn-after-read messages stay sealed until the reader opens them: polling decrypts in the
   // background, and destroying a message the user never actually looked at would be a lie.
@@ -109,28 +123,38 @@ export default function MessagesPanel(props: {
   }, [baseUrl, myWalletId]);
 
   const decryptEnvelope = useCallback(
-    async (env: TmailEnvelopeV1): Promise<DecryptedItem | null> => {
+    async (row: TmailInboxRowV1): Promise<InboxItem | null> => {
       const session = getTmailKeySession();
       if (!session) return null;
-      if (normalizeWalletId64(env.receiver_wallet_id) !== myWalletId) return null;
+      if (normalizeWalletId64(row.receiver_wallet_id) !== myWalletId) return null;
+      const common = {
+        msgId: row.msg_id,
+        sender: row.sender_wallet_id,
+        sentAtMs: row.sent_at_ms,
+        burnAfterRead: row.flags?.burn_after_read === true,
+      };
+      // No ciphertext means the node is still withholding it. Nothing to decrypt, and nothing to
+      // guess at: show it as scheduled with the node's own wording.
+      if (row.locked === true || !row.e2ee) {
+        return {
+          ...common,
+          state: "scheduled",
+          releaseAtMs: row.release_at_ms,
+          note: row.locked_note ?? TMAIL_TIME_LOCK_DISCLOSURE,
+        };
+      }
       try {
         const plaintext = await decryptForReceiver(
           {
-            client_ephemeral_pub: b64ToBytes(env.e2ee.client_ephemeral_pub_b64),
-            mlkem_ciphertext: b64ToBytes(env.e2ee.mlkem_ciphertext_b64),
-            nonce: b64ToBytes(env.e2ee.nonce_b64),
-            ciphertext: b64ToBytes(env.e2ee.ciphertext_b64),
+            client_ephemeral_pub: b64ToBytes(row.e2ee.client_ephemeral_pub_b64),
+            mlkem_ciphertext: b64ToBytes(row.e2ee.mlkem_ciphertext_b64),
+            nonce: b64ToBytes(row.e2ee.nonce_b64),
+            ciphertext: b64ToBytes(row.e2ee.ciphertext_b64),
           },
           session.x25519_sk,
           session.mlkem_sk,
         );
-        return {
-          msgId: env.msg_id,
-          sender: env.sender_wallet_id,
-          sentAtMs: env.sent_at_ms,
-          text: new TextDecoder().decode(plaintext),
-          burnAfterRead: env.flags?.burn_after_read === true,
-        };
+        return { ...common, state: "open", text: new TextDecoder().decode(plaintext) };
       } catch {
         return null;
       }
@@ -169,13 +193,16 @@ export default function MessagesPanel(props: {
       let changed = false;
       for (const env of res.messages) {
         const id = env.msg_id;
-        if (decryptedRef.current.has(id) || skipRef.current.has(id)) continue;
+        // A scheduled row is deliberately NOT treated as settled: once the node releases it, the
+        // next poll carries the ciphertext and it must be decrypted then.
+        const cached = decryptedRef.current.get(id);
+        if ((cached && cached.state !== "scheduled") || skipRef.current.has(id)) continue;
         const decoded = await decryptEnvelope(env);
         if (cancelled || !mountedRef.current) return;
         if (decoded) {
+          if (JSON.stringify(cached) !== JSON.stringify(decoded)) changed = true;
           decryptedRef.current.set(id, decoded);
-          changed = true;
-        } else {
+        } else if (!cached) {
           skipRef.current.add(id);
         }
       }
@@ -237,6 +264,7 @@ export default function MessagesPanel(props: {
         receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
         baseUrl,
         burnAfterRead,
+        releaseAtMs: scheduled ? Date.now() + scheduleMinutes * 60_000 : undefined,
       });
       const sent = await postTmailSend(baseUrl, env);
       if (!mountedRef.current) return;
@@ -357,6 +385,40 @@ export default function MessagesPanel(props: {
             <span className="block text-black/60">{TMAIL_BURN_DISCLOSURE}</span>
           </span>
         </label>
+        <label className="flex items-start gap-2 text-[11px] text-black/80">
+          <input
+            type="checkbox"
+            checked={scheduled}
+            onChange={(e) => setScheduled(e.target.checked)}
+            className="mt-[2px]"
+          />
+          <span className="flex-1">
+            <span className="font-semibold">Schedule release</span>
+            {scheduled ? (
+              <span className="ml-2 inline-flex items-center gap-1">
+                <input
+                  type="number"
+                  min={TMAIL_MIN_SCHEDULE_MINUTES}
+                  max={TMAIL_MAX_SCHEDULE_MINUTES}
+                  value={scheduleMinutes}
+                  onChange={(e) =>
+                    setScheduleMinutes(
+                      Math.min(
+                        TMAIL_MAX_SCHEDULE_MINUTES,
+                        Math.max(TMAIL_MIN_SCHEDULE_MINUTES, Number(e.target.value) || 1),
+                      ),
+                    )
+                  }
+                  className={`${inset} w-20 bg-white px-1 py-0.5 text-xs outline-none`}
+                />
+                <span className="text-black/60">
+                  minutes — opens {formatReleaseAt(Date.now() + scheduleMinutes * 60_000)}
+                </span>
+              </span>
+            ) : null}
+            <span className="block text-black/60">{TMAIL_TIME_LOCK_DISCLOSURE}</span>
+          </span>
+        </label>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-black/60">
             {messageText.length}/{TMAIL_MAX_PLAINTEXT_CHARS}
@@ -367,7 +429,13 @@ export default function MessagesPanel(props: {
             onClick={() => void onSend()}
             className={`${winBtn} bg-[#DAD8D2] px-4 py-1 text-sm ${sendBusy ? "opacity-60" : ""}`}
           >
-            {sendBusy ? "Encrypting…" : burnAfterRead ? "Send Burn-After-Read" : "Send Encrypted Message"}
+            {sendBusy
+              ? "Encrypting…"
+              : scheduled
+                ? "Send Scheduled"
+                : burnAfterRead
+                  ? "Send Burn-After-Read"
+                  : "Send Encrypted Message"}
           </button>
         </div>
         {sendNotice ? (
@@ -396,12 +464,15 @@ export default function MessagesPanel(props: {
           <div className="space-y-2">
             {items.map((m) => {
               const burn = opened[m.msgId];
-              const sealed = m.burnAfterRead && !burn;
+              const sealed = m.state === "open" && m.burnAfterRead && !burn;
               return (
                 <div key={m.msgId} className={`${outset} bg-white p-2`}>
                   <div className="flex items-center justify-between text-[10px] font-mono text-black/60">
                     <span title={m.sender}>from {shortId(m.sender)}</span>
                     <span className="flex items-center gap-2">
+                      {m.state === "scheduled" ? (
+                        <span className="font-semibold text-[#1f3f7a]">SCHEDULED</span>
+                      ) : null}
                       {m.burnAfterRead ? (
                         <span className="font-semibold text-[#8a1f1f]">BURN AFTER READING</span>
                       ) : null}
@@ -409,7 +480,16 @@ export default function MessagesPanel(props: {
                     </span>
                   </div>
 
-                  {sealed ? (
+                  {m.state === "scheduled" ? (
+                    <div className="mt-1 space-y-1">
+                      <div className="text-[11px] text-black/70">
+                        Opens {formatReleaseAt(m.releaseAtMs)} — in{" "}
+                        {timeUntilRelease(m.releaseAtMs)}. This node is not serving the encrypted
+                        message yet.
+                      </div>
+                      <div className="text-[10px] text-black/55">{m.note}</div>
+                    </div>
+                  ) : sealed ? (
                     <div className="mt-1 space-y-1">
                       <div className="text-[11px] text-black/70">
                         Sealed. Opening this message destroys it on the network.

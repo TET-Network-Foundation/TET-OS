@@ -3,6 +3,8 @@
  *
  *   1. The burn-revoke pre-image is byte-identical to the Rust one (cross-language golden vector).
  *   2. The user-facing burn copy is verbatim spec §A.3.2 Layer 3 (locked decision #2).
+ *   3. The scheduled-release copy is verbatim spec §A.2.5, in both the node and the UI (R6,
+ *      locked decision #1).
  *
  * Part 1 — pre-image — TypeScript side of the cross-language golden vector (spec §A.3.2).
  *
@@ -122,22 +124,36 @@ function specDisclosure() {
   return quoted.join(" ").trim();
 }
 
-function uiDisclosure() {
-  const src = readFileSync(resolve(REPO, "tet-network/ui/app/lib/tmail_burn.ts"), "utf8");
-  const at = src.indexOf("export const TMAIL_BURN_DISCLOSURE");
-  if (at < 0) throw new Error("TMAIL_BURN_DISCLOSURE not found in tmail_burn.ts");
-  const decl = src.slice(at, src.indexOf(";", at));
-  // Concatenate the double-quoted string literal parts of the declaration.
-  const parts = decl.match(/"(?:[^"\\]|\\.)*"/g) ?? [];
-  if (parts.length === 0) throw new Error("no string literal found for TMAIL_BURN_DISCLOSURE");
-  return parts.map((p) => JSON.parse(p)).join("").trim();
+/**
+ * Read a `const NAME = "..." [+ "..."];` string constant out of a Rust or TypeScript source file.
+ *
+ * Deliberately does NOT scan to the next `;` -- these disclosures contain semicolons, and doing so
+ * truncated the declaration mid-literal, which is how this check first came up empty. It matches
+ * the literal sequence directly from the `=` instead.
+ *
+ * `[\s\S]` rather than `.` in the escape branch: a Rust literal continues across lines with a
+ * trailing backslash, and `.` does not match a newline in JS.
+ */
+function stringConst(file, decl) {
+  const src = readFileSync(resolve(REPO, file), "utf8");
+  const at = src.indexOf(decl);
+  if (at < 0) throw new Error(`${decl} not found in ${file}`);
+  const m = src.slice(at).match(/=\s*((?:"(?:[^"\\]|\\[\s\S])*"\s*\+?\s*)+)/);
+  if (!m) throw new Error(`no string literal for ${decl} in ${file}`);
+  const parts = m[1].match(/"(?:[^"\\]|\\[\s\S])*"/g) ?? [];
+  if (parts.length === 0) throw new Error(`no string literal for ${decl} in ${file}`);
+  // Rust's backslash-newline continuation eats the newline and the following indentation.
+  return parts
+    .map((p) => JSON.parse(p.replace(/\\\n\s*/g, "")))
+    .join("")
+    .trim();
 }
 
 let spec;
 let ui;
 try {
   spec = specDisclosure();
-  ui = uiDisclosure();
+  ui = stringConst("tet-network/ui/app/lib/tmail_burn.ts", "export const TMAIL_BURN_DISCLOSURE");
 } catch (e) {
   failures += 1;
   console.error(`  FAIL could not read the disclosure: ${e.message}`);
@@ -152,13 +168,66 @@ if (spec !== undefined && ui !== undefined) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// [3] The locked scheduled-release copy must be verbatim spec §A.2.5 (R6, decision #1).
+//
+// Same reasoning as [2]. "Time-lock" implies an enforcement this feature does not have; the
+// disclosure is the only thing standing between the name and a false promise, and it has to agree
+// across the spec, the node and the UI or one of them is lying to somebody.
+// ---------------------------------------------------------------------------
+
+console.log("\n[3] locked scheduled-release disclosure is verbatim spec §A.2.5 (R6)");
+
+function blockquoteAfter(marker, file) {
+  const text = readFileSync(resolve(REPO, file), "utf8");
+  const at = text.indexOf(marker);
+  if (at < 0) throw new Error(`marker not found in ${file}: ${marker}`);
+  const lines = text.slice(at + marker.length).split("\n");
+  const quoted = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (t === "") {
+      if (quoted.length > 0) break;
+      continue;
+    }
+    if (!t.startsWith(">")) break;
+    quoted.push(t.replace(/^>\s?/, "").trim());
+  }
+  return quoted.join(" ").trim();
+}
+
+try {
+  const specTl = blockquoteAfter(
+    "### A.2.5 User-facing copy (locked — risk R6, decision #1)",
+    "docs/SOVEREIGN_OS_PHASE0_SPEC.md",
+  );
+  const rustTl = stringConst(
+    "tet-core/src/tmail/timelock.rs",
+    "pub const TMAIL_TIME_LOCK_DISCLOSURE",
+  );
+  const uiTl = stringConst(
+    "tet-network/ui/app/lib/tmail_timelock.ts",
+    "export const TMAIL_TIME_LOCK_DISCLOSURE",
+  );
+  check("node copy equals the spec §A.2.5 copy verbatim", rustTl, specTl);
+  check("UI copy equals the spec §A.2.5 copy verbatim", uiTl, specTl);
+  check(
+    "copy still refuses the word 'lock' as a promise",
+    /not an enforced lock/i.test(uiTl) && /could read it sooner/i.test(uiTl),
+    true,
+  );
+} catch (e) {
+  failures += 1;
+  console.error(`  FAIL could not read the scheduled-release disclosure: ${e.message}`);
+}
+
 if (failures > 0) {
   console.error(
     `\n${failures} check(s) failed.\n` +
       "  - A pre-image mismatch means every read receipt the UI sends is rejected 401 and nothing\n" +
       "    burns. Fix both sides and the golden literal together.\n" +
-      "  - A disclosure mismatch means the shipped copy no longer matches locked decision #2.\n" +
-      "    Change the spec first, deliberately, or restore the wording.",
+      "  - A disclosure mismatch means shipped copy no longer matches a locked decision (#2 burn,\n" +
+      "    #1 scheduled release). Change the spec first, deliberately, or restore the wording.",
   );
   process.exit(1);
 }
