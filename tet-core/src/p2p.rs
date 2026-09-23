@@ -1212,6 +1212,75 @@ pub(crate) async fn handle_tx_broadcast(
     }
 }
 
+/// Result of handling a Tmail gossip event. Returned rather than logged so the receive path can be
+/// driven from a test without a swarm — the same reason [`TxGossipOutcome`] exists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TmailGossipOutcome {
+    Stored { msg_id: String },
+    Duplicate { msg_id: String },
+    Burned { msg_id: String },
+    AlreadyBurned { msg_id: String },
+    UnknownBurnTarget { msg_id: String },
+    Rejected { reason: String },
+}
+
+/// Handle a Tmail-plane event learned from a peer: an envelope to buffer, or a burn revoke to
+/// apply (spec §A.1, §A.3.2).
+///
+/// **This is the whole receive path.** The swarm arm does nothing but call this and log the
+/// outcome, so a test that drives this function covers the same code the network does — which is
+/// the point. A guard that reimplemented the dispatch instead would be testing itself.
+///
+/// Neither branch re-broadcasts: an event received here is forwarded onward only by gossipsub's
+/// own mesh propagation, never amplified by us. Neither branch touches the ledger.
+pub(crate) fn handle_tmail_network_event(
+    tmail_store: &Arc<crate::tmail::store::TmailStore>,
+    event: &crate::models::NetworkEvent,
+) -> TmailGossipOutcome {
+    match event {
+        crate::models::NetworkEvent::TmailGossip { envelope } => {
+            if let Err(e) = crate::tmail::envelope::verify_tmail_envelope_v1(envelope) {
+                return TmailGossipOutcome::Rejected {
+                    reason: format!("envelope: {e}"),
+                };
+            }
+            match tmail_store.store_tmail(envelope) {
+                Ok(true) => TmailGossipOutcome::Stored {
+                    msg_id: envelope.msg_id.clone(),
+                },
+                // Also the burned case: a tombstoned msg_id is refused here, which is what stops a
+                // re-gossiped envelope from undoing a burn.
+                Ok(false) => TmailGossipOutcome::Duplicate {
+                    msg_id: envelope.msg_id.clone(),
+                },
+                Err(e) => TmailGossipOutcome::Rejected {
+                    reason: format!("store: {e}"),
+                },
+            }
+        }
+        crate::models::NetworkEvent::TmailBurnRevoke { revoke } => {
+            match crate::tmail::burn::apply_burn_revoke(tmail_store, revoke) {
+                Ok(crate::tmail::burn::BurnRevokeOutcome::Burned { msg_id }) => {
+                    crate::metrics::inc_tmail_burned();
+                    TmailGossipOutcome::Burned { msg_id }
+                }
+                Ok(crate::tmail::burn::BurnRevokeOutcome::AlreadyBurned { msg_id }) => {
+                    TmailGossipOutcome::AlreadyBurned { msg_id }
+                }
+                Ok(crate::tmail::burn::BurnRevokeOutcome::UnknownMessage { msg_id }) => {
+                    TmailGossipOutcome::UnknownBurnTarget { msg_id }
+                }
+                Err(e) => TmailGossipOutcome::Rejected {
+                    reason: format!("burn revoke: {e}"),
+                },
+            }
+        }
+        other => TmailGossipOutcome::Rejected {
+            reason: format!("not a tmail event: {other:?}"),
+        },
+    }
+}
+
 /// Whether a bootnode is registered as a gossipsub **explicit peer** (`TET_GOSSIP_BOOTNODE_EXPLICIT`,
 /// default on — the historical behaviour).
 ///
@@ -2760,63 +2829,35 @@ async fn run_mdns_ping_swarm(
                                     }
                                 }
                             }
-                            NetworkEvent::TmailGossip { envelope } => {
-                                // Tmail Basic E2EE envelope from a peer: verify the hybrid signature,
-                                // then buffer it in the node-local TTL store for the offline receiver.
-                                // The envelope is off-ledger and is never re-broadcast on receipt.
-                                match crate::tmail::envelope::verify_tmail_envelope_v1(&envelope) {
-                                    Ok(()) => match tmail_store.store_tmail(&envelope) {
-                                        Ok(true) => {
-                                            println!(
-                                                "[P2P] ✅ TMAIL ENVELOPE STORED msg_id={} sender={} receiver={}",
-                                                envelope.msg_id,
-                                                envelope.sender_wallet_id,
-                                                envelope.receiver_wallet_id
-                                            );
-                                        }
-                                        Ok(false) => {
-                                            println!(
-                                                "[P2P] ⏭️ TMAIL ENVELOPE ALREADY STORED msg_id={}",
-                                                envelope.msg_id
-                                            );
-                                        }
-                                        Err(e) => {
-                                            println!("[P2P] ❌ TMAIL STORE FAILED: {e}");
-                                        }
-                                    },
-                                    Err(e) => {
-                                        println!("[P2P] ❌ TMAIL ENVELOPE REJECTED: {e}");
+                            ev @ (NetworkEvent::TmailGossip { .. }
+                            | NetworkEvent::TmailBurnRevoke { .. }) => {
+                                // Tmail plane (spec §A.1, §A.3.2). Both branches live in
+                                // `handle_tmail_network_event` so the receive path is one
+                                // testable function rather than logic buried in this loop;
+                                // off-ledger, and never re-broadcast on receipt.
+                                match handle_tmail_network_event(&tmail_store, &ev) {
+                                    TmailGossipOutcome::Stored { msg_id } => {
+                                        println!("[P2P] ✅ TMAIL ENVELOPE STORED msg_id={msg_id}");
                                     }
-                                }
-                            }
-                            NetworkEvent::TmailBurnRevoke { revoke } => {
-                                // Burn-after-read revoke (spec §A.3.2 Layer 1). Verification and
-                                // authorization both live in `apply_burn_revoke`, which the REST
-                                // read-receipt handler also calls, so neither path can end up
-                                // weaker than the other. Never re-broadcast on receipt.
-                                match crate::tmail::burn::apply_burn_revoke(&tmail_store, &revoke) {
-                                    Ok(crate::tmail::burn::BurnRevokeOutcome::Burned { msg_id }) => {
-                                        crate::metrics::inc_tmail_burned();
+                                    TmailGossipOutcome::Duplicate { msg_id } => {
                                         println!(
-                                            "[P2P] 🔥 TMAIL BURNED msg_id={msg_id} reader={}",
-                                            revoke.reader_wallet_id
+                                            "[P2P] ⏭️ TMAIL ENVELOPE ALREADY STORED OR BURNED msg_id={msg_id}"
                                         );
                                     }
-                                    Ok(crate::tmail::burn::BurnRevokeOutcome::AlreadyBurned {
-                                        msg_id,
-                                    }) => {
+                                    TmailGossipOutcome::Burned { msg_id } => {
+                                        println!("[P2P] 🔥 TMAIL BURNED msg_id={msg_id}");
+                                    }
+                                    TmailGossipOutcome::AlreadyBurned { msg_id } => {
                                         println!("[P2P] ⏭️ TMAIL ALREADY BURNED msg_id={msg_id}");
                                     }
-                                    Ok(crate::tmail::burn::BurnRevokeOutcome::UnknownMessage {
-                                        msg_id,
-                                    }) => {
+                                    TmailGossipOutcome::UnknownBurnTarget { msg_id } => {
                                         println!(
                                             "[P2P] ⏭️ TMAIL BURN REVOKE FOR UNKNOWN msg_id={msg_id}"
                                         );
                                     }
-                                    Err(e) => {
+                                    TmailGossipOutcome::Rejected { reason } => {
                                         crate::metrics::inc_gossip_rejected();
-                                        println!("[P2P] ❌ TMAIL BURN REVOKE REJECTED: {e}");
+                                        println!("[P2P] ❌ TMAIL EVENT REJECTED: {reason}");
                                     }
                                 }
                             }

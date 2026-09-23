@@ -7643,3 +7643,251 @@ fn tmail_burn_revoke_preimage_cannot_collide_with_an_envelope_preimage() {
         "the revoke pre-image must carry its own domain separator"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S7-1 item 5 — AT-4: two nodes, burn on read, gone from BOTH stores.
+// ---------------------------------------------------------------------------
+
+/// One simulated node: its own ledger, its own Tmail store, its own REST state.
+struct TmailNode {
+    rest: crate::rest::RestState,
+}
+
+impl TmailNode {
+    fn new() -> Self {
+        let ledger = std::sync::Arc::new(open_temp_ledger());
+        Self {
+            rest: rest_state_for_tests(ledger),
+        }
+    }
+
+    fn store(&self) -> &std::sync::Arc<crate::tmail::store::TmailStore> {
+        &self.rest.tmail
+    }
+
+    fn inbox_len(&self, wallet: &str) -> usize {
+        self.rest.tmail.get_inbox(wallet, 50).len()
+    }
+
+    /// Deliver a gossip event to this node exactly as the swarm does: JSON on the wire, decoded
+    /// into a `NetworkEvent`, dispatched through `handle_tmail_network_event`.
+    ///
+    /// The JSON round-trip is not decoration — it is the actual gossipsub payload format, and it
+    /// is where a serde-shape mistake would show up.
+    fn receive_gossip(&self, wire_json: &str) -> crate::p2p::TmailGossipOutcome {
+        let event: crate::models::NetworkEvent =
+            serde_json::from_str(wire_json).expect("peers must be able to decode this event");
+        crate::p2p::handle_tmail_network_event(self.store(), &event)
+    }
+}
+
+fn tmail_wire_envelope(env: &crate::tmail::envelope::TmailEnvelopeV1) -> String {
+    serde_json::to_string(&crate::models::NetworkEvent::TmailGossip {
+        envelope: env.clone(),
+    })
+    .unwrap()
+}
+
+fn tmail_wire_revoke(rev: &crate::tmail::burn::TmailBurnRevokeV1) -> String {
+    serde_json::to_string(&crate::models::NetworkEvent::TmailBurnRevoke {
+        revoke: rev.clone(),
+    })
+    .unwrap()
+}
+
+/// **AT-4.** Send a burn-after-read message from node A, read it on node B, and assert the
+/// ciphertext is gone from **both** stores.
+///
+/// Shape of the run, matching how the network actually behaves:
+///   A: POST /tmail/send        → stored on A, gossiped
+///   B: receives the envelope   → stored on B (this is how an offline receiver gets mail)
+///   B: POST /tmail/read-receipt → burned on B, revoke gossiped
+///   A: receives the revoke     → burned on A
+///
+/// Every hop crosses `serde_json` and `handle_tmail_network_event`, the same function the swarm
+/// event loop calls, so this is not a re-implementation of the receive path standing in for it.
+#[tokio::test]
+async fn at4_burn_after_read_removes_the_message_from_both_nodes() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let node_a = TmailNode::new();
+    let node_b = TmailNode::new();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "at4-burn-1";
+
+    // --- A sends a burn-after-read message -------------------------------------------------
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        msg_id,
+        tmail_flags_for_tests(true),
+        None,
+    );
+    let sent = crate::rest::handlers::tmail::post_tmail_send(
+        axum::extract::State(node_a.rest.clone()),
+        axum::Json(env.clone()),
+    )
+    .await;
+    assert_eq!(sent.status(), StatusCode::ACCEPTED, "A must accept the send");
+
+    // --- B learns it over gossip -----------------------------------------------------------
+    assert_eq!(
+        node_b.receive_gossip(&tmail_wire_envelope(&env)),
+        crate::p2p::TmailGossipOutcome::Stored {
+            msg_id: msg_id.to_string()
+        },
+        "B must buffer the envelope for its offline receiver"
+    );
+
+    // Both nodes hold it. Without this the burn assertions below could pass for the wrong reason.
+    assert_eq!(node_a.inbox_len(&receiver), 1, "precondition: A holds it");
+    assert_eq!(node_b.inbox_len(&receiver), 1, "precondition: B holds it");
+
+    // --- B reads it: read receipt burns locally and announces ------------------------------
+    let revoke = signed_burn_revoke_for_tests(&receiver_words, &receiver, msg_id);
+    let receipt = crate::rest::handlers::tmail::post_tmail_read_receipt(
+        axum::extract::State(node_b.rest.clone()),
+        axum::Json(revoke.clone()),
+    )
+    .await;
+    assert_eq!(
+        receipt.status(),
+        StatusCode::ACCEPTED,
+        "B must accept the receiver's read receipt"
+    );
+
+    // --- A learns the revoke over gossip ---------------------------------------------------
+    assert_eq!(
+        node_a.receive_gossip(&tmail_wire_revoke(&revoke)),
+        crate::p2p::TmailGossipOutcome::Burned {
+            msg_id: msg_id.to_string()
+        },
+        "A must honour a revoke signed by the message's receiver"
+    );
+
+    // --- AT-4: gone from BOTH ---------------------------------------------------------------
+    assert_eq!(
+        node_b.inbox_len(&receiver),
+        0,
+        "AT-4: the message must be gone from the reading node"
+    );
+    assert_eq!(
+        node_a.inbox_len(&receiver),
+        0,
+        "AT-4: the message must be gone from the sending node too"
+    );
+    assert!(node_a.store().get_by_msg_id(msg_id).is_none());
+    assert!(node_b.store().get_by_msg_id(msg_id).is_none());
+
+    // --- And it stays gone: a peer re-gossips the original envelope -------------------------
+    assert_eq!(
+        node_a.receive_gossip(&tmail_wire_envelope(&env)),
+        crate::p2p::TmailGossipOutcome::Duplicate {
+            msg_id: msg_id.to_string()
+        },
+        "a re-gossiped burned envelope must be refused, not restored"
+    );
+    assert_eq!(
+        node_b.receive_gossip(&tmail_wire_envelope(&env)),
+        crate::p2p::TmailGossipOutcome::Duplicate {
+            msg_id: msg_id.to_string()
+        }
+    );
+    assert_eq!(node_a.inbox_len(&receiver), 0, "still gone on A");
+    assert_eq!(node_b.inbox_len(&receiver), 0, "still gone on B");
+}
+
+/// The negative half of AT-4: an ordinary (non-burn) message survives the same two-node run, so
+/// the test above is measuring the burn and not simply that messages vanish.
+#[tokio::test]
+async fn at4_control_a_plain_message_survives_the_same_two_node_run() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let node_a = TmailNode::new();
+    let node_b = TmailNode::new();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "at4-plain-1";
+
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        msg_id,
+        tmail_flags_for_tests(false), // no burn flag
+        None,
+    );
+    crate::rest::handlers::tmail::post_tmail_send(
+        axum::extract::State(node_a.rest.clone()),
+        axum::Json(env.clone()),
+    )
+    .await;
+    node_b.receive_gossip(&tmail_wire_envelope(&env));
+    assert_eq!(node_a.inbox_len(&receiver), 1);
+    assert_eq!(node_b.inbox_len(&receiver), 1);
+
+    // The receiver tries the very same read receipt that burned the message above.
+    let revoke = signed_burn_revoke_for_tests(&receiver_words, &receiver, msg_id);
+    let receipt = crate::rest::handlers::tmail::post_tmail_read_receipt(
+        axum::extract::State(node_b.rest.clone()),
+        axum::Json(revoke.clone()),
+    )
+    .await;
+    assert_eq!(
+        receipt.status(),
+        StatusCode::FORBIDDEN,
+        "a message that did not opt into burning must not be destroyable"
+    );
+    assert!(matches!(
+        node_a.receive_gossip(&tmail_wire_revoke(&revoke)),
+        crate::p2p::TmailGossipOutcome::Rejected { .. }
+    ));
+
+    assert_eq!(node_a.inbox_len(&receiver), 1, "plain mail survives on A");
+    assert_eq!(node_b.inbox_len(&receiver), 1, "plain mail survives on B");
+}
+
+/// A third party's revoke must not burn on either node — the authorization rule, across the wire.
+#[tokio::test]
+async fn at4_a_stranger_cannot_burn_a_message_on_either_node() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let node_a = TmailNode::new();
+    let node_b = TmailNode::new();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (stranger_words, stranger) = tmail_party_for_tests();
+    let msg_id = "at4-stranger-1";
+
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        msg_id,
+        tmail_flags_for_tests(true),
+        None,
+    );
+    crate::rest::handlers::tmail::post_tmail_send(
+        axum::extract::State(node_a.rest.clone()),
+        axum::Json(env.clone()),
+    )
+    .await;
+    node_b.receive_gossip(&tmail_wire_envelope(&env));
+
+    let revoke = signed_burn_revoke_for_tests(&stranger_words, &stranger, msg_id);
+    assert!(matches!(
+        node_a.receive_gossip(&tmail_wire_revoke(&revoke)),
+        crate::p2p::TmailGossipOutcome::Rejected { .. }
+    ));
+    assert!(matches!(
+        node_b.receive_gossip(&tmail_wire_revoke(&revoke)),
+        crate::p2p::TmailGossipOutcome::Rejected { .. }
+    ));
+    assert_eq!(node_a.inbox_len(&receiver), 1, "A must ignore the stranger");
+    assert_eq!(node_b.inbox_len(&receiver), 1, "B must ignore the stranger");
+}
