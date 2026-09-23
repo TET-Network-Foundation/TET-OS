@@ -163,6 +163,41 @@ off-ledger — but burn-after-read does not function across versions and emittin
 upgrade is actively counterproductive. The seed is the only block producer and the main gossip hub,
 so it upgrades first.
 
+### Seed redeployed to the S7-1 binary, 2026-09-23
+
+Helsinki seed moved from the pre-S7-1 image to `2e14629`. Source shipped by the documented
+`git archive HEAD | tar -x -C /opt/TET-OS` path (the seed is not a git checkout), then
+`docker compose -f docker-compose.yml -f docker-compose.dev.yml -f deploy/docker-compose.seed.yml`
+**build first, recreate second** — the old container kept producing blocks for the whole build, so
+downtime was the container restart alone, not the ~6 min compile.
+
+| Check | Before | After |
+|---|---|---|
+| **PeerId** | `12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC` | **identical** — the published multiaddr in `RUNNING_A_NODE.md` still resolves |
+| Height | 10732 → 10802 at swap | 10804 and advancing — no reset |
+| Block 10732 `block_id` | `0x10feee93…b15031` | **identical** |
+| Block 10732 `state_root` | `0x97902ea4…679fba` | **identical** |
+| `POST /tmail/read-receipt` | `404` (route absent) | `422` (route live) |
+
+The data volume `tet-os_tet_core_data` was never touched, which is why the node kept its libp2p
+identity and its chain.
+
+**Verified on the deployed binary** (`tmail_burn_interop_step5.mjs` over an SSH tunnel to the
+loopback REST): 19/19 green — burn envelope accepted, read receipt `202` carrying the locked
+§A.3.2 copy, ciphertext gone, re-submission `409`, and all three authorization controls refused
+with `403`.
+
+**Independent follower, same binary, over the internet:** a fresh node joined the upgraded seed via
+the public multiaddr and converged to **height 10827 with `state_root 0xfc93c5a3…9fd941`, identical
+on both**. Gossip peering confirmed in its log (`CONNECTION ESTABLISHED` with the seed's PeerId,
+subscribed to `/tet/v1/tmail`).
+
+**Still unverified:** a burn initiated on one node and observed to clear the *other* across the
+public network. That specific run writes Tmail traffic onto the public seed and was not performed.
+Burn is proven cross-node on two local nodes and proven on the seed itself; the seed-to-follower
+combination is the untested one, and per the AT-F1 lesson (a seed-submitted pass that never
+exercised the follower path) it should not be claimed until it is run.
+
 ### Why time-lock is not the expensive one
 
 The spec's §A.2 reads as though time-lock is the hard feature, and
