@@ -568,7 +568,15 @@ fn schedule_history_prune(ledger: Arc<Ledger>, block_height: u64) {
     });
 }
 
-fn validate_zk_task_claims(ledger: &Ledger, txs: &[SignedTxEnvelopeV1]) -> Result<(), String> {
+/// `pub(crate)` so the guard test can exercise it directly.
+///
+/// Reaching it through `validate_and_record_backfill_candidate` is not possible in a unit test:
+/// producer/validator-set and tx-hash checks reject a synthetic candidate long before the zk
+/// claims are examined, which makes an end-to-end assertion pass for the wrong reason.
+pub(crate) fn validate_zk_task_claims(
+    ledger: &Ledger,
+    txs: &[SignedTxEnvelopeV1],
+) -> Result<(), String> {
     let mut seen_task_ids = HashSet::<String>::new();
     for env in txs {
         let TxV1::VerifyZkProof {
@@ -587,15 +595,26 @@ fn validate_zk_task_claims(ledger: &Ledger, txs: &[SignedTxEnvelopeV1]) -> Resul
         ) {
             Ok(j) => j,
             Err(e) => {
+                // Reject the candidate. Write nothing.
+                //
+                // This arm used to slash the worker's bond before returning. Validation rejects
+                // the block, so the slash survived a block that never became canonical: a node
+                // that received the bad candidate slashed, a node that never saw it did not, and
+                // the two diverged with nothing in the chain to explain the difference.
+                //
+                // Removing it is fork *removal*, not a consensus change. Block validity is
+                // unchanged — the candidate is still rejected, on the same condition, with the
+                // same error. What changes is that every node now computes the same (unchanged)
+                // state when it sees one.
+                //
+                // It matters because this path is reachable from the public P2P port: any peer
+                // that can send a block candidate could make the receiving node burn a third
+                // party's bond, and only that node's. Punishing an invalid receipt on-chain needs
+                // a slash tx variant — see PHASE_1_GENESIS_SPEC §2.
                 let worker = env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase();
-                let slashed = ledger
-                    .slash_worker_bond_to_ecosystem_all(&worker)
-                    .unwrap_or(0);
                 log::error!(
-                    "[zk-slash] invalid receipt in block candidate worker={} slashed_micro={} err={}",
-                    worker,
-                    slashed,
-                    e
+                    "[zk-verify] invalid receipt in block candidate worker={worker} err={e} \
+                     (candidate rejected, no bond slashed)"
                 );
                 return Err(e.to_string());
             }

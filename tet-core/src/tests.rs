@@ -6528,3 +6528,78 @@ async fn invalid_zk_receipt_is_rejected_without_slashing() {
         "a refused receipt must leave state_root untouched"
     );
 }
+
+/// **SECURITY REGRESSION GUARD.** A block candidate carrying an invalid ZK receipt is rejected
+/// and writes nothing.
+///
+/// `validate_zk_task_claims` (`consensus.rs:571`) used to slash the worker's entire bond and
+/// *then* return `Err`, rejecting the candidate. The rejection meant the block never became
+/// canonical — but the slash persisted. A node that received the bad candidate slashed; a node
+/// that never saw it did not; the two diverged with nothing in the chain to explain the
+/// difference.
+///
+/// It mattered more than the REST-side slash because of the reach: this path is entered from the
+/// public P2P port. Any peer able to send a block candidate could make the receiving node burn a
+/// third party's bond — and only that node's, which is precisely the block-9828 shape.
+///
+/// Removing it is fork *removal*, not a consensus change: the candidate is still rejected, on the
+/// same condition, with the same error. Only the write is gone. This test asserts both halves —
+/// still rejected, and nothing written.
+#[tokio::test]
+async fn invalid_zk_candidate_is_rejected_without_slashing() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    let worker = crate::wallet::generate_mnemonic_12().unwrap();
+    let worker_words = worker.mnemonic_12.clone().unwrap();
+    let worker_id = worker.address_hex.to_ascii_lowercase();
+    ledger
+        .admin_rest_faucet(&worker_id, 100 * crate::ledger::STEVEMON, "127.0.0.1", true, 1, 1)
+        .unwrap();
+    ledger
+        .stake_worker_bond_micro(&worker_id, 10 * crate::ledger::STEVEMON, None)
+        .unwrap();
+    let bond_before = ledger.worker_bond_micro(&worker_id).unwrap();
+    assert!(bond_before > 0, "the worker must hold a bond for this guard to mean anything");
+    let root_before = ledger.compute_state_root().unwrap();
+
+    // The tx a malicious peer would put in a block candidate: a VerifyZkProof carrying garbage.
+    //
+    // Exercised against `validate_zk_task_claims` directly rather than through
+    // `validate_and_record_backfill_candidate`. The full path rejects a synthetic candidate on
+    // producer/validator-set and tx-hash checks long before it looks at zk claims, so an
+    // end-to-end assertion passes for the wrong reason — verified: with the slash restored, the
+    // end-to-end version of this test still passed.
+    let bad = signed_env_for_tests(
+        crate::protocol::TxV1::VerifyZkProof {
+            task_id: String::new(),
+            image_id: methods::NEXUS_GUEST_ID,
+            journal_b64: base64::engine::general_purpose::STANDARD.encode(b"not-a-journal"),
+            receipt_b64: base64::engine::general_purpose::STANDARD.encode(b"not-a-receipt"),
+        },
+        &worker_words,
+        &worker_id,
+    );
+
+    let res = crate::consensus::validate_zk_task_claims(ledger.as_ref(), &[bad]);
+    assert!(
+        res.is_err(),
+        "a candidate carrying an unverifiable receipt must be rejected"
+    );
+
+    assert_eq!(
+        ledger.worker_bond_micro(&worker_id).unwrap(),
+        bond_before,
+        "rejecting a candidate must not slash a bond — the block never becomes canonical, so the \
+         write would survive on this node alone"
+    );
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "rejecting a candidate must leave state_root untouched"
+    );
+}
