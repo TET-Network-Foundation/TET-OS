@@ -6717,6 +6717,17 @@ fn tmail_e2ee_block_for_tests() -> crate::tmail::envelope::TmailE2eeBlock {
     }
 }
 
+/// Wall-clock now, in ms. Tmail fixtures must be **live**: the store filters expired entries out
+/// of `get_inbox`, so a fixture with a stale `sent_at_ms` makes "the message is gone" assertions
+/// pass whether or not anything was deleted. That is exactly how the first version of the AT-4
+/// guards went vacuous (negative control C6).
+fn tmail_now_ms_for_tests() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 /// Hybrid-signs a [`TmailEnvelopeV1`] over the §A.1.3 pre-image.
 ///
 /// Same env contract as [`signed_env_for_tests`]: the pre-image binds `chain_id` and
@@ -6741,9 +6752,10 @@ fn signed_tmail_env_for_tests(
         flags,
         sender_wallet_id: sender_wallet_id.to_ascii_lowercase(),
         receiver_wallet_id: receiver_wallet_id.to_ascii_lowercase(),
-        sent_at_ms: 1_790_000_000_000,
+        sent_at_ms: tmail_now_ms_for_tests(),
         release_at_ms: 0,
-        ttl_ms: 60_000,
+        // One hour, so the entry is unambiguously live for the whole test.
+        ttl_ms: 3_600_000,
         fee_paid_micro: 0,
         pin_stake_micro: 0,
         e2ee: tmail_e2ee_block_for_tests(),
@@ -6955,4 +6967,362 @@ fn tmail_redundant_burn_block_is_accepted() {
         crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok(),
         "a burn block that merely restates the signed flag is harmless"
     );
+}
+
+// ---------------------------------------------------------------------------
+// S7-1 item 2 — burn revoke: gossip kind, authorization, store deletion.
+// ---------------------------------------------------------------------------
+
+fn tmail_party_for_tests() -> (String, String) {
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    (
+        w.mnemonic_12.clone().unwrap(),
+        w.address_hex.to_ascii_lowercase(),
+    )
+}
+
+fn tmail_store_for_tests() -> crate::tmail::store::TmailStore {
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    // The ledger owns the sled Db; leak it so the store outlives this call.
+    std::mem::forget(ledger);
+    crate::tmail::store::TmailStore::open(&db).unwrap()
+}
+
+/// Hybrid-signs a [`TmailBurnRevokeV1`] over its §A.3.2 pre-image.
+fn signed_burn_revoke_for_tests(
+    words: &str,
+    reader_wallet_id: &str,
+    msg_id: &str,
+) -> crate::tmail::burn::TmailBurnRevokeV1 {
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+
+    let mut rev = crate::tmail::burn::TmailBurnRevokeV1 {
+        v: 1,
+        kind: crate::tmail::burn::TMAIL_BURN_REVOKE_KIND.to_string(),
+        msg_id: msg_id.to_string(),
+        reader_wallet_id: reader_wallet_id.to_ascii_lowercase(),
+        read_at_ms: tmail_now_ms_for_tests(),
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: reader_wallet_id.to_ascii_lowercase(),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: mldsa_pubkey_b64.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::burn::tmail_burn_revoke_auth_message_bytes(&rev, &mldsa_pubkey_b64);
+    rev.hybrid_sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    rev.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    rev
+}
+
+/// Stores one burn-flagged message and returns (store, sender_words, sender, receiver_words,
+/// receiver, msg_id).
+fn stored_burn_message_for_tests() -> (
+    crate::tmail::store::TmailStore,
+    String,
+    String,
+    String,
+    String,
+    String,
+) {
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "burn-target-1".to_string();
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        &msg_id,
+        tmail_flags_for_tests(true),
+        None,
+    );
+    let store = tmail_store_for_tests();
+    assert!(store.store_tmail(&env).unwrap(), "fixture must store");
+    (
+        store,
+        sender_words,
+        sender,
+        receiver_words,
+        receiver,
+        msg_id,
+    )
+}
+
+/// **AT-4 core, single node.** The receiver reads → the ciphertext is gone from the store.
+#[test]
+fn tmail_burn_revoke_by_receiver_destroys_the_message() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (store, _sw, _s, receiver_words, receiver, msg_id) = stored_burn_message_for_tests();
+
+    assert!(
+        store.get_by_msg_id(&msg_id).is_some(),
+        "precondition: message is stored"
+    );
+    assert_eq!(
+        store.get_inbox(&receiver, 50).len(),
+        1,
+        "precondition: the fixture is LIVE and visible in the inbox -- if this fails the message \
+         expired on its own and the post-burn assertions below would pass for the wrong reason"
+    );
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+    let outcome = crate::tmail::burn::apply_burn_revoke(&store, &rev).unwrap();
+    assert_eq!(
+        outcome,
+        crate::tmail::burn::BurnRevokeOutcome::Burned {
+            msg_id: msg_id.clone()
+        }
+    );
+    assert!(
+        store.get_by_msg_id(&msg_id).is_none(),
+        "the ciphertext must be gone from the store"
+    );
+    assert!(
+        store.get_inbox(&receiver, 50).is_empty(),
+        "and gone from the inbox"
+    );
+}
+
+/// The sender is a party too — they may burn what they sent.
+#[test]
+fn tmail_burn_revoke_by_sender_destroys_the_message() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (store, sender_words, sender, _rw, receiver, msg_id) = stored_burn_message_for_tests();
+
+    assert_eq!(
+        store.get_inbox(&receiver, 50).len(),
+        1,
+        "precondition: the fixture is live in the inbox"
+    );
+    let rev = signed_burn_revoke_for_tests(&sender_words, &sender, &msg_id);
+    assert!(matches!(
+        crate::tmail::burn::apply_burn_revoke(&store, &rev).unwrap(),
+        crate::tmail::burn::BurnRevokeOutcome::Burned { .. }
+    ));
+    assert!(store.get_by_msg_id(&msg_id).is_none());
+    assert!(
+        store.get_inbox(&receiver, 50).is_empty(),
+        "the ciphertext row itself must be gone, not merely masked by the tombstone"
+    );
+}
+
+/// **The authorization guard.** A validly-signed revoke from a wallet that is neither party must
+/// be dropped — otherwise anyone who learns a `msg_id` off the wire can delete other people's mail
+/// from every node on the network.
+#[test]
+fn tmail_burn_revoke_from_a_third_party_is_dropped() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (store, _sw, _s, _rw, _r, msg_id) = stored_burn_message_for_tests();
+    let (stranger_words, stranger) = tmail_party_for_tests();
+
+    let rev = signed_burn_revoke_for_tests(&stranger_words, &stranger, &msg_id);
+    // Its own signature is perfectly valid — that is the point. Authorization is the check.
+    assert!(
+        crate::tmail::burn::verify_tmail_burn_revoke_v1(&rev).is_ok(),
+        "the stranger's signature is genuine; only authorization may reject it"
+    );
+    let err = crate::tmail::burn::apply_burn_revoke(&store, &rev)
+        .expect_err("a third-party revoke must be rejected");
+    assert!(
+        format!("{err}").contains("neither the sender nor the receiver"),
+        "expected the not-a-party rejection, got: {err}"
+    );
+    assert!(
+        store.get_by_msg_id(&msg_id).is_some(),
+        "the message must survive a third-party revoke"
+    );
+}
+
+/// Burn power exists only where the sender opted in. Without this, either party could use the
+/// revoke as a general delete primitive for ordinary mail.
+#[test]
+fn tmail_burn_revoke_cannot_destroy_a_non_burn_message() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "plain-message-1";
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        msg_id,
+        tmail_flags_for_tests(false), // NOT a burn message
+        None,
+    );
+    let store = tmail_store_for_tests();
+    store.store_tmail(&env).unwrap();
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, msg_id);
+    let err = crate::tmail::burn::apply_burn_revoke(&store, &rev)
+        .expect_err("a non-burn message must not be revocable");
+    assert!(
+        format!("{err}").contains("not burn-after-read"),
+        "expected the not-burnable rejection, got: {err}"
+    );
+    assert!(
+        store.get_by_msg_id(msg_id).is_some(),
+        "an ordinary message must survive a revoke aimed at it"
+    );
+}
+
+/// **The tombstone guard.** Gossip re-delivers envelopes. If the burn deleted the `msg_id` dedup
+/// entry outright, the next copy would sail through `store_tmail` and undo the burn.
+#[test]
+fn tmail_burned_message_is_not_resurrected_by_re_gossip() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "resurrect-1";
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        msg_id,
+        tmail_flags_for_tests(true),
+        None,
+    );
+    let store = tmail_store_for_tests();
+    store.store_tmail(&env).unwrap();
+
+    assert_eq!(
+        store.get_inbox(&receiver, 50).len(),
+        1,
+        "precondition: the fixture is live in the inbox"
+    );
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, msg_id);
+    crate::tmail::burn::apply_burn_revoke(&store, &rev).unwrap();
+    assert!(store.is_burned(msg_id), "a tombstone must be left behind");
+
+    // A peer re-gossips the very same envelope, exactly as the mesh would.
+    assert!(
+        !store.store_tmail(&env).unwrap(),
+        "a re-gossiped burned envelope must be refused"
+    );
+    assert!(
+        store.get_by_msg_id(msg_id).is_none(),
+        "and must not come back into the store"
+    );
+    assert!(
+        store.get_inbox(&receiver, 50).is_empty(),
+        "nor reappear in the inbox"
+    );
+}
+
+/// A revoke for a message this node has never seen is dropped and leaves **no** tombstone —
+/// otherwise anyone could pre-block delivery of any `msg_id` they can guess.
+#[test]
+fn tmail_burn_revoke_for_an_unknown_message_leaves_no_tombstone() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let msg_id = "not-here-yet-1";
+    let store = tmail_store_for_tests();
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, msg_id);
+    assert_eq!(
+        crate::tmail::burn::apply_burn_revoke(&store, &rev).unwrap(),
+        crate::tmail::burn::BurnRevokeOutcome::UnknownMessage {
+            msg_id: msg_id.to_string()
+        }
+    );
+    assert!(
+        !store.is_burned(msg_id),
+        "an unauthorizable revoke must not tombstone anything"
+    );
+
+    // The message arrives afterwards and must still be deliverable.
+    let env = signed_tmail_env_for_tests(
+        &sender_words,
+        &sender,
+        &receiver,
+        msg_id,
+        tmail_flags_for_tests(true),
+        None,
+    );
+    assert!(
+        store.store_tmail(&env).unwrap(),
+        "a speculative revoke must not block later delivery"
+    );
+}
+
+/// A revoke whose signature does not verify is dropped before anything is touched.
+#[test]
+fn tmail_burn_revoke_with_a_forged_signature_is_dropped() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (store, _sw, _s, receiver_words, receiver, msg_id) = stored_burn_message_for_tests();
+
+    let mut rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+    // Re-sign over a different msg_id, then point the revoke back at the real one.
+    let forged = signed_burn_revoke_for_tests(&receiver_words, &receiver, "some-other-msg");
+    rev.hybrid_sig.ed25519_sig_b64 = forged.hybrid_sig.ed25519_sig_b64;
+    rev.hybrid_sig.mldsa_sig_b64 = forged.hybrid_sig.mldsa_sig_b64;
+
+    assert!(
+        crate::tmail::burn::apply_burn_revoke(&store, &rev).is_err(),
+        "a signature over a different msg_id must not burn this message"
+    );
+    assert!(
+        store.get_by_msg_id(&msg_id).is_some(),
+        "the message must survive a forged revoke"
+    );
+}
+
+/// Applying the same revoke twice is a no-op, not an error — gossip delivers duplicates.
+#[test]
+fn tmail_burn_revoke_is_idempotent() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (store, _sw, _s, receiver_words, receiver, msg_id) = stored_burn_message_for_tests();
+
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+    assert!(matches!(
+        crate::tmail::burn::apply_burn_revoke(&store, &rev).unwrap(),
+        crate::tmail::burn::BurnRevokeOutcome::Burned { .. }
+    ));
+    assert_eq!(
+        crate::tmail::burn::apply_burn_revoke(&store, &rev).unwrap(),
+        crate::tmail::burn::BurnRevokeOutcome::AlreadyBurned {
+            msg_id: msg_id.clone()
+        },
+        "a duplicate revoke must be a quiet no-op"
+    );
+}
+
+/// The revoke rides the Tmail gossip topic and survives a JSON round-trip as a `NetworkEvent`,
+/// which is how it actually reaches a peer.
+#[test]
+fn tmail_burn_revoke_round_trips_as_a_network_event() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (receiver_words, receiver) = tmail_party_for_tests();
+    let rev = signed_burn_revoke_for_tests(&receiver_words, &receiver, "wire-1");
+
+    let event = crate::models::NetworkEvent::TmailBurnRevoke {
+        revoke: rev.clone(),
+    };
+    let json = serde_json::to_string(&event).unwrap();
+    let back: crate::models::NetworkEvent = serde_json::from_str(&json).unwrap();
+    match back {
+        crate::models::NetworkEvent::TmailBurnRevoke { revoke } => {
+            assert_eq!(revoke.msg_id, rev.msg_id);
+            assert_eq!(revoke.kind, crate::tmail::burn::TMAIL_BURN_REVOKE_KIND);
+            assert!(
+                crate::tmail::burn::verify_tmail_burn_revoke_v1(&revoke).is_ok(),
+                "the signature must still verify after the wire round-trip"
+            );
+        }
+        other => panic!("wrong event kind after round-trip: {other:?}"),
+    }
 }

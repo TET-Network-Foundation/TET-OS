@@ -8,7 +8,10 @@
 //! - `tmail_by_receiver_v1` — key `receiver(64 hex ascii) ‖ sent_at_ms(BE u64) ‖ msg_id`, value = envelope JSON.
 //!   The fixed 64-byte receiver prefix enables `scan_prefix`; the BE timestamp makes reverse
 //!   iteration yield newest-first.
-//! - `tmail_by_msg_id_v1` — key `msg_id`, value = receiver wallet id (idempotency / dedup).
+//! - `tmail_by_msg_id_v1` — key `msg_id`, value = receiver wallet id (idempotency / dedup), or a
+//!   [`BURNED_PREFIX`] tombstone once the message has been burned (spec §A.3.2). The tombstone is
+//!   what stops a re-gossiped envelope from resurrecting a burned message: `store_tmail` refuses
+//!   any `msg_id` already present in this tree, burned or live.
 //! - `tmail_keys_v1` — key `wallet_id`, value = [`crate::tmail::keys::TmailKeyRegistrationV1`] JSON.
 
 use crate::tmail::envelope::TmailEnvelopeV1;
@@ -17,6 +20,11 @@ use crate::tmail::keys::TmailKeyRegistrationV1;
 const TREE_BY_RECEIVER: &str = "tmail_by_receiver_v1";
 const TREE_BY_MSG_ID: &str = "tmail_by_msg_id_v1";
 const TREE_KEYS: &str = "tmail_keys_v1";
+
+/// Tombstone marker written into `tmail_by_msg_id_v1` when a message is burned. The suffix is the
+/// original entry's expiry in ms, so `prune_expired` can reap tombstones instead of growing a tree
+/// that never shrinks.
+const BURNED_PREFIX: &[u8] = b"burned:";
 
 const DEFAULT_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -196,7 +204,97 @@ impl TmailStore {
                 let _ = self.by_msg_id.remove(msg_id.as_bytes());
             }
         }
+        // Burn tombstones live in the other tree and would otherwise never be reaped. Drop each
+        // one once the message it stands for would have expired anyway — past that point a
+        // re-gossiped copy is refused by `is_expired` instead.
+        let mut stale_tombs: Vec<Vec<u8>> = Vec::new();
+        for item in self.by_msg_id.iter() {
+            let Ok((k, v)) = item else { continue };
+            if !v.starts_with(BURNED_PREFIX) {
+                continue;
+            }
+            let expire_at = std::str::from_utf8(&v[BURNED_PREFIX.len()..])
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+            if now > expire_at {
+                stale_tombs.push(k.to_vec());
+            }
+        }
+        for k in stale_tombs {
+            let _ = self.by_msg_id.remove(&k);
+        }
         removed
+    }
+
+    /// Locate the `by_receiver` index key for `msg_id`, if the message is live here.
+    ///
+    /// The index key is `receiver(64 ascii) ‖ sent_at_ms(BE u64) ‖ msg_id`, so the msg_id is the
+    /// key suffix past byte 72 — matched directly, with no deserialization.
+    fn index_key_for_msg_id(&self, msg_id: &str) -> Option<Vec<u8>> {
+        let raw = self.by_msg_id.get(msg_id.as_bytes()).ok().flatten()?;
+        if raw.starts_with(BURNED_PREFIX) {
+            return None;
+        }
+        let receiver = String::from_utf8(raw.to_vec()).ok()?;
+        if !is_wallet_id_64hex(&receiver) {
+            return None;
+        }
+        const PREFIX_LEN: usize = 64 + 8;
+        for item in self.by_receiver.scan_prefix(receiver.as_bytes()) {
+            let Ok((k, _v)) = item else { continue };
+            if k.len() > PREFIX_LEN && &k[PREFIX_LEN..] == msg_id.as_bytes() {
+                return Some(k.to_vec());
+            }
+        }
+        None
+    }
+
+    /// The stored envelope for `msg_id`, or `None` if this node does not hold it (never seen,
+    /// expired, or burned).
+    pub fn get_by_msg_id(&self, msg_id: &str) -> Option<TmailEnvelopeV1> {
+        let key = self.index_key_for_msg_id(msg_id.trim())?;
+        let v = self.by_receiver.get(&key).ok().flatten()?;
+        serde_json::from_slice(&v).ok()
+    }
+
+    /// Has this message been burned here? True only for a tombstone, not for "never seen".
+    pub fn is_burned(&self, msg_id: &str) -> bool {
+        self.by_msg_id
+            .get(msg_id.trim().as_bytes())
+            .ok()
+            .flatten()
+            .is_some_and(|v| v.starts_with(BURNED_PREFIX))
+    }
+
+    /// Remove a message's ciphertext and leave a tombstone (spec §A.3.2 Layer 1).
+    ///
+    /// Returns `Ok(true)` if a live entry was removed, `Ok(false)` if there was nothing to remove.
+    /// The `msg_id` entry is **replaced, not deleted**: dropping it would let the next gossip
+    /// re-delivery of the same envelope pass `store_tmail`'s dedup check and restore the message
+    /// we were just told to destroy.
+    ///
+    /// Callers MUST have authorized the revoke first
+    /// ([`crate::tmail::burn::authorize_burn_revoke`]) — this method does no policy check.
+    pub fn delete_by_msg_id(&self, msg_id: &str) -> Result<bool, TmailStoreError> {
+        let msg_id = msg_id.trim();
+        let Some(key) = self.index_key_for_msg_id(msg_id) else {
+            return Ok(false);
+        };
+        // Compute the expiry before dropping the value, so the tombstone can be reaped on the same
+        // schedule the message itself would have been.
+        let expire_at = self
+            .by_receiver
+            .get(&key)?
+            .and_then(|v| serde_json::from_slice::<TmailEnvelopeV1>(&v).ok())
+            .map(|env| env.sent_at_ms.saturating_add(effective_ttl_ms(env.ttl_ms)))
+            .unwrap_or_else(|| now_ms().saturating_add(effective_ttl_ms(0)));
+
+        let removed = self.by_receiver.remove(&key)?.is_some();
+        let mut tomb = BURNED_PREFIX.to_vec();
+        tomb.extend_from_slice(expire_at.to_string().as_bytes());
+        self.by_msg_id.insert(msg_id.as_bytes(), tomb)?;
+        Ok(removed)
     }
 
     /// Register (or refresh) a wallet's Tmail KEM public keys. Verifies the hybrid signature first,

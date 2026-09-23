@@ -1256,7 +1256,7 @@ fn network_event_topics(
             }
             topics
         }
-        Ok(NetworkEvent::TmailGossip { .. }) => {
+        Ok(NetworkEvent::TmailGossip { .. }) | Ok(NetworkEvent::TmailBurnRevoke { .. }) => {
             vec![tmail_topic.clone()]
         }
         Ok(NetworkEvent::FileAnnounce { .. }) => {
@@ -2786,6 +2786,37 @@ async fn run_mdns_ping_swarm(
                                     },
                                     Err(e) => {
                                         println!("[P2P] ❌ TMAIL ENVELOPE REJECTED: {e}");
+                                    }
+                                }
+                            }
+                            NetworkEvent::TmailBurnRevoke { revoke } => {
+                                // Burn-after-read revoke (spec §A.3.2 Layer 1). Verification and
+                                // authorization both live in `apply_burn_revoke`, which the REST
+                                // read-receipt handler also calls, so neither path can end up
+                                // weaker than the other. Never re-broadcast on receipt.
+                                match crate::tmail::burn::apply_burn_revoke(&tmail_store, &revoke) {
+                                    Ok(crate::tmail::burn::BurnRevokeOutcome::Burned { msg_id }) => {
+                                        crate::metrics::inc_tmail_burned();
+                                        println!(
+                                            "[P2P] 🔥 TMAIL BURNED msg_id={msg_id} reader={}",
+                                            revoke.reader_wallet_id
+                                        );
+                                    }
+                                    Ok(crate::tmail::burn::BurnRevokeOutcome::AlreadyBurned {
+                                        msg_id,
+                                    }) => {
+                                        println!("[P2P] ⏭️ TMAIL ALREADY BURNED msg_id={msg_id}");
+                                    }
+                                    Ok(crate::tmail::burn::BurnRevokeOutcome::UnknownMessage {
+                                        msg_id,
+                                    }) => {
+                                        println!(
+                                            "[P2P] ⏭️ TMAIL BURN REVOKE FOR UNKNOWN msg_id={msg_id}"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        crate::metrics::inc_gossip_rejected();
+                                        println!("[P2P] ❌ TMAIL BURN REVOKE REJECTED: {e}");
                                     }
                                 }
                             }

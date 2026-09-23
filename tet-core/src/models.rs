@@ -62,6 +62,16 @@ pub enum NetworkEvent {
         envelope: TmailEnvelopeV1,
     },
 
+    /// A burn-after-read revoke gossiped to peers (spec §A.3.2 Layer 1).
+    ///
+    /// Off-ledger, like [`NetworkEvent::TmailGossip`]. Receivers MUST verify the hybrid signature
+    /// **and** authorize the signer against the stored target (sender or receiver of that
+    /// `msg_id`, and only for a message whose signed `flags.burn_after_read` is set) before
+    /// removing anything. Never re-broadcast on receipt.
+    TmailBurnRevoke {
+        revoke: crate::tmail::burn::TmailBurnRevokeV1,
+    },
+
     /// A File Sharing announce envelope gossiped to peers (spec `PHASE_0_FILE_SHARING_SPEC.md` §6).
     ///
     /// Off-ledger, mirroring [`NetworkEvent::TmailGossip`]: receivers MUST verify the hybrid
