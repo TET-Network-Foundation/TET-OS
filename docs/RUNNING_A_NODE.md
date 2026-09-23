@@ -354,6 +354,26 @@ Note that a `ufw deny 5010` would **not** have closed that port: Docker publishe
 DNAT rules into the nat table's `DOCKER` chain, which ufw's filter rules never see. Binding to
 `127.0.0.1` is the close that actually holds.
 
+#### Smoke test: submit from the follower, not the seed
+
+When verifying a node, **send the test transaction from the node you just started**, not from the
+seed over a tunnel. The difference is not cosmetic: `/ledger/transfer` admitted transactions to the
+mempool and announced them to nobody until 2026-09-23, so a follower could accept a signed
+transfer, return `202 pending`, and never deliver it. Every AT-F1 run before that date passed
+because the transfer was submitted to the seed, where submit-node and mining-node are the same
+process and the bug is invisible.
+
+```bash
+# fund a wallet through YOUR node
+tet-cli --node-url http://127.0.0.1:5010 faucet claim --mnemonic "…"
+
+# then send FROM your node — this is the assertion that matters
+tet-cli --node-url http://127.0.0.1:5010 tx send <recipient> 1 --mnemonic "…"
+```
+
+Expect settlement within two block intervals and the same balances on your node and the seed. If
+the transfer stays `pending`, your node is not announcing it — see below.
+
 #### Transaction propagation
 
 A transaction submitted to **any** node reaches the producers, over two independent paths.
