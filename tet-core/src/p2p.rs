@@ -1445,7 +1445,8 @@ async fn run_mdns_ping_swarm(
         .mesh_n_low(mesh_n_low)
         .mesh_n_high(mesh_n_high)
         .heartbeat_interval(Duration::from_millis(800))
-        .max_messages_per_rpc(Some(32))
+        // Was `max_messages_per_rpc(Some(32))`, removed in gossipsub 0.50 — see p2p_network.rs.
+        .max_publish_messages(32)
         .build()
         .map_err(|e| -> AnyErr { format!("gossipsub config: {e}").into() })?;
     let mut gossipsub = gossipsub::Behaviour::new(

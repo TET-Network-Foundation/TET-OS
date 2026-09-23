@@ -102,6 +102,31 @@ been the same process. Both were invisible until a node ran somewhere that was n
 - **The publish-failure diagnostic** (`[P2P][diag]`) — it dumps `all_peers()` with each peer's
   topic set. It is what made the invisible visible, and it costs nothing until a publish fails.
 
+## Version note — upgraded 2026-09-23
+
+Everything above was diagnosed against **`libp2p-gossipsub` 0.48.0**, which is what TET ran at the
+time. TET is now on **0.50.0** (via `libp2p` 0.57.0). Three things in this document read
+differently on the new version:
+
+- **The error is renamed.** `PublishError::InsufficientPeers` became
+  `PublishError::NoPeersSubscribedToTopic` in 0.49.0. Occurrences of the old name in this
+  post-mortem are left as written, because they are quoting what 0.48 actually produced. Code and
+  logs from here on will show the new name.
+- **Subscriptions are now sent as a single hello RPC**, not one per topic (0.50.0,
+  [PR 6385](https://github.com/libp2p/rust-libp2p/pull/6385)). The "a subset of the per-topic
+  `Subscribe` RPCs went missing" line of enquiry is therefore closed on the current version: a
+  subset of one message cannot be delivered. That was never our root cause, but it was one of the
+  candidates.
+- **The `other_established > 0` early return is unchanged**, so the actual mechanism — a second
+  connection from a known `PeerId` being told nothing — still exists in 0.50.0 and on master. That
+  is what [PR 6635](https://github.com/libp2p/rust-libp2p/pull/6635) makes visible.
+
+The upgrade was driven by security, not by this bug: 0.49.3, 0.49.4 and 0.49.5/0.50.0 carry fixes
+for three advisories (prune backoff `GHSA-gc42-3jg7-rxr2`, time arithmetic
+`GHSA-xqmp-fxgv-xvq5`, unbounded per-peer topic growth `GHSA-g3g5-x568-qvqx`), and the seed has
+8002 open to the internet. The fix for *this* post-mortem's bug was ours and shipped separately in
+`25771f8`.
+
 ## Worth raising upstream — small, and not what we thought
 
 gossipsub accepts a second connection from a `PeerId` it already knows and tells it nothing: no
@@ -162,3 +187,4 @@ means re-publishing the multiaddr. Phase 1's genesis ceremony is the natural win
 | 2026-09-22 17:24 | `/tet/v1/tx-submit` second path ships; transactions flow again |
 | 2026-09-22 ~21:00 | `[P2P][diag]` added; peer record shown holding 3 of 4 topics |
 | 2026-09-23 | 0.48.0 source read; `other_established` gate found; three-swarms-one-identity confirmed; scoped env fix, 10/10 |
+| 2026-09-23 | Upgraded to gossipsub 0.50.0 / libp2p 0.57.0 for the three security advisories. See [Version note](#version-note--upgraded-2026-09-23) |

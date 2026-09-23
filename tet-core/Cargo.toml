@@ -31,12 +31,18 @@ hkdf = "0.12"
 pqcrypto-kyber = "0.8"
 pqcrypto-traits = "0.3"
 
-libp2p = { version = "0.55", features = ["tokio", "tcp", "dns", "noise", "yamux", "mdns", "ping", "kad", "gossipsub", "identify", "request-response", "json", "macros", "autonat", "relay", "dcutr"] }
+libp2p = { version = "0.57", features = ["tokio", "tcp", "dns", "noise", "yamux", "mdns", "ping", "kad", "gossipsub", "identify", "request-response", "json", "macros", "autonat", "relay", "dcutr"] }
 futures = "0.3"
 async-trait = "0.1"
 tokio-stream = { version = "0.1", features = ["sync"] }
 rand_core = "0.6"
 rand = "0.8"
+# rand 0.10, aliased, for ONE call: libp2p-webrtc 0.10's `Certificate::generate` requires a
+# `CryptoRng + Rng` from rand 0.10. TET's `rand_core` is 0.6 and is used by ledger.rs,
+# wallet.rs, pqc_keystore.rs and e2ee.rs, so bumping it would touch ledger and crypto code for no
+# benefit. The argument is ignored upstream anyway (`_rng`, see melekes/rust-libp2p#12) — only the
+# bound has to be satisfied.
+rand_new = { package = "rand", version = "0.10" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 ureq = { version = "2.12", default-features = false, features = ["json"] }
 rand_chacha = "0.3"
@@ -62,7 +68,7 @@ solana-client = "2.2.12"
 solana-sdk = "2.2.12"
 spl-token = "6"
 spl-associated-token-account = "4"
-libp2p-webrtc = { version = "0.9.0-alpha.1", features = ["tokio"] }
+libp2p-webrtc = { version = "0.10.0-alpha", features = ["tokio"] }
 
 [features]
 # Enable host-side proof generation. This pulls in heavier deps (e.g. protobuf toolchain).

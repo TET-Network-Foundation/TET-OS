@@ -12,7 +12,6 @@
 //! Wire format note: like the upstream json codec, EOF delimits a frame (the substream is closed
 //! after each message), so no length prefix is needed; `take(max)` enforces the cap.
 
-use async_trait::async_trait;
 use futures::prelude::*;
 use libp2p::StreamProtocol;
 use libp2p::request_response;
@@ -29,7 +28,10 @@ pub const FETCH_RESPONSE_MAX_BYTES: u64 = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Default)]
 pub struct FilesFetchCodec;
 
-#[async_trait]
+// libp2p-request-response 0.30 moved `Codec` from `#[async_trait]` (which desugars to
+// `Pin<Box<dyn Future>>`) to native RPITIT: `-> impl Future<Output = ...> + Send`. A plain
+// `async fn` in the impl satisfies that directly, so the attribute is not just unnecessary, it
+// makes the lifetimes disagree with the trait.
 impl request_response::Codec for FilesFetchCodec {
     type Protocol = StreamProtocol;
     type Request = FileFetchRequest;

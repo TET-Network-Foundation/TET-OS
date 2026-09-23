@@ -522,7 +522,7 @@ pub fn build_basic_swarm(
     // WebRTC-direct transport (UDP + DTLS + SCTP). This enables browser/mobile connectivity.
     let webrtc_transport = webrtc::tokio::Transport::new(
         keypair.clone(),
-        webrtc::tokio::Certificate::generate(&mut rand::thread_rng())
+        webrtc::tokio::Certificate::generate(&mut rand_new::rng())
             .map_err(|e| format!("webrtc certificate generate failed: {e:?}"))?,
     )
     .map(|(peer, conn), _| (peer, StreamMuxerBox::new(conn)))
@@ -560,7 +560,11 @@ pub fn build_basic_swarm(
         .max_transmit_size(max_tx)
         .heartbeat_interval(Duration::from_millis(800))
         // Limit fan-out work per RPC (anti-spam; pairs with small max_transmit_size).
-        .max_messages_per_rpc(Some(32))
+        // Was `max_messages_per_rpc(Some(32))`, removed in gossipsub 0.50. That single knob split
+        // into separate caps; this is the publish half. Control messages now have their own
+        // dedicated limits (`max_control_messages_sent`, `max_control_message_size`, 16 KiB),
+        // which 0.50 added as hardening, so the defaults there are tighter than what we had.
+        .max_publish_messages(32)
         .build()?;
     let mut gossipsub =
         gossipsub::Behaviour::new(MessageAuthenticity::Signed(keypair.clone()), gcfg)?;
