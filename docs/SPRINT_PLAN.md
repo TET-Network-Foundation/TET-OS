@@ -252,6 +252,33 @@ inverted, J3 disclosure dropped, J4 flag ignored, J5 REST bypasses the projectio
 copy — all live. J4 was vacuous on its first run and the guard was strengthened; see the item 2
 commit.
 
+**AT-3 verified live, two local nodes, 17/17 green.** Driver:
+`tet-network/ui/scripts/tmail_timelock_interop_step6.mjs` (`SCHEDULE_MS`, default 25 s). It uses the
+browser's real crypto, like the step4/step5 scripts.
+
+| Step | Result |
+|---|---|
+| Scheduled envelope accepted | `202` on N1 |
+| Listed as `locked` on BOTH nodes | **1 ms** over real gossip |
+| `e2ee` block served by neither | withheld |
+| `release_at_ms` + `locked_note` visible | both nodes, disclosure present |
+| Ciphertext absent from the raw response bodies | clean |
+| After the release passed | **both unlocked in 11 ms** |
+| Receiver decrypts the released message | plaintext matches |
+
+Three live controls:
+
+| Control | Result |
+|---|---|
+| Unscheduled message | never withheld; served in full on both |
+| `release_at_ms` in the past | `400 flags.time_lock requires release_at_ms strictly after sent_at_ms` |
+| Unsigned `time_lock` block moving the release | `400 time_lock block disagrees with the signed release_at_ms` |
+
+**No production clock hook.** The unit guards inject `now_ms` into `to_inbox_row`, which is how
+AT-3's "after 1h" is reached without sleeping. The live run instead schedules ~25 s out and waits it
+out, because adding a clock-skew override to a shipping node would be a backdoor around the only
+mechanism this feature has.
+
 **Deferred to Phase 0.1, as the spec already directs:**
 
 | Deferred | Spec | Why not now |
