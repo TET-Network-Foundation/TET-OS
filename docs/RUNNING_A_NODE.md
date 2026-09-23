@@ -501,6 +501,42 @@ but nothing calls it for this route. The natural home is the Wallet window, next
 a "Claim 1,000 TET" button visible while the balance is zero and the wallet has not claimed. That
 is UI work, deliberately not done here.
 
+### Tmail: what your node does with burn and scheduled messages
+
+Both features are **off-ledger**: they touch the node's Tmail buffer and the `/tet/v1/tmail` gossip
+plane, never a balance or a block.
+
+**Burn-after-read.** A message sent with `flags.burn_after_read` is destroyed on this node when a
+party posts `POST /tmail/read-receipt`, and the revoke is gossiped so cooperating peers destroy
+their copies too. Only the message's **sender or receiver** can revoke it, and only if the sender
+set the flag — a revoke from anyone else, or aimed at an ordinary message, is refused `403`.
+
+> Best-effort burn. Cooperating nodes will purge after read receipt. Non-cooperating peers may
+> retain encrypted copies.
+
+**Scheduled release.** A message sent with `flags.time_lock` and a future `release_at_ms` is listed
+by `GET /tmail/inbox` with `locked: true` and **no `e2ee` block** until that moment. The response
+also carries `locked_count`.
+
+> Scheduled release, not an enforced lock. The encrypted message reaches relaying nodes when it is
+> sent; cooperating nodes withhold it until the release time, and anyone holding the recipient's
+> keys could read it sooner.
+
+Read that second line before you describe this feature to anyone. Withholding is **your node's
+policy about its own API**. The ciphertext was gossiped to every relaying node at send time and
+sits in their stores; the decryption key is the recipient's, and the node never decrypts. An
+operator running modified code simply serves it early. There is no cryptographic enforcement in
+Phase 0 — the stake forfeit and the VDF are Phase 0.1.
+
+**Both features need the network on the same build.** A node that predates them rejects a
+burn-flagged or scheduled envelope outright (`400`, so it is never stored or relayed), has no
+`/tmail/read-receipt` route (`404`), and cannot decode a `tmail_burn_revoke_v1` gossip event — it
+reports the message invalid to gossipsub, which costs the *publisher* peer score. Upgrade before
+relying on either.
+
+**Retention.** A conversation keeps its newest **5** messages; older ones are deleted from the
+store, not hidden. Override with `TET_TMAIL_RETAIN_PER_CONVERSATION`.
+
 #### Multi-node
 
 For `tet-node-1`…`3`, see `tet-core/README.md`. Use `./scripts/print-bootnode.sh` for Docker PeerId

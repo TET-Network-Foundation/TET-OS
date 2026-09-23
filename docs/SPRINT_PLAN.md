@@ -118,7 +118,7 @@ consensus each feature touches, which is not the order the spec presents them in
 | # | Item | Consensus? | Status | Ships in |
 |---|---|---|---|---|
 | **S7-1** | Burn-after-read (AT-4) | No | ✅ | Phase 0 — [live evidence](#s7-1-at-4-verified-live-2026-09-23) |
-| **S7-2** | Time-lock (AT-3) | No | ⬜ | Phase 0 |
+| **S7-2** | Time-lock (AT-3) | No | ✅ | Phase 0 — [detail](#s7-2-scheduled-release-2026-09-23) |
 | **S7-0** | Server-side 5-message retention | No | ✅ | Phase 0 — [detail](#s7-0-retention-is-a-store-rule-now-2026-09-23) |
 | **S7-3** | Pin stake (AT-7) | **Yes** | ⛔ **deferred** | **Phase 1 genesis** |
 
@@ -215,6 +215,54 @@ Independent of the test script's own polling, the seed's log shows its gossip ar
 
 **Known gap, not blocking:** `metrics::inc_tmail_burned` increments but is not exported by
 `/metrics`, so the burn counter is invisible to monitoring. Folds into the open S4 monitoring item.
+
+### S7-2: scheduled release (2026-09-23)
+
+**Shipped as spec §A.2.2 approach C.** `GET /tmail/inbox` lists a scheduled message — sender,
+timestamps, `release_at_ms`, `locked: true`, `locked_note` — and **omits the `e2ee` block** until
+`now >= release_at_ms`. The response carries `locked_count`. One clock reading covers the whole
+response so rows cannot disagree about "now".
+
+`flags.time_lock` and `release_at_ms` were already inside the signed §A.1.3 pre-image, so this
+changed no signature format and invalidated nothing already signed — the schedule was signed all
+along and merely refused. The schedule must be coherent with the flag in both directions: the flag
+requires a release strictly after `sent_at_ms` (a past release would present as "scheduled" while
+releasing immediately), and without the flag `release_at_ms` must be 0 (otherwise it is a signed
+value the node silently ignores). The unsigned `time_lock` block may only restate the signed value,
+and `vdf_proof_b64` is refused outright so the Phase 0.1 path never looks supported.
+
+**A spec correction landed with it.** §A.2.4 specified `GET /tmail/decrypt/:id → 423 TIME_LOCKED`.
+That endpoint does not exist and could not: the node holds no decryption keys and never decrypts —
+decryption is client-side. A 423 from a decrypt route was never the mechanism. What a node can
+withhold is the ciphertext it serves, so that is what it withholds; the table now says so.
+
+**Honesty is enforced, not just written.** New §A.2.5 records the R6 wording as locked, and
+`npm run verify:tmail-burn` pins three copies to each other — the spec, `TMAIL_TIME_LOCK_DISCLOSURE`
+in `tet-core/src/tmail/timelock.rs`, and the UI constant. Softening any one of them fails the check.
+The disclosure ships in `locked_note` on every withheld row, under the compose control, on every
+scheduled message in the inbox, and in `RUNNING_A_NODE.md`:
+
+> Scheduled release, not an enforced lock. The encrypted message reaches relaying nodes when it is
+> sent; cooperating nodes withhold it until the release time, and anyone holding the recipient's
+> keys could read it sooner.
+
+**AT-3's clock is a parameter**, `to_inbox_row(env, now_ms)`. "After 1h" is reached by passing an
+instant, never by sleeping. Negative controls: J1 withholding disabled, J2 clock comparison
+inverted, J3 disclosure dropped, J4 flag ignored, J5 REST bypasses the projection, plus K1–K3 on the
+copy — all live. J4 was vacuous on its first run and the guard was strengthened; see the item 2
+commit.
+
+**Deferred to Phase 0.1, as the spec already directs:**
+
+| Deferred | Spec | Why not now |
+|---|---|---|
+| `time_lock_stake_micro` forfeit | §A.2.2 item 4 | Marked *Optional* there. It is the only part that would make the schedule **enforceable**, and it needs a challenge path on ZK-Court patterns plus a new consensus tx — the same flag-day problem as Pin |
+| Wesolowski VDF | §A.2.3, decision #1 | New crypto dependency and proof tooling; "do not block ship on VDF" |
+| Hash-lock to a release beacon | §A.2.2 item 3 caveat | Would raise the bar above "cooperating nodes", but needs an external beacon |
+
+Until one of those lands, this is scheduled release and nothing stronger. Risk **R6** stays open by
+design, and the marketing constraint from decision #1 — say "scheduled release", never "time-lock"
+without the disclosure — is now a build check rather than a convention.
 
 ### Why time-lock is not the expensive one
 
