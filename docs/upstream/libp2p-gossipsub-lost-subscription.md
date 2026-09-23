@@ -1,6 +1,8 @@
 # Draft: rust-libp2p issue — gossipsub peer record can lose topics permanently after simultaneous dial
 
-**Status:** draft, not yet filed. Target: https://github.com/libp2p/rust-libp2p/issues
+**Status:** draft, **not** filed, and probably should not be filed in this form. Candidate 1 below
+is an application-architecture fault, not a libp2p defect, and it currently explains the evidence
+better than anything upstream. Resolve that before considering an issue.
 
 ---
 
@@ -95,30 +97,98 @@ Three consecutive runs of the same binary, with identical connection and subscri
 counts in the logs: two succeeded, one failed. Restarting the affected node clears it; nothing
 short of a new connection does.
 
-## Analysis
+## What the 0.48.0 source actually does
 
-`handle_received_subscriptions` inserts into `connected_peers[peer].topics`, which is keyed by
-`PeerId` rather than by connection. Subscriptions are sent to a peer when a connection to it is
-established. With two connections racing:
+Read from the vendored crate, `libp2p-gossipsub-0.48.0/src/behaviour.rs`.
 
-- each connection carries a `Subscribe` RPC for the sender's current topic set;
-- the topics land in one shared per-peer record;
-- when one connection closes, whatever was in flight on it is lost;
-- the per-peer record is not rebuilt from the surviving connection, because gossipsub has already
-  "sent subscriptions to this peer" and has no reason to send them again.
+**Subscriptions are sent as one RPC per topic, not one RPC for all of them.**
+`on_connection_established` ends with (`behaviour.rs:2926-2930`):
 
-There is no periodic re-advertisement of subscriptions, and no protocol message for requesting a
-peer's current set, so a record that starts incomplete stays incomplete until a new connection to
-that peer is established.
+```rust
+tracing::debug!(peer=%peer_id, "New peer connected");
+// We need to send our subscriptions to the newly-connected node.
+for topic_hash in self.mesh.clone().into_keys() {
+    self.send_message(peer_id, RpcOut::Subscribe(topic_hash));
+}
+```
 
-Two properties make this hard to notice in practice:
+Two details follow from this:
 
-1. It is one-directional. Only the node with the damaged record is affected, and only for
-   publishing. The other node's record may be complete, so its own publishes land and its messages
-   arrive normally — the connection looks healthy from both ends.
-2. `InsufficientPeers` is indistinguishable from the ordinary "mesh has not grafted yet" condition
-   that occurs briefly after any connection, so it reads as a startup race rather than a permanent
-   state.
+1. The loop iterates `self.mesh`, not a set of subscribed topics. A topic that is subscribed but
+   momentarily absent from the mesh is not advertised to a peer connecting at that instant.
+2. Each topic is a separate `RpcOut::Subscribe`, so a subset can be delivered. `send_message`
+   (`behaviour.rs:2828-2847`) returns `false` and **drops** the RPC when the peer's send queue is
+   full, logging `Send Queue full. Could not send ...` at warn level. `RpcOut::Subscribe` goes to
+   the priority queue (`rpc.rs:86-96`), which is a bounded `try_send`.
+
+**Advertisement is gated on the first connection only** (`behaviour.rs:2912-2914`):
+
+```rust
+if other_established > 0 {
+    return; // Not our first connection to this peer, hence nothing to do.
+}
+```
+
+`subscribe()` separately sends one `RpcOut::Subscribe` per topic to every already-connected peer
+(`behaviour.rs:542-546`), so subscribing after a connection exists does reach that peer.
+
+### Correction to an earlier reading of these logs
+
+The `New peer connected` line is emitted *after* the `other_established > 0` early return, so it
+appears only on a first connection to a peer. Two such lines for the same peer therefore do **not**
+indicate two simultaneous connections — they indicate the peer was fully disconnected and then
+reconnected. The earlier framing of this report as a simultaneous-dial race was wrong on that
+point; what the logs show is connect → subscriptions → full disconnect → reconnect → subscriptions,
+with the resulting record still incomplete.
+
+### What is not yet explained
+
+The queue-full path is ruled out for the observed failure: no `Send Queue full` warning appears
+anywhere in the captured logs, at a log level that would have shown it. So a subset of the
+per-topic `Subscribe` RPCs went missing without the one code path that is documented to drop them
+having fired.
+
+That leaves the mechanism open. Candidates, in current order of likelihood:
+
+**1. Multiple `Swarm` instances in one process sharing a single `PeerId` and connecting to the
+same remote listener.** This is an application-architecture candidate, not a libp2p defect, and it
+now looks like the leading explanation for the reporting application. That application runs three
+separate `Swarm`s — a block plane, an inference plane and a ledger plane — all built from the
+**same identity keypair**, and at least two of them dial the *same* bootnode multiaddr, i.e. the
+same remote TCP listener.
+
+From the remote's single gossipsub `Behaviour`, those arrive as two connections from one `PeerId`.
+The first gets `other_established == 0` and is advertised to; the second hits the early return at
+`behaviour.rs:2912` and is told nothing. Locally, though, those two connections belong to two
+*different* `Behaviour` instances, and whichever one owns the connection the remote treated as
+"second" never receives the subscription list at all. If that is the block plane, publishing on
+its topics fails exactly as described, permanently, and intermittently — depending on which
+swarm's dial lands first.
+
+Consistent with: the ~1-in-3 failure rate; the partial or empty topic set; and connect/disconnect
+churn observed between the two nodes. Not yet proven. The decisive test is to stop the secondary
+swarms dialling the block-plane address, or give each swarm its own keypair, and re-run.
+
+**2. Connection churn from an empty mesh.** With every peer registered as a gossipsub *explicit*
+peer, `get_random_peers` excludes them and the mesh stays empty for every topic. Since 0.31.0 only
+mesh peers are kept alive, so nothing holds the connection open and the swarm's
+`idle_connection_timeout` may close it, producing the disconnect/reconnect churn seen in the logs.
+The reporting application's timeout is 300 s, which does not obviously match the sub-second
+intervals between some events, and the observed disconnect causes are a mix of `IO(Custom { .. })`
+and `None` — so this is plausible for the churn but not yet tied to the lost subscriptions.
+
+**3.** A topic subscribed but absent from `self.mesh` at the moment a peer connects, so the loop
+at `behaviour.rs:2928` never advertises it. Note that `unsubscribe()` removes the mesh entry
+(`behaviour.rs:1140`), so an application that "repairs" by unsubscribe+resubscribe opens this
+window itself.
+
+**4.** `handle_received_subscriptions` discarding a subscription that arrives while the sending
+peer is not in `connected_peers`.
+
+**5.** RPCs lost in the connection handler after `send_message` returned `true`.
+
+This report should not assert a mechanism until one of these is demonstrated. The observations
+above are reproducible; the cause is not yet established.
 
 ## Suggested fixes
 

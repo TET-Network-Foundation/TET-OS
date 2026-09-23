@@ -1663,9 +1663,9 @@ async fn run_mdns_ping_swarm(
     // upstream and nothing observable from the application.
     //
     // So: periodically ask gossipsub what each bootnode is subscribed to. If a bootnode is not
-    // showing one of our topics, unsubscribe+resubscribe — `subscribe()` alone is a no-op when
-    // already subscribed and sends no RPC, whereas the pair emits a fresh Subscribe to every
-    // connected peer, which is what repopulates their view of us and prompts theirs of us.
+    // showing one of our topics, log it and drop the connection. We do NOT unsubscribe+resubscribe
+    // to force a fresh advertisement: `unsubscribe()` removes the topic from `self.mesh`, and
+    // advertisement on connect iterates `self.mesh`, so that "repair" can itself cause the damage.
     //
     // This is a workaround for a libp2p-gossipsub behaviour, documented in
     // docs/upstream/libp2p-gossipsub-lost-subscription.md. Remove it if upstream adds a retry.
@@ -1806,22 +1806,22 @@ async fn run_mdns_ping_swarm(
                         heal_cooldown.insert(pid, now);
                         println!(
                             "[P2P][gossip-heal] bootnode {pid} record is missing {missing} \
-                             (partial subscription set); dropping the connection so a fresh one \
-                             re-exchanges subscriptions"
+                             (partial subscription set); dropping the connection"
                         );
                         log::warn!(
                             "[p2p][gossip-heal] reconnecting peer={pid} missing_topic={missing}"
                         );
-                        // Re-send our own subscriptions too, repairing THEIR record of US. That
-                        // half is cheap and independent: `subscribe()` alone is a no-op when
-                        // already subscribed and emits no RPC, so the pair is required.
-                        let my_topics: Vec<gossipsub::TopicHash> =
-                            swarm.behaviour().gossipsub.topics().cloned().collect();
-                        for t in &my_topics {
-                            let ident = gossipsub::IdentTopic::new(t.as_str());
-                            let _ = swarm.behaviour_mut().gossipsub.unsubscribe(&ident);
-                            let _ = swarm.behaviour_mut().gossipsub.subscribe(&ident);
-                        }
+                        // DELIBERATELY NOT re-sending our own subscriptions here.
+                        //
+                        // The obvious repair — unsubscribe() then subscribe(), since subscribe()
+                        // alone is a no-op when already subscribed — is unsafe. `unsubscribe()`
+                        // removes the topic from `self.mesh` (behaviour.rs:1140), and
+                        // `on_connection_established` advertises by iterating `self.mesh`
+                        // (behaviour.rs:2928). A peer connecting inside that window is never told
+                        // about the removed topic, which is the same class of damage this code
+                        // exists to detect. It would have been a self-inflicted repeat.
+                        //
+                        // Detection and logging only, until the cause is settled.
                         // And drop the connection, intending a fresh one to re-exchange
                         // subscriptions.
                         //
