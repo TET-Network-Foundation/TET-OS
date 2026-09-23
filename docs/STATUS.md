@@ -14,6 +14,6 @@
 | **Fees** | `fees.rs` is the single source of truth, [`FEE_SPEC.md`](./FEE_SPEC.md) is normative: schedules 1/3/4 deleted, 5–7 unified, `fee_bps` bounded, the ×5 burn saturation fixed. |
 | **S4 — L1 Foundation (the blocker)** | ⬜ re-provision the public seed · ⬜ public faucet — must now be **built** consensus-routed, not un-gated · ⬜ UI service in `docker-compose.yml` · ⬜ CI (no `.github/` at all) · ⬜ refresh `RUNNING_A_NODE.md` (dated 2026-05-19) · ⬜ dashboards / alerting / SLOs. **0 of 6 exit criteria signed off.** |
 | **Other sprints** | S1–S3, S5, S9 ✅ · S6 🟡 (tabbed Win95 shell — no window manager, taskbar or boot sequence) · S7, S8 (Anonymous Mode — critical path), S10, S11 ⬜. |
-| **Open, not genesis-blocked** | ~15 direct-write paths still reachable from REST/p2p · ZK-Court has no challenger incentive, so the dispute path is never exercised · `chf_top_up_mint` and the CHF/AML/fiat meta keys are still live v0 machinery. |
+| **Open, not genesis-blocked** | 10 direct-write paths still fork `state_root` (enumerated in [`PHASE_1_GENESIS_SPEC.md` §4](./PHASE_1_GENESIS_SPEC.md#4-direct-write-path-inventory)); the anonymous and remote-triggerable ones were removed 2026-09-23 · ZK-Court has no challenger incentive, so the dispute path is never exercised · `chf_top_up_mint` and the CHF/AML/fiat meta keys are still live v0 machinery. |
 
 **Next:** close the S4 gate. Nothing else in Phase 0 is worth building against a chain no external builder can join.

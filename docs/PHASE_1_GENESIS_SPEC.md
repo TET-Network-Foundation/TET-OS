@@ -103,6 +103,7 @@ These are all consensus- or schema-breaking and are cheap only at a ceremony.
 | **FIPS-203 ML-KEM migration** | WP §17.17 | Tmail/Files KEM keys are mnemonic-derived; changing the algorithm invalidates every messaging identity. Free when the key directory is discarded anyway |
 | **Minimum ML-DSA level** | WP §7.1 | Verification infers the level from pubkey length and accepts 44/65/87, so the effective security level is the signer's choice. Pinning a floor is a consensus rule |
 | **Protocol reserve allocation** | WP §11.4 | `WALLET_PROTOCOL_RESERVE` mints 0 and is committed in the genesis hash. Changing it needs a new ceremony |
+| **Consensus-route all remaining balance writes** | [§4 table](#4-direct-write-path-inventory), this doc §2.5 | Ten paths still move funds outside the block pipeline. Each needs a new `TxV1` variant or a client-signed settlement envelope, several need both |
 | **Stake / unstake / worker-bond as consensus txs** | [§4 table](#4-direct-write-path-inventory), `wallet.rs:261`, `ledger.rs:1113`, `ledger.rs:1171` | `TxV1` has **no** `Stake`, `Unstake` or `WorkerBond` variant — the nine are `SignerLink`, `FoundingMemberEnroll`, `Transfer`, `GenesisBridge`, `InitialAirdrop`, `FileFee`, `WorkerRegister`, `EnterpriseInference`, `VerifyZkProof`. Routing these through the mempool therefore needs new tx variants, which is a schema change |
 | **Per-plane libp2p keypairs** | [post-mortem 2026-09](./postmortems/2026-09-gossip-lost-subscriptions.md), this doc §2.4 | Changes every node's `PeerId` on at least two planes, so every published bootnode multiaddr must be reissued. Free at a ceremony, disruptive on a live network |
 | **Denomination naming** | `WHITEPAPER_v1.0_GAPS.md` §10.1 | "Stevemon" vs "micro-TET" is cosmetic in code but appears in the genesis hash payload |
@@ -253,6 +254,37 @@ in exactly the area this section is about, and it is read in only two places. Re
 `TET_NODE_LABEL` (or fold it into `TET_WALLET_ID`) at the ceremony, when changing an env var
 contract is free.
 
+### 2.5 Consensus-route all remaining balance writes
+
+After the 2026-09-23 sweep, ten paths still write balances outside the block pipeline. Every one
+forks `state_root` on the serving node while block history stays byte-identical — the block-9828
+signature. None is reachable anonymously any more; all are hybrid-signed or admin-gated. **That is
+not the same as being safe:** a signature authorises the caller, it does not put the write through
+consensus. Two nodes serving the same signed request still diverge.
+
+| # | path | file:line | what it needs |
+|---|---|---|---|
+| 7 | `POST /ai/infer` → `settle_ai_inference_dynamic_charge` | `ai.rs:744` | new `TxV1::AiInferenceCharge`, client-signed — §2.1 |
+| 8 | `POST /ai/proxy` → `settle_transfer_internal` | `ai_proxy.rs` | client-signed settlement envelope |
+| 9 | `POST /ai/proxy` → `mint_worker_network_reward` | `ai_proxy.rs` | new mint variant, consensus-validated amount |
+| 10 | `POST /v1/compute` → `mint_worker_network_reward` | `network.rs:292` | as #9 |
+| 11 | `POST /enterprise/inference` → `settle_ai_utility_payment` | `enterprise.rs:216` | as #8 |
+| 12 | `POST /ledger/genesis_bridge` → `transfer_no_fee` | `ledger.rs:625` | `TxV1::GenesisBridge` already exists — route through the mempool |
+| 13 | `POST /ledger/zk_verify` → `slash_worker_bond_to_ecosystem_all` | `ledger.rs:992` | `TxV1::VerifyZkProof` exists; move the slash to block-apply |
+| 14 | `POST /wallet/slash` → `slash_stake_micro` | `wallet.rs:294` | admin-gated; needs a slash variant |
+| 17 | ZK-Court → `zkcourt_settle_challenger_bond` | `vision/zk_court.rs` | settle at block-apply, not at challenge submission |
+
+**The blocker is shared.** Settlement runs *after* the work and *before* the `200 OK`. Routing it
+through the mempool means the caller receives the result before payment confirms, and a tx that
+never mines leaves the node having worked for free. That is the optimistic-execution model the
+whitepaper specifies (§5.1, §8 ZK-Court) and which is not built — ZK-Court has no challenger
+incentive, so the dispute path is never exercised. Settling that model is a prerequisite for #7,
+#8, #9, #10 and #11, not a consequence of them.
+
+**Two do not wait on it.** #12 and #13 already have their `TxV1` variants and write directly out
+of habit, not necessity. Either could be mempool-routed in a sprint with no genesis change; they
+are listed here only to keep the batch in one place.
+
 ## 3. Fixed before Phase 1 — do not redo
 
 Recorded so the ceremony checklist does not re-litigate them.
@@ -273,11 +305,39 @@ Recorded so the ceremony checklist does not re-litigate them.
 
 ---
 
-## 4. Still unfixed and NOT genesis-blocked
+## 4. Direct-write path inventory
 
-Tracked here only so they are not forgotten; none requires a ceremony.
+Replaces the earlier "~15 direct-write paths" placeholder, which pointed at an audit that was
+never written down. Derived 2026-09-23 by taking every `pub fn` in `ledger.rs` that writes the
+balances tree and reading every caller.
 
-- ~~`/ai/infer` settlement~~ — **promoted to §2.1**; it is genesis-blocked after all.
-- **~15 other direct-write paths** remain reachable from REST or p2p — see the audit in the
-  commit body for 2026-09-19. None is a *new* regression; all predate this work.
-- **ZK-Court has no challenger incentive**, so the dispute path is never exercised (WP §8).
+**The fork test is objective:** `compute_state_root` (`ledger.rs:1359`) iterates `self.balances`,
+so any method that changes a balance outside block-apply forks the serving node's root while block
+history stays identical.
+
+| # | path | trigger | forks? | status |
+|---|---|---|---|---|
+| 1 | `POST /wallet/stake` → `stake_micro` | REST, hybrid-signed | yes | **open** — §2, needs a `Stake` variant |
+| 2 | `POST /worker/register` → `grant_genesis_guardian_if_eligible` | REST, unauthenticated | **no** — writes cert/meta, not balances | open, not a fork risk |
+| 3 | `POST /ledger/stake` → `stake_worker_bond_micro` | REST, hybrid-signed | yes | **open** — §2 |
+| 4 | `POST /ledger/unstake` → `unstake_worker_bond_micro` | REST, hybrid-signed | yes | **open** — §2 |
+| 5 | `POST /genesis/1000/claim` → `genesis_1k_claim` | REST, hybrid-signed | yes | ✅ removed `0c64dd4`; method deleted `6df13f9` |
+| 6 | gossip `AiResult` → `settle_ai_utility_payment` | **remote peer, gossip on 8002** | yes | ✅ removed `33b521a` |
+| 7–13 | AI settlement, mints, bridge, zk-verify slash | REST, hybrid-signed | yes | **open** — §2.5 |
+| 14 | `POST /wallet/slash` → `slash_stake_micro` | REST, admin bearer | yes | **open** — §2.5 |
+| 15 | `POST /ledger/mint_demo` → `mint_reward_with_proof` | REST, admin + signed | yes | ✅ removed `4d8d7ea` |
+| 16 | startup dev faucet → `mint_reward_with_proof` | internal, `TET_DEV_FAUCET_MICRO`, `!is_prod` | yes | open — not network-reachable, off by default, refused on mainnet |
+| 17 | ZK-Court → `zkcourt_settle_challenger_bond` | internal, `submit_challenge` | yes | **open** — §2.5 |
+| — | `validate_zk_task_claims` → `slash_worker_bond_to_ecosystem_all` | block-apply (`consensus.rs:971`, `:1071`) | no | ✅ already consensus-routed |
+| — | `admin_rest_faucet`, `claim_initial_airdrop`, `mint_fiat_chf_topup` | no production caller | n/a | ✅ `#[cfg(test)]` `6df13f9` |
+| — | `slash_worker_bond_zk_court_burn_all`, `slash_wallet_liquid_burn_micro` | no caller at all | n/a | ✅ deleted `6df13f9` |
+
+**Correction on record.** The first pass labelled #1, #3, #4 and #5 "unauthenticated". They are
+not: each verifies a hybrid Ed25519 + ML-DSA signature, but by hand
+(`verify_ed25519_hex_on_message` + `verify_mldsa_b64`, or signature headers) rather than through
+`verify_envelope_v1`, so a scan for the usual helper names missed them. The removals of #5 and #15
+stand on fork grounds, not on an authentication gap.
+
+**Still open, unrelated to balance writes:** ZK-Court has no challenger incentive, so the dispute
+path is never exercised (WP §8). `chf_top_up_mint` and the CHF/AML/fiat meta keys remain live v0
+machinery.
