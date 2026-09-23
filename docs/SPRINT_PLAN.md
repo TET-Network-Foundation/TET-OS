@@ -94,61 +94,19 @@ since S1 — gossip and the pull-based catch-up RPC. Transactions had one, so th
 made them undeliverable with no symptom beyond `"status":"pending"` forever. The fix that mattered
 was not repairing gossip but giving transactions the second path.
 
-### Tx gossip: root cause, found 2026-09-22
+### Tx gossip: resolved 2026-09-23
 
-A follower's `publish` to `/tet/v1/txs` fails with `InsufficientPeers` **because its record of the
-seed's topic subscriptions is incomplete**. Instrumented at the failure point
-(`p2p.rs`, `[P2P][diag]`):
+Root cause was **ours, not libp2p's**: three `Swarm`s built from one identity keypair, two of them
+dialling the same remote listener, so the seed's gossipsub told the second connection nothing
+(`other_established > 0` early return) while locally that connection belonged to a different
+`Behaviour` which was therefore left with no record of the seed's subscriptions.
 
-```
-[P2P][diag] topic=/tet/v1/txs connected_peers=1 mesh_peers=[]
-  peers=[12D3KooWNcdESJUC… on_topic=false
-         topics=[/tet/v1/blocks /tet/v1/files/announce /tet/v1/tmail]]
-```
+Fixed by scoping the inference plane to `TET_NEXUS_BOOTNODES` (empty by default). Ten consecutive
+fresh-container joins: gossip publish 10/10 after, 0/3 before; one connection instead of two; no
+churn.
 
-Three of the seed's four subscriptions are recorded; `/tet/v1/txs` is missing. `publish` therefore
-takes the early return at libp2p-gossipsub `behaviour.rs:635` — "no connected peer is subscribed
-to this topic" — before mesh, fanout or explicit-peer selection is even consulted.
-
-**It is intermittent.** Three back-to-back runs on identical code: two settled, the third lost the
-txs subscription. All three showed the same counts — 2 connections, 4 subscription events — so the
-loss is not visible from the event tally. One of the four was a duplicate.
-
-The trigger is two near-simultaneous connections to the same peer (65 ms apart: the follower dials
-its bootnode while the seed dials back). The subscription RPC that rides the connection which then
-closes is lost, and **nothing re-sends it** — gossipsub exchanges subscriptions once, at connection
-establishment. The follower is then permanently wrong about that peer, with no retry and no
-symptom other than transactions silently not propagating.
-
-Hypotheses checked and eliminated:
-
-| # | Hypothesis | Verdict |
-|---|---|---|
-| a | The seed only subscribes to `TXS_TOPIC` under some condition (mining, REST enabled) | **No.** `p2p.rs:1423` subscribes unconditionally with `.expect()`, in the same block as blocks/tmail/files. Read, not grepped |
-| b | Subscription exchange is lossy / racy | **Yes — this is it.** Evidence above |
-| c | Small-network mesh params — `mesh_n_low` unreachable with 2 nodes | **Real, but not the cause.** The mesh *is* permanently empty (`mesh_peers=[]`, `RANDOM PEERS: Got 0 peers` every heartbeat) because `get_random_peers` excludes explicit peers and `p2p.rs` makes *every* connected peer explicit, not just bootnodes. But publish never reaches mesh selection — it fails earlier. `TET_GOSSIP_BOOTNODE_EXPLICIT=0` now exists to test this independently. An empty mesh costs redundancy, not delivery |
-
-**Why the seed is unaffected:** the failure is one-directional because it is about what *this* node
-knows about *its* peer. The seed's record of the follower happened to be complete, so its publishes
-land — which is why blocks flow and only follower-submitted transactions disappear.
-
-**Live verification, 2026-09-22, after the tx-submit second path shipped.** Three consecutive
-follower submissions against the public seed, each a fresh container:
-
-| run | settled | gossip publish | tx-submit |
-|---|---|---|---|
-| 1 | 1,000 TET in ~6 s | ❌ `InsufficientPeers` | ✅ `accepted=true outcome=enqueued` |
-| 2 | 1,000 TET in ~15 s | ❌ ×2 | ✅ ×2 |
-| 3 | 1,000 TET in ~15 s | ❌ ×2 | ✅ ×2 |
-
-Gossip failed in **every** run. The lost-subscription condition is not rare on this pair — it is
-the normal state — which means the second path is not redundancy here, it is the only thing
-delivering transactions. Before the fix these three runs would all have hung on
-`"status":"pending"` indefinitely.
-
-**Fix taken:** not a gossipsub patch. A lost subscription is unobservable from the application and
-has no retry, so the response is to stop making transaction delivery depend on it — see the
-tx-submit second path below.
+Full write-up, including the identity inventory and a recommended per-plane-keypair fix:
+[`docs/postmortems/2026-09-gossip-lost-subscriptions.md`](./postmortems/2026-09-gossip-lost-subscriptions.md).
 
 
 

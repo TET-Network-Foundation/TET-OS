@@ -388,6 +388,7 @@ makes this node re-publish it.
 | `TET_TX_REBROADCAST_SEC` | **15** | Seconds between rebroadcast sweeps (both paths). |
 | `TET_TX_REBROADCAST_MAX` | **20** | Attempts per tx before it is abandoned. Five minutes at the default cadence. |
 | `TET_TX_SUBMIT_RPS` | **10** | Inbound `/tet/v1/tx-submit` budget per peer per second. |
+| `TET_NEXUS_BOOTNODES` | *(empty)* | Bootnodes for the **inference** plane (4003). Deliberately separate from `TET_BOOTNODES`, which is the block plane's address and must not be dialled from another plane — see the 2026-09 post-mortem. |
 
 If a transaction stays pending for more than two block intervals, check the submitting node's log:
 

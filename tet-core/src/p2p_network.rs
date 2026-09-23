@@ -1297,8 +1297,12 @@ pub fn start_p2p_node(
     }
 
     // Phase 1.2: Multi-bootnode bootstrap strategy (`TET_BOOTNODES` | `BOOTNODES`).
+    // TET_NEXUS_BOOTNODES, not TET_BOOTNODES — empty by default. See fluid_net's module docs:
+    // TET_BOOTNODES is the block plane's address, this plane listens on 4003, and dialling the
+    // block-plane port from here opened a second connection to the same remote under the same
+    // PeerId, which gossipsub answers with silence.
     let bootnodes = {
-        let v = crate::vision::fluid_net::bootnode_addrs_from_env();
+        let v = crate::vision::fluid_net::plane_bootnode_addrs_from_env("TET_NEXUS_BOOTNODES");
         if v.is_empty() { None } else { Some(v) }
     };
 
