@@ -192,11 +192,29 @@ the public multiaddr and converged to **height 10827 with `state_root 0xfc93c5a3
 on both**. Gossip peering confirmed in its log (`CONNECTION ESTABLISHED` with the seed's PeerId,
 subscribed to `/tet/v1/tmail`).
 
-**Still unverified:** a burn initiated on one node and observed to clear the *other* across the
-public network. That specific run writes Tmail traffic onto the public seed and was not performed.
-Burn is proven cross-node on two local nodes and proven on the seed itself; the seed-to-follower
-combination is the untested one, and per the AT-F1 lesson (a seed-submitted pass that never
-exercised the follower path) it should not be claimed until it is run.
+**Cross-network AT-4, seed ↔ follower, 19/19 green.** The gap noted here earlier is closed. The
+read receipt was posted **on the follower**, not on the seed — deliberately, because the AT-F1
+regression was a seed-submitted pass that never exercised the follower path:
+
+| Step | Result |
+|---|---|
+| Burn envelope sent on the seed | `202` |
+| Reached the follower over the public network | 367 ms, flag intact |
+| Follower decrypts it | plaintext matches |
+| **Read receipt posted on the follower** | `202` |
+| **Both stores cleared** | **1049 ms** — the revoke travelled follower → seed |
+| Sender-initiated burn (the mirror direction) | both cleared, 1088 ms |
+| Three authorization controls | `403` each, messages survived |
+
+Independent of the test script's own polling, the seed's log shows its gossip arm firing:
+
+```
+[P2P] 🔥 TMAIL BURNED msg_id=171f0cef-60ca-438c-a1ca-ad523791e900
+[P2P] 🔥 TMAIL BURNED msg_id=531fb73d-e3c1-43da-9cfb-8b1278613b87
+```
+
+**Known gap, not blocking:** `metrics::inc_tmail_burned` increments but is not exported by
+`/metrics`, so the burn counter is invisible to monitoring. Folds into the open S4 monitoring item.
 
 ### Why time-lock is not the expensive one
 
