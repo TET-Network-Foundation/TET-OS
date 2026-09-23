@@ -139,10 +139,6 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::ledger::get_genesis_1k_status),
         )
         .route(
-            "/genesis/1000/claim",
-            axum::routing::post(super::handlers::ledger::post_genesis_1k_claim),
-        )
-        .route(
             "/ledger/initial_airdrop/claim",
             axum::routing::post(super::handlers::ledger::post_initial_airdrop_claim),
         )

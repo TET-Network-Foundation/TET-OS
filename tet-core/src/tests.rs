@@ -6347,3 +6347,47 @@ async fn gossiped_ai_result_writes_no_balance() {
          deferred to PHASE_1_GENESIS_SPEC §2, which needs a client-signed tx and a consensus rule"
     );
 }
+
+/// **SECURITY REGRESSION GUARD.** `POST /genesis/1000/claim` must stay removed.
+///
+/// It credited `GENESIS_1K_BONUS_TET` (10,000 TET) via `Ledger::genesis_1k_claim`, a direct
+/// balance write outside the block pipeline, with **no authentication of any kind** — no admin
+/// bearer, no signature over the claim, nothing but a wallet id in the body. Any caller who could
+/// reach the REST port could mint themselves 10,000 TET up to the 10,000-slot cap, and every
+/// claim forked the serving node's `state_root` while block history stayed identical.
+///
+/// `GET /genesis/1000/status` is deliberately left in place: it reads a counter and writes
+/// nothing.
+#[tokio::test]
+async fn removed_genesis_1k_claim_route_is_not_reachable() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let root_before = ledger.compute_state_root().unwrap();
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/genesis/1000/claim")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(r#"{"wallet_id":"founder"}"#))
+        .unwrap();
+    let resp = crate::rest::routes::build_router(rest_state_for_tests(ledger.clone()))
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "POST /genesis/1000/claim must stay removed — it minted 10,000 TET with no authentication"
+    );
+
+    assert_eq!(
+        ledger.compute_state_root().unwrap(),
+        root_before,
+        "a request to the removed claim route must not mutate ledger state"
+    );
+}

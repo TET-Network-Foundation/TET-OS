@@ -365,79 +365,6 @@ async fn post_initial_airdrop_claim_impl(
         .into_response()
 }
 
-async fn post_genesis_1k_claim_impl(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    let _guard = state.genesis_1k_lock.lock().await;
-    let w = headers
-        .get("x-tet-wallet-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if w.len() != 64 || !w.chars().all(|c| c.is_ascii_hexdigit()) {
-        return (StatusCode::BAD_REQUEST, "missing/invalid x-tet-wallet-id").into_response();
-    }
-    let sig_b64 = headers
-        .get("x-tet-ed25519-sig-b64")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    let mldsa_pk_b64 = headers
-        .get("x-tet-mldsa-pubkey-b64")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    let mldsa_sig_b64 = headers
-        .get("x-tet-mldsa-sig-b64")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .trim();
-    if sig_b64.is_empty() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "missing x-tet-ed25519-sig-b64 (hybrid genesis1k claim)",
-        )
-            .into_response();
-    }
-    if mldsa_pk_b64.is_empty() || mldsa_sig_b64.is_empty() {
-        return (
-            StatusCode::UNAUTHORIZED,
-            "missing x-tet-mldsa-pubkey-b64 or x-tet-mldsa-sig-b64 (hybrid genesis1k claim)",
-        )
-            .into_response();
-    }
-    let msg = crate::wallet::genesis_1k_claim_hybrid_auth_message_bytes(&w, mldsa_pk_b64);
-    if let Err(e) = crate::quantum_shield::verify_ed25519(&w, sig_b64, &msg) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            format!("invalid genesis 1k claim ed25519 signature: {e}"),
-        )
-            .into_response();
-    }
-    if let Err(e) = crate::wallet::verify_mldsa_b64(mldsa_pk_b64, mldsa_sig_b64, &msg) {
-        return (
-            StatusCode::UNAUTHORIZED,
-            format!("invalid genesis 1k claim ml-dsa signature: {e}"),
-        )
-            .into_response();
-    }
-    match state.ledger.genesis_1k_claim(&w) {
-        Ok(slot) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "ok": true,
-                "slot": slot,
-                "bonus_tet": crate::ledger::GENESIS_1K_BONUS_TET,
-                "bonus_micro": crate::ledger::GENESIS_1K_BONUS_TET.saturating_mul(crate::ledger::STEVEMON),
-            })),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
-}
-
 async fn get_ledger_balance_impl(
     State(state): State<RestState>,
     Path(wallet): Path<String>,
@@ -1054,12 +981,6 @@ pub async fn get_genesis_1k_status(
     get_genesis_1k_status_impl(State(state), Query(q)).await
 }
 
-pub async fn post_genesis_1k_claim(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
-    post_genesis_1k_claim_impl(State(state), headers).await
-}
 
 pub async fn post_initial_airdrop_claim(
     State(state): State<RestState>,
