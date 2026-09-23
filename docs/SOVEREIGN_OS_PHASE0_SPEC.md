@@ -1303,7 +1303,7 @@ Wallet IDs are 64-character hex strings. This is unmemorable, unspoken, and unsh
 
 TNS provides:
 1. Native names (e.g., alice.tmail) for on-chain identity
-2. DNS bridge for existing domain owners (steve@tetnetwork.org resolves to wallet)
+2. DNS bridge for existing domain owners (tetsteve@proton.me resolves to wallet)
 3. Multi-app identity — one name across Tmail, Files, AI Worker
 4. Anonymous-compatible — can pair with B.2 Anonymous Tmail
 

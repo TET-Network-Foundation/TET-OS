@@ -310,7 +310,7 @@ sup.fn { font-size: 6pt; }
 <p><strong>Date:</strong> 2026-05-21  </p>
 <p><strong>Author:</strong> Steve  </p>
 <p><strong>Title:</strong> Founder-Architect, TET Network Project  </p>
-<p><strong>Contact:</strong> steve@tetnetwork.org  </p>
+<p><strong>Contact:</strong> tetsteve@proton.me  </p>
 <p><strong>Status:</strong> Draft for review. Does <strong>not</strong> supersede <a href="../WHITEPAPER.md" class="fn-ref"><code>WHITEPAPER.md</code></a> (Genesis v1.0, 2026-04-28) until merged by explicit commit.   <sup class="fn">[1]</sup></p>
 <p><strong>Implementation references:</strong> <a href="./WHITEPAPER_v1.0_GAPS.md" class="fn-ref"><code>docs/WHITEPAPER_v1.0_GAPS.md</code></a>, <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>docs/SOVEREIGN_OS_PHASE0_SPEC.md</code></a>, <a href="./CODEBASE_OVERVIEW.md" class="fn-ref"><code>docs/CODEBASE_OVERVIEW.md</code></a>, <a href="./STATUS.md" class="fn-ref"><code>docs/STATUS.md</code></a>   <sup class="fn">[2]</sup></p>
 <p><strong>Canonical code:</strong> <code>tet-core/</code> (Rust), <code>tet-network/ui/</code> (Sovereign OS)</p>
@@ -909,6 +909,18 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex">0x11.05</span> 17.5 CAAC hardware fingerprinting attack model</h3>
 <p>Timing micro-tasks are described; formal security game (emulator, FPGA, cloud GPU posing as mobile) is not written. <strong>Status: open</strong> (implementation partial).</p>
+<p><strong>Concrete instance of this gap (2026-09-20).</strong> <code>POST /v1/vision/caac/complete</code> accepts</p>
+<p><code>client_latency_ms</code> <strong>from the caller</strong> and derives the PoC/PoR role from it</p>
+<p>(<code>vision::caac::role_from_latency_ms</code>). The resulting record feeds</p>
+<p><code>LedgerCaacWeightProvider::consensus_weight</code> (<code>consensus.rs:200</code>), which sets leader-election</p>
+<p>weight when <code>TET_CONSENSUS_LEADER_MODE=caac</code> — the value <code>.env.mainnet.example</code> ships.</p>
+<p>The endpoint now requires a hybrid Ed25519 + ML-DSA signature, which closes <strong>impersonation</strong>: you</p>
+<p>can no longer write a role record for a wallet you do not control. It does <strong>not</strong> close</p>
+<p>self-elevation. A node can honestly sign its own <code>client_latency_ms: 0</code>, be classified PoC, and</p>
+<p>take weight 100 plus a latency bonus of up to 1000 — while a truthful slow node takes 25.</p>
+<p><strong>The signature proves who is speaking, not that the number is true.</strong> Closing this needs</p>
+<p>server-measured or hardware-attested latency, which is the formal model this section is about.</p>
+<p>Tracked for the ceremony in <a href="./PHASE_1_GENESIS_SPEC.md" class="fn-ref"><code>PHASE_1_GENESIS_SPEC.md</code></a> §2.3. <sup class="fn">[4]</sup></p>
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex">0x11.06</span> 17.6 Cross-chain bridge design (Phase 1 interoperability)</h3>
 <p>No canonical bridge spec for ETH/SOL/BTC custody. <strong>Status: open.</strong></p>
@@ -918,7 +930,7 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex">0x11.08</span> 17.8 Time-lock cryptography upgrade</h3>
 <p><strong>Phase 0:</strong> Time-lock delivery uses <strong>stake-scheduled release</strong> (<code>release_at_ms</code> in signed envelope; nodes refuse early decrypt). Trust is <strong>social/protocol-enforced</strong>, not wall-clock cryptographic.</p>
-<p><strong>Phase 0.1+:</strong> <strong>Verifiable Delay Function (VDF)</strong> or threshold decryption for <strong>trustless</strong> time-lock. Class-group VDF evaluation is research-track (see <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a> §A.2). <sup class="fn">[4]</sup></p>
+<p><strong>Phase 0.1+:</strong> <strong>Verifiable Delay Function (VDF)</strong> or threshold decryption for <strong>trustless</strong> time-lock. Class-group VDF evaluation is research-track (see <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a> §A.2). <sup class="fn">[5]</sup></p>
 <p><strong>Status: open</strong> (VDF); Phase 0 path <strong>implemented by policy</strong>.</p>
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex">0x11.09</span> 17.9 Burn-after-reading cryptographic guarantee</h3>
@@ -1015,7 +1027,7 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 |                    [ 0x12 ] 18. Comparison Table                     |
 ==============================================================================</pre>
 <p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
-<h2 id="s4">18. Comparison Table</h2>
+<h2 id="s5">18. Comparison Table</h2>
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex">0x12.01</span> 18.1 Layer 1 positioning</h3>
 <p>Factual summary from public project materials (2026-05). Where uncertain: <strong>unknown / not stated</strong>.</p>
@@ -1048,17 +1060,17 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 +-----------------------------------------+----------+-------------------+------------------------+--------------------------------------------------------------------------------------------+
 </pre>
 <p><strong>Do not over-claim:</strong> Rows assume <strong>2026-09-15</strong> ship targets pass AT-3..AT-5 on public testnet. Until then, table is <strong>design intent</strong>.</p>
-<p><strong>Sources (indicative):</strong> TET — this document + <code>tet-core</code> + <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a>; Signal/Telegram/Session — public product docs. <sup class="fn">[5]</sup></p>
+<p><strong>Sources (indicative):</strong> TET — this document + <code>tet-core</code> + <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a>; Signal/Telegram/Session — public product docs. <sup class="fn">[6]</sup></p>
 <p><strong>L1 caveat:</strong> TET testnet does not yet demonstrate planetary PoR scale, SP1 proofs, or closed-form η.</p>
 <p class="sep span-all">==============================================================================</p>
 <pre class="frame span-all">==============================================================================
 |                         [ 0x13 ] 19. Roadmap                         |
 ==============================================================================</pre>
 <p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
-<h2 id="s5">19. Roadmap</h2>
+<h2 id="s6">19. Roadmap</h2>
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex">0x13.01</span> 19.1 Phase 0 — Sovereign OS + public testnet (current)</h3>
-<p><strong>Sprint sequence</strong> (see <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a> §B.1): <sup class="fn">[6]</sup></p>
+<p><strong>Sprint sequence</strong> (see <a href="./SOVEREIGN_OS_PHASE0_SPEC.md" class="fn-ref"><code>SOVEREIGN_OS_PHASE0_SPEC.md</code></a> §B.1): <sup class="fn">[7]</sup></p>
 <pre class="ascii-table span-all ultra-ascii">
 +----------+---------------------------------------------------------------------------------------------------------+
 | Sprint  | Focus                                                                                                  |
@@ -1101,7 +1113,7 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 |                       [ 0x14 ] 20. Conclusion                        |
 ==============================================================================</pre>
 <p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
-<h2 id="s6">20. Conclusion</h2>
+<h2 id="s7">20. Conclusion</h2>
 <p>TET Network is not an incremental L1 tweak. It couples <strong>hardware-adaptive consensus</strong>, <strong>post-quantum signatures</strong>, and an <strong>energy-linked issuance philosophy</strong> distinct from labor markets and centralized inference APIs. Version 1.1 makes the structure honest: Part I is what we build and test; Part II is where the protocol could go; Part III is what still requires math, code, or both.</p>
 <p>The testnet exists to find bugs like dual <code>genesis_hash</code> implementations before they become permanent mainnet failures. Engineers who can disprove a mechanism should do so on testnet, not in production.</p>
 <p class="sep span-all">==============================================================================</p>
@@ -1109,20 +1121,20 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 |                   [ 0x15 ] 21. A Call to Builders                    |
 ==============================================================================</pre>
 <p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
-<h2 id="s6">21. A Call to Builders</h2>
+<h2 id="s7">21. A Call to Builders</h2>
 <p>Expertise sought (unchanged in spirit from v1.0):</p>
 <p>- Rust systems programming (consensus, ledger, networking)</p>
 <p>- libp2p at scale</p>
 <p>- zkVM engineering (RISC Zero today; SP1 tomorrow)</p>
 <p>- Applied cryptography (ML-DSA, hybrid protocols)</p>
 <p>- Distributed ML infrastructure</p>
-<p>Technical critique: <strong>steve@tetnetwork.org</strong> (Subject: Core Builder Application)</p>
+<p>Technical critique: <strong>tetsteve@proton.me</strong> (Subject: Core Builder Application)</p>
 <p class="sep span-all">==============================================================================</p>
 <pre class="frame span-all">==============================================================================
 |                       [ 0x16 ] 22. References                        |
 ==============================================================================</pre>
 <p class="sep span-all">--==[ TET NETWORK / WHITEPAPER v1.1 ]==----------------------------------</p>
-<h2 id="s6">22. References</h2>
+<h2 id="s7">22. References</h2>
 <p class="sep minor">----------------------------------------</p>
 <h3><span class="hex"></span> Core consensus and cryptoeconomics</h3>
 <p class="sep minor">----------------------------------------</p>
