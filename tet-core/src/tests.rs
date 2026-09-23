@@ -6695,3 +6695,264 @@ async fn invalid_zk_candidate_is_rejected_without_slashing() {
         "rejecting a candidate must leave state_root untouched"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S7-1 — Burn-after-read (spec §A.3). Envelope-level guards.
+// ---------------------------------------------------------------------------
+
+/// A well-formed `e2ee` block. The node never decrypts, so only `ciphertext_b64` is actually read
+/// (it feeds `payload_sha256` in the §A.1.3 pre-image) — the rest just has to deserialize.
+fn tmail_e2ee_block_for_tests() -> crate::tmail::envelope::TmailE2eeBlock {
+    let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
+    crate::tmail::envelope::TmailE2eeBlock {
+        v: 1,
+        scheme: crate::tmail::envelope::TMAIL_E2EE_SCHEME.to_string(),
+        client_ephemeral_pub_b64: b64("client-x25519-pub"),
+        client_mlkem_pub_b64: b64("client-kyber-pub"),
+        receiver_x25519_pub_b64: b64("receiver-x25519-pub"),
+        receiver_mlkem_pub_b64: b64("receiver-kyber-pub"),
+        mlkem_ciphertext_b64: b64("kyber-ciphertext"),
+        nonce_b64: b64("twelve-bytes"),
+        ciphertext_b64: b64("opaque-ciphertext-the-node-never-opens"),
+    }
+}
+
+/// Hybrid-signs a [`TmailEnvelopeV1`] over the §A.1.3 pre-image.
+///
+/// Same env contract as [`signed_env_for_tests`]: the pre-image binds `chain_id` and
+/// `genesis_hash` from the process env, so the caller must hold `env_lock()` and have run
+/// `set_test_env_base()` or the signature binds to a different network than the verifier assumes.
+fn signed_tmail_env_for_tests(
+    words: &str,
+    sender_wallet_id: &str,
+    receiver_wallet_id: &str,
+    msg_id: &str,
+    flags: crate::tmail::envelope::TmailFlags,
+    burn: Option<crate::tmail::envelope::TmailBurn>,
+) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+
+    let mut env = crate::tmail::envelope::TmailEnvelopeV1 {
+        v: 1,
+        kind: crate::tmail::envelope::TMAIL_ENVELOPE_KIND.to_string(),
+        msg_id: msg_id.to_string(),
+        flags,
+        sender_wallet_id: sender_wallet_id.to_ascii_lowercase(),
+        receiver_wallet_id: receiver_wallet_id.to_ascii_lowercase(),
+        sent_at_ms: 1_790_000_000_000,
+        release_at_ms: 0,
+        ttl_ms: 60_000,
+        fee_paid_micro: 0,
+        pin_stake_micro: 0,
+        e2ee: tmail_e2ee_block_for_tests(),
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: sender_wallet_id.to_ascii_lowercase(),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: mldsa_pubkey_b64.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+        anonymous: None,
+        time_lock: None,
+        burn,
+        plaintext_commitment_sha256: None,
+    };
+
+    let msg = crate::tmail::envelope::tmail_envelope_auth_message_bytes(&env, &mldsa_pubkey_b64)
+        .unwrap();
+    env.hybrid_sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    env.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    env
+}
+
+fn tmail_flags_for_tests(burn_after_read: bool) -> crate::tmail::envelope::TmailFlags {
+    crate::tmail::envelope::TmailFlags {
+        basic: true,
+        time_lock: false,
+        burn_after_read,
+        anonymous: false,
+    }
+}
+
+/// Two wallets with their mnemonics, for the Tmail guards.
+fn tmail_pair_for_tests() -> (String, String, String) {
+    let sender = crate::wallet::generate_mnemonic_12().unwrap();
+    let receiver = crate::wallet::generate_mnemonic_12().unwrap();
+    (
+        sender.mnemonic_12.clone().unwrap(),
+        sender.address_hex.to_ascii_lowercase(),
+        receiver.address_hex.to_ascii_lowercase(),
+    )
+}
+
+/// **S7-1 item 1.** A burn-after-read envelope must verify.
+///
+/// Before S7-1 the flag gate rejected every non-`basic` flag, so this is the assertion that goes
+/// red if the relaxation is reverted. `flags.burn_after_read` is already inside the §A.1.3
+/// pre-image via `TmailFlags::canonical`, so accepting it changes no signature format.
+#[test]
+fn tmail_envelope_with_burn_flag_verifies() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "burn-msg-1",
+        tmail_flags_for_tests(true),
+        None,
+    );
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok(),
+        "a burn-after-read envelope must verify after S7-1"
+    );
+}
+
+/// The relaxation is burn-only: a plain Basic envelope must still verify unchanged.
+#[test]
+fn tmail_basic_envelope_still_verifies_after_burn_relaxation() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "basic-msg-1",
+        tmail_flags_for_tests(false),
+        None,
+    );
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok(),
+        "S7-1 must not disturb the Basic E2EE path shipped in S5"
+    );
+}
+
+/// Time-lock is S7-2 and anonymous is S8 — both must stay closed after the burn relaxation.
+#[test]
+fn tmail_time_lock_and_anonymous_flags_are_still_rejected() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let mut tl = tmail_flags_for_tests(false);
+    tl.time_lock = true;
+    let env = signed_tmail_env_for_tests(&words, &sender, &receiver, "tl-1", tl, None);
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err(),
+        "time_lock is S7-2 and must not ride in on the burn relaxation"
+    );
+
+    let mut anon = tmail_flags_for_tests(false);
+    anon.anonymous = true;
+    let env = signed_tmail_env_for_tests(&words, &sender, &receiver, "anon-1", anon, None);
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err(),
+        "anonymous is S8 and must not ride in on the burn relaxation"
+    );
+}
+
+/// **The malleability guard.** The `burn` block is NOT covered by the §A.1.3 pre-image — only
+/// `flags` is. So a relaying peer can edit it freely, and it must never be able to change policy.
+///
+/// Here the signed flag says "no burn" while the unsigned block says "burn": the envelope must be
+/// rejected rather than silently honouring either side.
+#[test]
+fn tmail_unsigned_burn_block_cannot_contradict_the_signed_flag() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    // Signed as basic-only, then handed a burn block a peer could have injected in transit.
+    let mut env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "malleable-1",
+        tmail_flags_for_tests(false),
+        None,
+    );
+    env.burn = Some(crate::tmail::envelope::TmailBurn {
+        burn_after_read: true,
+        max_reads: None,
+    });
+    let err = crate::tmail::envelope::verify_tmail_envelope_v1(&env)
+        .expect_err("an unsigned burn block contradicting the signed flag must be rejected");
+    assert!(
+        format!("{err}").contains("burn block disagrees"),
+        "expected the inconsistent-burn-block rejection, got: {err}"
+    );
+
+    // And the mirror: signed as burn, block says no burn.
+    let mut env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "malleable-2",
+        tmail_flags_for_tests(true),
+        None,
+    );
+    env.burn = Some(crate::tmail::envelope::TmailBurn {
+        burn_after_read: false,
+        max_reads: None,
+    });
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err(),
+        "the mirror case must be rejected too"
+    );
+}
+
+/// `max_reads` is unsigned and Phase 0 policy is exactly `on_read_receipt` (one read). Reject it
+/// rather than ignoring it, so it cannot look supported.
+#[test]
+fn tmail_burn_block_max_reads_is_rejected() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "maxreads-1",
+        tmail_flags_for_tests(true),
+        Some(crate::tmail::envelope::TmailBurn {
+            burn_after_read: true,
+            max_reads: Some(3),
+        }),
+    );
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err(),
+        "max_reads is unsigned and unsupported in Phase 0; it must be rejected, not ignored"
+    );
+}
+
+/// A redundant burn block (agrees with the signed flag, no `max_reads`) is allowed through.
+#[test]
+fn tmail_redundant_burn_block_is_accepted() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "redundant-1",
+        tmail_flags_for_tests(true),
+        Some(crate::tmail::envelope::TmailBurn {
+            burn_after_read: true,
+            max_reads: None,
+        }),
+    );
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok(),
+        "a burn block that merely restates the signed flag is harmless"
+    );
+}

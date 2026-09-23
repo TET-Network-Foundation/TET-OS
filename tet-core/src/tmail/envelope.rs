@@ -19,8 +19,14 @@ pub enum TmailEnvelopeError {
     UnsupportedVersion(u32),
     #[error("unexpected envelope kind: {0}")]
     Kind(String),
-    #[error("only the basic flag is supported in this build (time_lock/burn/anonymous out of scope)")]
+    #[error(
+        "unsupported flag in this build (time_lock/anonymous out of scope; basic+burn_after_read supported)"
+    )]
     UnsupportedFlags,
+    #[error(
+        "burn block disagrees with the signed flags.burn_after_read, or sets an unsupported field"
+    )]
+    InconsistentBurnBlock,
     #[error("signer ed25519 pubkey must equal sender_wallet_id")]
     SignerMismatch,
     #[error("invalid wallet id (expected 64 lowercase hex chars)")]
@@ -31,7 +37,8 @@ pub enum TmailEnvelopeError {
     Signature(String),
 }
 
-/// Feature flags (spec §A.1.2 `flags`). For the Basic E2EE task only `basic` may be set.
+/// Feature flags (spec §A.1.2 `flags`). This build supports `basic`, optionally with
+/// `burn_after_read` (S7-1); `time_lock` and `anonymous` are still rejected.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmailFlags {
     pub basic: bool,
@@ -103,7 +110,13 @@ pub struct TmailTimeLock {
     pub vdf_proof_b64: Option<String>,
 }
 
-/// Burn-after-read block (spec §A.1.2 `burn`). Out of scope for the Basic task; always `None`.
+/// Burn-after-read block (spec §A.1.2 `burn`).
+///
+/// **This block is not covered by the §A.1.3 signature pre-image** — only `flags` is (via
+/// [`TmailFlags::canonical`]). It is therefore malleable in transit and MUST NOT decide behaviour.
+/// [`verify_tmail_envelope_v1`] accepts it only when it is redundant with the signed flag, and
+/// rejects `max_reads` outright; Phase 0 burn policy is exactly `on_read_receipt` (one read).
+/// The signed `flags.burn_after_read` is the authority.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmailBurn {
     #[serde(default)]
@@ -112,7 +125,7 @@ pub struct TmailBurn {
     pub max_reads: Option<u32>,
 }
 
-/// Tmail Basic E2EE envelope (spec §A.1.2).
+/// Tmail E2EE envelope (spec §A.1.2) — Basic, optionally burn-after-read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmailEnvelopeV1 {
     pub v: u32,
@@ -132,7 +145,8 @@ pub struct TmailEnvelopeV1 {
     pub pin_stake_micro: u64,
     pub e2ee: TmailE2eeBlock,
     pub hybrid_sig: TmailHybridSig,
-    /// Optional feature blocks — always `None` in the Basic E2EE build.
+    /// Optional feature blocks. `anonymous` and `time_lock` are always `None` in this build;
+    /// `burn` may be present but carries no policy (see [`TmailBurn`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anonymous: Option<TmailAnonymous>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,16 +204,23 @@ pub fn tmail_envelope_auth_message_bytes(
     Ok(s.into_bytes())
 }
 
-/// Verify a Basic E2EE Tmail envelope's hybrid signature (spec §A.1.3).
+/// Verify a Tmail envelope's hybrid signature (spec §A.1.3).
 ///
 /// Checks (in order):
 /// 1. version / kind discriminators,
-/// 2. only `basic` flag set (this build's scope),
-/// 3. sender/receiver wallet ids are well-formed 64-hex,
-/// 4. signer `ed25519_pubkey_hex` equals `sender_wallet_id` (non-anonymous binding),
-/// 5. hybrid (Ed25519 + ML-DSA-44) signature over the §A.1.3 pre-image.
+/// 2. flags are within this build's scope — `basic`, optionally plus `burn_after_read` (S7-1).
+///    `time_lock` and `anonymous` remain out of scope,
+/// 3. the unsigned `burn` block, if present, is redundant with the signed flag,
+/// 4. sender/receiver wallet ids are well-formed 64-hex,
+/// 5. signer `ed25519_pubkey_hex` equals `sender_wallet_id` (non-anonymous binding),
+/// 6. hybrid (Ed25519 + ML-DSA-44) signature over the §A.1.3 pre-image.
 ///
 /// Same pattern as `verify_envelope_v1`: both signatures must validate over identical bytes.
+///
+/// **Why burn needs no new signed field.** `flags.burn_after_read` is already inside the pre-image
+/// through [`TmailFlags::canonical`], so enabling it here changes no signature format and
+/// invalidates nothing already signed. The `burn` block is *not* in the pre-image, which is why it
+/// may not carry policy — see [`TmailBurn`].
 pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelopeError> {
     if env.v != 1 {
         return Err(TmailEnvelopeError::UnsupportedVersion(env.v));
@@ -207,15 +228,21 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
     if env.kind != TMAIL_ENVELOPE_KIND {
         return Err(TmailEnvelopeError::Kind(env.kind.clone()));
     }
+    // S7-1 relaxes this gate for `burn_after_read` only. Everything else stays closed.
     if !env.flags.basic
         || env.flags.time_lock
-        || env.flags.burn_after_read
         || env.flags.anonymous
         || env.anonymous.is_some()
         || env.time_lock.is_some()
-        || env.burn.is_some()
     {
         return Err(TmailEnvelopeError::UnsupportedFlags);
+    }
+    // The burn block is unsigned (§A.1.3 covers `flags`, not `burn`). Accept it only when it adds
+    // nothing the signature does not already cover, so a peer cannot flip burn policy in transit.
+    if let Some(burn) = env.burn.as_ref()
+        && (burn.burn_after_read != env.flags.burn_after_read || burn.max_reads.is_some())
+    {
+        return Err(TmailEnvelopeError::InconsistentBurnBlock);
     }
 
     let sender = env.sender_wallet_id.trim().to_ascii_lowercase();
@@ -224,7 +251,11 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
         return Err(TmailEnvelopeError::InvalidWalletId);
     }
 
-    let signer = env.hybrid_sig.ed25519_pubkey_hex.trim().to_ascii_lowercase();
+    let signer = env
+        .hybrid_sig
+        .ed25519_pubkey_hex
+        .trim()
+        .to_ascii_lowercase();
     if signer != sender {
         return Err(TmailEnvelopeError::SignerMismatch);
     }
