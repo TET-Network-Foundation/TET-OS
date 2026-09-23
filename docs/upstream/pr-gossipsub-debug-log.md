@@ -1,11 +1,10 @@
 # Prepared PR: rust-libp2p — gossipsub debug log for additional connections
 
-**Not opened.** Branch is committed and pushed-ready in the fork; see "Manual steps" below for
-what only a human can do.
+**Opened as [libp2p/rust-libp2p#6635](https://github.com/libp2p/rust-libp2p/pull/6635).**
 
 - **Fork:** `Nexus-Network-Foundation/rust-libp2p` (local clone at `../rust-libp2p`)
 - **Branch:** `gossipsub/log-secondary-connection`, off `master`
-- **Commit:** `bcd75ec58`
+- **Commit:** `92a92b97e`
 - **Diff:** 2 files, +9 −0 (`protocols/gossipsub/src/behaviour.rs`, `protocols/gossipsub/CHANGELOG.md`)
 
 ---
@@ -93,23 +92,16 @@ Note: the repo's `rustfmt.toml` sets `imports_granularity`, `group_imports` and
 touches no imports or comments, so it is unaffected — but a nightly `cargo fmt` is what their CI
 runs.
 
-## Manual steps — these cannot be done for you
+## Manual steps
 
-1. **Replace the changelog placeholder.** The entry cites
-   `[PR XXXX](https://github.com/libp2p/rust-libp2p/pull/XXXX)` because the number does not exist
-   until the PR is opened. Open the PR, then amend the entry with the real number and force-push
-   *once*. (CONTRIBUTING discourages force-pushes after review starts; before first review is the
-   right moment.)
-2. **Fill in the AI Assistance Disclosure.** The PR template has a required section:
-   - **Tools used** — required, and `none` would be untrue here.
-   - **Attestation** checkbox: *"I have read every line of this diff, understand what it does, and
-     can explain it in review."* That is a personal attestation. Read the nine added lines and tick
-     it yourself, or do not open the PR.
-3. **Push the branch to the fork.** It is committed locally only; nothing has been pushed to
-   `Nexus-Network-Foundation/rust-libp2p` or anywhere near `libp2p/rust-libp2p`.
-4. **Decide whether to file an issue first.** CONTRIBUTING does not require one, and for a
-   one-line log addition a PR alone is normal. If a maintainer would rather discuss the underlying
-   ergonomics, the PR thread is the place.
+1. ~~Replace the changelog placeholder.~~ Done: `PR 6635` substituted, commit amended, branch
+   force-pushed once with `--force-with-lease` before any review, per CONTRIBUTING's preference
+   against force-pushes once review has started.
+2. **AI Assistance Disclosure** — the PR template's required section. "Tools used" is required,
+   and the attestation *"I have read every line of this diff, understand what it does, and can
+   explain it in review"* is personal to the submitter. Not something that can be delegated.
+3. ~~Push the branch.~~ Done.
+4. Issue first: not required by CONTRIBUTING, and a PR alone is normal for a log-only change.
 
 No DCO or sign-off requirement: neither `CONTRIBUTING.md` nor the PR template mentions one, and
 there is no DCO bot config in `.github/`.
