@@ -279,6 +279,22 @@ AT-3's "after 1h" is reached without sleeping. The live run instead schedules ~2
 out, because adding a clock-skew override to a shipping node would be a backdoor around the only
 mechanism this feature has.
 
+**Seed redeployed to the S7-2 binary, 2026-09-23.** Same build-first-recreate-second pattern as the
+S7-1 redeploy, so the old container produced blocks throughout the ~8 min compile.
+
+| Check | Before | After |
+|---|---|---|
+| **PeerId** | `12D3KooWNcdESJUC…cD7MSEC` | **identical** |
+| Height | 11054 → 11118 at swap | 11118, advancing |
+| Block 11054 `block_id` | `0xa253afb2…a20a1bd` | **identical** |
+| Block 11054 `state_root` | `0x23576105…0dd1fa` | **identical** |
+| `GET /tmail/inbox` | no `locked_count` | `locked_count` present |
+
+AT-3 re-run against the deployed seed over an SSH tunnel to its loopback REST: **17/17 green**,
+including the raw-body check that the ciphertext appears nowhere in the response, and all three
+controls. **Both URLs pointed at the seed**, so the "both nodes" steps there are self-checks; the
+genuine two-node evidence is the local pair above. A seed↔follower AT-3 has not been run.
+
 **Deferred to Phase 0.1, as the spec already directs:**
 
 | Deferred | Spec | Why not now |
