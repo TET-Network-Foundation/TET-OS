@@ -6846,27 +6846,28 @@ fn tmail_basic_envelope_still_verifies_after_burn_relaxation() {
     );
 }
 
-/// Time-lock is S7-2 and anonymous is S8 — both must stay closed after the burn relaxation.
+/// Anonymous (S8) must stay closed after the burn relaxation.
+///
+/// **Amended by S7-2.** This guard also asserted that `time_lock` was rejected. Once S7-2 opened
+/// time-lock that half kept passing — but for the wrong reason: the envelope it built left
+/// `release_at_ms` at 0, so it was refused as an incoherent schedule, not as an unsupported flag,
+/// while the assertion message still claimed the latter. A guard that is true for a reason other
+/// than the one it states is the failure mode `CLAUDE.md` describes, so the stale half was removed
+/// rather than left to look reassuring. Time-lock's real rules are covered by
+/// `tmail_time_lock_requires_a_future_release` and
+/// `tmail_release_without_the_time_lock_flag_is_rejected`.
 #[test]
-fn tmail_time_lock_and_anonymous_flags_are_still_rejected() {
+fn tmail_anonymous_flag_is_still_rejected_after_the_burn_relaxation() {
     let _g = env_lock();
     set_test_env_base();
     let (words, sender, receiver) = tmail_pair_for_tests();
-
-    let mut tl = tmail_flags_for_tests(false);
-    tl.time_lock = true;
-    let env = signed_tmail_env_for_tests(&words, &sender, &receiver, "tl-1", tl, None);
-    assert!(
-        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err(),
-        "time_lock is S7-2 and must not ride in on the burn relaxation"
-    );
 
     let mut anon = tmail_flags_for_tests(false);
     anon.anonymous = true;
     let env = signed_tmail_env_for_tests(&words, &sender, &receiver, "anon-1", anon, None);
     assert!(
         crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err(),
-        "anonymous is S8 and must not ride in on the burn relaxation"
+        "anonymous is S8 and must not ride in on the burn or time-lock relaxations"
     );
 }
 
@@ -8152,4 +8153,172 @@ fn at7_a_read_side_cap_holds_when_stored_rows_exceed_retention() {
         5,
         "GET /tmail/inbox must cap per conversation even when the store still holds more"
     );
+}
+
+// ---------------------------------------------------------------------------
+// S7-2 item 1 — time-lock: flag gate and schedule validation.
+// ---------------------------------------------------------------------------
+
+/// Build a scheduled envelope: `flags.time_lock` set and `release_at_ms` in the future.
+fn signed_scheduled_env_for_tests(
+    words: &str,
+    sender: &str,
+    receiver: &str,
+    msg_id: &str,
+    release_in_ms: i64,
+) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    let mut flags = tmail_flags_for_tests(false);
+    flags.time_lock = true;
+    let mut env =
+        signed_tmail_env_for_tests(words, sender, receiver, msg_id, flags, None);
+    env.release_at_ms = (env.sent_at_ms as i64 + release_in_ms).max(0) as u64;
+    resign_tmail_env_for_tests(&mut env, words);
+    env
+}
+
+/// Re-sign an envelope in place after mutating a field that is inside the §A.1.3 pre-image.
+fn resign_tmail_env_for_tests(env: &mut crate::tmail::envelope::TmailEnvelopeV1, words: &str) {
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let msg = crate::tmail::envelope::tmail_envelope_auth_message_bytes(env, &pk).unwrap();
+    env.hybrid_sig.mldsa_pubkey_b64 = pk;
+    env.hybrid_sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    env.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+}
+
+/// A scheduled envelope verifies. `release_at_ms` was already in the pre-image, so nothing about
+/// the signature format changed.
+#[test]
+fn tmail_scheduled_envelope_verifies() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+    let env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "sched-1", 3_600_000);
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok(),
+        "a time-locked envelope must verify after S7-2"
+    );
+}
+
+/// `flags.time_lock` with a release at or before `sent_at_ms` would present as "scheduled" while
+/// releasing immediately. Refused rather than normalised.
+#[test]
+fn tmail_time_lock_requires_a_future_release() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    for offset in [0i64, -1, -60_000] {
+        let env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "past-1", offset);
+        let err = crate::tmail::envelope::verify_tmail_envelope_v1(&env)
+            .expect_err("a non-future release must be refused");
+        assert!(
+            format!("{err}").contains("strictly after sent_at_ms"),
+            "expected the release-time rejection, got: {err}"
+        );
+    }
+}
+
+/// A `release_at_ms` without the flag is a signed value the node would silently ignore.
+#[test]
+fn tmail_release_without_the_time_lock_flag_is_rejected() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let mut env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "stray-release",
+        tmail_flags_for_tests(false),
+        None,
+    );
+    env.release_at_ms = env.sent_at_ms + 60_000;
+    resign_tmail_env_for_tests(&mut env, &words);
+    let err = crate::tmail::envelope::verify_tmail_envelope_v1(&env)
+        .expect_err("release_at_ms without the flag must be refused");
+    assert!(
+        format!("{err}").contains("must be 0 unless"),
+        "expected the unexpected-release rejection, got: {err}"
+    );
+}
+
+/// The unsigned `time_lock` block cannot contradict the signed `release_at_ms`, and the VDF field
+/// is refused outright — the VDF path is Phase 0.1 and must not look supported.
+#[test]
+fn tmail_unsigned_time_lock_block_cannot_contradict_or_smuggle_a_vdf() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let mut env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "tlblock-1", 60_000);
+    env.time_lock = Some(crate::tmail::envelope::TmailTimeLock {
+        release_at_ms: env.release_at_ms + 999_999, // a relaying peer moves the release
+        vdf_proof_b64: None,
+    });
+    let err = crate::tmail::envelope::verify_tmail_envelope_v1(&env)
+        .expect_err("a contradicting time_lock block must be refused");
+    assert!(
+        format!("{err}").contains("time_lock block disagrees"),
+        "expected the inconsistent-block rejection, got: {err}"
+    );
+
+    let mut env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "tlblock-2", 60_000);
+    env.time_lock = Some(crate::tmail::envelope::TmailTimeLock {
+        release_at_ms: env.release_at_ms,
+        vdf_proof_b64: Some("bm90LWEtdmRm".to_string()),
+    });
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err(),
+        "a VDF proof must be refused in Phase 0 rather than silently ignored"
+    );
+}
+
+/// A redundant `time_lock` block (restates the signed release, no VDF) is harmless.
+#[test]
+fn tmail_redundant_time_lock_block_is_accepted() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+    let mut env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "tlblock-3", 60_000);
+    env.time_lock = Some(crate::tmail::envelope::TmailTimeLock {
+        release_at_ms: env.release_at_ms,
+        vdf_proof_b64: None,
+    });
+    assert!(crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok());
+}
+
+/// Time-lock and burn compose: a scheduled burn-after-read message is valid.
+#[test]
+fn tmail_time_lock_and_burn_compose() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+
+    let mut flags = tmail_flags_for_tests(true);
+    flags.time_lock = true;
+    let mut env =
+        signed_tmail_env_for_tests(&words, &sender, &receiver, "sched-burn", flags, None);
+    env.release_at_ms = env.sent_at_ms + 60_000;
+    resign_tmail_env_for_tests(&mut env, &words);
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok(),
+        "scheduled + burn-after-read must be a valid combination"
+    );
+}
+
+/// Anonymous stays closed — S7-2 must not widen the gate past time-lock.
+#[test]
+fn tmail_anonymous_flag_is_still_rejected_after_time_lock() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+    let mut flags = tmail_flags_for_tests(false);
+    flags.anonymous = true;
+    let env = signed_tmail_env_for_tests(&words, &sender, &receiver, "anon-2", flags, None);
+    assert!(crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err());
 }

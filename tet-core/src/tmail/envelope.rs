@@ -27,6 +27,14 @@ pub enum TmailEnvelopeError {
         "burn block disagrees with the signed flags.burn_after_read, or sets an unsupported field"
     )]
     InconsistentBurnBlock,
+    #[error("flags.time_lock requires release_at_ms strictly after sent_at_ms")]
+    InvalidReleaseTime,
+    #[error("release_at_ms must be 0 unless flags.time_lock is set")]
+    UnexpectedReleaseTime,
+    #[error(
+        "time_lock block disagrees with the signed release_at_ms, or carries a VDF proof (Phase 0.1)"
+    )]
+    InconsistentTimeLockBlock,
     #[error("signer ed25519 pubkey must equal sender_wallet_id")]
     SignerMismatch,
     #[error("invalid wallet id (expected 64 lowercase hex chars)")]
@@ -101,7 +109,12 @@ pub struct TmailAnonymous {
     pub stealth_addr: Option<String>,
 }
 
-/// Time-lock block (spec §A.1.2 `time_lock`). Out of scope for the Basic task; always `None`.
+/// Time-lock block (spec §A.1.2 `time_lock`).
+///
+/// **Not covered by the §A.1.3 signature pre-image** — but the top-level `release_at_ms` *is*, so
+/// the schedule itself is signed and this block is redundant. Same rule as [`TmailBurn`]: accepted
+/// only when it restates the signed value, and `vdf_proof_b64` is rejected outright because the VDF
+/// path is Phase 0.1 (spec §A.2.3, locked decision #1) and must not look supported.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmailTimeLock {
     #[serde(default)]
@@ -208,19 +221,21 @@ pub fn tmail_envelope_auth_message_bytes(
 ///
 /// Checks (in order):
 /// 1. version / kind discriminators,
-/// 2. flags are within this build's scope — `basic`, optionally plus `burn_after_read` (S7-1).
-///    `time_lock` and `anonymous` remain out of scope,
-/// 3. the unsigned `burn` block, if present, is redundant with the signed flag,
-/// 4. sender/receiver wallet ids are well-formed 64-hex,
-/// 5. signer `ed25519_pubkey_hex` equals `sender_wallet_id` (non-anonymous binding),
-/// 6. hybrid (Ed25519 + ML-DSA-44) signature over the §A.1.3 pre-image.
+/// 2. flags are within this build's scope — `basic`, optionally plus `burn_after_read` (S7-1)
+///    and/or `time_lock` (S7-2). `anonymous` remains out of scope,
+/// 3. the schedule is coherent: `release_at_ms` is set iff `flags.time_lock` is,
+/// 4. the unsigned `burn` / `time_lock` blocks, if present, are redundant with the signed fields,
+/// 5. sender/receiver wallet ids are well-formed 64-hex,
+/// 6. signer `ed25519_pubkey_hex` equals `sender_wallet_id` (non-anonymous binding),
+/// 7. hybrid (Ed25519 + ML-DSA-44) signature over the §A.1.3 pre-image.
 ///
 /// Same pattern as `verify_envelope_v1`: both signatures must validate over identical bytes.
 ///
-/// **Why burn needs no new signed field.** `flags.burn_after_read` is already inside the pre-image
-/// through [`TmailFlags::canonical`], so enabling it here changes no signature format and
-/// invalidates nothing already signed. The `burn` block is *not* in the pre-image, which is why it
-/// may not carry policy — see [`TmailBurn`].
+/// **Why neither feature needs a new signed field.** `flags.burn_after_read`, `flags.time_lock` and
+/// `release_at_ms` are all already inside the pre-image (`TmailFlags::canonical`, and
+/// `release_at_ms` as its own field), so enabling them changes no signature format and invalidates
+/// nothing already signed. The `burn` and `time_lock` *blocks* are not in the pre-image, which is
+/// why they may not carry policy — see [`TmailBurn`] and [`TmailTimeLock`].
 pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelopeError> {
     if env.v != 1 {
         return Err(TmailEnvelopeError::UnsupportedVersion(env.v));
@@ -228,14 +243,25 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
     if env.kind != TMAIL_ENVELOPE_KIND {
         return Err(TmailEnvelopeError::Kind(env.kind.clone()));
     }
-    // S7-1 relaxes this gate for `burn_after_read` only. Everything else stays closed.
-    if !env.flags.basic
-        || env.flags.time_lock
-        || env.flags.anonymous
-        || env.anonymous.is_some()
-        || env.time_lock.is_some()
-    {
+    // S7-1 opened `burn_after_read`; S7-2 opens `time_lock`. `anonymous` (S8) stays closed.
+    if !env.flags.basic || env.flags.anonymous || env.anonymous.is_some() {
         return Err(TmailEnvelopeError::UnsupportedFlags);
+    }
+    // The schedule must be coherent with the flag, both of which are signed. A `release_at_ms`
+    // without the flag would be a signed value the node ignores; the flag without a future
+    // `release_at_ms` would present as "scheduled" while releasing immediately. Both mislead the
+    // receiver, so both are refused rather than normalised.
+    if env.flags.time_lock {
+        if env.release_at_ms <= env.sent_at_ms {
+            return Err(TmailEnvelopeError::InvalidReleaseTime);
+        }
+    } else if env.release_at_ms != 0 {
+        return Err(TmailEnvelopeError::UnexpectedReleaseTime);
+    }
+    if let Some(tl) = env.time_lock.as_ref()
+        && (tl.release_at_ms != env.release_at_ms || tl.vdf_proof_b64.is_some())
+    {
+        return Err(TmailEnvelopeError::InconsistentTimeLockBlock);
     }
     // The burn block is unsigned (§A.1.3 covers `flags`, not `burn`). Accept it only when it adds
     // nothing the signature does not already cover, so a peer cannot flip burn policy in transit.
