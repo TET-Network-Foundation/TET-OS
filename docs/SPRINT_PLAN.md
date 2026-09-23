@@ -300,10 +300,10 @@ Negative controls, all live:
 H1 is the one that matters: it restores exactly the behaviour that made AT-7 vacuous, and the guard
 goes red. H6 proves the pin seam is genuinely wired into retention rather than decorative.
 
-**Known cosmetic mismatch, not a bug:** the UI's `INBOX_VISIBLE = 5` counts across *all*
-conversations while the server retains 5 *per* conversation, so with two counterparties the panel
-shows 5 of 10 behind "Show older (5 hidden)". The display cap is now a convenience over an already
-bounded set rather than the retention mechanism.
+**The UI cap is gone (2026-09-23).** `INBOX_VISIBLE` and the "Show older" toggle were removed from
+`MessagesPanel.tsx`: the panel now renders exactly what `GET /tmail/inbox` returns. There is one
+"5" in the product and it is the node's per-conversation retention rule. Keeping a second,
+differently-scoped cap in the client was how AT-7 came to be vacuous in the first place.
 
 ### AT-7 was vacuous before S7-0 — the original finding
 

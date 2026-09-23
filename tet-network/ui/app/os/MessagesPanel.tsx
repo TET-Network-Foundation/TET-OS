@@ -6,6 +6,8 @@
  *   A. Compose — look up the recipient's KEM keys, encrypt client-side, POST /tmail/send.
  *                Optional burn-after-read (spec §A.3) rides the signed `flags`.
  *   B. Inbox   — poll GET /tmail/inbox/:wallet_id (5s), decrypt with this wallet's KEM secret keys.
+ *                Renders exactly what the node returns: retention is the node's
+ *                per-conversation rule (S7-0), not a client-side slice.
  *                Burn-after-read mail stays sealed until the reader opens it, which posts
  *                POST /tmail/read-receipt and destroys it network-wide (best-effort, §A.3.2 L3).
  *   C. Status  — show/auto-register this wallet's messaging keys (PUT /tmail/keys/:wallet_id).
@@ -30,7 +32,6 @@ import { getTmailKeySession } from "../lib/tmail_session";
 import { b64ToBytes } from "../lib/encoding";
 
 const INBOX_POLL_MS = 5_000;
-const INBOX_VISIBLE = 5;
 
 type DecryptedItem = {
   msgId: string;
@@ -75,7 +76,6 @@ export default function MessagesPanel(props: {
   const decryptedRef = useRef<Map<string, DecryptedItem>>(new Map());
   const skipRef = useRef<Set<string>>(new Set());
   const [items, setItems] = useState<DecryptedItem[]>([]);
-  const [showOlder, setShowOlder] = useState(false);
   const [inboxErr, setInboxErr] = useState<string>("");
   // Burn-after-read messages stay sealed until the reader opens them: polling decrypts in the
   // background, and destroying a message the user never actually looked at would be a lie.
@@ -320,8 +320,6 @@ export default function MessagesPanel(props: {
   }
 
   const shortId = (id: string) => (id.length > 16 ? `${id.slice(0, 10)}…${id.slice(-6)}` : id);
-  const visible = showOlder ? items : items.slice(0, INBOX_VISIBLE);
-  const hidden = Math.max(0, items.length - INBOX_VISIBLE);
 
   return (
     <div className={`${outset} bg-[#DAD8D2] p-3 space-y-3`}>
@@ -396,7 +394,7 @@ export default function MessagesPanel(props: {
           <div className="text-[11px] text-black/60">No decryptable messages yet.</div>
         ) : (
           <div className="space-y-2">
-            {visible.map((m) => {
+            {items.map((m) => {
               const burn = opened[m.msgId];
               const sealed = m.burnAfterRead && !burn;
               return (
@@ -458,24 +456,6 @@ export default function MessagesPanel(props: {
                 </div>
               );
             })}
-            {!showOlder && hidden > 0 ? (
-              <button
-                type="button"
-                onClick={() => setShowOlder(true)}
-                className={`${winBtn} bg-[#DAD8D2] px-3 py-0.5 text-xs`}
-              >
-                Show older ({hidden} hidden)
-              </button>
-            ) : null}
-            {showOlder && hidden > 0 ? (
-              <button
-                type="button"
-                onClick={() => setShowOlder(false)}
-                className={`${winBtn} bg-[#DAD8D2] px-3 py-0.5 text-xs`}
-              >
-                Show less
-              </button>
-            ) : null}
           </div>
         )}
       </div>
