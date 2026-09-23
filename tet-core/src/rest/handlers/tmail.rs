@@ -88,8 +88,21 @@ pub struct InboxQuery {
     pub limit: Option<usize>,
 }
 
-/// `GET /tmail/inbox/:wallet_id?limit=N` — non-expired envelopes addressed to `wallet_id`, newest
-/// first. Phase 0: unauthenticated read (public), server filters to mail addressed to this wallet.
+/// `GET /tmail/inbox/:wallet_id?limit=N` — non-expired messages addressed to `wallet_id`, newest
+/// first, at most [`crate::tmail::store::RETAIN_PER_CONVERSATION`] per conversation (S7-0).
+/// Phase 0: unauthenticated read (public), server filters to mail addressed to this wallet.
+///
+/// **Scheduled messages are listed without their ciphertext.** A row whose `flags.time_lock` is set
+/// and whose `release_at_ms` has not arrived comes back with `locked: true`, a `locked_note`, and
+/// **no `e2ee` field** — the receiver sees that something is scheduled, and for when, without the
+/// payload (spec §A.2.4).
+///
+/// This is **scheduled release, not an enforced lock**: the ciphertext reached every relaying node
+/// at send time, and withholding is this node's policy about its own API, nothing more. See
+/// [`crate::tmail::timelock`] and the `locked_note` text. Real enforcement (stake forfeit, VDF) is
+/// Phase 0.1.
+///
+/// One clock reading is taken for the whole response so rows cannot disagree about "now".
 pub async fn get_tmail_inbox(
     State(state): State<RestState>,
     Path(wallet_id): Path<String>,
@@ -103,13 +116,24 @@ pub async fn get_tmail_inbox(
         .limit
         .unwrap_or(INBOX_DEFAULT_LIMIT)
         .clamp(1, INBOX_MAX_LIMIT);
-    let messages = state.tmail.get_inbox(&w, limit);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let messages: Vec<crate::tmail::timelock::TmailInboxRowV1> = state
+        .tmail
+        .get_inbox(&w, limit)
+        .iter()
+        .map(|env| crate::tmail::timelock::to_inbox_row(env, now_ms))
+        .collect();
+    let locked_count = messages.iter().filter(|m| m.locked).count();
     (
         StatusCode::OK,
         Json(serde_json::json!({
             "ok": true,
             "wallet_id": w,
             "count": messages.len(),
+            "locked_count": locked_count,
             "messages": messages,
         })),
     )

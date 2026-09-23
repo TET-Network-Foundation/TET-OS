@@ -261,11 +261,33 @@ Reuse [`e2ee.rs`](../../tet-core/src/e2ee.rs):
 
 ### A.2.4 REST / node behavior
 
+**Implemented 2026-09-23 (S7-2), with one correction to the table below.** There is no
+`GET /tmail/decrypt/:id` and there never was: the node does not hold decryption keys and never
+decrypts — decryption is client-side (`ui/app/lib/tmail_e2ee.ts`). A `423` from a decrypt endpoint
+was therefore never the mechanism. What the node can actually withhold is the **ciphertext it
+serves**, so that is what it withholds.
+
 | Endpoint | Before `release_at_ms` | After |
 |----------|------------------------|-------|
 | `POST /tmail/send` | Accept; gossip | Accept |
-| `GET /tmail/decrypt/:id` | **423 TIME_LOCKED** | Returns plaintext helper JSON (key unwrap instructions only in client) |
+| `GET /tmail/inbox/:wallet_id` | Row listed with `locked: true`, `release_at_ms`, `locked_note`, and **no `e2ee` field** | Row served in full, `locked: false` |
 | Gossip handlers | Store ciphertext | Same |
+
+The response also carries `locked_count`. One clock reading covers the whole response, so rows
+cannot disagree about "now". Clients must read an absent `e2ee` as "not yet released", never as an
+empty payload.
+
+### A.2.5 User-facing copy (locked — risk R6, decision #1)
+
+> Scheduled release, not an enforced lock. The encrypted message reaches relaying nodes when it is
+> sent; cooperating nodes withhold it until the release time, and anyone holding the recipient's
+> keys could read it sooner.
+
+Reproduced verbatim wherever a user meets the feature: the compose control, a withheld message, the
+API docs, `RUNNING_A_NODE.md`. **Do not describe this as a "time-lock" without it** — risk R6 exists
+precisely because the word implies an enforcement this does not have. Source of truth:
+`TMAIL_TIME_LOCK_DISCLOSURE` in `tet-core/src/tmail/timelock.rs`, checked against this block by
+`npm run verify:tmail-burn`.
 
 ---
 

@@ -6,7 +6,7 @@
 //!
 //! Time-lock is **scheduled release, not an enforced lock** (spec §A.2.2 approach C, locked
 //! decision #1): the ciphertext reaches relaying nodes at send time and cooperating nodes withhold
-//! it until `release_at_ms`.
+//! it until `release_at_ms`. See [`timelock`] for the limits that wording is carrying.
 //!
 //! Design invariant: Tmail ciphertext is **never** written to the ledger — envelopes only travel over
 //! libp2p gossip (`/tet/v1/tmail`) and a node-local TTL buffer ([`store::TmailStore`]).
@@ -15,3 +15,4 @@ pub mod burn;
 pub mod envelope;
 pub mod keys;
 pub mod store;
+pub mod timelock;

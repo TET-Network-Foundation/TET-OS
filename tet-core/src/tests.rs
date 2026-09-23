@@ -6702,7 +6702,12 @@ async fn invalid_zk_candidate_is_rejected_without_slashing() {
 
 /// A well-formed `e2ee` block. The node never decrypts, so only `ciphertext_b64` is actually read
 /// (it feeds `payload_sha256` in the §A.1.3 pre-image) — the rest just has to deserialize.
-fn tmail_e2ee_block_for_tests() -> crate::tmail::envelope::TmailE2eeBlock {
+///
+/// **The ciphertext is unique per `seed`.** It used to be a fixed string, which made every test
+/// envelope share one payload — so a test asserting "this ciphertext does not appear in the
+/// response" could be satisfied, or defeated, by a *different* message's identical payload. AT-3's
+/// leak check caught it. Distinct payloads keep "did this specific message leak?" answerable.
+fn tmail_e2ee_block_for_tests(seed: &str) -> crate::tmail::envelope::TmailE2eeBlock {
     let b64 = |s: &str| base64::engine::general_purpose::STANDARD.encode(s.as_bytes());
     crate::tmail::envelope::TmailE2eeBlock {
         v: 1,
@@ -6713,7 +6718,7 @@ fn tmail_e2ee_block_for_tests() -> crate::tmail::envelope::TmailE2eeBlock {
         receiver_mlkem_pub_b64: b64("receiver-kyber-pub"),
         mlkem_ciphertext_b64: b64("kyber-ciphertext"),
         nonce_b64: b64("twelve-bytes"),
-        ciphertext_b64: b64("opaque-ciphertext-the-node-never-opens"),
+        ciphertext_b64: b64(&format!("opaque-ciphertext-the-node-never-opens::{seed}")),
     }
 }
 
@@ -6758,7 +6763,7 @@ fn signed_tmail_env_for_tests(
         ttl_ms: 3_600_000,
         fee_paid_micro: 0,
         pin_stake_micro: 0,
-        e2ee: tmail_e2ee_block_for_tests(),
+        e2ee: tmail_e2ee_block_for_tests(msg_id),
         hybrid_sig: crate::tmail::envelope::TmailHybridSig {
             ed25519_pubkey_hex: sender_wallet_id.to_ascii_lowercase(),
             ed25519_sig_b64: String::new(),
@@ -8321,4 +8326,234 @@ fn tmail_anonymous_flag_is_still_rejected_after_time_lock() {
     flags.anonymous = true;
     let env = signed_tmail_env_for_tests(&words, &sender, &receiver, "anon-2", flags, None);
     assert!(crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// S7-2 item 2 — AT-3: the inbox withholds ciphertext until release_at_ms.
+//
+// The clock is a parameter (`to_inbox_row(env, now_ms)`), which is the test hook: AT-3's "after
+// 1h" is expressed by passing an instant past the release, never by sleeping.
+// ---------------------------------------------------------------------------
+
+/// **AT-3.** Before the release the ciphertext is withheld; after it, the same message carries it.
+#[test]
+fn at3_scheduled_message_withholds_ciphertext_until_release() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+    // An hour out, exactly as AT-3 specifies -- but reached by moving the clock, not waiting.
+    let env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "at3-1", 3_600_000);
+    let release = env.release_at_ms;
+
+    // --- before ---
+    let before = crate::tmail::timelock::to_inbox_row(&env, release - 1);
+    assert!(before.locked, "it must report as scheduled before release");
+    assert!(
+        before.e2ee.is_none(),
+        "AT-3: the ciphertext must be withheld before release_at_ms"
+    );
+    // The receiver still learns that something is scheduled, and for when.
+    assert_eq!(before.release_at_ms, release);
+    assert_eq!(before.sender_wallet_id, sender);
+    assert_eq!(
+        before.locked_note,
+        Some(crate::tmail::timelock::TMAIL_TIME_LOCK_DISCLOSURE),
+        "a withheld row must carry the R6 disclosure"
+    );
+
+    // --- exactly at release: released (the boundary is inclusive) ---
+    let at = crate::tmail::timelock::to_inbox_row(&env, release);
+    assert!(!at.locked, "release_at_ms itself must count as released");
+    assert!(at.e2ee.is_some());
+
+    // --- after ---
+    let after = crate::tmail::timelock::to_inbox_row(&env, release + 1);
+    assert!(!after.locked);
+    let e2ee = after.e2ee.expect("AT-3: ciphertext must be present after release");
+    assert_eq!(
+        e2ee.ciphertext_b64, env.e2ee.ciphertext_b64,
+        "and it must be the original ciphertext, unmodified"
+    );
+    assert!(after.locked_note.is_none());
+}
+
+/// The withheld row must not leak the payload through any other field.
+#[test]
+fn at3_withheld_row_serializes_without_any_ciphertext() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+    let env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "at3-leak", 3_600_000);
+
+    let row = crate::tmail::timelock::to_inbox_row(&env, env.release_at_ms - 1);
+    let json = serde_json::to_string(&row).unwrap();
+    assert!(
+        !json.contains(&env.e2ee.ciphertext_b64),
+        "the ciphertext must not appear anywhere in a withheld row"
+    );
+    assert!(
+        !json.contains("e2ee"),
+        "the e2ee field must be absent, not empty"
+    );
+    assert!(json.contains("\"locked\":true"));
+}
+
+/// A message with no schedule is never withheld, whatever the clock says.
+///
+/// The second half is the one that matters. `is_locked` checks `flags.time_lock` *and* the clock,
+/// and the flag check looks redundant because `verify_tmail_envelope_v1` forces `release_at_ms` to
+/// 0 whenever the flag is clear — so on any envelope that passed verification, the clock test alone
+/// would give the same answer, and deleting the flag check is undetectable.
+///
+/// It is not redundant for a row that never went through today's verification: an entry already in
+/// the store from an older build, or any future path that populates `release_at_ms` without the
+/// flag. Withholding *those* would hide a message the sender never scheduled. So the guard builds
+/// exactly that envelope directly, without signing it, which is the only way to reach the case.
+#[test]
+fn at3_unscheduled_messages_are_never_withheld() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, sender, receiver) = tmail_pair_for_tests();
+    let env = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "at3-plain",
+        tmail_flags_for_tests(false),
+        None,
+    );
+    for now in [0u64, env.sent_at_ms, u64::MAX] {
+        let row = crate::tmail::timelock::to_inbox_row(&env, now);
+        assert!(!row.locked, "a message with no schedule is never locked");
+        assert!(row.e2ee.is_some());
+    }
+
+    // A stored row carrying a future release_at_ms with the flag CLEAR. Verification refuses this
+    // shape today, so it is constructed here rather than signed.
+    let mut stray = env.clone();
+    stray.release_at_ms = stray.sent_at_ms + 3_600_000;
+    assert!(
+        !stray.flags.time_lock,
+        "precondition: the flag is clear and only release_at_ms is set"
+    );
+    let row = crate::tmail::timelock::to_inbox_row(&stray, stray.sent_at_ms);
+    assert!(
+        !row.locked,
+        "withholding must key off the signed flag, not a stray release_at_ms: a message the \
+         sender never scheduled must not be hidden from its receiver"
+    );
+    assert!(row.e2ee.is_some(), "and its ciphertext must still be served");
+}
+
+/// End to end over REST: a scheduled message is listed, counted as locked, and carries no payload.
+#[tokio::test]
+async fn at3_rest_inbox_withholds_scheduled_ciphertext() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    // Scheduled an hour out, so "now" inside the handler is unambiguously before release.
+    let scheduled = signed_scheduled_env_for_tests(&words, &sender, &receiver, "at3-rest-locked", 3_600_000);
+    // ...and an ordinary one alongside it, to prove the withholding is selective.
+    let plain = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "at3-rest-plain",
+        tmail_flags_for_tests(false),
+        None,
+    );
+    for env in [&scheduled, &plain] {
+        let r = crate::rest::handlers::tmail::post_tmail_send(
+            axum::extract::State(state.clone()),
+            axum::Json(env.clone()),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::ACCEPTED);
+    }
+
+    let resp = crate::rest::handlers::tmail::get_tmail_inbox(
+        axum::extract::State(state.clone()),
+        axum::extract::Path(receiver.clone()),
+        axum::extract::Query(crate::rest::handlers::tmail::InboxQuery { limit: Some(50) }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+
+    assert_eq!(json["count"].as_u64(), Some(2), "both messages must be listed");
+    assert_eq!(json["locked_count"].as_u64(), Some(1));
+
+    let msgs = json["messages"].as_array().unwrap();
+    let locked = msgs.iter().find(|m| m["msg_id"] == "at3-rest-locked").unwrap();
+    assert_eq!(locked["locked"], Value::Bool(true));
+    assert!(
+        locked.get("e2ee").is_none(),
+        "AT-3: a scheduled message must be served without its e2ee block"
+    );
+    assert_eq!(locked["release_at_ms"].as_u64(), Some(scheduled.release_at_ms));
+    assert!(
+        locked["locked_note"].as_str().unwrap().contains("not an enforced lock"),
+        "the withheld row must carry the R6 disclosure"
+    );
+
+    let open = msgs.iter().find(|m| m["msg_id"] == "at3-rest-plain").unwrap();
+    assert_eq!(open["locked"], Value::Bool(false));
+    assert!(
+        open["e2ee"]["ciphertext_b64"].as_str() == Some(plain.e2ee.ciphertext_b64.as_str()),
+        "an unscheduled message must still be served in full"
+    );
+
+    // Nothing in the whole response may contain the scheduled ciphertext.
+    let raw = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        !raw.contains(&scheduled.e2ee.ciphertext_b64),
+        "the scheduled ciphertext must not appear anywhere in the response body"
+    );
+}
+
+/// A scheduled message that has been released behaves exactly like an ordinary one over REST.
+#[tokio::test]
+async fn at3_rest_inbox_serves_the_payload_once_released() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    // Release one second after send: by the time the handler reads the clock it has passed.
+    // (The envelope is still valid -- release_at_ms is strictly after sent_at_ms.)
+    let mut env = signed_scheduled_env_for_tests(&words, &sender, &receiver, "at3-released", 1);
+    env.sent_at_ms = tmail_now_ms_for_tests() - 60_000;
+    env.release_at_ms = env.sent_at_ms + 1;
+    resign_tmail_env_for_tests(&mut env, &words);
+    assert!(crate::tmail::envelope::verify_tmail_envelope_v1(&env).is_ok());
+
+    crate::rest::handlers::tmail::post_tmail_send(
+        axum::extract::State(state.clone()),
+        axum::Json(env.clone()),
+    )
+    .await;
+
+    let resp = crate::rest::handlers::tmail::get_tmail_inbox(
+        axum::extract::State(state.clone()),
+        axum::extract::Path(receiver.clone()),
+        axum::extract::Query(crate::rest::handlers::tmail::InboxQuery { limit: Some(50) }),
+    )
+    .await;
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["locked_count"].as_u64(), Some(0));
+    let m = &json["messages"].as_array().unwrap()[0];
+    assert_eq!(m["locked"], Value::Bool(false));
+    assert_eq!(
+        m["e2ee"]["ciphertext_b64"].as_str(),
+        Some(env.e2ee.ciphertext_b64.as_str()),
+        "a released message must serve its original ciphertext"
+    );
 }
