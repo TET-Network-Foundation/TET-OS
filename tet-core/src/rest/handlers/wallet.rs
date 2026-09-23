@@ -204,11 +204,9 @@ async fn post_wallet_transfer_impl(
         Ok(h) => h,
         Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
     };
-    if let Err(e) = state.enqueue_mempool_tx(env.clone()).await {
+    if let Err(e) = state.submit_local_tx(env.clone()).await {
         return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
     }
-    // Propagate the pending tx so any producer node can include it in a block.
-    state.broadcast_mempool_tx(&env).await;
 
     (
         StatusCode::ACCEPTED,

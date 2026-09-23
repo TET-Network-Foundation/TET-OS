@@ -124,7 +124,7 @@ async fn tick_worker_daemon(
             !mp.iter()
                 .any(|existing| verify_zk_task_id(existing) == Some(task.tx_hash.as_str()))
         };
-        if should_enqueue && let Err(e) = state.enqueue_mempool_tx(env).await {
+        if should_enqueue && let Err(e) = state.submit_local_tx(env).await {
             log::warn!(
                 "[worker-daemon] mempool rejected VerifyZkProof task_id={} err={}",
                 task.tx_hash,

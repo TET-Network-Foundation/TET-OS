@@ -17,9 +17,9 @@ use crate::{
     protocol::{SignedTxEnvelopeV1, TxV1},
     rest::{
         ExplorerEventsQuery, LedgerMeQuery,
-        LedgerWorkerBondStakeReq, LedgerWorkerBondUnstakeReq, MarketIndexResp, MintDemoReq,
+        LedgerWorkerBondStakeReq, LedgerWorkerBondUnstakeReq, MarketIndexResp,
         ProofsQuery, RestState, VaultHistoryQuery, WalletIdQuery,
-        helpers::{require_admin_bearer, require_hybrid_sig, verify_envelope_v1},
+        helpers::{require_admin_bearer, verify_envelope_v1},
     },
 };
 
@@ -344,11 +344,9 @@ async fn post_initial_airdrop_claim_impl(
         )
             .into_response();
     }
-    if let Err(e) = state.enqueue_mempool_tx(env.clone()).await {
+    if let Err(e) = state.submit_local_tx(env.clone()).await {
         return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
     }
-    // Propagate the pending claim so any producer node can include it in a block.
-    state.broadcast_mempool_tx(&env).await;
 
     (
         StatusCode::ACCEPTED,
@@ -419,7 +417,7 @@ async fn post_transfer_enveloped_impl(
         return (StatusCode::BAD_REQUEST, "insufficient funds").into_response();
     }
 
-    if let Err(e) = state.enqueue_mempool_tx(env).await {
+    if let Err(e) = state.submit_local_tx(env).await {
         return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
     }
 
@@ -850,7 +848,7 @@ pub async fn post_ledger_zk_verify(
     }
 
     // Enqueue into mempool (Phase 2: pending until mined).
-    if let Err(e) = state.enqueue_mempool_tx(env).await {
+    if let Err(e) = state.submit_local_tx(env).await {
         return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
     }
 

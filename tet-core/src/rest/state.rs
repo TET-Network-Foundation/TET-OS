@@ -140,23 +140,40 @@ impl RestState {
         }
     }
 
-    /// Enqueue a tx submitted over REST. Thin wrapper over [`enqueue_into_mempool`] — the
-    /// admission rules live there so the gossip path (`p2p::handle_tx_broadcast`) enforces
-    /// byte-for-byte the same caps. A peer must never get a cheaper seat than a REST client.
-    pub async fn enqueue_mempool_tx(
+    /// **The only way a locally-originated tx enters the mempool.** Admits it *and* registers it
+    /// for delivery — gossip publish, direct `tx-submit` to bootnodes, and the retry sweep.
+    ///
+    /// There is deliberately no enqueue-only method on `RestState`. A handler that admits a tx
+    /// without announcing it produces a transaction that sits in this node's mempool forever
+    /// unless this node happens to be a producer — which is invisible in testing on a mining
+    /// node and total on a follower. `/ledger/transfer` did exactly that until 2026-09-23: a
+    /// follower could accept a signed transfer, return `202`, and never send it anywhere.
+    ///
+    /// Receive paths must NOT use this. A tx learned from a peer goes through
+    /// [`enqueue_without_broadcast`] so we never re-publish what we were just told.
+    pub async fn submit_local_tx(
         &self,
         env: SignedTxEnvelopeV1,
     ) -> Result<bool, MempoolEnqueueError> {
-        enqueue_into_mempool(&self.mempool, env).await
+        let evicted = enqueue_without_broadcast(&self.mempool, env.clone()).await?;
+        self.broadcast_mempool_tx(&env).await;
+        Ok(evicted)
     }
 }
 
-/// Mempool admission: size caps, byte caps, and lowest-fee eviction.
+/// Mempool admission **without announcing the tx**: size caps, byte caps, lowest-fee eviction.
 ///
-/// Free function rather than a `RestState` method because the block-plane swarm task holds only
-/// the mempool `Arc`, not a `RestState`. Before this existed the gossip path called `mp.push(env)`
-/// directly and bypassed every cap here, so a peer could grow this node's mempool without bound.
-pub async fn enqueue_into_mempool(
+/// For **receive paths only** — `p2p::handle_tx_broadcast` and the `tx-submit` RPC. A tx we were
+/// just told about must not be re-published by us; that is what keeps the retry sweep from
+/// becoming a gossip storm.
+///
+/// Locally-originated txs must go through [`RestState::submit_local_tx`] instead, which admits
+/// *and* announces. The naming is deliberately blunt: a REST handler reaching past `RestState`
+/// into `state.mempool` to call this is visible in review as doing something it should not.
+///
+/// Free function rather than a method because the block-plane swarm task holds only the mempool
+/// `Arc`, not a `RestState`.
+pub async fn enqueue_without_broadcast(
     mempool: &Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     env: SignedTxEnvelopeV1,
 ) -> Result<bool, MempoolEnqueueError> {

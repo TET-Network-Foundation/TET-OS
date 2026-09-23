@@ -357,7 +357,7 @@ pub async fn post_enterprise_inference_submit(
             .into_response();
     }
 
-    if let Err(e) = state.enqueue_mempool_tx(env).await {
+    if let Err(e) = state.submit_local_tx(env).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(serde_json::json!({

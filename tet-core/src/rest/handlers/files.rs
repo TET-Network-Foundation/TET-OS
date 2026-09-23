@@ -341,10 +341,9 @@ pub async fn post_files_fee(
     if spendable < fee_micro {
         return (StatusCode::BAD_REQUEST, "insufficient funds").into_response();
     }
-    if let Err(e) = state.enqueue_mempool_tx(env.clone()).await {
+    if let Err(e) = state.submit_local_tx(env.clone()).await {
         return (StatusCode::TOO_MANY_REQUESTS, e.to_string()).into_response();
     }
-    state.broadcast_mempool_tx(&env).await;
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({

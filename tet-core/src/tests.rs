@@ -1489,7 +1489,7 @@ async fn file_fee_tx_settles_treasury_storage_burn_via_consensus() {
 
     // Re-enqueue the identical settlement: the miner must drop it (per-tx applied marker),
     // leaving every balance unchanged.
-    state.enqueue_mempool_tx(env).await.unwrap();
+    state.submit_local_tx(env).await.unwrap();
     let outcome2 =
         crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
             .await
@@ -1719,7 +1719,7 @@ async fn worker_register_duplicate_tx_is_idempotent_in_mempool() {
         .unwrap();
     assert_eq!(outcome.tx_count, 1);
 
-    state.enqueue_mempool_tx(env.clone()).await.unwrap();
+    state.submit_local_tx(env.clone()).await.unwrap();
     let outcome2 =
         crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
             .await
@@ -3569,8 +3569,8 @@ async fn mempool_limit_evicts_lowest_fee_tx() {
         },
     };
 
-    assert!(!state.enqueue_mempool_tx(make_env(1)).await.unwrap());
-    assert!(state.enqueue_mempool_tx(make_env(100)).await.unwrap());
+    assert!(!state.submit_local_tx(make_env(1)).await.unwrap());
+    assert!(state.submit_local_tx(make_env(100)).await.unwrap());
     let mp = state.mempool.lock().await;
     assert_eq!(mp.len(), 1);
     let crate::protocol::TxV1::Transfer { fee_bps, .. } = mp[0].tx else {
@@ -4822,6 +4822,98 @@ mod block_sync {
             n1.ledger.balance_micro(&wallet_id).unwrap(),
             1_000 * crate::ledger::STEVEMON,
             "the peer's block must settle a tx that gossip never carried"
+        );
+
+        rebroadcast.abort();
+        stop(&[n1, n2]);
+    }
+
+    /// **AT-F1 FOLLOWER SENDS MONEY.**
+    ///
+    /// The headline S4 criterion, on the path that actually matters: a transfer. Node 2 does not
+    /// mine; it accepts a signed transfer over `/ledger/transfer` and node 1 must settle it.
+    ///
+    /// `post_transfer_enveloped_impl` admitted the tx to the mempool and **never announced it**.
+    /// `broadcast_mempool_tx` had four callers and the transfer handler was not among them, so a
+    /// follower could accept a signed transfer, return `202 pending`, and never send it anywhere
+    /// — the transaction sat in its mempool until restart. Invisible whenever the submitting node
+    /// was also a producer, which is how every earlier AT-F1 run passed: the transfer was
+    /// submitted to the seed.
+    ///
+    /// Now there is no enqueue-only method on `RestState`; `submit_local_tx` admits and announces
+    /// in one call. Delete the announce half and this test fails.
+    #[tokio::test]
+    async fn at_f1_follower_sends_money_and_producer_settles_it() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            std::env::set_var("TET_TX_REBROADCAST_SEC", "1");
+        }
+
+        let n1 = spawn_node(None, true).await; // producer
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await; // follower: submits, never mines
+
+        let rebroadcast = crate::rest::RestState::spawn_mempool_rebroadcast(n2.state.clone())
+            .expect("follower must have a delivery channel");
+
+        // Fund the sender identically on both ledgers so the producer agrees it can pay.
+        let sender = crate::wallet::generate_mnemonic_12().unwrap();
+        let sender_words = sender.mnemonic_12.clone().unwrap();
+        let sender_id = sender.address_hex.to_ascii_lowercase();
+        for l in [&n1.ledger, &n2.ledger] {
+            l.admin_rest_faucet(&sender_id, 1_000 * crate::ledger::STEVEMON, "127.0.0.1", true, 1, 1)
+                .unwrap();
+        }
+        let recipient = crate::wallet::generate_mnemonic_12().unwrap();
+        let recipient_id = recipient.address_hex.to_ascii_lowercase();
+        assert_eq!(n1.ledger.balance_micro(&recipient_id).unwrap(), 0);
+
+        let amount_micro = crate::ledger::STEVEMON; // 1 TET
+        let env = signed_env_for_tests(
+            crate::protocol::TxV1::Transfer {
+                from_wallet: sender_id.clone(),
+                to_wallet: recipient_id.clone(),
+                amount_micro,
+                fee_bps: 100,
+            },
+            &sender_words,
+            &sender_id,
+        );
+
+        use axum::response::IntoResponse as _;
+        let resp = crate::rest::handlers::ledger::post_transfer_enveloped(
+            axum::extract::State(n2.state.clone()),
+            axum::http::HeaderMap::new(),
+            axum::Json(env),
+        )
+        .await
+        .into_response();
+        assert_eq!(
+            resp.status(),
+            axum::http::StatusCode::ACCEPTED,
+            "the follower must accept the signed transfer"
+        );
+
+        // It has to cross the wire on its own. This is the assertion the old code failed.
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            if n1.state.mempool.lock().await.len() == 1 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the transfer never reached the producer — a follower accepted money and \
+                 announced it to nobody"
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+
+        mine_n(&n1.state, 1).await;
+        let got = n1.ledger.balance_micro(&recipient_id).unwrap();
+        assert!(
+            got > 0,
+            "the producer's block must credit the recipient; got {got}"
         );
 
         rebroadcast.abort();
@@ -6140,7 +6232,7 @@ async fn gossiped_tx_already_mined_is_dropped_not_requeued() {
     let state = rest_state_for_tests(ledger.clone());
     let (wallet_id, env) = airdrop_env_for_tests();
 
-    state.enqueue_mempool_tx(env.clone()).await.unwrap();
+    state.submit_local_tx(env.clone()).await.unwrap();
     crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
         .await
         .expect("mine");
@@ -6252,7 +6344,7 @@ async fn pending_local_tx_is_rebroadcast_until_mined_then_forgotten() {
     let (gossip_tx, _gossip_rx) = tokio::sync::mpsc::channel::<String>(64);
     state.gossip_tx = Some(gossip_tx);
 
-    state.enqueue_mempool_tx(env.clone()).await.unwrap();
+    state.submit_local_tx(env.clone()).await.unwrap();
     state.broadcast_mempool_tx(&env).await;
     assert_eq!(
         state.pending_rebroadcast.lock().await.len(),

@@ -1162,7 +1162,7 @@ pub(crate) enum TxGossipOutcome {
 ///    REST path has always checked this; the gossip path did not, so a peer replaying an old
 ///    envelope could park a dead tx in every mempool on the network until a miner discarded it.
 /// 3. mempool duplicate check.
-/// 4. `enqueue_into_mempool` — the byte/count caps and lowest-fee eviction. The previous code
+/// 4. `enqueue_without_broadcast` — the byte/count caps and lowest-fee eviction. The previous
 ///    called `mp.push()` directly and bypassed all of it, which let a peer grow this node's
 ///    mempool without bound.
 ///
@@ -1198,7 +1198,7 @@ pub(crate) async fn handle_tx_broadcast(
         }
     }
 
-    match crate::rest::state::enqueue_into_mempool(mempool, env).await {
+    match crate::rest::state::enqueue_without_broadcast(mempool, env).await {
         Ok(_evicted) => {
             let mempool_len = mempool.lock().await.len();
             TxGossipOutcome::Enqueued {
