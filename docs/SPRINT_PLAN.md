@@ -119,7 +119,7 @@ consensus each feature touches, which is not the order the spec presents them in
 |---|---|---|---|---|
 | **S7-1** | Burn-after-read (AT-4) | No | ✅ | Phase 0 — [live evidence](#s7-1-at-4-verified-live-2026-09-23) |
 | **S7-2** | Time-lock (AT-3) | No | ⬜ | Phase 0 |
-| **S7-0** | Server-side 5-message retention | No | ⬜ | Phase 0 — precondition for Pin |
+| **S7-0** | Server-side 5-message retention | No | ✅ | Phase 0 — [detail](#s7-0-retention-is-a-store-rule-now-2026-09-23) |
 | **S7-3** | Pin stake (AT-7) | **Yes** | ⛔ **deferred** | **Phase 1 genesis** |
 
 ### S7-1: AT-4 verified live, 2026-09-23
@@ -264,7 +264,48 @@ must match apply byte-for-byte) · `ledger.rs:1641` (apply arm) · `consensus.rs
 `post_files_fee` (`handlers/files.rs:296`) · `fees.rs:92` (a fifth `FeeKind` — today's four are
 `Transfer`, `AiUtility`, `AiInference`, `File`, and none carries a 50/50 treasury/burn schedule).
 
-### AT-7 is vacuous today — S7-0
+### S7-0: retention is a store rule now (2026-09-23)
+
+**Done.** A conversation keeps its newest **5** messages; older ones are **deleted** from
+`tmail_by_receiver_v1`, not hidden. Conversation = counterparty wallet pair (Appendix K.3 flat
+threads), so two counterparties retain 5 each rather than 5 between them. Enforced at write time in
+`store_tmail`, so the store obeys the rule even if nothing ever reads the inbox, and again in
+`get_inbox` so the API contract holds if a stale row survives a crash between insert and prune.
+
+A pruned message leaves a `pruned:` marker in `tmail_by_msg_id_v1` — deliberately distinct from the
+burn `burned:` tombstone, because "aged out" and "destroyed on instruction" are different facts.
+Both stop a re-gossiped copy from reinserting; both carry the original expiry so `prune_expired`
+reaps them.
+
+`TmailStore::is_pinned` is the Phase 1 seam: hardcoded `false`, consulted by both the write-time
+prune and the read-time cap, so when `TxV1::TmailPin` lands the exemption is already wired.
+
+**AT-7 rewritten as two halves.** (a) without a pin the 6th message is genuinely gone — **green**.
+(b) with a pin the thread keeps >5 — **RED**, `#[ignore]`d so CI stays green on a known-missing
+feature, with the spec's AT list carrying the matching ❌. `cargo test --bin TET-Core -- --ignored
+at7_b` shows it failing, with the reason in the panic message. It stays red until Phase 1.
+
+Negative controls, all live:
+
+| Control | Guard | Result |
+|---|---|---|
+| H1 `store_tmail` stops enforcing (the pre-S7-0 display-only cap) | `at7_a_sixth_message_is_pruned` | FAILED |
+| H2 `get_inbox` drops its per-conversation cap | `at7_a_read_side_cap_holds` | FAILED |
+| H3 retention ignores the conversation, caps the whole inbox | `at7_a_retention_is_per_conversation` | FAILED |
+| H4 pruning deletes the row but leaves no marker | `at7_a_pruned_message_is_not_restored` | FAILED |
+| H5 retention keeps the oldest five instead of the newest | `at7_a_sixth_message_is_pruned` | FAILED |
+| H6 `is_pinned` flipped to `true` | `at7_a_sixth_message_is_pruned` | FAILED |
+| H7 AT-7(b) run with `--ignored` | `at7_b_pinned_conversation` | FAILED (as intended) |
+
+H1 is the one that matters: it restores exactly the behaviour that made AT-7 vacuous, and the guard
+goes red. H6 proves the pin seam is genuinely wired into retention rather than decorative.
+
+**Known cosmetic mismatch, not a bug:** the UI's `INBOX_VISIBLE = 5` counts across *all*
+conversations while the server retains 5 *per* conversation, so with two counterparties the panel
+shows 5 of 10 behind "Show older (5 hidden)". The display cap is now a convenience over an already
+bounded set rather than the retention mechanism.
+
+### AT-7 was vacuous before S7-0 — the original finding
 
 **AT-7 ("pay 1000 Stevemon stake; conversation retains >5 messages") passes right now, with the
 feature entirely absent.** The 5-message cap is client-side display only: `MessagesPanel.tsx:28`

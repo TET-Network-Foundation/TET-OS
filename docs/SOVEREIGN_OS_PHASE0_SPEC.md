@@ -731,7 +731,36 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 
 **AT-6 Files:** Upload file, share link, friend on second machine downloads via P2P when online.
 
-**AT-7 Pin:** Pay **1000 Stevemon** stake; conversation retains >5 messages.
+**AT-7 Pin — split into two halves (2026-09-23, S7-0). (a) ✅ · (b) ❌ RED until Phase 1.**
+
+> **Why it was split.** As originally written this test **passed with the feature entirely absent**.
+> The 5-message cap was client-side display only (`MessagesPanel.tsx:28/269` slicing an array behind
+> a "Show older" button) and the node returned up to 50 regardless, so "conversation retains >5
+> messages" was true for every conversation, pinned or not. It asserted nothing.
+
+**AT-7(a) — retention is real. ✅ passes.** Without any pin, the 6th message in a conversation is
+**deleted from the node's store**, not hidden: `GET /tmail/inbox` returns at most 5 per conversation
+and the older envelope is gone from `tmail_by_receiver_v1`, marked so a re-gossiped copy cannot
+restore it. Conversation = counterparty wallet pair (Appendix K.3 flat threads), so two
+counterparties keep 5 each, not 5 between them.
+Guards: `at7_a_*` in `tet-core/src/tests.rs`.
+
+**AT-7(b) — Pin buys retention. ❌ fails, and must keep failing until Phase 1.** Paying the
+Appendix C fee (**1 000 µTET**) pins a thread, which exempts it from (a) and retains >5.
+**Nothing can pin in Phase 0:** `TxV1::TmailPin` is batched into the Phase 1 genesis
+([`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) §2) rather than shipped as a flag-day
+upgrade, so `TmailStore::is_pinned` is hardcoded `false`.
+
+Guard: `at7_b_pinned_conversation_retains_more_than_five`, marked `#[ignore]` so CI stays green on a
+known-missing feature — **not** to hide it. Run it and it goes red with the reason:
+
+```
+cargo test --bin TET-Core -- --ignored at7_b
+```
+
+When Pin lands, this turns green by implementing the pin store behind that one seam; the test does
+not need rewriting. **Until then AT-7 is not passed, and a green suite must not be read as
+"Pin works".**
 
 **AT-8 Mini-apps:** Calculator converts 1 TET; Clock shows block height; Notes persist encrypted.
 
@@ -1071,13 +1100,24 @@ Host verification extends [`zk_verifier.rs`](../../tet-core/src/zk_verifier.rs) 
 
 # Appendix K — 5-message visible limit + Pin (detailed)
 
-## K.1 UI rule
+## K.1 Retention rule
 
-| State | Visible in inbox list |
-|-------|----------------------|
-| Last 5 received (non-pinned) | Yes |
-| Older | Hidden unless **Pinned** |
-| Pinned thread | All messages in thread |
+> **Updated 2026-09-23 (S7-0): this is a *server* rule, not a UI rule.** It was specified as an
+> inbox-display rule, which is why AT-7 was vacuous — the node kept everything and the client hid
+> it. The node now deletes.
+
+| State | In the node's store |
+|-------|---------------------|
+| Last 5 received per conversation (non-pinned) | Kept |
+| Older | **Deleted** from `tmail_by_receiver_v1`, with a marker so a re-gossiped copy is refused |
+| Pinned thread | All messages kept — **Phase 1**, `TmailStore::is_pinned` is `false` today |
+
+`GET /tmail/inbox` caps at 5 per conversation as well, so the contract holds even if a stale row
+survives a crash between insert and prune. Conversation identity is the counterparty wallet pair
+(K.3 flat threads): two counterparties retain 5 each.
+
+Cap and marker: `RETAIN_PER_CONVERSATION` in `tet-core/src/tmail/store.rs`, overridable with
+`TET_TMAIL_RETAIN_PER_CONVERSATION`.
 
 ## K.2 Pin economics
 

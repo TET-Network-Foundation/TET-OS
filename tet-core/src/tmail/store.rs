@@ -13,6 +13,12 @@
 //!   what stops a re-gossiped envelope from resurrecting a burned message: `store_tmail` refuses
 //!   any `msg_id` already present in this tree, burned or live.
 //! - `tmail_keys_v1` — key `wallet_id`, value = [`crate::tmail::keys::TmailKeyRegistrationV1`] JSON.
+//!
+//! **Retention (S7-0, spec Appendix K.1).** A conversation keeps only its newest
+//! [`RETAIN_PER_CONVERSATION`] messages. This is a *store* rule, not a display rule: the older ones
+//! are deleted, not hidden. Conversation identity in Phase 0 is the counterparty wallet pair
+//! (Appendix K.3 — flat threads, one conversation per counterparty), so for an inbox belonging to
+//! `receiver` the grouping key is `sender_wallet_id`.
 
 use crate::tmail::envelope::TmailEnvelopeV1;
 use crate::tmail::keys::TmailKeyRegistrationV1;
@@ -25,6 +31,17 @@ const TREE_KEYS: &str = "tmail_keys_v1";
 /// original entry's expiry in ms, so `prune_expired` can reap tombstones instead of growing a tree
 /// that never shrinks.
 const BURNED_PREFIX: &[u8] = b"burned:";
+
+/// Marker written into `tmail_by_msg_id_v1` when a message is dropped by the retention rule.
+///
+/// Distinct from [`BURNED_PREFIX`] on purpose: "aged out of a conversation" and "destroyed on the
+/// sender's instruction" are different facts, and only the latter is a burn. Both stop a
+/// re-gossiped copy from coming back, and both carry the original expiry so `prune_expired` reaps
+/// them instead of growing a tree that never shrinks.
+const PRUNED_PREFIX: &[u8] = b"pruned:";
+
+/// Messages kept per conversation (spec Appendix K.1 / AT-7). Older ones are deleted.
+pub const RETAIN_PER_CONVERSATION: usize = 5;
 
 const DEFAULT_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -94,6 +111,18 @@ fn is_expired(env: &TmailEnvelopeV1, now: u64) -> bool {
     now > expire_at
 }
 
+/// Effective per-conversation retention. Env override exists so tests and operators can move it
+/// without a rebuild; `0` is rejected by `env_usize`'s filter, so the cap can never be disabled
+/// into "keep nothing".
+fn retain_per_conversation() -> usize {
+    env_usize("TET_TMAIL_RETAIN_PER_CONVERSATION", RETAIN_PER_CONVERSATION)
+}
+
+/// Conversation key for an inbox entry (Appendix K.3, Phase 0 flat threads): the counterparty.
+fn conversation_key(env: &TmailEnvelopeV1) -> String {
+    env.sender_wallet_id.trim().to_ascii_lowercase()
+}
+
 fn receiver_index_key(receiver: &str, sent_at_ms: u64, msg_id: &str) -> Vec<u8> {
     let mut k = Vec::with_capacity(receiver.len() + 8 + msg_id.len());
     k.extend_from_slice(receiver.as_bytes());
@@ -147,16 +176,113 @@ impl TmailStore {
         self.by_receiver.insert(key, val)?;
         self.by_msg_id
             .insert(msg_id.as_bytes(), receiver.as_bytes())?;
+        // Retention is applied at write time so the store never holds more than the rule allows,
+        // even if nothing ever calls `GET /tmail/inbox`. Enforcing it only on read would make the
+        // cap a display convention again -- exactly what S7-0 exists to stop being true.
+        self.enforce_retention(&receiver, &conversation_key(env))?;
         Ok(true)
     }
 
-    /// Return up to `limit` non-expired envelopes addressed to `wallet_id`, newest first.
+    /// Delete everything past the newest [`retain_per_conversation`] messages in one conversation.
+    ///
+    /// Conversation = `(receiver, counterparty)` (Appendix K.3 flat threads). Returns how many
+    /// entries were deleted.
+    ///
+    /// Dropped entries keep a [`PRUNED_PREFIX`] marker in `tmail_by_msg_id_v1`, so a peer
+    /// re-gossiping an aged-out message cannot reinsert it and start the churn again.
+    pub fn enforce_retention(
+        &self,
+        receiver: &str,
+        counterparty: &str,
+    ) -> Result<usize, TmailStoreError> {
+        let receiver = receiver.trim().to_ascii_lowercase();
+        let counterparty = counterparty.trim().to_ascii_lowercase();
+        if !is_wallet_id_64hex(&receiver) {
+            return Ok(0);
+        }
+        if self.is_pinned(&receiver, &counterparty) {
+            return Ok(0);
+        }
+        let keep = retain_per_conversation();
+
+        // (sent_at_ms, key, msg_id, expire_at) for this conversation, newest first.
+        let mut rows: Vec<(u64, Vec<u8>, String, u64)> = Vec::new();
+        for item in self.by_receiver.scan_prefix(receiver.as_bytes()) {
+            let Ok((k, v)) = item else { continue };
+            let Ok(env) = serde_json::from_slice::<TmailEnvelopeV1>(&v) else {
+                continue;
+            };
+            if conversation_key(&env) != counterparty {
+                continue;
+            }
+            let expire_at = env.sent_at_ms.saturating_add(effective_ttl_ms(env.ttl_ms));
+            rows.push((
+                env.sent_at_ms,
+                k.to_vec(),
+                env.msg_id.trim().to_string(),
+                expire_at,
+            ));
+        }
+        if rows.len() <= keep {
+            return Ok(0);
+        }
+        // Newest first, tie-broken by key so the ordering is total and deletion is deterministic
+        // across nodes -- two nodes holding the same conversation must drop the same messages.
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+
+        let mut removed = 0usize;
+        for (_sent, key, msg_id, expire_at) in rows.into_iter().skip(keep) {
+            if matches!(self.by_receiver.remove(&key), Ok(Some(_))) {
+                removed += 1;
+            }
+            if !msg_id.is_empty() {
+                let mut mark = PRUNED_PREFIX.to_vec();
+                mark.extend_from_slice(expire_at.to_string().as_bytes());
+                self.by_msg_id.insert(msg_id.as_bytes(), mark)?;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Is this conversation pinned, and therefore exempt from the retention rule?
+    ///
+    /// **Always `false` in Phase 0 — there is no way to pin.** Pin is a 1_000 µTET fee settled by
+    /// `TxV1::TmailPin`, which is batched into the Phase 1 genesis (see
+    /// `PHASE_1_GENESIS_SPEC.md` §2 and `SPRINT_PLAN.md` § S7), so no pin record can exist yet.
+    ///
+    /// This is a seam, not dead code: `enforce_retention` and `get_inbox` both consult it, so when
+    /// the Phase 1 pin store lands the exemption is already wired and AT-7(b) turns green by
+    /// replacing this body. It is also what makes AT-7(b) fail *for the right reason* today —
+    /// "nothing can pin" rather than an unexplained off-by-one.
+    pub fn is_pinned(&self, _receiver: &str, _counterparty: &str) -> bool {
+        false
+    }
+
+    /// Was this message dropped by the retention rule (as opposed to burned, or never seen)?
+    pub fn is_retention_pruned(&self, msg_id: &str) -> bool {
+        self.by_msg_id
+            .get(msg_id.trim().as_bytes())
+            .ok()
+            .flatten()
+            .is_some_and(|v| v.starts_with(PRUNED_PREFIX))
+    }
+
+    /// Return up to `limit` non-expired envelopes addressed to `wallet_id`, newest first, capped at
+    /// [`retain_per_conversation`] **per conversation** (spec Appendix K.1).
+    ///
+    /// The cap is applied here as well as at write time. That is deliberate belt-and-braces: the
+    /// store is the authority and `enforce_retention` already deleted the overflow, but a stale row
+    /// (a crash between insert and enforce, an older DB) must not leak past the documented API
+    /// contract just because pruning lagged.
     pub fn get_inbox(&self, wallet_id: &str, limit: usize) -> Vec<TmailEnvelopeV1> {
         let receiver = wallet_id.trim().to_ascii_lowercase();
         if !is_wallet_id_64hex(&receiver) {
             return Vec::new();
         }
         let now = now_ms();
+        let keep = retain_per_conversation();
+        let mut per_conversation: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         let mut out = Vec::new();
         // `scan_prefix(..).rev()` → descending key order → descending sent_at_ms → newest first.
         for item in self.by_receiver.scan_prefix(receiver.as_bytes()).rev() {
@@ -174,6 +300,14 @@ impl TmailStore {
             if env.receiver_wallet_id.trim().to_ascii_lowercase() != receiver {
                 continue;
             }
+            // Iteration is newest-first, so the first `keep` seen per conversation are the ones
+            // retention would have kept.
+            let counterparty = conversation_key(&env);
+            let slot = per_conversation.entry(counterparty.clone()).or_insert(0);
+            if *slot >= keep && !self.is_pinned(&receiver, &counterparty) {
+                continue;
+            }
+            *slot += 1;
             out.push(env);
         }
         out
@@ -204,16 +338,20 @@ impl TmailStore {
                 let _ = self.by_msg_id.remove(msg_id.as_bytes());
             }
         }
-        // Burn tombstones live in the other tree and would otherwise never be reaped. Drop each
-        // one once the message it stands for would have expired anyway — past that point a
-        // re-gossiped copy is refused by `is_expired` instead.
+        // Burn tombstones and retention markers live in the other tree and would otherwise never be
+        // reaped. Drop each one once the message it stands for would have expired anyway — past
+        // that point a re-gossiped copy is refused by `is_expired` instead.
         let mut stale_tombs: Vec<Vec<u8>> = Vec::new();
         for item in self.by_msg_id.iter() {
             let Ok((k, v)) = item else { continue };
-            if !v.starts_with(BURNED_PREFIX) {
+            let prefix_len = if v.starts_with(BURNED_PREFIX) {
+                BURNED_PREFIX.len()
+            } else if v.starts_with(PRUNED_PREFIX) {
+                PRUNED_PREFIX.len()
+            } else {
                 continue;
-            }
-            let expire_at = std::str::from_utf8(&v[BURNED_PREFIX.len()..])
+            };
+            let expire_at = std::str::from_utf8(&v[prefix_len..])
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);

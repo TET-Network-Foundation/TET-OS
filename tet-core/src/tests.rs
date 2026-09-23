@@ -7891,3 +7891,265 @@ async fn at4_a_stranger_cannot_burn_a_message_on_either_node() {
     assert_eq!(node_a.inbox_len(&receiver), 1, "A must ignore the stranger");
     assert_eq!(node_b.inbox_len(&receiver), 1, "B must ignore the stranger");
 }
+
+// ---------------------------------------------------------------------------
+// S7-0 — server-side per-conversation retention (spec Appendix K.1), and AT-7.
+// ---------------------------------------------------------------------------
+
+/// Store `n` messages from `sender` to `receiver`, oldest first, one second apart.
+/// Returns the msg_ids in send order.
+fn store_conversation_for_tests(
+    store: &crate::tmail::store::TmailStore,
+    sender_words: &str,
+    sender: &str,
+    receiver: &str,
+    n: usize,
+    tag: &str,
+) -> Vec<String> {
+    let base = tmail_now_ms_for_tests();
+    let mut ids = Vec::new();
+    for i in 0..n {
+        let msg_id = format!("{tag}-{i}");
+        let mut env = signed_tmail_env_for_tests(
+            sender_words,
+            sender,
+            receiver,
+            &msg_id,
+            tmail_flags_for_tests(false),
+            None,
+        );
+        // Distinct, increasing timestamps so "newest" is unambiguous.
+        env.sent_at_ms = base + (i as u64) * 1000;
+        store.store_tmail(&env).unwrap();
+        ids.push(msg_id);
+    }
+    ids
+}
+
+/// **AT-7(a).** Without a pin, the 6th message is genuinely gone from the STORE — not hidden.
+///
+/// This is the assertion that makes AT-7 mean something. Before S7-0 the 5-message cap was
+/// `MessagesPanel.tsx:269` slicing an array, so a "Show older" button revealed everything and the
+/// store kept all of it; the acceptance test passed with the feature absent.
+#[test]
+fn at7_a_sixth_message_is_pruned_from_the_store_without_a_pin() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    let ids = store_conversation_for_tests(&store, &sender_words, &sender, &receiver, 6, "at7a");
+
+    // The store itself holds five, not six.
+    let inbox = store.get_inbox(&receiver, 50);
+    assert_eq!(
+        inbox.len(),
+        5,
+        "a conversation must retain exactly {} messages",
+        crate::tmail::store::RETAIN_PER_CONVERSATION
+    );
+
+    // And specifically the OLDEST is the one gone.
+    let oldest = &ids[0];
+    assert!(
+        store.get_by_msg_id(oldest).is_none(),
+        "the 6th-oldest message must be deleted from the store, not merely hidden from the inbox"
+    );
+    assert!(
+        store.is_retention_pruned(oldest),
+        "it must be marked as retention-pruned, not left as a dangling id"
+    );
+    // The five newest survive.
+    for id in &ids[1..] {
+        assert!(
+            store.get_by_msg_id(id).is_some(),
+            "message {id} should have been retained"
+        );
+    }
+}
+
+/// A pruned message must not be resurrected when a peer re-gossips it.
+#[test]
+fn at7_a_pruned_message_is_not_restored_by_re_gossip() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    let base = tmail_now_ms_for_tests();
+    let mut first: Option<crate::tmail::envelope::TmailEnvelopeV1> = None;
+    for i in 0..6 {
+        let mut env = signed_tmail_env_for_tests(
+            &sender_words,
+            &sender,
+            &receiver,
+            &format!("regossip-{i}"),
+            tmail_flags_for_tests(false),
+            None,
+        );
+        env.sent_at_ms = base + (i as u64) * 1000;
+        store.store_tmail(&env).unwrap();
+        if i == 0 {
+            first = Some(env);
+        }
+    }
+    let evicted = first.unwrap();
+    assert!(store.get_by_msg_id(&evicted.msg_id).is_none());
+
+    assert!(
+        !store.store_tmail(&evicted).unwrap(),
+        "a re-gossiped aged-out message must be refused"
+    );
+    assert_eq!(store.get_inbox(&receiver, 50).len(), 5, "still five");
+}
+
+/// Retention is **per conversation**, not per inbox: two counterparties keep five each.
+#[test]
+fn at7_a_retention_is_per_conversation_not_per_inbox() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (a_words, alice) = tmail_party_for_tests();
+    let (b_words, bob) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    store_conversation_for_tests(&store, &a_words, &alice, &receiver, 6, "conv-a");
+    store_conversation_for_tests(&store, &b_words, &bob, &receiver, 6, "conv-b");
+
+    let inbox = store.get_inbox(&receiver, 100);
+    assert_eq!(
+        inbox.len(),
+        10,
+        "two conversations must retain five each, not five in total"
+    );
+    let from_alice = inbox
+        .iter()
+        .filter(|m| m.sender_wallet_id.eq_ignore_ascii_case(&alice))
+        .count();
+    let from_bob = inbox
+        .iter()
+        .filter(|m| m.sender_wallet_id.eq_ignore_ascii_case(&bob))
+        .count();
+    assert_eq!((from_alice, from_bob), (5, 5));
+}
+
+/// The REST inbox reflects the store rule — the cap is not something the client is trusted to do.
+#[tokio::test]
+async fn at7_a_rest_inbox_returns_at_most_five_per_conversation() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    let base = tmail_now_ms_for_tests();
+    for i in 0..6 {
+        let mut env = signed_tmail_env_for_tests(
+            &sender_words,
+            &sender,
+            &receiver,
+            &format!("rest-at7-{i}"),
+            tmail_flags_for_tests(false),
+            None,
+        );
+        env.sent_at_ms = base + (i as u64) * 1000;
+        crate::rest::handlers::tmail::post_tmail_send(
+            axum::extract::State(state.clone()),
+            axum::Json(env),
+        )
+        .await;
+    }
+
+    let resp = crate::rest::handlers::tmail::get_tmail_inbox(
+        axum::extract::State(state.clone()),
+        axum::extract::Path(receiver.clone()),
+        axum::extract::Query(crate::rest::handlers::tmail::InboxQuery { limit: Some(50) }),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["count"].as_u64(),
+        Some(5),
+        "GET /tmail/inbox must return at most five per conversation, got {}",
+        json["count"]
+    );
+}
+
+/// **AT-7(b) — EXPECTED TO FAIL until Pin lands in Phase 1.**
+///
+/// Ignored so CI stays green on a known-missing feature, not to hide it: run
+/// `cargo test --bin TET-Core -- --ignored at7_b` and it goes red, which is the point. The
+/// acceptance-test list in `SOVEREIGN_OS_PHASE0_SPEC.md` §B.2 carries the matching ❌ so nobody
+/// reads a passing suite as "Pin works".
+///
+/// It fails for the right reason rather than an unexplained count: `TmailStore::is_pinned` is
+/// hardcoded `false` because `TxV1::TmailPin` does not exist — it is batched into the Phase 1
+/// genesis (`PHASE_1_GENESIS_SPEC.md` §2). When that lands, this test turns green by implementing
+/// the pin store behind that one seam; nothing here needs rewriting.
+#[test]
+#[ignore = "AT-7(b): RED until TxV1::TmailPin lands in Phase 1 — run with --ignored to confirm it still fails"]
+fn at7_b_pinned_conversation_retains_more_than_five() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    // The user pays the Appendix C fee (1_000 µTET) and pins the thread. There is no API for this
+    // in Phase 0, which is exactly what this test records.
+    assert!(
+        store.is_pinned(&receiver, &sender),
+        "AT-7(b) blocked: nothing can pin a conversation yet. Pin is a 1_000 uTET fee settled by \
+         TxV1::TmailPin, which is batched into the Phase 1 genesis (PHASE_1_GENESIS_SPEC.md §2) \
+         rather than shipped as a flag-day upgrade. Until then TmailStore::is_pinned is hardcoded \
+         false and a pinned thread cannot exist."
+    );
+
+    store_conversation_for_tests(&store, &sender_words, &sender, &receiver, 6, "at7b");
+    assert!(
+        store.get_inbox(&receiver, 50).len() > 5,
+        "AT-7: a pinned conversation must retain more than five messages"
+    );
+}
+
+/// The read-side cap is covered independently of the write-side one.
+///
+/// Without this, `get_inbox`'s per-conversation cap is untestable: `store_tmail` already deleted
+/// the overflow, so the read filter never sees more than five and could be deleted without a test
+/// noticing. Widening retention for the writes and narrowing it for the read reproduces the case
+/// the filter exists for — rows already on disk from a crash between insert and enforce, or an
+/// older DB written under a larger cap.
+#[test]
+fn at7_a_read_side_cap_holds_when_stored_rows_exceed_retention() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (sender_words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    {
+        // Write eight under a wide cap, so all eight land on disk.
+        let _wide = EnvVarGuard::set("TET_TMAIL_RETAIN_PER_CONVERSATION", "10");
+        store_conversation_for_tests(&store, &sender_words, &sender, &receiver, 8, "readcap");
+        assert_eq!(
+            store.get_inbox(&receiver, 50).len(),
+            8,
+            "precondition: all eight are stored under the wide cap"
+        );
+    }
+
+    // Now read under the real cap. The rows are still on disk; the API contract must still hold.
+    let _narrow = EnvVarGuard::set("TET_TMAIL_RETAIN_PER_CONVERSATION", "5");
+    assert_eq!(
+        store.get_inbox(&receiver, 50).len(),
+        5,
+        "GET /tmail/inbox must cap per conversation even when the store still holds more"
+    );
+}
