@@ -528,6 +528,35 @@ anywhere in the repo. Whether a receipt fits inside the envelope decides the S8-
 (inline vs announce-then-pull vs compressed proof), so it is measured in S8-1 before the envelope is
 designed.
 
+### S8 registry: propagation measured, 2026-09-24
+
+Two local nodes, driver `tet-network/ui/scripts/tmail_anon_registry_step7.mjs`. The margin is
+measured, not assumed, and the epoch-boundary term is recorded separately because it dominates.
+
+| Term | Measured | Note |
+|---|---|---|
+| Registration reaches the peer | **2 ms** | gossip + direct, both paths live |
+| **Epoch-boundary wait** | **41,275 ms** | ≤ 60 s by construction; ~30 s on average for a random arrival |
+| Proof | 33,000 ms | measured earlier, hash-only guest with accelerated sha2 |
+| **Total budget** | **74,277 ms** (~74 s) | |
+| Root window (effective) | 3,600,000 ms | `min(window, 128 × epoch)`, reported by `GET /tmail/anon/root` |
+| **Margin** | **3,525,723 ms — 97.9 % spare** | |
+
+Both nodes converged on an **identical root**, node 1's authentication path is full depth (20/20),
+and that path's root equals node 2's current root — which is the property that makes a proof built
+on one node verifiable on another.
+
+**The epoch-boundary term is the biggest single cost**, at 41 s of the 74 s budget — larger than
+the proof. It was not in the original window sizing and is recorded here rather than absorbed: a
+registration is admitted immediately but does not enter the tree until the next 60 s boundary, so a
+member cannot prove membership for up to a minute after registering. The UI must say
+"registration propagating" during that period rather than showing an error.
+
+Propagation itself is negligible locally (2 ms). **CH↔HEL will be higher** — the burn and
+scheduled-release runs saw 250–700 ms for gossip across that link — but even a thousand-fold
+increase over local leaves the budget dominated by the epoch boundary and the proof. A confirming
+run against the seed follows the redeploy.
+
 ### Locked decision #6 — amended 2026-09-24
 
 The original locked decision reads: *"Marketing = **AT-3 + AT-4 + AT-5**"*.
