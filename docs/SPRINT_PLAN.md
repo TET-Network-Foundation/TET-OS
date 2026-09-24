@@ -552,10 +552,43 @@ registration is admitted immediately but does not enter the tree until the next 
 member cannot prove membership for up to a minute after registering. The UI must say
 "registration propagating" during that period rather than showing an error.
 
-Propagation itself is negligible locally (2 ms). **CH↔HEL will be higher** — the burn and
-scheduled-release runs saw 250–700 ms for gossip across that link — but even a thousand-fold
-increase over local leaves the budget dominated by the epoch boundary and the proof. A confirming
-run against the seed follows the redeploy.
+**Confirmed CH↔HEL, 2026-09-24**, after the seed redeploy. Registered **on the follower**, verified
+on the seed:
+
+| Term | Local | **CH↔HEL** |
+|---|---|---|
+| Registration reaches the peer | 2 ms | **641 ms** |
+| Epoch-boundary wait | 41,275 ms | 27,375 ms |
+| Proof | 33,000 ms | 33,000 ms |
+| **Total budget** | 74,277 ms | **61,016 ms** |
+| **Margin against a 60 min window** | 97.9 % | **98.3 %** |
+
+Propagation across the public network is **320× local but still 641 ms** — three orders of magnitude
+below the epoch boundary, which remains the dominant term. Both nodes converged on the identical
+root `71077e93cfe02d0b…`, the follower's authentication path is full depth, and its root equals the
+seed's.
+
+The seed's own log confirms arrival independently of the test script:
+
+```
+[P2P] 📇 ANON REGISTRATION Added wallet=e28b52eeb82e35b2…
+```
+
+**Conclusion: the 60-minute window is not close to binding.** The real budget is ~61 s, of which
+~94 % is the epoch boundary plus the proof — both of which are design constants, not network
+effects. The window could be far shorter; it is left at 60 min because nothing argues for tightening
+it and a generous window costs only cache entries.
+
+### Seed redeployed to the S8 registry binding, 2026-09-24
+
+Same build-first-recreate-second pattern. Verified across the swap:
+
+| Check | Before | After |
+|---|---|---|
+| **PeerId** | `12D3KooWNcdESJUC…cD7MSEC` | **identical** |
+| Height | 18063 → 18128 at swap | 18128, advancing |
+| Block 18063 `block_id` | `0xa82651ff…e4b53a49` | **identical** |
+| `GET /tmail/anon/root` | `404` | live, epoch + root + effective window |
 
 ### Locked decision #6 — amended 2026-09-24
 
