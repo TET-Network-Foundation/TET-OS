@@ -8557,3 +8557,114 @@ async fn at3_rest_inbox_serves_the_payload_once_released() {
         "a released message must serve its original ciphertext"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S8-1 — receipt size measurement.
+//
+// The anonymous envelope (§A.1.2) must carry a RISC Zero receipt inline, and Tmail envelopes ride
+// gossipsub with `max_transmit_size` = DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES (128 KiB, p2p.rs:439).
+// Whether a real receipt fits decides the S8-2 envelope design, so it is measured rather than
+// assumed.
+//
+// Ignored: it runs a real prover, which needs the guest built (RISC0_SKIP_BUILD=0) and takes far
+// longer than a unit test should.
+//
+//   RISC0_SKIP_BUILD=0 cargo test -p tet-core --bin TET-Core --features zk-prove \
+//     -- --ignored --nocapture s8_measure_receipt_size
+// ---------------------------------------------------------------------------
+
+#[test]
+#[ignore = "runs a real RISC Zero prover; needs RISC0_SKIP_BUILD=0"]
+fn s8_measure_receipt_size_against_the_gossip_ceiling() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    assert!(
+        !methods::NEXUS_GUEST_ELF.is_empty(),
+        "guest ELF is empty -- rebuild with RISC0_SKIP_BUILD=0, otherwise this measures nothing"
+    );
+
+    use risc0_zkvm::{ExecutorEnv, default_prover};
+    let prompt = "anchor-ownership size probe".to_string();
+    let response = "r".repeat(64);
+    let flops: u64 = 1_000;
+    let pk = [7u8; 32];
+    let commitment = nexus_protocol::zk_court_inference_commitment_v1(
+        &prompt, &response, flops, &pk,
+    );
+
+    let env = ExecutorEnv::builder()
+        .write(&1u8)
+        .unwrap()
+        .write(&prompt)
+        .unwrap()
+        .write(&response)
+        .unwrap()
+        .write(&flops)
+        .unwrap()
+        .write(&pk)
+        .unwrap()
+        .write(&commitment)
+        .unwrap()
+        .build()
+        .unwrap();
+
+    let started = std::time::Instant::now();
+    let info = default_prover()
+        .prove(env, methods::NEXUS_GUEST_ELF)
+        .expect("prove");
+    let prove_ms = started.elapsed().as_millis();
+    let receipt = info.receipt;
+
+    // Exactly how the envelope would carry it: bincode, then STANDARD base64 (zk_verifier.rs:113).
+    let bin = bincode::serialize(&receipt).expect("bincode");
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bin);
+
+    let ceiling = crate::p2p::DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES;
+    println!("\n=== S8-1 receipt size measurement ===");
+    println!("prove wall time      : {prove_ms} ms");
+    println!("journal bytes        : {}", receipt.journal.bytes.len());
+    println!("receipt (bincode)    : {} bytes ({:.1} KiB)", bin.len(), bin.len() as f64 / 1024.0);
+    println!("receipt (base64)     : {} bytes ({:.1} KiB)", b64.len(), b64.len() as f64 / 1024.0);
+    println!("gossip ceiling       : {ceiling} bytes ({:.0} KiB)", ceiling as f64 / 1024.0);
+    println!(
+        "fits inline?         : {}",
+        if b64.len() < ceiling { "YES" } else { "NO" }
+    );
+    println!(
+        "headroom             : {} bytes",
+        ceiling as i64 - b64.len() as i64
+    );
+
+    // The receipt must actually verify, or the number measures a broken artifact.
+    receipt.verify(methods::NEXUS_GUEST_ID).expect("receipt must verify");
+    println!("verified against NEXUS_GUEST_ID: yes\n");
+}
+
+/// **Guard for the `RISC0_SKIP_BUILD=0` build defect.** A zk build must embed a real guest.
+///
+/// `risc0-build` checks whether `RISC0_SKIP_BUILD` is *set*, not what it is set to, while
+/// `methods/build.rs` checks the value. So `RISC0_SKIP_BUILD=0` -- which the Dockerfile and
+/// `zk-image.yml` both pass, meaning "do build the guest" -- silently produced an empty ELF and an
+/// all-zero image id. The build stayed green; the node just refused to prove at runtime and
+/// verified against `[0; 8]`.
+///
+/// Ignored because it is only meaningful in a zk build: under the normal CI default
+/// (`RISC0_SKIP_BUILD=1`) an empty ELF is correct.
+///
+///   cargo test -p tet-core --bin TET-Core --features zk-prove -- --ignored s8_guest_elf
+#[test]
+#[ignore = "only meaningful in a zk build (RISC0_SKIP_BUILD unset or 0)"]
+fn s8_guest_elf_is_embedded_in_a_zk_build() {
+    assert!(
+        !methods::NEXUS_GUEST_ELF.is_empty(),
+        "NEXUS_GUEST_ELF is empty in a zk build -- the guest was not embedded. This is the \
+         RISC0_SKIP_BUILD=0 defect: risc0-build skips on the variable being SET, regardless of \
+         value. methods/build.rs must remove it before calling embed_methods."
+    );
+    assert_ne!(
+        methods::NEXUS_GUEST_ID,
+        [0u32; 8],
+        "NEXUS_GUEST_ID is all zeros -- receipts would be verified against a null image id"
+    );
+}

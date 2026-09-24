@@ -21,6 +21,27 @@ pub const NEXUS_GUEST_ELF: &[u8] = &[];
         let _ = std::fs::write(dst, stub);
         return;
     }
+    // `risc0-build` checks whether RISC0_SKIP_BUILD is **set**, not what it is set to. Our own
+    // check above is value-based, so `RISC0_SKIP_BUILD=0` -- which every caller means as "do build
+    // the guest" -- fell through to here and then made `embed_methods` skip anyway. The result was
+    // silent and worse than a failure: the build went green while emitting
+    //
+    //     pub const NEXUS_GUEST_ELF: &[u8] = &[];
+    //     pub const NEXUS_GUEST_ID: [u32; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
+    //
+    // so the node compiled, started, and refused to prove with "guest ELF empty", while verifying
+    // against an all-zero image id. Both `Dockerfile` (production default) and
+    // `.github/workflows/zk-image.yml` pass `RISC0_SKIP_BUILD=0`, so the production zk image had
+    // this shape.
+    //
+    // Removing the variable here is the one-line fix that covers every caller, rather than editing
+    // each deployment config and hoping the next one remembers.
+    //
+    // Safety: build scripts are single-threaded at this point and this process exits shortly after.
+    if std::env::var_os("RISC0_SKIP_BUILD").is_some() {
+        unsafe { std::env::remove_var("RISC0_SKIP_BUILD") };
+    }
+
     eprintln!("RISC Zero toolchain check: {RISC0_TOOLCHAIN_HELP}");
     std::panic::set_hook(Box::new(|info| {
         eprintln!("{RISC0_TOOLCHAIN_HELP}");
