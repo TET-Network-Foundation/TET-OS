@@ -11,4 +11,5 @@ sha2 = { version = "0.10", default-features = false }
 hex = { version = "0.4", default-features = false }
 serde = { version = "1", default-features = false, features = ["derive"] }
 nexus-protocol = { path = "../../nexus-protocol", default-features = false }
+ed25519-dalek = { version = "2", default-features = false }
 

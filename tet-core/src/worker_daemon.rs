@@ -222,7 +222,10 @@ async fn build_verify_zk_env_for_task(
                 task.tx_hash
             ));
         }
-        crate::zk_verifier::VerifiedZkJournal::Inference(_) => {
+        crate::zk_verifier::VerifiedZkJournal::Inference(_)
+        // A Tmail anchor-ownership proof is a valid receipt for a completely different claim.
+        // Accepting it here would settle an AI task against a proof that says nothing about one.
+        | crate::zk_verifier::VerifiedZkJournal::TmailAnchor(_) => {
             return Err(anyhow::anyhow!(
                 "worker daemon expected ZkCourtJournalV1 for task_id={}",
                 task.tx_hash

@@ -8668,3 +8668,404 @@ fn s8_guest_elf_is_embedded_in_a_zk_build() {
         "NEXUS_GUEST_ID is all zeros -- receipts would be verified against a null image id"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S8-1 step 2 — anchor-ownership proof: a REAL receipt, mocks disabled.
+//
+// Every other ZK test in this repo runs on MOCKJ1:/MOCKZC1:. That is exactly how an empty guest
+// ELF survived for months, so this one proves for real and refuses the mock path outright.
+// ---------------------------------------------------------------------------
+
+/// Prove guest mode 2 and return `(journal_b64, receipt_b64)` in the wire form the envelope uses.
+#[cfg(test)]
+fn prove_anchor_ownership_for_tests(
+    anchor_seed: &[u8; 32],
+    receiver_wallet: &[u8; 32],
+    bucket_index: u64,
+) -> (String, String, nexus_protocol::TmailAnchorOwnsEphemeralV1) {
+    use risc0_zkvm::{ExecutorEnv, default_prover};
+    let env = ExecutorEnv::builder()
+        .write(&2u8)
+        .unwrap()
+        .write(anchor_seed)
+        .unwrap()
+        .write(receiver_wallet)
+        .unwrap()
+        .write(&bucket_index)
+        .unwrap()
+        .build()
+        .unwrap();
+    let receipt = default_prover()
+        .prove(env, methods::NEXUS_GUEST_ELF)
+        .expect("prove mode 2")
+        .receipt;
+    let journal: nexus_protocol::TmailAnchorOwnsEphemeralV1 =
+        receipt.journal.decode().expect("journal decodes");
+    let journal_b64 =
+        base64::engine::general_purpose::STANDARD.encode(&receipt.journal.bytes);
+    let receipt_b64 = base64::engine::general_purpose::STANDARD
+        .encode(bincode::serialize(&receipt).expect("bincode"));
+    (journal_b64, receipt_b64, journal)
+}
+
+/// **The real-receipt test.** A genuine mode-2 proof verifies through the production path with
+/// mock receipts explicitly disallowed.
+#[test]
+#[ignore = "runs a real RISC Zero prover; needs a zk build"]
+fn s8_anchor_ownership_real_receipt_verifies_with_mocks_disabled() {
+    let _g = env_lock();
+    set_test_env_base();
+    // `mock_zk_allowed()` returns true under cfg(test); TET_MAINNET=1 forces it false, which is
+    // the only way to assert that this path needs no mock support at all.
+    let _mainnet = EnvVarGuard::set("TET_MAINNET", "1");
+    let _founder = EnvVarGuard::set(
+        "TET_GENESIS_FOUNDER_WALLET_ID",
+        "57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0",
+    );
+    assert!(
+        !crate::zk_verifier::zk_dev_mock_allowed(),
+        "precondition: mocks must be disallowed, or this proves nothing about the real path"
+    );
+
+    let anchor_seed = [9u8; 32];
+    let receiver = [4u8; 32];
+    let bucket = nexus_protocol::tmail_bucket_index_v1(1_790_000_000_000);
+
+    let (journal_b64, receipt_b64, journal) =
+        prove_anchor_ownership_for_tests(&anchor_seed, &receiver, bucket);
+
+    // The journal must carry exactly what the design says, and the ephemeral must match the
+    // derivation the host/UI computes independently.
+    let expected_seed =
+        nexus_protocol::tmail_ephemeral_seed_v1(&anchor_seed, &receiver, bucket);
+    let expected_pub = ed25519_dalek::SigningKey::from_bytes(&expected_seed)
+        .verifying_key()
+        .to_bytes();
+    assert_eq!(
+        journal.ephemeral_pubkey_bytes, expected_pub,
+        "the guest's ephemeral must equal the host-side HKDF derivation"
+    );
+    assert_eq!(journal.receiver_wallet_bytes, receiver);
+    assert_eq!(journal.bucket_index, bucket);
+
+    // Through the production verifier, with mocks off.
+    let verified = crate::zk_verifier::verify_tx_receipt_and_journal(
+        methods::NEXUS_GUEST_ID,
+        &journal_b64,
+        &receipt_b64,
+    )
+    .expect("a real receipt must verify with mocks disabled");
+    match verified {
+        crate::zk_verifier::VerifiedZkJournal::TmailAnchor(j) => {
+            assert_eq!(j, journal, "decoded journal must round-trip exactly");
+        }
+        other => panic!("wrong journal variant: {other:?}"),
+    }
+}
+
+/// **The anchor must not be recoverable from the receipt.** This is the whole point of the design.
+#[test]
+#[ignore = "runs a real RISC Zero prover; needs a zk build"]
+fn s8_receipt_does_not_leak_the_anchor_seed() {
+    let _g = env_lock();
+    set_test_env_base();
+    // A seed with a distinctive byte pattern, so a naive leak is findable.
+    let anchor_seed = [0xABu8; 32];
+    let receiver = [4u8; 32];
+    let bucket = nexus_protocol::tmail_bucket_index_v1(1_790_000_000_000);
+
+    let (journal_b64, receipt_b64, _j) =
+        prove_anchor_ownership_for_tests(&anchor_seed, &receiver, bucket);
+
+    let journal_bytes = base64::engine::general_purpose::STANDARD
+        .decode(journal_b64.as_bytes())
+        .unwrap();
+    assert!(
+        !journal_bytes.windows(32).any(|w| w == anchor_seed),
+        "the anchor seed must not appear in the journal"
+    );
+
+    let receipt_bytes = base64::engine::general_purpose::STANDARD
+        .decode(receipt_b64.as_bytes())
+        .unwrap();
+    assert!(
+        !receipt_bytes.windows(32).any(|w| w == anchor_seed),
+        "the anchor seed must not appear anywhere in the serialized receipt"
+    );
+
+    // Nor may the ephemeral SEED (the HKDF output) leak -- it is the ephemeral's private key.
+    let eph_seed = nexus_protocol::tmail_ephemeral_seed_v1(&anchor_seed, &receiver, bucket);
+    assert!(
+        !receipt_bytes.windows(32).any(|w| w == eph_seed),
+        "the ephemeral secret must not appear in the receipt"
+    );
+}
+
+/// **The replay rule.** A receipt is valid only for its `(ephemeral, receiver, bucket)` tuple.
+/// Changing any element must produce a different ephemeral, so a receipt cannot be carried across
+/// receivers or days.
+#[test]
+fn s8_ephemeral_is_bound_to_receiver_and_bucket() {
+    let anchor_seed = [9u8; 32];
+    let receiver_a = [4u8; 32];
+    let receiver_b = [5u8; 32];
+    let bucket = 20_717u64;
+
+    let eph = |seed: &[u8; 32], rx: &[u8; 32], b: u64| {
+        ed25519_dalek::SigningKey::from_bytes(&nexus_protocol::tmail_ephemeral_seed_v1(seed, rx, b))
+            .verifying_key()
+            .to_bytes()
+    };
+
+    let base = eph(&anchor_seed, &receiver_a, bucket);
+    assert_ne!(
+        base,
+        eph(&anchor_seed, &receiver_b, bucket),
+        "a different receiver must yield a different ephemeral -- otherwise one receipt covers \
+         every conversation"
+    );
+    assert_ne!(
+        base,
+        eph(&anchor_seed, &receiver_a, bucket + 1),
+        "the next bucket must yield a different ephemeral -- otherwise one proof lasts forever"
+    );
+    assert_ne!(
+        base,
+        eph(&[1u8; 32], &receiver_a, bucket),
+        "a different anchor must yield a different ephemeral"
+    );
+    // ...and it is deterministic, which is what lets the anchor regenerate its own audit trail.
+    assert_eq!(base, eph(&anchor_seed, &receiver_a, bucket));
+}
+
+/// The 24 h bucket boundary is exact, and is node-local Tmail policy rather than consensus.
+#[test]
+fn s8_bucket_index_is_a_24h_floor() {
+    use nexus_protocol::{TMAIL_BUCKET_MS, tmail_bucket_index_v1};
+    assert_eq!(tmail_bucket_index_v1(0), 0);
+    assert_eq!(tmail_bucket_index_v1(TMAIL_BUCKET_MS - 1), 0);
+    assert_eq!(tmail_bucket_index_v1(TMAIL_BUCKET_MS), 1);
+    assert_eq!(tmail_bucket_index_v1(TMAIL_BUCKET_MS * 3 + 5), 3);
+}
+
+/// `TmailAnchorOwnsEphemeralV1` and `ZkCourtJournalV1` are both 72 bytes under bincode. The
+/// verifier must not report one as the other.
+#[test]
+fn s8_anchor_journal_is_not_confused_with_a_zk_court_journal() {
+    let anchor = nexus_protocol::TmailAnchorOwnsEphemeralV1 {
+        journal_kind: nexus_protocol::TMAIL_ANCHOR_JOURNAL_KIND,
+        ephemeral_pubkey_bytes: [1u8; 32],
+        receiver_wallet_bytes: [2u8; 32],
+        bucket_index: 7,
+    };
+    let court = nexus_protocol::ZkCourtJournalV1 {
+        commitment_sha256: [3u8; 32],
+        flops_u64: 11,
+        worker_pubkey_bytes: [4u8; 32],
+    };
+    // The encoding that matters is risc0 serde (what `env::commit` writes), not bincode.
+    let words_len = |v: &[u32]| v.len() * 4;
+    let anchor_len = words_len(&risc0_zkvm::serde::to_vec(&anchor).unwrap());
+    let court_len = words_len(&risc0_zkvm::serde::to_vec(&court).unwrap());
+    assert_eq!(
+        court_len, 264,
+        "ZkCourtJournalV1 is 264 bytes under risc0 serde"
+    );
+    assert_eq!(
+        anchor_len, 268,
+        "the journal_kind tag must make the anchor journal a DIFFERENT length (268 vs 264) -- \
+         without it the two are byte-level permutations and no round-trip check can separate them"
+    );
+    assert_ne!(anchor_len, court_len);
+}
+
+/// **The collision guard.** A real ZK-Court journal must never decode as a Tmail anchor journal.
+///
+/// Before the `journal_kind` tag these were both 264 bytes and mutual permutations: decoding one
+/// as the other succeeded *and* re-serialized identically, so a round-trip check could not tell
+/// them apart and whichever arm ran first won. A genuine ZK-Court receipt would have been reported
+/// as an anchor-ownership proof.
+#[test]
+fn s8_zk_court_journal_never_decodes_as_a_tmail_anchor_journal() {
+    let court = nexus_protocol::ZkCourtJournalV1 {
+        commitment_sha256: [3u8; 32],
+        flops_u64: 11,
+        worker_pubkey_bytes: [4u8; 32],
+    };
+    let words = risc0_zkvm::serde::to_vec(&court).unwrap();
+    let mut bytes = Vec::with_capacity(words.len() * 4);
+    for w in &words {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+
+    match crate::zk_verifier::decode_journal_bytes_for_tests(&bytes)
+        .expect("a real ZkCourt journal must decode")
+    {
+        crate::zk_verifier::VerifiedZkJournal::ZkCourt(j) => {
+            assert_eq!(j.flops_u64, 11, "and must decode to the right values");
+            assert_eq!(j.worker_pubkey_bytes, [4u8; 32]);
+        }
+        other => panic!("ZkCourt journal decoded as the wrong type: {other:?}"),
+    }
+}
+
+/// And the mirror: a real anchor journal decodes as itself, with its values intact.
+#[test]
+fn s8_tmail_anchor_journal_decodes_as_itself() {
+    let anchor = nexus_protocol::TmailAnchorOwnsEphemeralV1 {
+        journal_kind: nexus_protocol::TMAIL_ANCHOR_JOURNAL_KIND,
+        ephemeral_pubkey_bytes: [7u8; 32],
+        receiver_wallet_bytes: [8u8; 32],
+        bucket_index: 20_717,
+    };
+    let words = risc0_zkvm::serde::to_vec(&anchor).unwrap();
+    let mut bytes = Vec::with_capacity(words.len() * 4);
+    for w in &words {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+    match crate::zk_verifier::decode_journal_bytes_for_tests(&bytes).expect("must decode") {
+        crate::zk_verifier::VerifiedZkJournal::TmailAnchor(j) => assert_eq!(j, anchor),
+        other => panic!("anchor journal decoded as the wrong type: {other:?}"),
+    }
+}
+
+/// A journal whose tag is wrong must be refused rather than accepted as an anchor proof.
+#[test]
+fn s8_anchor_journal_with_a_bad_tag_is_refused() {
+    let anchor = nexus_protocol::TmailAnchorOwnsEphemeralV1 {
+        journal_kind: 0xDEAD_BEEF,
+        ephemeral_pubkey_bytes: [7u8; 32],
+        receiver_wallet_bytes: [8u8; 32],
+        bucket_index: 1,
+    };
+    let words = risc0_zkvm::serde::to_vec(&anchor).unwrap();
+    let mut bytes = Vec::with_capacity(words.len() * 4);
+    for w in &words {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+    assert!(
+        crate::zk_verifier::decode_journal_bytes_for_tests(&bytes).is_err(),
+        "the tag must be CHECKED, not just deserialized -- otherwise it is decoration"
+    );
+}
+
+/// Executor-only check of guest mode 2: runs the guest and inspects the journal **without
+/// proving**. Seconds instead of ~10 minutes, so guest-logic bugs are found before paying for a
+/// proof. Not a substitute for the real-receipt test — it verifies no cryptography.
+#[test]
+#[ignore = "needs a zk build (guest ELF); no proving"]
+fn s8_anchor_ownership_executor_only_journal_is_correct() {
+    let _g = env_lock();
+    set_test_env_base();
+    assert!(!methods::NEXUS_GUEST_ELF.is_empty(), "needs a zk build");
+
+    use risc0_zkvm::{ExecutorEnv, default_executor};
+    let anchor_seed = [9u8; 32];
+    let receiver = [4u8; 32];
+    let bucket = nexus_protocol::tmail_bucket_index_v1(1_790_000_000_000);
+
+    let env = ExecutorEnv::builder()
+        .write(&2u8).unwrap()
+        .write(&anchor_seed).unwrap()
+        .write(&receiver).unwrap()
+        .write(&bucket).unwrap()
+        .build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let session = default_executor().execute(env, methods::NEXUS_GUEST_ELF).expect("execute");
+    println!(
+        "\nexecutor-only: {} ms, {} segments",
+        started.elapsed().as_millis(),
+        session.segments.len()
+    );
+
+    let journal: nexus_protocol::TmailAnchorOwnsEphemeralV1 =
+        session.journal.decode().expect("journal decodes");
+    let expected_seed = nexus_protocol::tmail_ephemeral_seed_v1(&anchor_seed, &receiver, bucket);
+    let expected_pub = ed25519_dalek::SigningKey::from_bytes(&expected_seed)
+        .verifying_key()
+        .to_bytes();
+    assert_eq!(journal.ephemeral_pubkey_bytes, expected_pub, "ephemeral mismatch");
+    assert_eq!(journal.receiver_wallet_bytes, receiver);
+    assert_eq!(journal.bucket_index, bucket);
+    println!("journal bytes: {}", session.journal.bytes.len());
+}
+
+/// Which encoding are guest journals actually in? `env::commit` uses **risc0 serde**
+/// (word-aligned), not `bincode`. Executor-only, so it costs milliseconds.
+#[test]
+#[ignore = "needs a zk build (guest ELF); no proving"]
+fn s8_journal_encoding_is_risc0_serde_not_bincode() {
+    let _g = env_lock();
+    set_test_env_base();
+    assert!(!methods::NEXUS_GUEST_ELF.is_empty(), "needs a zk build");
+
+    use risc0_zkvm::{ExecutorEnv, default_executor};
+    let env = ExecutorEnv::builder()
+        .write(&2u8).unwrap()
+        .write(&[9u8; 32]).unwrap()
+        .write(&[4u8; 32]).unwrap()
+        .write(&20_717u64).unwrap()
+        .build().unwrap();
+    let session = default_executor().execute(env, methods::NEXUS_GUEST_ELF).unwrap();
+    let bytes = session.journal.bytes.clone();
+
+    let bincode_len = bincode::serialize(&nexus_protocol::TmailAnchorOwnsEphemeralV1 {
+        journal_kind: nexus_protocol::TMAIL_ANCHOR_JOURNAL_KIND,
+        ephemeral_pubkey_bytes: [0u8; 32],
+        receiver_wallet_bytes: [0u8; 32],
+        bucket_index: 0,
+    })
+    .unwrap()
+    .len();
+
+    println!("\nguest journal bytes : {}", bytes.len());
+    println!("bincode would be    : {bincode_len}");
+
+    // risc0 serde decodes it.
+    assert!(
+        session.journal.decode::<nexus_protocol::TmailAnchorOwnsEphemeralV1>().is_ok(),
+        "risc0 serde must decode the guest journal"
+    );
+    // bincode does not.
+    let via_bincode =
+        bincode::deserialize::<nexus_protocol::TmailAnchorOwnsEphemeralV1>(&bytes);
+    println!("bincode decode ok?  : {}", via_bincode.is_ok());
+
+    assert_ne!(
+        bytes.len(),
+        bincode_len,
+        "if these ever match, this test is measuring nothing"
+    );
+}
+
+/// **The round-trip guard.** A journal with trailing bytes must be refused.
+///
+/// risc0's `from_slice` decodes from the front and does not insist it consumed everything, so
+/// appended bytes deserialize fine. Re-serializing and comparing is what rejects them. Without it a
+/// verifier would accept a journal that is not the journal the guest committed — the receipt
+/// covers `receipt.journal.bytes`, and anything beyond that is unproven data riding along.
+#[test]
+fn s8_journal_with_trailing_bytes_is_refused() {
+    let court = nexus_protocol::ZkCourtJournalV1 {
+        commitment_sha256: [3u8; 32],
+        flops_u64: 11,
+        worker_pubkey_bytes: [4u8; 32],
+    };
+    let words = risc0_zkvm::serde::to_vec(&court).unwrap();
+    let mut bytes = Vec::with_capacity(words.len() * 4);
+    for w in &words {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+    // Exactly as committed: accepted.
+    assert!(crate::zk_verifier::decode_journal_bytes_for_tests(&bytes).is_ok());
+
+    // Same journal plus unproven trailing data: refused.
+    let mut padded = bytes.clone();
+    padded.extend_from_slice(&[0xAAu8; 8]);
+    assert!(
+        crate::zk_verifier::decode_journal_bytes_for_tests(&padded).is_err(),
+        "a journal with trailing bytes must be refused: from_slice decodes from the front, so \
+         only the re-serialize comparison catches it"
+    );
+}

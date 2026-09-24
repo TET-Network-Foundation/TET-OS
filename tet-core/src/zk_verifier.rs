@@ -3,7 +3,7 @@
 //! Guest compilation may be bypassed via `RISC0_SKIP_BUILD=1`.
 
 use base64::Engine as _;
-pub use nexus_protocol::{InferenceJournalV1, ZkCourtJournalV1};
+pub use nexus_protocol::{InferenceJournalV1, TmailAnchorOwnsEphemeralV1, ZkCourtJournalV1};
 use risc0_zkvm::Receipt;
 
 /// **Compile-time guard: a `zk-prove` build must embed a real guest.**
@@ -51,6 +51,8 @@ const _: () = {
 pub enum VerifiedZkJournal {
     Inference(InferenceJournalV1),
     ZkCourt(ZkCourtJournalV1),
+    /// Tmail Anonymous Mode anchor-ownership proof (spec §A.4.3, guest mode 2).
+    TmailAnchor(TmailAnchorOwnsEphemeralV1),
 }
 
 /// Whether dev/test mock ZK receipts (`MOCKJ1:` / `MOCKZC1:`) and ZK-Court optimistic placeholders are allowed.
@@ -85,15 +87,57 @@ fn mock_zk_allowed() -> bool {
         )
 }
 
-fn decode_journal_bytes(bytes: &[u8]) -> anyhow::Result<VerifiedZkJournal> {
-    if let Ok(j) = bincode::deserialize::<InferenceJournalV1>(bytes) {
+/// Decode a **real receipt's** journal into its typed form.
+///
+/// # Journals are risc0 serde, not bincode
+///
+/// `env::commit` serializes with **risc0's word-aligned serde**, so a journal that `bincode` would
+/// write in 72 bytes arrives as 264 (each `u8` of a `[u8; 32]` becomes a 4-byte word). This
+/// function previously used `bincode::deserialize`, which is wrong in the worst possible way:
+/// bincode **succeeds** on those 264 bytes, consuming the first 72 and returning a struct full of
+/// garbage. It did not error — it returned a confidently wrong journal.
+///
+/// The consequence was not cosmetic. `consensus::compute_reward_for_block` reads
+/// `ZkCourtJournalV1::flops_u64` out of a verified journal and folds it into the block reward, so a
+/// real ZK-Court receipt would have contributed a nonsense FLOPs value to consensus. It stayed
+/// hidden because every ZK test in this repo uses `MOCKJ1:`/`MOCKZC1:` receipts, whose "journals"
+/// are bincode by construction — the mock path and the real path disagreed about the wire format
+/// and only the mock path was ever exercised.
+///
+/// # Length collisions are real, so every decode is round-tripped
+///
+/// Under risc0 serde `ZkCourtJournalV1` and [`TmailAnchorOwnsEphemeralV1`] are **both 264 bytes**
+/// (32·4 + 8 + 32·4 and 32·4 + 32·4 + 8). A plain "try each type in order" chain therefore reports
+/// whichever is listed first. Each candidate is re-serialized and compared against the original
+/// bytes, so a journal is only accepted as the type that reproduces it exactly.
+pub(crate) fn decode_journal_bytes(bytes: &[u8]) -> anyhow::Result<VerifiedZkJournal> {
+    fn round_trips<T: serde::Serialize + serde::de::DeserializeOwned>(
+        bytes: &[u8],
+    ) -> Option<T> {
+        let decoded: T = risc0_zkvm::serde::from_slice(bytes).ok()?;
+        let words = risc0_zkvm::serde::to_vec(&decoded).ok()?;
+        let mut re = Vec::with_capacity(words.len() * 4);
+        for w in &words {
+            re.extend_from_slice(&w.to_le_bytes());
+        }
+        if re == bytes { Some(decoded) } else { None }
+    }
+
+    if let Some(j) = round_trips::<InferenceJournalV1>(bytes) {
         return Ok(VerifiedZkJournal::Inference(j));
     }
-    if let Ok(j) = bincode::deserialize::<ZkCourtJournalV1>(bytes) {
+    if let Some(j) = round_trips::<TmailAnchorOwnsEphemeralV1>(bytes)
+        // The tag is checked, not merely deserialized: without this the struct is still a valid
+        // shape for arbitrary bytes and the discriminator would be decoration.
+        && j.journal_kind == nexus_protocol::TMAIL_ANCHOR_JOURNAL_KIND
+    {
+        return Ok(VerifiedZkJournal::TmailAnchor(j));
+    }
+    if let Some(j) = round_trips::<ZkCourtJournalV1>(bytes) {
         return Ok(VerifiedZkJournal::ZkCourt(j));
     }
     Err(anyhow::anyhow!(
-        "journal is neither InferenceJournalV1 nor ZkCourtJournalV1"
+        "journal is not a recognised TET journal type (expected risc0-serde encoding)"
     ))
 }
 
@@ -269,4 +313,10 @@ pub fn verify_and_extract_inference_journal_with_size(
         .decode()
         .map_err(|e| anyhow::anyhow!("Failed to decode inference journal: {e:?}"))?;
     Ok((journal, proof_size))
+}
+
+/// Test-only alias so guards can exercise the real decoder rather than a copy of it.
+#[cfg(test)]
+pub(crate) fn decode_journal_bytes_for_tests(bytes: &[u8]) -> anyhow::Result<VerifiedZkJournal> {
+    decode_journal_bytes(bytes)
 }
