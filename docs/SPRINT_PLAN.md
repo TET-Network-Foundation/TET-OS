@@ -45,7 +45,7 @@ Two numbering schemes ran in parallel from 2026-05-18: an infrastructure track i
 | **S5** | Tmail protocol — `/tet/v1/tmail` gossip, `TmailEnvelopeV1`, REST, store | ✅ *(fee/audit deferred)* | `9e9a4a7`, `4d3fc72` |
 | **S6** | Win95 shell + Basic Tmail UI | 🟡 | `1d3173f`, `356df5e`, `ad3fb3f`, `a3f2720`…`31299c3`. E2EE verified cross-region (CH→FI, 1.3 s). Shell is **tabbed**, not a window manager — no taskbar, no boot sequence, no sounds |
 | **S7** | Time-lock + Burn + Pin stake | 🟡 | **Ordered and scoped 2026-09-23** (burn → time-lock → pin). Burn and time-lock are consensus-free and ship in Phase 0; **Pin is deferred to Phase 1** — see [S7 detail](#s7--time-lock--burn--pin-detail). Gates marketing (locked decision #6, AT-3/AT-4) |
-| **S8** | Anonymous Mode — RISC0 guest, escrow, anchor audit | ⬜ | **Critical path.** Gates marketing (AT-5). Risk R1: never ship placeholder UI |
+| **S8** | Anonymous Mode — RISC0 guest, escrow, anchor audit | ⬜ | **Critical path.** Scoped 2026-09-24: anonymity is consensus-free and ships in Phase 0 (**AT-5(a)**); escrow + settle + slash go to Phase 1 (**AT-5(b)**). Gates marketing — see the [decision #6 amendment](#locked-decision-6--amended-2026-09-24). Risk R1: never ship placeholder UI |
 | **S9** | Files — upload, libp2p fetch codec, on-chain fee | ✅ | `dbfa7ab`, `bd98cdc`, `ed9b9bc` |
 | **S10** | Mini-apps — Calculator, Clock, Notes | ⬜ | AT-8 |
 | **S11** | QA matrix, public testnet smoke, ship candidate | ⬜ | AT-0…AT-9 |
@@ -441,6 +441,65 @@ until Pin lands in Phase 1.
 Locked decision #6 gates marketing on **AT-3 + AT-4 + AT-5** — time-lock, burn, anonymous. **AT-7
 (Pin) is not in that set.** Deferring Pin to Phase 1 costs the gate nothing, and the two features
 that do gate it (S7-1, S7-2) are the two that touch no consensus.
+
+
+## S8 — Anonymous Mode (detail)
+
+**Scoped 2026-09-24, read-only analysis before any code.** The anonymity itself is consensus-free;
+the 1 TET escrow is not. S8 splits on that line and AT-5 splits with it.
+
+| # | Item | Consensus? | Status | Ships in |
+|---|---|---|---|---|
+| **S8-1** | RISC0 guest mode 2 + `TmailAnchorOwnsEphemeralV1` + verifier | No | ⬜ | Phase 0 |
+| **S8-2** | Anonymous envelope (`ANONYMOUS_SENTINEL`, ephemeral signer) | No | ⬜ | Phase 0 |
+| **S8-3** | Client-side audit trail (re-derivation) | No | ⬜ | Phase 0 |
+| **S8-4** | Escrow + 24 h settle + slash (**AT-5(b)**) | **Yes** | ⛔ **deferred** | **Phase 1 genesis** |
+
+### What the analysis found
+
+**The one real foundation:** `TxV1::VerifyZkProof` already exists *and is appliable*
+(`ledger.rs:1731`), `zk_verifier` verifies real `risc0_zkvm::Receipt` bytes, and the zk image builds
+green since `2f3d267`. Everything else is missing: no `ANONYMOUS_SENTINEL`, no `anonymous.rs`, no
+`/tmail/audit/self` route, no escrow tree, no anonymous fee kind.
+
+**Every ZK test in the repo uses a mock receipt** (`MOCKJ1:` / `MOCKZC1:`). S8-1 is the first thing
+to depend on a real receipt verifying end to end, which is why it carries a real-receipt test with
+mocks disabled — and why it is first.
+
+**Two design defects found in the spec, both now fixed:**
+
+1. **The envelope struct implemented a different construction than the spec.**
+   `TmailAnonymous { ring_proof_b64, stealth_addr }` was ring-signatures-and-stealth-addresses;
+   §A.4.3 specifies anchor-ownership ZK. **Decided: the spec's design; the struct is deleted.**
+   Ring signatures and stealth addresses are ECC-based and therefore quantum-vulnerable, which is
+   contrary to TET's whole premise — a post-quantum chain should not have its privacy layer be the
+   one classical component.
+2. **The audit trail defeated its own unlinkability claim.** §A.4.4 stored
+   `tmail_anonymous_audit_v1:{anchor_wallet}` → `{ephemeral_id_hash, …}` in replicated ledger meta
+   and claimed third parties could not link ephemeral → anchor. An observer could take the
+   ephemeral off the wire, hash it, scan the rows and read the anchor out of the key — an unsalted
+   hash of a public value hides nothing. **Decided: client-side only**, re-derived from the anchor
+   seed via HKDF, nothing replicated; `HMAC(anchor_seed, eph_id)` and node-local if any store is
+   needed at all. §A.4.4 is rewritten, with the old design preserved as superseded.
+
+**Open, measured before S8-2:** Tmail envelopes ride gossipsub with `max_transmit_size` = **128 KiB**
+(`p2p.rs:439`), and receipts are serialized as plain `bincode` — no Groth16 or succinct compression
+anywhere in the repo. Whether a receipt fits inside the envelope decides the S8-2 design
+(inline vs announce-then-pull vs compressed proof), so it is measured in S8-1 before the envelope is
+designed.
+
+### Locked decision #6 — amended 2026-09-24
+
+The original locked decision reads: *"Marketing = **AT-3 + AT-4 + AT-5**"*.
+
+**Amendment.** Show HN requires **AT-3 + AT-4 + AT-5(a)** — time-lock, burn, and anonymity —
+**with disclosure that misuse deterrence (the 1 TET escrow) lands at Phase 1**. AT-5(b) stays red
+until then and the launch bar is unchanged: **launch requires AT-5(b)**.
+
+Recorded as an amendment rather than an edit, so the original and the reason both survive. The
+reason: AT-5(b) is not deferrable work that someone forgot, it is blocked on `PHASE_1_GENESIS_SPEC`
+§1 — the 24 h auto-settle *is* the wall-clock-in-apply defect, so shipping it early would ship the
+defect. Stake-free anonymity is accepted on **testnet only**.
 
 
 ## Superseded scope

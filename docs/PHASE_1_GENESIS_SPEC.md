@@ -8,6 +8,34 @@ is exactly one window to make them. Anything on this list that is missed stays b
 
 ---
 
+## 0. The §2 batch is growing — revisit the ceremony date after S8-3
+
+**Added 2026-09-24.** This list was written as a catalogue of things that *would* be nice to fix at
+a ceremony. It is turning into the critical path for shipping features.
+
+Three Phase 0 features now have a half that cannot ship without it:
+
+| Feature | Phase 0 half | Blocked half | Why blocked |
+|---|---|---|---|
+| **Pin** (S7-3) | — | the whole thing | `TxV1::TmailPin` is a new variant |
+| **Anonymous** (S8) | anonymity works, AT-5(a) | escrow + 24 h settle + slash, AT-5(b) | new variant **and** §1's wall-clock defect |
+| **Retention** (S7-0) | server-side rule ✅ | pin exemption | waits on Pin |
+
+Each was deferred here for a good individual reason. Together they mean the product ships with
+acceptance tests that are red by design and a marketing claim that needs a footnote.
+
+**The tension worth naming:** a flag-day `TxV1` upgrade is *cheapest right now* — the network is one
+seed and a handful of followers — and gets more expensive with every node that joins. But it is not
+available for the anonymous escrow, because that one's auto-settle **is** §1's wall-clock-in-apply
+defect; a flag day would ship the defect rather than route around it. So the escrow cannot jump the
+queue, and Pin jumping it alone buys little.
+
+**Action:** after S8-3 lands, revisit whether to bring the genesis ceremony forward rather than
+continue accumulating deferred halves. The question is not "is each deferral correct" — each one is
+— but "at what point does the batch cost more than the ceremony".
+
+---
+
 ## 1. Consensus change: apply must use `block.timestamp`, not `ledger_now_ms()`
 
 **This is the single most important Phase 1 consensus fix.**
@@ -106,6 +134,7 @@ These are all consensus- or schema-breaking and are cheap only at a ceremony.
 | **Consensus-route all remaining balance writes** | [§4 table](#4-direct-write-path-inventory), this doc §2.5 | Ten paths still move funds outside the block pipeline. Each needs a new `TxV1` variant or a client-signed settlement envelope, several need both |
 | **Stake / unstake / worker-bond as consensus txs** | [§4 table](#4-direct-write-path-inventory), `wallet.rs:261`, `ledger.rs:1113`, `ledger.rs:1171` | `TxV1` has **no** `Stake`, `Unstake` or `WorkerBond` variant — the nine are `SignerLink`, `FoundingMemberEnroll`, `Transfer`, `GenesisBridge`, `InitialAirdrop`, `FileFee`, `WorkerRegister`, `EnterpriseInference`, `VerifyZkProof`. Routing these through the mempool therefore needs new tx variants, which is a schema change |
 | **Per-plane libp2p keypairs** | [post-mortem 2026-09](./postmortems/2026-09-gossip-lost-subscriptions.md), this doc §2.4 | Changes every node's `PeerId` on at least two planes, so every published bootnode multiaddr must be reissued. Free at a ceremony, disruptive on a live network |
+| **`TxV1::AnonymousEscrow` (open / settle / slash)** | `SOVEREIGN_OS_PHASE0_SPEC.md` §A.4.5, `SPRINT_PLAN.md` § S8 | Anonymous Mode locks **1 TET** from the anchor into escrow per ephemeral. That is a balance move, so it needs a new `TxV1` variant — the same schema break as `TmailPin`. **It cannot be brought forward by a flag day**, because the 24 h auto-settle is §1's defect: "if `now > created_at + 24h` … → escrow → anchor" is `ledger_now_ms()` deciding a balance move, and an escrow row with a deadline is `VestLockV1`-shaped, read by the time-gated `locked_balance_micro` (`ledger.rs:4571`). Shipping it before §1 lands would add a second wall-clock consensus input, not remove one. Decided 2026-09-24 |
 | **`TxV1::TmailPin`** | `SOVEREIGN_OS_PHASE0_SPEC.md` Appendix C, `SPRINT_PLAN.md` §S7 | Tmail Pin is a 1_000 µTET fee (50% treasury / 50% burn). `TxV1` is `#[serde(tag = "kind")]` and blocks carry `Vec<SignedTxEnvelopeV1>` (`consensus.rs:81`), so a node on the current binary cannot **deserialize** a block containing a new variant — it fails before reaching the `apply_consensus_block_batch` catch-all. Adding it to a live chain is a flag-day upgrade for every node; free at a ceremony. Decided 2026-09-23 not to spend a flag day on it |
 | **Denomination naming** | `WHITEPAPER_v1.0_GAPS.md` §10.1 | "Stevemon" vs "micro-TET" is cosmetic in code but appears in the genesis hash payload |
 | **Per-block `state_root` checkpoints** | `BUG_block_9828_divergence_mystery.md` | Validation is tip-only today, so divergence surfaces at an arbitrary later block rather than the one that caused it. Changes what nodes exchange |

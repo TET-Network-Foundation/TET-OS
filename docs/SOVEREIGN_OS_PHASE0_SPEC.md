@@ -403,7 +403,40 @@ Anchor (A) ──fund──► Ephemeral (E) ──send Tmail──► Receiver
 
 **On send:** Gossip shows `sender_wallet_id = ANONYMOUS` + `anonymous.ephemeral_wallet_id` + ZK receipt — **not** anchor.
 
-### A.4.4 Anchor-only audit trail
+### A.4.4 Anchor-only audit trail — **client-side** (rewritten 2026-09-24)
+
+> **The previous design broke the property it existed to provide.** It stored
+> `tmail_anonymous_audit_v1:{anchor_wallet}` → `{ephemeral_id_hash, …}` in **ledger sled meta** and
+> then claimed *"Third party: cannot link ephemeral → anchor."* If that store is replicated, the
+> opposite is true: an observer takes the `ephemeral_wallet_id` off the wire, hashes it, scans the
+> audit rows, and reads the anchor straight out of the key. An unsalted hash of a public value is
+> not a hiding commitment. Preserved below as the superseded design.
+
+**The trail is regenerated, not stored.** Ephemerals are derived deterministically
+(§A.4.2: `ephemeral_sk = HKDF(anchor_seed, "tet-ephemeral-v1" || nonce || counter)`), so an anchor
+holding its seed can recompute every ephemeral it has ever produced by walking the counter. There
+is nothing to replicate, and therefore nothing to leak.
+
+| Store | Content |
+|-------|---------|
+| **Client (anchor device)** | Re-derives `ephemeral_id` for `counter = 0..n`; matches against its own sent history |
+| **Ledger** | **Nothing.** No anchor→ephemeral relation is written to any replicated store |
+| **Node-local (only if needed)** | `HMAC(anchor_seed, ephemeral_id)` as the key — never a bare hash, and never replicated |
+
+`GET /tmail/audit/self` is therefore **not** a ledger query. If it exists at all it serves a
+node-local store keyed as above, and a node that never saw the sends simply returns nothing.
+
+**Third party:** cannot link ephemeral → anchor — now true by construction, because the link exists
+only inside the anchor's seed.
+
+**Lawful anchor holder:** can prove their own ephemerals by re-deriving them (voluntary disclosure),
+which is strictly stronger evidence than a stored row: it demonstrates knowledge of the seed.
+
+**Cost, stated:** an anchor that loses its seed loses its audit trail. That is the same trade the
+wallet already makes, and the alternative is a replicated index that deanonymises every user.
+
+<details>
+<summary>Superseded design (pre-2026-09-24), preserved verbatim</summary>
 
 | Store | Content |
 |-------|---------|
@@ -413,6 +446,8 @@ Anchor (A) ──fund──► Ephemeral (E) ──send Tmail──► Receiver
 **Third party:** Cannot link ephemeral → anchor.
 
 **Lawful anchor holder:** Can prove their own ephemerals (voluntary disclosure).
+
+</details>
 
 ### A.4.5 Misuse prevention
 
@@ -749,7 +784,23 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 
 **AT-4 Burn:** Friend reads → message disappears from network inbox on both nodes (best-effort test).
 
-**AT-5 Anonymous:** Send with **1 TET** escrow (1M Stevemon); gossip hides anchor; anchor sees audit entry; third party cannot link.
+**AT-5 Anonymous — split into two halves (2026-09-24). (a) target · (b) ❌ RED until Phase 1.**
+
+**AT-5(a) — anonymity works.** Gossip hides the anchor: `sender_wallet_id = ANONYMOUS_SENTINEL`, the
+envelope is signed by the **ephemeral**, and a ZK receipt proves the ephemeral was derived from
+*some* anchor without revealing which. The anchor can re-derive its own ephemerals (§A.4.4). A third
+party cannot link ephemeral → anchor. **No stake involved.** This is the Phase 0 deliverable.
+
+**AT-5(b) — escrow-backed. ❌ fails until Phase 1.** The **1 TET** (1M Stevemon) escrow, the 24 h
+auto-settle and the ZK-Court slash are balance moves needing a new `TxV1` variant, and the timed
+settle is `PHASE_1_GENESIS_SPEC.md` §1's wall-clock-in-apply defect — so unlike Pin it cannot even
+be brought forward by a flag day without shipping that defect. Batched into
+[`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) §2.
+
+Guard: marked `#[ignore]` with its reason, like AT-7(b); it goes red on
+`cargo test --bin TET-Core -- --ignored`. **Until it passes, Anonymous Mode has no misuse
+deterrence** — anonymous sends cost nothing beyond the ordinary Tmail fee. Accepted on **testnet
+only**; launch requires AT-5(b).
 
 **AT-6 Files:** Upload file, share link, friend on second machine downloads via P2P when online.
 
