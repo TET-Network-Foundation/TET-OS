@@ -5,6 +5,12 @@
 **Post-quantum Layer 1 (ML-DSA) + AI-native workloads + hardware-adaptive consensus.**
 Built primarily in Rust (`tet-core`), with a Sovereign OS UI on libp2p.
 
+> **Your keys, your data, your device — TET only proves, never stores.**
+>
+> Secrets (passwords, personal data, biometric/neural data, private keys) live only on the user's
+> device. The chain holds public keys and proofs. Any design that would put a secret — or anything
+> derived from one that could re-identify it — on chain or in replicated state is rejected.
+
 > ⚠️ **Phase 0 — public testnet / developer preview.**
 > Active development toward 2026-09-15 ship target.
 > See [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./docs/SOVEREIGN_OS_PHASE0_SPEC.md) for the Phase 0 plan

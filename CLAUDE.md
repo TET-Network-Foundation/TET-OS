@@ -21,6 +21,38 @@ enqueueing a variant it does not handle does not silently drop the write — it 
 reject the whole block**. `TxV1::GenesisBridge` is exactly this case: present in the enum, signed
 and verified by its handler, and absent from the apply match.
 
+## Design principle — check every new replicated field against it
+
+> **Your keys, your data, your device — TET only proves, never stores.**
+
+Secrets (passwords, personal data, biometric/neural data, private keys) live only on the user's
+device. The chain holds only public keys and proofs. **Any design that would put a secret — or
+anything derived from one that could re-identify it — on chain or in replicated state is rejected.**
+
+**Review rule: before adding any new on-chain or replicated field, check it against this.** Ask what
+an observer holding the whole replicated state can recover, not what the field is called. The
+failure mode is never a field named `private_key`; it is a derivative that turns out to be
+invertible or linkable.
+
+Three decisions this week already turned on it, all of which looked fine until that question was
+asked:
+
+1. **Client-side audit trail (S8, spec §A.4.4).** The spec stored
+   `tmail_anonymous_audit_v1:{anchor_wallet}` → `{ephemeral_id_hash, …}` in replicated ledger meta
+   and claimed third parties could not link ephemeral → anchor. They could: take the ephemeral off
+   the wire, hash it, scan the rows, read the anchor out of the key. **An unsalted hash of a public
+   value is not a hiding commitment.** Now regenerated client-side from the anchor seed; nothing
+   replicated.
+2. **Ring signatures / stealth addresses removed (spec §A.1.2).** ECC-based, so quantum-vulnerable —
+   the privacy layer would have been the one classical component in a post-quantum chain.
+3. **Groth16 wrapping rejected (spec §A.4.3).** Pairing-based on BN254. Compressing a hash-based
+   STARK into it would put anonymity on an assumption a quantum adversary breaks, while the rest of
+   the chain still stands. Plus a trusted setup, which contradicts the premise twice.
+
+Note what 2 and 3 have in common: the tempting option was the *convenient* one — smaller proofs, a
+simpler envelope — and the principle is what made the cost visible. Expect it to argue against
+convenience most of the time it applies.
+
 ## Devlog
 The public site repo is at ~/site (github.com/Nexus-Network-Foundation/site).
 At the end of every session where something shipped, was fixed, or was found:

@@ -30,6 +30,20 @@
 
 ## 1. Introduction
 
+### 1.0 Design principle
+
+> **Your keys, your data, your device — TET only proves, never stores.**
+
+Secrets — passwords, personal data, biometric and neural data, private keys — live **only on the
+user's device**. The chain holds public keys and proofs, nothing else. Any design that would put a
+secret on chain or in replicated state is rejected, and so is any design that would put something
+*derived* from a secret there if that derivative could re-identify it.
+
+The second half is the one that bites in practice. A hash of a public value is not a hiding
+commitment; an index keyed by a stable identifier deanonymises everyone in it; a proof system is
+only as private as its weakest assumption. The principle is therefore a **review rule**, applied
+before any new on-chain or replicated field, not a slogan.
+
 Cloud AI infrastructure today is not a technical necessity; it is a capital structure. A small set of operators price inference, control availability, and impose correlated failure on every downstream application. Blockchains that treat all nodes as identical hardware competitors reproduce the same concentration under a different scarcity token (ASICs or stake).
 
 TET Network responds at the protocol layer with a single premise: **compute is energy**. Every device that draws electricity can, in principle, contribute verified work or network maintenance. The protocol does not force smartphones to compete under data-center rules. **Context-Aware Adaptive Consensus (CAAC)** assigns roles from hardware reality: high-throughput nodes run **Proof of Compute (PoC)**; constrained edge nodes run **Proof of Relay (PoR)**.
