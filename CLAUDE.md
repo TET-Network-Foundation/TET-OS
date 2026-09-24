@@ -41,6 +41,39 @@ This is not theoretical. Two defects found on 2026-09-24 had both survived for m
 The tell in both cases was the same: a green suite over a code path that had never executed with
 real inputs. When a mock exists, ask what it is standing in for and whether anything tests that.
 
+## When a guard passes, ask what else could have made it pass
+
+Caches, fallbacks, retries and default values are the usual culprits. **Disable the fallback inside
+the guard** — clear the cache, remove the retry, unset the default — so the test can only pass
+through the path it names.
+
+Twice in one week a guard here was true for the wrong reason, and both times a *fallback* was
+answering:
+
+- The AT-4 burn guards passed with ciphertext removal disabled, because the fixture had already
+  expired and `get_inbox` filtered it out on TTL.
+- The registry flood guard passed with epoch gating removed, because the **memo cache** still held
+  the honest root; recomputation would have disagreed. It now clears the cache before asserting,
+  and asserts the cache is too small to hold every root.
+
+The negative control is what caught both. A guard that cannot fail is worse than no guard, because
+it is counted.
+
+## Bound every config- or input-driven loop, and make the bound observable
+
+**Every loop or scan driven by configuration or input needs an explicit upper bound, and the
+effective bound must be observable — logged or exposed — not silently truncated.**
+
+`accepts_anon_root` walked `window_ms / epoch_ms` epochs and built a Merkle tree per miss. With a
+1 ms epoch that is 3.6 million tree builds per verification: a self-inflicted denial of service
+that a *smaller* configured value makes *worse*, which is the direction nobody checks. It is now
+capped at 128 epochs, and `GET /tmail/anon/root` reports the effective window
+(`min(window, 128 * epoch)`) so a configuration whose real window is shorter than its setting is
+visible rather than a surprise during an incident.
+
+Silent truncation is the specific failure to avoid: a bound nobody can see is a bound nobody can
+debug.
+
 ## Design principle — check every new replicated field against it
 
 > **Your keys, your data, your device — TET only proves, never stores.**
