@@ -118,7 +118,7 @@ consensus each feature touches, which is not the order the spec presents them in
 | # | Item | Consensus? | Status | Ships in |
 |---|---|---|---|---|
 | **S7-1** | Burn-after-read (AT-4) | No | ✅ | Phase 0 — [live evidence](#s7-1-at-4-verified-live-2026-09-23) |
-| **S7-2** | Time-lock (AT-3) | No | ✅ | Phase 0 — [detail](#s7-2-scheduled-release-2026-09-23) |
+| **S7-2** | Time-lock (AT-3) | No | ✅ | Phase 0 — [detail](#s7-2-scheduled-release-2026-09-23); **AT-3 passes seed↔follower** |
 | **S7-0** | Server-side 5-message retention | No | ✅ | Phase 0 — [detail](#s7-0-retention-is-a-store-rule-now-2026-09-23) |
 | **S7-3** | Pin stake (AT-7) | **Yes** | ⛔ **deferred** | **Phase 1 genesis** |
 
@@ -292,8 +292,34 @@ S7-1 redeploy, so the old container produced blocks throughout the ~8 min compil
 
 AT-3 re-run against the deployed seed over an SSH tunnel to its loopback REST: **17/17 green**,
 including the raw-body check that the ciphertext appears nowhere in the response, and all three
-controls. **Both URLs pointed at the seed**, so the "both nodes" steps there are self-checks; the
-genuine two-node evidence is the local pair above. A seed↔follower AT-3 has not been run.
+controls. Both URLs pointed at the seed for that run, so its "both nodes" steps were self-checks —
+closed by the cross-network run below.
+
+**Cross-network AT-3, follower → seed, 17/17 green (2026-09-24).** Sent **from the follower**, not
+the seed, for the same reason AT-4 was: a seed-submitted pass never exercises the follower path.
+The follower first reached lag 0 against the public chain (height 14098, `state_root
+0xbff8a79e9525785ef5`, identical on both) so gossip was genuinely established.
+
+| Step | Result |
+|---|---|
+| Scheduled envelope sent **on the follower** | `202` |
+| Listed as `locked` on **both** follower and seed | 693 ms over the public network |
+| `e2ee` served by neither | withheld on both |
+| `release_at_ms` + `locked_note` on both | disclosure present |
+| Ciphertext absent from **both** raw response bodies | clean |
+| After release passed | **both unlocked in 433 ms** |
+| Receiver decrypts **via the seed** | plaintext matches |
+| Three controls | all refused as expected |
+
+The seed's own log independently shows the envelope arriving over gossip from the follower, while
+the seed's REST served it with no payload until release:
+
+```
+[P2P] ✅ TMAIL ENVELOPE STORED msg_id=5bf34b8c-9fb3-4d15-bfb4-f14d988e8746
+```
+
+So withholding holds on a node that only ever saw the message over the wire, which is the case that
+matters: the seed had no part in composing it and no reason to treat it specially.
 
 **Deferred to Phase 0.1, as the spec already directs:**
 
