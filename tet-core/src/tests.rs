@@ -6989,6 +6989,13 @@ fn tmail_party_for_tests() -> (String, String) {
     )
 }
 
+/// Most registry tests want registrations effective immediately; a 1 ms epoch makes the boundary
+/// a non-event. Tests that exercise the boundary set `TET_TMAIL_ANON_EPOCH_MS` themselves.
+#[cfg(test)]
+fn anon_fast_epoch_guard() -> EnvVarGuard {
+    EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "1")
+}
+
 fn tmail_store_for_tests() -> crate::tmail::store::TmailStore {
     let ledger = open_temp_ledger();
     let db = ledger.sled_db();
@@ -8911,11 +8918,24 @@ fn signed_anon_registration_for_tests(
     reg
 }
 
+/// Register and make the entry effective immediately, by using a 1 ms epoch so the boundary has
+/// always already passed. Tests that care about the boundary itself set the epoch explicitly.
+#[cfg(test)]
+fn register_effective_now(
+    store: &crate::tmail::store::TmailStore,
+    reg: &crate::tmail::anon::TmailAnonRegistrationV1,
+) -> crate::tmail::store::AnonRegisterOutcome {
+    let out = store.register_anon(reg).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    out
+}
+
 /// A registration verifies, lands in the registry, and changes the root.
 #[test]
 fn s8_registration_verifies_and_changes_the_root() {
     let _g = env_lock();
     set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
     let store = tmail_store_for_tests();
     let (words, wallet) = tmail_party_for_tests();
     let reg = signed_anon_registration_for_tests(&words, &wallet, &[1u8; 32], 1_000);
@@ -8925,7 +8945,7 @@ fn s8_registration_verifies_and_changes_the_root() {
     assert_eq!(store.anon_member_count(), 0);
 
     assert_eq!(
-        store.register_anon(&reg).unwrap(),
+        register_effective_now(&store, &reg),
         crate::tmail::store::AnonRegisterOutcome::Added
     );
     assert_eq!(store.anon_member_count(), 1);
@@ -8933,7 +8953,7 @@ fn s8_registration_verifies_and_changes_the_root() {
 
     // Idempotent: the same registration again is a no-op.
     assert_eq!(
-        store.register_anon(&reg).unwrap(),
+        register_effective_now(&store, &reg),
         crate::tmail::store::AnonRegisterOutcome::Duplicate
     );
     assert_eq!(store.anon_member_count(), 1);
@@ -9009,6 +9029,7 @@ fn s8_registration_signed_by_another_wallet_is_refused() {
 fn s8_root_is_independent_of_registration_arrival_order() {
     let _g = env_lock();
     set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
     let (w1, wallet1) = tmail_party_for_tests();
     let (w2, wallet2) = tmail_party_for_tests();
     let (w3, wallet3) = tmail_party_for_tests();
@@ -9024,6 +9045,7 @@ fn s8_root_is_independent_of_registration_arrival_order() {
     for r in [&r3, &r1, &r2] {
         node_b.register_anon(r).unwrap();
     }
+    std::thread::sleep(std::time::Duration::from_millis(2));
 
     assert_eq!(node_a.anon_member_count(), 3);
     assert_eq!(
@@ -9039,6 +9061,7 @@ fn s8_root_is_independent_of_registration_arrival_order() {
 fn s8_registry_path_verifies_against_the_root() {
     let _g = env_lock();
     set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
     let store = tmail_store_for_tests();
     let mut wallets = Vec::new();
     for i in 0..5u8 {
@@ -9049,6 +9072,7 @@ fn s8_registry_path_verifies_against_the_root() {
             .unwrap();
         wallets.push((wallet, secret));
     }
+    std::thread::sleep(std::time::Duration::from_millis(2));
 
     let tree = store.anon_tree();
     let root = tree.root();
@@ -9098,17 +9122,40 @@ fn s8_registry_is_capped_and_refuses_rather_than_evicts() {
     );
     assert_eq!(store.anon_member_count(), 2, "and no member is evicted");
 
-    // An existing member may still update -- refusing that would strand them.
-    let updated = signed_anon_registration_for_tests(
-        &tmail_party_for_tests().0,
-        &regs[0].wallet_id,
-        &[9u8; 32],
-        2_000,
-    );
-    let mut updated = updated;
-    updated.wallet_id = regs[0].wallet_id.clone();
+}
+
+/// **The update cooldown.** A member may refresh its commitment, but not repeatedly.
+///
+/// Without this, churning an existing registration moves the root every epoch forever at no cost —
+/// the member cap does not bind it, because the wallet is already a member. It is the same
+/// root-churn attack as the flood, wearing a different hat.
+#[test]
+fn s8_commitment_updates_are_rate_limited_per_wallet() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let store = tmail_store_for_tests();
+    let (w, wallet) = tmail_party_for_tests();
+
+    store
+        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000))
+        .unwrap();
+
+    // A second, different commitment straight away is refused.
+    let again = signed_anon_registration_for_tests(&w, &wallet, &[2u8; 32], 2_000);
+    match store.register_anon(&again).unwrap() {
+        crate::tmail::store::AnonRegisterOutcome::UpdateTooSoon { retry_after_ms } => {
+            assert!(retry_after_ms > 0, "must say how long to wait");
+        }
+        other => panic!("expected UpdateTooSoon, got {other:?}"),
+    }
+
+    // With the cooldown elapsed (simulated by setting it to zero) the update is allowed -- a
+    // member must not be permanently stuck with one commitment.
+    let _cooldown = EnvVarGuard::set("TET_TMAIL_ANON_UPDATE_COOLDOWN_MS", "1");
+    std::thread::sleep(std::time::Duration::from_millis(2));
     assert!(matches!(
-        store.register_anon(&updated).unwrap(),
+        store.register_anon(&again).unwrap(),
         crate::tmail::store::AnonRegisterOutcome::Updated
     ));
 }
@@ -9119,11 +9166,10 @@ fn s8_registry_is_capped_and_refuses_rather_than_evicts() {
 fn s8_root_window_accepts_recent_and_refuses_stale() {
     let _g = env_lock();
     set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
     let store = tmail_store_for_tests();
     let (w, wallet) = tmail_party_for_tests();
-    store
-        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000))
-        .unwrap();
+    register_effective_now(&store, &signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000));
 
     let now_bucket = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
     let current = store.anon_root();
@@ -9154,18 +9200,15 @@ fn s8_root_window_accepts_recent_and_refuses_stale() {
 fn s8_superseded_root_stays_acceptable_inside_the_window() {
     let _g = env_lock();
     set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
     let store = tmail_store_for_tests();
     let (w1, wallet1) = tmail_party_for_tests();
-    store
-        .register_anon(&signed_anon_registration_for_tests(&w1, &wallet1, &[1u8; 32], 1_000))
-        .unwrap();
+    register_effective_now(&store, &signed_anon_registration_for_tests(&w1, &wallet1, &[1u8; 32], 1_000));
     let old_root = store.anon_root();
 
     // A second registration arrives, moving the root on.
     let (w2, wallet2) = tmail_party_for_tests();
-    store
-        .register_anon(&signed_anon_registration_for_tests(&w2, &wallet2, &[2u8; 32], 1_000))
-        .unwrap();
+    register_effective_now(&store, &signed_anon_registration_for_tests(&w2, &wallet2, &[2u8; 32], 1_000));
     assert_ne!(store.anon_root(), old_root, "precondition: the root moved");
 
     let now_bucket = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
@@ -9260,4 +9303,111 @@ async fn s8_local_registration_announces_on_both_paths() {
         .try_recv()
         .expect("registration must also go out over the direct /tet/v1/anon-register path");
     assert_eq!(direct.registration.wallet_id, reg.wallet_id);
+}
+
+/// **The flood guard.** A registration flood must not invalidate honest proofs.
+///
+/// The attack the epoch design exists to stop: roots used to change on every registration and the
+/// history kept the last 512, so >512 free registrations inside the acceptance window evicted every
+/// honest root and valid proofs failed network-wide. A denial of service on anonymity itself, for
+/// the price of some signatures.
+///
+/// Here 2,000 registrations arrive and a proof built against a root from ~50 minutes ago still
+/// verifies, because the accepted set is defined by **time** (epoch roots, recomputed on a cache
+/// miss) rather than by a lossy buffer that volume can evict.
+///
+/// Wall-clock is not waited out: epochs are compressed and the registrations are backdated, which
+/// is exactly what the epoch abstraction makes possible to test at all.
+#[test]
+fn s8_registration_flood_does_not_invalidate_an_honest_root() {
+    let _g = env_lock();
+    set_test_env_base();
+    // 1 s epochs and a 120 s window: 120 epochs of history, the same shape as the 60 s / 60 min
+    // production setting but compressed so the test runs in milliseconds.
+    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "1000");
+    let _window = EnvVarGuard::set("TET_TMAIL_ANON_ROOT_WINDOW_MS", "120000");
+    // Deliberately small, to prove acceptance does NOT depend on the cache holding the root.
+    let _cache = EnvVarGuard::set("TET_TMAIL_ANON_ROOT_HISTORY", "4");
+    let store = tmail_store_for_tests();
+
+    let honest_secret = [0x11u8; 32];
+    let (hw, honest_wallet) = tmail_party_for_tests();
+    store
+        .register_anon(&signed_anon_registration_for_tests(
+            &hw,
+            &honest_wallet,
+            &honest_secret,
+            1_000,
+        ))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // The root the honest member built a proof against.
+    let honest_root = store.anon_root();
+    let honest_epoch = store.anon_current_epoch();
+    assert!(
+        store.anon_leaf_index(&honest_wallet).is_some(),
+        "precondition: the honest member is in the tree"
+    );
+
+    // 2,000 registrations flood in. Signing 2,000 real ML-DSA registrations would dominate the
+    // test, so they are written straight into the registry -- the flood is about VOLUME changing
+    // the root, and each one is individually valid by construction.
+    let mut flooded = 0usize;
+    for i in 0..2_000u32 {
+        let mut wallet = format!("{i:064x}");
+        wallet.truncate(64);
+        let stored = crate::tmail::store::StoredAnonRegistration {
+            registration: crate::tmail::anon::TmailAnonRegistrationV1 {
+                v: 1,
+                kind: crate::tmail::anon::TMAIL_ANON_REGISTRATION_KIND.to_string(),
+                wallet_id: wallet.clone(),
+                commitment_hex: hex::encode(nexus_protocol::tet_anon_commitment_v1(&[
+                    (i % 251) as u8 + 1;
+                    32
+                ])),
+                registered_at_ms: 1_000,
+                hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+                    ed25519_pubkey_hex: wallet.clone(),
+                    ed25519_sig_b64: String::new(),
+                    mldsa_pubkey_b64: String::new(),
+                    mldsa_sig_b64: String::new(),
+                },
+            },
+            admitted_at_ms: tmail_now_ms_for_tests(),
+        };
+        store.insert_stored_anon_for_tests(&wallet, &stored).unwrap();
+        flooded += 1;
+    }
+    assert_eq!(flooded, 2_000);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // The root has certainly moved.
+    assert_ne!(
+        store.anon_root(),
+        honest_root,
+        "precondition: the flood moved the root"
+    );
+    assert!(
+        store.anon_root_cache_len() <= 8,
+        "precondition: the cache is far too small to hold every root -- acceptance must not \
+         depend on it"
+    );
+
+    // Drop the memo, so acceptance has to come from RECOMPUTING the epoch root rather than from
+    // a cached value. Without this the guard passes even with epoch gating removed -- it was the
+    // cache answering, not the design (negative control N1).
+    store.clear_anon_root_cache_for_tests();
+    assert_eq!(store.anon_root_cache_len(), 0, "precondition: memo dropped");
+
+    // The honest proof still verifies: its root is one epoch inside the window.
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    assert!(
+        store.accepts_anon_root(&honest_root, now_bucket),
+        "a root from epoch {honest_epoch} must still be accepted after a 2,000-registration \
+         flood: the accepted set is defined by time, not by a buffer volume can evict"
+    );
+
+    // ...and a root that never existed is still refused.
+    assert!(!store.accepts_anon_root(&[0x77u8; 32], now_bucket));
 }

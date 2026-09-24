@@ -313,18 +313,25 @@ pub async fn post_tmail_anon_register(
         Ok(outcome) => {
             let tag = format!("{outcome:?}").to_lowercase();
             let full = matches!(outcome, crate::tmail::store::AnonRegisterOutcome::Full(_));
+            let too_soon = matches!(
+                outcome,
+                crate::tmail::store::AnonRegisterOutcome::UpdateTooSoon { .. }
+            );
             let status = if full {
                 StatusCode::INSUFFICIENT_STORAGE
+            } else if too_soon {
+                StatusCode::TOO_MANY_REQUESTS
             } else {
                 StatusCode::ACCEPTED
             };
             (
                 status,
                 Json(serde_json::json!({
-                    "ok": !full,
+                    "ok": !full && !too_soon,
                     "wallet_id": reg.wallet_id.trim().to_ascii_lowercase(),
                     "outcome": tag,
                     "members": state.tmail.anon_member_count(),
+                    "effective_from_epoch": state.tmail.anon_current_epoch() + 1,
                     "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
                 })),
             )
@@ -347,7 +354,9 @@ pub async fn get_tmail_anon_root(State(state): State<RestState>) -> Response {
             "merkle_root": hex::encode(tree.root()),
             "members": state.tmail.anon_member_count(),
             "depth": nexus_protocol::TET_ANON_MERKLE_DEPTH,
-            "roots_remembered": state.tmail.anon_root_history_len(),
+            "epoch": state.tmail.anon_current_epoch(),
+            "roots_cached": state.tmail.anon_root_cache_len(),
+            "root_window_ms": state.tmail.anon_effective_window_ms(),
             "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
         })),
     )

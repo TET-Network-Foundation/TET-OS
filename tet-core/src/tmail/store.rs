@@ -46,8 +46,47 @@ const DEFAULT_ANON_MAX_MEMBERS: usize = 50_000;
 /// the measured margin; see `SPRINT_PLAN.md` § S8 for the numbers.
 const DEFAULT_ANON_ROOT_WINDOW_MS: u64 = 60 * 60 * 1000;
 
-/// Cap on remembered roots. One entry per root *change*, not per registration.
+/// Cap on cached epoch roots. A backstop on memory, **not** a correctness bound — see
+/// [`TmailStore::accepts_anon_root`], where an uncached epoch root is recomputed rather than
+/// treated as unknown.
 const DEFAULT_ANON_ROOT_HISTORY: usize = 512;
+
+/// Epoch length for registry roots: 60 s.
+///
+/// # Why roots are epoch-based and not per-registration
+///
+/// The first design recorded a new root on every registration and kept the last 512. Registration
+/// is free, so an attacker could push more than 512 registrations inside the acceptance window and
+/// evict every honest root from the history — valid proofs would then fail, network-wide, for the
+/// cost of some signatures. A denial of service on anonymity itself.
+///
+/// With epochs the number of roots is bounded by **time**, not by registration volume: 60 per hour
+/// however many registrations arrive. A flood changes what the *next* epoch's root will be and
+/// nothing else.
+///
+/// Registrations are admitted to the store immediately and enter the **tree** at the next epoch
+/// boundary. A pleasant side effect: two nodes holding the same registrations converge on the same
+/// root at the boundary, instead of chasing each other through a sequence of per-registration
+/// roots that may never coincide.
+const DEFAULT_ANON_EPOCH_MS: u64 = 60_000;
+
+/// Hard cap on how many epoch roots a single acceptance check will compute.
+///
+/// Acceptance walks back epoch by epoch, and each miss builds a Merkle tree. Without a cap the
+/// work is `window_ms / epoch_ms`, which a misconfiguration turns into millions of tree builds per
+/// verification — a self-inflicted denial of service, and one that a *smaller* `epoch_ms` makes
+/// worse rather than better. With the defaults (60 min / 60 s) the walk is 60 epochs.
+///
+/// The effective window is therefore `min(window_ms, ANON_MAX_ROOT_SCAN * epoch_ms)`, reported by
+/// [`TmailStore::anon_effective_window_ms`] so a shortfall is visible rather than surprising.
+const ANON_MAX_ROOT_SCAN: u64 = 128;
+
+/// One commitment update per wallet per 24 h.
+///
+/// Without this, churning an existing registration is an unmetered way to move the root every
+/// epoch forever, which is the same attack wearing a different hat — the member cap does not bind
+/// it because the wallet is already a member.
+const DEFAULT_ANON_UPDATE_COOLDOWN_MS: u64 = 24 * 60 * 60 * 1000;
 
 /// Tombstone marker written into `tmail_by_msg_id_v1` when a message is burned. The suffix is the
 /// original entry's expiry in ms, so `prune_expired` can reap tombstones instead of growing a tree
@@ -90,10 +129,9 @@ pub struct TmailStore {
     by_msg_id: sled::Tree,
     keys: sled::Tree,
     anon_registry: sled::Tree,
-    /// `(root, first_seen_ms)`, newest last. In memory: a restart drops it, after which only the
-    /// current root is accepted until the registry changes again. That is a liveness cost measured
-    /// in one proof, not a correctness problem.
-    anon_roots: std::sync::Mutex<Vec<([u8; 32], u64)>>,
+    /// Memoised `(epoch, root)`. Purely a cache — a miss is recomputed from the registry, so
+    /// losing it (restart, eviction, flood) costs time and never acceptance.
+    anon_roots: std::sync::Mutex<Vec<(u64, [u8; 32])>>,
 }
 
 fn now_ms() -> u64 {
@@ -493,6 +531,16 @@ impl TmailStore {
 // Anonymity-set registry (spec §A.4.3).
 // ---------------------------------------------------------------------------
 
+/// What the registry stores: the signed registration plus **our** admission time.
+///
+/// `registered_at_ms` inside the registration is chosen by the sender and cannot be trusted for
+/// epoch placement or rate limiting; `admitted_at_ms` is this node's own clock.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoredAnonRegistration {
+    pub registration: crate::tmail::anon::TmailAnonRegistrationV1,
+    pub admitted_at_ms: u64,
+}
+
 /// Outcome of admitting a registration, so callers can log and respond without re-deriving it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnonRegisterOutcome {
@@ -506,6 +554,8 @@ pub enum AnonRegisterOutcome {
     Stale,
     /// Registry is at its member cap and this is a new wallet.
     Full(usize),
+    /// This wallet updated its commitment too recently.
+    UpdateTooSoon { retry_after_ms: u64 },
 }
 
 impl TmailStore {
@@ -517,14 +567,36 @@ impl TmailStore {
         env_u64("TET_TMAIL_ANON_ROOT_WINDOW_MS", DEFAULT_ANON_ROOT_WINDOW_MS)
     }
 
-    fn anon_root_history() -> usize {
+    fn anon_root_cache_cap() -> usize {
         env_usize("TET_TMAIL_ANON_ROOT_HISTORY", DEFAULT_ANON_ROOT_HISTORY)
+    }
+
+    fn anon_epoch_ms() -> u64 {
+        env_u64("TET_TMAIL_ANON_EPOCH_MS", DEFAULT_ANON_EPOCH_MS)
+    }
+
+    fn anon_update_cooldown_ms() -> u64 {
+        env_u64(
+            "TET_TMAIL_ANON_UPDATE_COOLDOWN_MS",
+            DEFAULT_ANON_UPDATE_COOLDOWN_MS,
+        )
+    }
+
+    /// Epoch index for a wall-clock instant. Node-local Tmail policy, not consensus.
+    pub fn anon_epoch_index(now_ms: u64) -> u64 {
+        now_ms / Self::anon_epoch_ms()
+    }
+
+    pub fn anon_current_epoch(&self) -> u64 {
+        Self::anon_epoch_index(now_ms())
     }
 
     /// Admit a (already signature-verified) registration.
     ///
     /// Callers MUST have run [`crate::tmail::anon::verify_tmail_anon_registration_v1`]. Both the
-    /// local and the gossip path go through here, so neither can be weaker than the other.
+    /// local and the receive paths go through here, so neither can be weaker than the other.
+    ///
+    /// The registration is stored now and enters the Merkle tree at the **next epoch boundary**.
     pub fn register_anon(
         &self,
         reg: &crate::tmail::anon::TmailAnonRegistrationV1,
@@ -533,16 +605,29 @@ impl TmailStore {
         if !is_wallet_id_64hex(&wallet) {
             return Err(TmailStoreError::InvalidReceiver);
         }
-        let existing = self.get_anon_registration(&wallet);
+        let now = now_ms();
+        let existing = self.get_stored_anon(&wallet);
         let outcome = match existing {
             Some(prev) => {
-                if prev.commitment_hex.eq_ignore_ascii_case(&reg.commitment_hex)
-                    && prev.registered_at_ms == reg.registered_at_ms
+                if prev
+                    .registration
+                    .commitment_hex
+                    .eq_ignore_ascii_case(&reg.commitment_hex)
+                    && prev.registration.registered_at_ms == reg.registered_at_ms
                 {
                     return Ok(AnonRegisterOutcome::Duplicate);
                 }
-                if prev.registered_at_ms > reg.registered_at_ms {
+                if prev.registration.registered_at_ms > reg.registered_at_ms {
                     return Ok(AnonRegisterOutcome::Stale);
+                }
+                // Cooldown is measured on OUR admission clock, not the sender's claimed
+                // `registered_at_ms`, which they choose freely.
+                let cooldown = Self::anon_update_cooldown_ms();
+                let elapsed = now.saturating_sub(prev.admitted_at_ms);
+                if elapsed < cooldown {
+                    return Ok(AnonRegisterOutcome::UpdateTooSoon {
+                        retry_after_ms: cooldown - elapsed,
+                    });
                 }
                 AnonRegisterOutcome::Updated
             }
@@ -554,41 +639,49 @@ impl TmailStore {
                 AnonRegisterOutcome::Added
             }
         };
-        let val = serde_json::to_vec(reg).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
+        let stored = StoredAnonRegistration {
+            registration: reg.clone(),
+            admitted_at_ms: now,
+        };
+        let val = serde_json::to_vec(&stored).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
         self.anon_registry.insert(wallet.as_bytes(), val)?;
-        self.note_anon_root();
         Ok(outcome)
+    }
+
+    pub fn get_stored_anon(&self, wallet_id: &str) -> Option<StoredAnonRegistration> {
+        let w = wallet_id.trim().to_ascii_lowercase();
+        let v = self.anon_registry.get(w.as_bytes()).ok().flatten()?;
+        serde_json::from_slice(&v).ok()
     }
 
     pub fn get_anon_registration(
         &self,
         wallet_id: &str,
     ) -> Option<crate::tmail::anon::TmailAnonRegistrationV1> {
-        let w = wallet_id.trim().to_ascii_lowercase();
-        let v = self.anon_registry.get(w.as_bytes()).ok().flatten()?;
-        serde_json::from_slice(&v).ok()
+        self.get_stored_anon(wallet_id).map(|s| s.registration)
     }
 
     pub fn anon_member_count(&self) -> usize {
         self.anon_registry.len()
     }
 
-    /// Leaves in canonical order: **sorted by wallet id ascending**.
+    /// Leaves effective for `epoch`, in canonical order (**wallet id ascending**).
     ///
-    /// Leaf order is the Merkle index, so this ordering is consensus-in-miniature: two nodes with
-    /// identical registrations must produce identical roots or membership proofs stop verifying
-    /// across nodes. sled iterates keys in lexicographic order, which for lowercase-hex wallet ids
-    /// is exactly that.
-    pub fn anon_leaves(&self) -> Vec<[u8; 32]> {
+    /// A registration admitted during epoch `e` is included from epoch `e + 1`. Leaf order is the
+    /// Merkle index, so this ordering is consensus-in-miniature: two nodes with the same
+    /// registrations must produce the same root or membership proofs stop verifying across nodes.
+    /// sled iterates keys lexicographically, which for lowercase-hex wallet ids is exactly that.
+    pub fn anon_leaves_for_epoch(&self, epoch: u64) -> Vec<[u8; 32]> {
         let mut out = Vec::new();
         for item in self.anon_registry.iter() {
             let Ok((_k, v)) = item else { continue };
-            let Ok(reg) =
-                serde_json::from_slice::<crate::tmail::anon::TmailAnonRegistrationV1>(&v)
-            else {
+            let Ok(stored) = serde_json::from_slice::<StoredAnonRegistration>(&v) else {
                 continue;
             };
-            let Ok(bytes) = hex::decode(reg.commitment_hex.trim()) else {
+            if Self::anon_epoch_index(stored.admitted_at_ms) >= epoch {
+                continue;
+            }
+            let Ok(bytes) = hex::decode(stored.registration.commitment_hex.trim()) else {
                 continue;
             };
             if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
@@ -598,12 +691,18 @@ impl TmailStore {
         out
     }
 
-    /// Index of a wallet's leaf in canonical order, for building its authentication path.
-    pub fn anon_leaf_index(&self, wallet_id: &str) -> Option<usize> {
+    /// Index of a wallet's leaf within `epoch`'s tree, for building its authentication path.
+    pub fn anon_leaf_index_for_epoch(&self, wallet_id: &str, epoch: u64) -> Option<usize> {
         let target = wallet_id.trim().to_ascii_lowercase();
         let mut i = 0usize;
         for item in self.anon_registry.iter() {
-            let Ok((k, _v)) = item else { continue };
+            let Ok((k, v)) = item else { continue };
+            let Ok(stored) = serde_json::from_slice::<StoredAnonRegistration>(&v) else {
+                continue;
+            };
+            if Self::anon_epoch_index(stored.admitted_at_ms) >= epoch {
+                continue;
+            }
             if k.as_ref() == target.as_bytes() {
                 return Some(i);
             }
@@ -612,64 +711,130 @@ impl TmailStore {
         None
     }
 
+    pub fn anon_leaf_index(&self, wallet_id: &str) -> Option<usize> {
+        self.anon_leaf_index_for_epoch(wallet_id, self.anon_current_epoch())
+    }
+
+    pub fn anon_tree_for_epoch(&self, epoch: u64) -> crate::tmail::anon::AnonMerkleTree {
+        crate::tmail::anon::AnonMerkleTree::build(self.anon_leaves_for_epoch(epoch))
+    }
+
     pub fn anon_tree(&self) -> crate::tmail::anon::AnonMerkleTree {
-        crate::tmail::anon::AnonMerkleTree::build(self.anon_leaves())
+        self.anon_tree_for_epoch(self.anon_current_epoch())
+    }
+
+    /// Root for a given epoch, memoised.
+    ///
+    /// The cache is an optimisation, never an authority: a miss recomputes. That is the whole
+    /// difference from the previous design, where the root history was a lossy ring buffer and an
+    /// attacker could evict honest roots out of it by registering faster than the cap.
+    ///
+    /// # The invariant that makes the cache sound
+    ///
+    /// **A past epoch's leaf set is immutable.** A registration admitted now carries
+    /// `admitted_at_ms = now`, so it enters the tree only from the *next* epoch onward and can
+    /// never alter the leaves of an epoch already gone. A cached root therefore always equals what
+    /// recomputation would produce.
+    ///
+    /// Drop the epoch gating and that stops being true: past epochs would inherit every later
+    /// registration, the cache would disagree with recomputation, and acceptance would silently
+    /// depend on whatever happened to be cached. The flood guard clears the cache before its final
+    /// assertion precisely so it cannot pass that way.
+    pub fn anon_root_for_epoch(&self, epoch: u64) -> [u8; 32] {
+        if let Ok(cache) = self.anon_roots.lock()
+            && let Some((_, root)) = cache.iter().find(|(e, _)| *e == epoch)
+        {
+            return *root;
+        }
+        let root = self.anon_tree_for_epoch(epoch).root();
+        if let Ok(mut cache) = self.anon_roots.lock() {
+            if !cache.iter().any(|(e, _)| *e == epoch) {
+                cache.push((epoch, root));
+            }
+            let cap = Self::anon_root_cache_cap();
+            if cache.len() > cap {
+                let excess = cache.len() - cap;
+                cache.drain(0..excess);
+            }
+        }
+        root
     }
 
     pub fn anon_root(&self) -> [u8; 32] {
-        self.anon_tree().root()
-    }
-
-    /// Record the current root with the time it was first seen. Called on every registry change.
-    fn note_anon_root(&self) {
-        let root = self.anon_root();
-        let now = now_ms();
-        let Ok(mut hist) = self.anon_roots.lock() else {
-            return;
-        };
-        if hist.last().map(|(r, _)| *r == root).unwrap_or(false) {
-            return;
-        }
-        hist.push((root, now));
-        let cap = Self::anon_root_history();
-        if hist.len() > cap {
-            let excess = hist.len() - cap;
-            hist.drain(0..excess);
-        }
-        let window = Self::anon_root_window_ms();
-        hist.retain(|(_, t)| now.saturating_sub(*t) <= window);
+        self.anon_root_for_epoch(self.anon_current_epoch())
     }
 
     /// Is `root` acceptable for a proof attached to a message in `bucket_index`?
     ///
-    /// Three conditions, deliberately independent:
+    /// Three independent conditions:
     ///
-    /// 1. it is this node's **current** root — always accepted, so a node that just restarted and
-    ///    lost its history still works;
-    /// 2. or it is a root this node computed within [`anon_root_window_ms`] — covers the window
-    ///    between a sender building a proof and the receiving node verifying it;
-    /// 3. **and** the message's bucket is within ±1 of now. This is an outer bound that the window
-    ///    cannot override: a root from a month ago is refused even if somebody sets the window to a
-    ///    month, because the bucket already pins the message to a day.
+    /// 1. the message's bucket is within ±1 of now — an **outer bound the window cannot override**,
+    ///    so a root from a month ago is refused however the window is configured;
+    /// 2. and `root` is the root of some epoch inside [`anon_root_window_ms`];
+    /// 3. the current epoch always qualifies, so a node that just restarted still works.
+    ///
+    /// Epoch roots are **recomputed** when not cached, so acceptance does not depend on this node
+    /// having been awake, or on an attacker not having flooded the cache. Registration volume
+    /// cannot evict an honest root from the accepted set, because the set is defined by time.
     pub fn accepts_anon_root(&self, root: &[u8; 32], bucket_index: u64) -> bool {
         let now = now_ms();
         let now_bucket = nexus_protocol::tmail_bucket_index_v1(now);
         if bucket_index.abs_diff(now_bucket) > 1 {
             return false;
         }
-        if self.anon_root() == *root {
-            return true;
+        let epoch_ms = Self::anon_epoch_ms();
+        let current = Self::anon_epoch_index(now);
+        let span = Self::anon_root_window_ms()
+            .div_ceil(epoch_ms)
+            .min(ANON_MAX_ROOT_SCAN);
+        let oldest = current.saturating_sub(span);
+        let mut e = current;
+        loop {
+            if self.anon_root_for_epoch(e) == *root {
+                return true;
+            }
+            if e == oldest {
+                return false;
+            }
+            e -= 1;
         }
-        let window = Self::anon_root_window_ms();
-        let Ok(hist) = self.anon_roots.lock() else {
-            return false;
-        };
-        hist.iter()
-            .any(|(r, t)| r == root && now.saturating_sub(*t) <= window)
     }
 
-    /// How many roots are currently remembered (for diagnostics and tests).
-    pub fn anon_root_history_len(&self) -> usize {
+    /// Test-only: drop the memoised epoch roots, forcing recomputation.
+    #[cfg(test)]
+    pub fn clear_anon_root_cache_for_tests(&self) {
+        if let Ok(mut c) = self.anon_roots.lock() {
+            c.clear();
+        }
+    }
+
+    /// Test-only: write a pre-built stored registration, bypassing signature verification.
+    ///
+    /// Exists so the flood guard can create volume without signing thousands of real ML-DSA
+    /// registrations, which would dominate its runtime. Never compiled into a release binary.
+    #[cfg(test)]
+    pub fn insert_stored_anon_for_tests(
+        &self,
+        wallet_id: &str,
+        stored: &StoredAnonRegistration,
+    ) -> Result<(), TmailStoreError> {
+        let val = serde_json::to_vec(stored).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
+        self.anon_registry
+            .insert(wallet_id.trim().to_ascii_lowercase().as_bytes(), val)?;
+        Ok(())
+    }
+
+    /// The window actually enforced, after the scan cap. Reported by `GET /tmail/anon/root` so a
+    /// configuration whose window exceeds `ANON_MAX_ROOT_SCAN * epoch_ms` is visible, not silently
+    /// short.
+    pub fn anon_effective_window_ms(&self) -> u64 {
+        let epoch_ms = Self::anon_epoch_ms();
+        Self::anon_root_window_ms().min(ANON_MAX_ROOT_SCAN.saturating_mul(epoch_ms))
+    }
+
+    /// How many epoch roots are currently cached (diagnostics and tests).
+    pub fn anon_root_cache_len(&self) -> usize {
         self.anon_roots.lock().map(|h| h.len()).unwrap_or(0)
     }
+
 }
