@@ -89,44 +89,6 @@ pub fn tmail_ephemeral_seed_v1(
     out
 }
 
-/// Anchor-ownership journal (spec §A.4.3), committed by guest mode 2.
-///
-/// **What it proves:** the committed `ephemeral_pubkey_bytes` is the correct HKDF derivation for
-/// this `(receiver, bucket)` from *some* anchor seed the prover knows. So one anchor yields exactly
-/// one ephemeral per receiver per 24 h.
-///
-/// **What it deliberately does not contain:** anything identifying the anchor. Not the anchor
-/// pubkey, not a hash of it — a hash of a public value is invertible by scanning known wallets, and
-/// committing one would hand every verifier a deanonymisation index. Unlinkability therefore holds
-/// against anyone holding every receipt ever published.
-///
-/// **What it does not achieve, stated plainly:** this bounds ephemerals *per anchor*; it does not
-/// bound *anchors*. Anyone can generate seeds. Making an anchor costly is the 1 TET escrow, which
-/// is AT-5(b) and Phase 1 — until then Anonymous Mode has binding, not sybil resistance.
-///
-/// # Why this journal carries an explicit `journal_kind`
-///
-/// Under risc0's word-aligned serde, this struct's payload and [`ZkCourtJournalV1`] are **both 264
-/// bytes** — `32·4 + 32·4 + 8` versus `32·4 + 8 + 32·4`. They are byte-level permutations of each
-/// other, so decoding one as the other succeeds *and* re-serializes to identical bytes: a
-/// round-trip check cannot separate them and whichever type a verifier tries first wins. A genuine
-/// ZK-Court receipt would then be reported as a Tmail anchor proof, or the reverse.
-///
-/// The tag makes the encoding self-describing and the length distinct (268 bytes), so the ambiguity
-/// is removed at the wire level rather than by hoping the match arms stay in the right order.
-/// [`TMAIL_ANCHOR_JOURNAL_KIND`] must be checked on decode, not merely deserialized.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TmailAnchorOwnsEphemeralV1 {
-    /// Always [`TMAIL_ANCHOR_JOURNAL_KIND`]. Present so this journal cannot be confused with a
-    /// same-length one of a different type.
-    pub journal_kind: u32,
-    pub ephemeral_pubkey_bytes: [u8; 32],
-    pub receiver_wallet_bytes: [u8; 32],
-    pub bucket_index: u64,
-}
-
-/// Discriminator for [`TmailAnchorOwnsEphemeralV1`] (ASCII "TMA1" little-endian).
-pub const TMAIL_ANCHOR_JOURNAL_KIND: u32 = u32::from_le_bytes(*b"TMA1");
 
 // ---------------------------------------------------------------------------
 // Semaphore-style anonymous membership (hash-only). Spec §A.4.3, redesign 2026-09-24.

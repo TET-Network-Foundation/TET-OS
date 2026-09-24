@@ -3,9 +3,7 @@
 //! Guest compilation may be bypassed via `RISC0_SKIP_BUILD=1`.
 
 use base64::Engine as _;
-pub use nexus_protocol::{
-    InferenceJournalV1, TmailAnchorOwnsEphemeralV1, TmailAnonMembershipV1, ZkCourtJournalV1,
-};
+pub use nexus_protocol::{InferenceJournalV1, TmailAnonMembershipV1, ZkCourtJournalV1};
 use risc0_zkvm::Receipt;
 
 /// **Compile-time guard: a `zk-prove` build must embed a real guest.**
@@ -53,8 +51,6 @@ const _: () = {
 pub enum VerifiedZkJournal {
     Inference(InferenceJournalV1),
     ZkCourt(ZkCourtJournalV1),
-    /// Tmail Anonymous Mode anchor-ownership proof (spec §A.4.3, guest mode 2).
-    TmailAnchor(TmailAnchorOwnsEphemeralV1),
     /// Tmail anonymous **membership** proof, hash-only (spec §A.4.3, guest mode 3).
     TmailAnon(TmailAnonMembershipV1),
 }
@@ -110,10 +106,11 @@ fn mock_zk_allowed() -> bool {
 ///
 /// # Length collisions are real, so every decode is round-tripped
 ///
-/// Under risc0 serde `ZkCourtJournalV1` and [`TmailAnchorOwnsEphemeralV1`] are **both 264 bytes**
-/// (32·4 + 8 + 32·4 and 32·4 + 32·4 + 8). A plain "try each type in order" chain therefore reports
-/// whichever is listed first. Each candidate is re-serialized and compared against the original
-/// bytes, so a journal is only accepted as the type that reproduces it exactly.
+/// Journal types of equal length are a live hazard here: the removed mode-2 journal was 264 bytes
+/// under risc0 serde, exactly like `ZkCourtJournalV1`, and a byte-level permutation of it — decoding
+/// one as the other succeeded *and* re-serialized identically. Each candidate is therefore
+/// re-serialized and compared against the original bytes, and the Tmail journal additionally
+/// carries a checked `journal_kind` tag so length alone never decides.
 pub(crate) fn decode_journal_bytes(bytes: &[u8]) -> anyhow::Result<VerifiedZkJournal> {
     fn round_trips<T: serde::Serialize + serde::de::DeserializeOwned>(
         bytes: &[u8],
@@ -129,13 +126,6 @@ pub(crate) fn decode_journal_bytes(bytes: &[u8]) -> anyhow::Result<VerifiedZkJou
 
     if let Some(j) = round_trips::<InferenceJournalV1>(bytes) {
         return Ok(VerifiedZkJournal::Inference(j));
-    }
-    if let Some(j) = round_trips::<TmailAnchorOwnsEphemeralV1>(bytes)
-        // The tag is checked, not merely deserialized: without this the struct is still a valid
-        // shape for arbitrary bytes and the discriminator would be decoration.
-        && j.journal_kind == nexus_protocol::TMAIL_ANCHOR_JOURNAL_KIND
-    {
-        return Ok(VerifiedZkJournal::TmailAnchor(j));
     }
     if let Some(j) = round_trips::<TmailAnonMembershipV1>(bytes)
         && j.journal_kind == nexus_protocol::TMAIL_ANON_JOURNAL_KIND
