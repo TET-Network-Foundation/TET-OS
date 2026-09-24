@@ -482,6 +482,40 @@ mocks disabled — and why it is first.
    seed via HKDF, nothing replicated; `HMAC(anchor_seed, eph_id)` and node-local if any store is
    needed at all. §A.4.4 is rewritten, with the old design preserved as superseded.
 
+### S8-1 measurement: a receipt does not fit in a gossip message (2026-09-24)
+
+Measured, not estimated. Real receipt from the existing guest (mode 1), proved locally on the
+risc0 3.0.5 toolchain and **verified against `NEXUS_GUEST_ID`** so the number describes a valid
+artifact. Guard: `s8_measure_receipt_size_against_the_gossip_ceiling` (`#[ignore]`d — it runs a real
+prover).
+
+| | bytes | vs ceiling |
+|---|---|---|
+| journal | 264 | — |
+| receipt (`bincode`) | 244,778 (239.0 KiB) | **1.9× over** |
+| receipt (`bincode` → base64, as the envelope would carry it) | 326,372 (318.7 KiB) | **2.5× over** |
+| gossip ceiling (`DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES`) | 131,072 (128 KiB) | — |
+
+Prove wall time 15.8 s on an M-series laptop.
+
+**So the anonymous envelope cannot carry its receipt inline.** It is not a near miss that a larger
+ceiling would fix: raising `max_transmit_size` to hold a 319 KiB message would mean every Tmail
+message on the plane could be that large. **S8-2's design is blocked on this decision** — see the
+two options in the §A.2-style write-up handed to the founder 2026-09-24.
+
+### A build defect found on the way
+
+The first measurement run reported an empty guest rather than a number. Root cause: `risc0-build`
+checks whether `RISC0_SKIP_BUILD` is **set**, not its value, while `methods/build.rs` checked the
+value — so `RISC0_SKIP_BUILD=0`, which the Dockerfile and `zk-image.yml` both pass meaning *"do
+build the guest"*, produced `NEXUS_GUEST_ELF = &[]` and `NEXUS_GUEST_ID = [0; 8]` while the build
+went green.
+
+**The zk-image run that passed on 2026-09-22 built an image whose guest is a stub.** The image
+builds; the prover in it does not work. The S4 correction earlier today ("the zk image builds") was
+true and incomplete. Fixed in `d34eabf`; guard `s8_guest_elf_is_embedded_in_a_zk_build`, negative
+control recorded in that commit.
+
 **Open, measured before S8-2:** Tmail envelopes ride gossipsub with `max_transmit_size` = **128 KiB**
 (`p2p.rs:439`), and receipts are serialized as plain `bincode` — no Groth16 or succinct compression
 anywhere in the repo. Whether a receipt fits inside the envelope decides the S8-2 design
