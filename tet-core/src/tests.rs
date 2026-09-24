@@ -9069,3 +9069,209 @@ fn s8_journal_with_trailing_bytes_is_refused() {
          only the re-serialize comparison catches it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S8-1 redesign — hash-only anonymous membership (guest mode 3).
+// ---------------------------------------------------------------------------
+
+/// Build a depth-`TET_ANON_MERKLE_DEPTH` authentication path for `leaf` at `index`, plus the root.
+#[cfg(test)]
+fn anon_merkle_path_for_tests(
+    leaf: &[u8; 32],
+    index: u32,
+) -> (Vec<[u8; 32]>, [u8; 32]) {
+    // Deterministic filler siblings; a real registry supplies the actual tree.
+    let siblings: Vec<[u8; 32]> = (0..nexus_protocol::TET_ANON_MERKLE_DEPTH)
+        .map(|i| {
+            let mut s = [0u8; 32];
+            s[0] = i as u8;
+            s[1] = 0xA5;
+            s
+        })
+        .collect();
+    let root = nexus_protocol::tet_anon_merkle_root_from_path_v1(leaf, index, &siblings);
+    (siblings, root)
+}
+
+#[cfg(test)]
+fn anon_membership_env_for_tests(
+    secret: &[u8; 32],
+    receiver: &[u8; 32],
+    bucket: u64,
+) -> (risc0_zkvm::ExecutorEnv<'static>, [u8; 32]) {
+    let leaf = nexus_protocol::tet_anon_commitment_v1(secret);
+    let (siblings, root) = anon_merkle_path_for_tests(&leaf, 3);
+    let env = risc0_zkvm::ExecutorEnv::builder()
+        .write(&3u8).unwrap()
+        .write(secret).unwrap()
+        .write(&3u32).unwrap()
+        .write(&siblings).unwrap()
+        .write(&[0x11u8; 32]).unwrap()
+        .write(receiver).unwrap()
+        .write(&bucket).unwrap()
+        .build()
+        .unwrap();
+    (env, root)
+}
+
+/// Executor-only cost of the hash-only guest. Compare against mode 2's Ed25519 derivation.
+#[test]
+#[ignore = "needs a zk build (guest ELF); no proving"]
+fn s8_anon_membership_executor_cost() {
+    let _g = env_lock();
+    set_test_env_base();
+    assert!(!methods::NEXUS_GUEST_ELF.is_empty(), "needs a zk build");
+
+    let secret = [0x5Au8; 32];
+    let receiver = [4u8; 32];
+    let bucket = 20_717u64;
+    let (env, expected_root) = anon_membership_env_for_tests(&secret, &receiver, bucket);
+
+    let started = std::time::Instant::now();
+    let session = risc0_zkvm::default_executor()
+        .execute(env, methods::NEXUS_GUEST_ELF)
+        .expect("execute mode 3");
+    println!(
+        "\n=== hash-only membership guest (mode 3) ===\nexecutor: {} ms, {} segments, journal {} bytes",
+        started.elapsed().as_millis(),
+        session.segments.len(),
+        session.journal.bytes.len()
+    );
+
+    let j: nexus_protocol::TmailAnonMembershipV1 = session.journal.decode().unwrap();
+    assert_eq!(j.journal_kind, nexus_protocol::TMAIL_ANON_JOURNAL_KIND);
+    assert_eq!(j.merkle_root, expected_root, "guest root must match the host-side path walk");
+    assert_eq!(
+        j.nullifier,
+        nexus_protocol::tet_anon_nullifier_v1(&secret, &receiver, bucket)
+    );
+    assert_eq!(j.ephemeral_pubkey_bytes, [0x11u8; 32]);
+    assert_eq!(j.bucket_index, bucket);
+}
+
+/// The nullifier is one per `(member, receiver, bucket)` and reveals nothing about the member.
+#[test]
+fn s8_anon_nullifier_is_bound_and_hiding() {
+    let s1 = [1u8; 32];
+    let s2 = [2u8; 32];
+    let rx_a = [4u8; 32];
+    let rx_b = [5u8; 32];
+    let n = nexus_protocol::tet_anon_nullifier_v1;
+
+    assert_eq!(n(&s1, &rx_a, 7), n(&s1, &rx_a, 7), "deterministic");
+    assert_ne!(n(&s1, &rx_a, 7), n(&s1, &rx_b, 7), "different receiver");
+    assert_ne!(n(&s1, &rx_a, 7), n(&s1, &rx_a, 8), "different bucket");
+    assert_ne!(n(&s1, &rx_a, 7), n(&s2, &rx_a, 7), "different member");
+
+    // The nullifier's preimage contains the SECRET, so unlike a hash of a public wallet id it
+    // cannot be inverted by enumerating known wallets -- which is precisely the mistake §A.4.4's
+    // original audit-trail design made.
+    let commitment = nexus_protocol::tet_anon_commitment_v1(&s1);
+    assert_ne!(
+        n(&s1, &rx_a, 7),
+        commitment,
+        "nullifier and registry commitment must be independent values"
+    );
+}
+
+/// A forged path must not reproduce the honest root.
+#[test]
+fn s8_anon_merkle_path_binds_the_leaf() {
+    let leaf = nexus_protocol::tet_anon_commitment_v1(&[1u8; 32]);
+    let other = nexus_protocol::tet_anon_commitment_v1(&[2u8; 32]);
+    let (siblings, root) = anon_merkle_path_for_tests(&leaf, 3);
+
+    assert_eq!(
+        nexus_protocol::tet_anon_merkle_root_from_path_v1(&leaf, 3, &siblings),
+        root
+    );
+    assert_ne!(
+        nexus_protocol::tet_anon_merkle_root_from_path_v1(&other, 3, &siblings),
+        root,
+        "a different leaf must not reach the same root"
+    );
+    assert_ne!(
+        nexus_protocol::tet_anon_merkle_root_from_path_v1(&leaf, 4, &siblings),
+        root,
+        "the same leaf at a different index must not reach the same root"
+    );
+}
+
+/// Leaf and internal-node hashing are domain-separated, so a leaf cannot be passed off as a node.
+#[test]
+fn s8_anon_leaf_and_node_hashing_are_domain_separated() {
+    let a = [7u8; 32];
+    let b = [8u8; 32];
+    assert_ne!(
+        nexus_protocol::tet_anon_commitment_v1(&a),
+        nexus_protocol::tet_anon_merkle_parent_v1(&a, &b),
+        "leaf and parent hashing must not collide"
+    );
+}
+
+/// **The real-receipt test for the hash-only design.** Proves for real, with mocks disallowed, and
+/// reports prove time and receipt size against the 128 KiB gossip ceiling.
+#[test]
+#[ignore = "runs a real RISC Zero prover; needs a zk build"]
+fn s8_anon_membership_real_receipt_verifies_with_mocks_disabled() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::set("TET_MAINNET", "1");
+    let _founder = EnvVarGuard::set(
+        "TET_GENESIS_FOUNDER_WALLET_ID",
+        "57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0",
+    );
+    assert!(
+        !crate::zk_verifier::zk_dev_mock_allowed(),
+        "precondition: mocks must be disallowed"
+    );
+
+    let secret = [0x5Au8; 32];
+    let receiver = [4u8; 32];
+    let bucket = 20_717u64;
+    let (env, expected_root) = anon_membership_env_for_tests(&secret, &receiver, bucket);
+
+    let started = std::time::Instant::now();
+    let receipt = risc0_zkvm::default_prover()
+        .prove(env, methods::NEXUS_GUEST_ELF)
+        .expect("prove mode 3")
+        .receipt;
+    let prove_ms = started.elapsed().as_millis();
+
+    let bin = bincode::serialize(&receipt).unwrap();
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bin);
+    let ceiling = crate::p2p::DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES;
+    println!("\n=== hash-only membership: real proof ===");
+    println!("prove wall time   : {prove_ms} ms");
+    println!("receipt (bincode) : {} bytes ({:.1} KiB)", bin.len(), bin.len() as f64 / 1024.0);
+    println!("receipt (base64)  : {} bytes ({:.1} KiB)", b64.len(), b64.len() as f64 / 1024.0);
+    println!("gossip ceiling    : {ceiling} bytes");
+    println!("fits inline?      : {}", if b64.len() < ceiling { "YES" } else { "NO" });
+
+    receipt.verify(methods::NEXUS_GUEST_ID).expect("receipt verifies");
+
+    let journal_b64 =
+        base64::engine::general_purpose::STANDARD.encode(&receipt.journal.bytes);
+    let verified = crate::zk_verifier::verify_tx_receipt_and_journal(
+        methods::NEXUS_GUEST_ID,
+        &journal_b64,
+        &b64,
+    )
+    .expect("must verify through the production path with mocks disabled");
+    match verified {
+        crate::zk_verifier::VerifiedZkJournal::TmailAnon(j) => {
+            assert_eq!(j.merkle_root, expected_root);
+            assert_eq!(
+                j.nullifier,
+                nexus_protocol::tet_anon_nullifier_v1(&secret, &receiver, bucket)
+            );
+        }
+        other => panic!("wrong variant: {other:?}"),
+    }
+
+    // The member secret must not appear anywhere in the receipt.
+    assert!(
+        !bin.windows(32).any(|w| w == secret),
+        "the member secret must never appear in the receipt"
+    );
+}

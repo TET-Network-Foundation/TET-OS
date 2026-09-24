@@ -127,3 +127,102 @@ pub struct TmailAnchorOwnsEphemeralV1 {
 
 /// Discriminator for [`TmailAnchorOwnsEphemeralV1`] (ASCII "TMA1" little-endian).
 pub const TMAIL_ANCHOR_JOURNAL_KIND: u32 = u32::from_le_bytes(*b"TMA1");
+
+// ---------------------------------------------------------------------------
+// Semaphore-style anonymous membership (hash-only). Spec §A.4.3, redesign 2026-09-24.
+//
+// Replaces the anchor-derives-ephemeral construction, which cost 11-19 min of in-guest Ed25519 and
+// proved almost nothing: "I know a seed that derives this ephemeral" is trivially true for anyone
+// who invents a seed. Membership in a published registry is a claim with content, and it is all
+// SHA-256 — which the zkVM accelerates.
+// ---------------------------------------------------------------------------
+
+/// Merkle depth. 2^20 = 1,048,576 members; the tree is fixed-depth so proof size and guest cost do
+/// not vary with registry size, and so a small registry cannot be distinguished from a large one by
+/// timing the proof.
+pub const TET_ANON_MERKLE_DEPTH: usize = 20;
+
+/// Registry leaf for a member: `SHA256("tet-anon-v1" ‖ seed)`.
+///
+/// The wallet publishes this commitment, hybrid-signed. `seed` never leaves the device — the
+/// commitment is what goes in the registry, and inverting it means breaking SHA-256 on a 32-byte
+/// high-entropy preimage.
+pub fn tet_anon_commitment_v1(seed: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"tet-anon-v1");
+    h.update(seed.as_slice());
+    h.finalize().into()
+}
+
+/// Nullifier: `SHA256("tet-null-v1" ‖ seed ‖ receiver ‖ bucket)`.
+///
+/// One member yields exactly one nullifier per `(receiver, bucket)`, so nodes rejecting a repeat
+/// bound how many ephemerals a member can publish per counterparty per day. It reveals nothing:
+/// the preimage contains the secret seed, so unlike a hash of a public wallet id it cannot be
+/// inverted by enumeration.
+pub fn tet_anon_nullifier_v1(
+    seed: &[u8; 32],
+    receiver_wallet: &[u8; 32],
+    bucket_index: u64,
+) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"tet-null-v1");
+    h.update(seed.as_slice());
+    h.update(receiver_wallet.as_slice());
+    h.update(bucket_index.to_le_bytes());
+    h.finalize().into()
+}
+
+/// Domain-separated Merkle parent. Separated from leaf hashing so a leaf can never be presented as
+/// an internal node (second-preimage on the tree).
+pub fn tet_anon_merkle_parent_v1(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"tet-node-v1");
+    h.update(left.as_slice());
+    h.update(right.as_slice());
+    h.finalize().into()
+}
+
+/// Recompute a root from a leaf and its authentication path. `index` bit `i` selects whether the
+/// running hash is the right child at level `i`.
+pub fn tet_anon_merkle_root_from_path_v1(
+    leaf: &[u8; 32],
+    index: u32,
+    siblings: &[[u8; 32]],
+) -> [u8; 32] {
+    let mut cur = *leaf;
+    let mut i = 0usize;
+    while i < siblings.len() {
+        let bit = (index >> i) & 1;
+        cur = if bit == 0 {
+            tet_anon_merkle_parent_v1(&cur, &siblings[i])
+        } else {
+            tet_anon_merkle_parent_v1(&siblings[i], &cur)
+        };
+        i += 1;
+    }
+    cur
+}
+
+/// Anonymous-membership journal (hash-only construction).
+///
+/// `ephemeral_pubkey_bytes` is a **committed input**, not derived in-guest: the prover chooses it,
+/// and the journal binds the proof to that choice. No curve arithmetic is needed, because
+/// uniqueness comes from the nullifier rather than from deriving a key. One member gets one
+/// nullifier per `(receiver, bucket)`, so they can publish one ephemeral for that pair; a second
+/// would need either the same nullifier (rejected) or a different member secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TmailAnonMembershipV1 {
+    /// Always [`TMAIL_ANON_JOURNAL_KIND`].
+    pub journal_kind: u32,
+    /// Registry root the membership was proved against.
+    pub merkle_root: [u8; 32],
+    /// One per `(member, receiver, bucket)`.
+    pub nullifier: [u8; 32],
+    pub ephemeral_pubkey_bytes: [u8; 32],
+    pub receiver_wallet_bytes: [u8; 32],
+    pub bucket_index: u64,
+}
+
+/// Discriminator for [`TmailAnonMembershipV1`] (ASCII "TAM1").
+pub const TMAIL_ANON_JOURNAL_KIND: u32 = u32::from_le_bytes(*b"TAM1");

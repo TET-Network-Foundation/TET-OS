@@ -3,7 +3,9 @@
 //! Guest compilation may be bypassed via `RISC0_SKIP_BUILD=1`.
 
 use base64::Engine as _;
-pub use nexus_protocol::{InferenceJournalV1, TmailAnchorOwnsEphemeralV1, ZkCourtJournalV1};
+pub use nexus_protocol::{
+    InferenceJournalV1, TmailAnchorOwnsEphemeralV1, TmailAnonMembershipV1, ZkCourtJournalV1,
+};
 use risc0_zkvm::Receipt;
 
 /// **Compile-time guard: a `zk-prove` build must embed a real guest.**
@@ -53,6 +55,8 @@ pub enum VerifiedZkJournal {
     ZkCourt(ZkCourtJournalV1),
     /// Tmail Anonymous Mode anchor-ownership proof (spec §A.4.3, guest mode 2).
     TmailAnchor(TmailAnchorOwnsEphemeralV1),
+    /// Tmail anonymous **membership** proof, hash-only (spec §A.4.3, guest mode 3).
+    TmailAnon(TmailAnonMembershipV1),
 }
 
 /// Whether dev/test mock ZK receipts (`MOCKJ1:` / `MOCKZC1:`) and ZK-Court optimistic placeholders are allowed.
@@ -132,6 +136,11 @@ pub(crate) fn decode_journal_bytes(bytes: &[u8]) -> anyhow::Result<VerifiedZkJou
         && j.journal_kind == nexus_protocol::TMAIL_ANCHOR_JOURNAL_KIND
     {
         return Ok(VerifiedZkJournal::TmailAnchor(j));
+    }
+    if let Some(j) = round_trips::<TmailAnonMembershipV1>(bytes)
+        && j.journal_kind == nexus_protocol::TMAIL_ANON_JOURNAL_KIND
+    {
+        return Ok(VerifiedZkJournal::TmailAnon(j));
     }
     if let Some(j) = round_trips::<ZkCourtJournalV1>(bytes) {
         return Ok(VerifiedZkJournal::ZkCourt(j));

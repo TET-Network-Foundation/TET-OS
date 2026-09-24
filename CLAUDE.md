@@ -21,6 +21,26 @@ enqueueing a variant it does not handle does not silently drop the write — it 
 reject the whole block**. `TxV1::GenesisBridge` is exactly this case: present in the enum, signed
 and verified by its handler, and absent from the apply match.
 
+## A mock-only path counts as untested
+
+**Any path with a mock variant must have at least one test on the real variant.** A path exercised
+only through its mock is untested, however many tests point at it.
+
+This is not theoretical. Two defects found on 2026-09-24 had both survived for months behind
+`MOCKJ1:` / `MOCKZC1:` receipts, because every ZK test in the repo used them:
+
+- `decode_journal_bytes` parsed journals with **bincode**, but `env::commit` writes **risc0
+  word-aligned serde**. bincode does not fail on those bytes — it consumes the first 72 of 264 and
+  returns a struct of garbage. `compute_reward_for_block` reads `flops_u64` out of that journal and
+  folds it into the block reward, so a real receipt would have put a nonsense value into consensus.
+  Mock journals are bincode by construction, so the mock path and the real path disagreed about the
+  wire format and only the mock path ever ran.
+- The production zk image shipped an **empty guest ELF** (`RISC0_SKIP_BUILD=0` defect). Nothing
+  noticed, because nothing ever needed a real guest.
+
+The tell in both cases was the same: a green suite over a code path that had never executed with
+real inputs. When a mock exists, ask what it is standing in for and whether anything tests that.
+
 ## Design principle — check every new replicated field against it
 
 > **Your keys, your data, your device — TET only proves, never stores.**
