@@ -122,6 +122,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         files,
         files_fetch_tx: None,
         tx_submit_tx: None,
+        anon_register_tx: None,
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
         )),
@@ -4109,7 +4110,8 @@ mod block_sync {
         let file_store = std::sync::Arc::new(
             crate::files::storage::FileStore::open(&ledger.sled_db()).expect("file store"),
         );
-        let (gossip_tx, files_fetch_tx, tx_submit_tx, swarm_task) = crate::p2p::start_mdns_ping_swarm(
+        let (gossip_tx, files_fetch_tx, tx_submit_tx, _anon_register_tx, swarm_task) =
+            crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
             mempool.clone(),
             keypair,
@@ -8873,4 +8875,389 @@ fn s8_anon_membership_real_receipt_verifies_with_mocks_disabled() {
         !bin.windows(32).any(|w| w == secret),
         "the member secret must never appear in the receipt"
     );
+}
+
+// ---------------------------------------------------------------------------
+// S8 — anonymity-set registry: gossip + direct delivery, caps, root window.
+// ---------------------------------------------------------------------------
+
+fn signed_anon_registration_for_tests(
+    words: &str,
+    wallet_id: &str,
+    secret: &[u8; 32],
+    registered_at_ms: u64,
+) -> crate::tmail::anon::TmailAnonRegistrationV1 {
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let mut reg = crate::tmail::anon::TmailAnonRegistrationV1 {
+        v: 1,
+        kind: crate::tmail::anon::TMAIL_ANON_REGISTRATION_KIND.to_string(),
+        wallet_id: wallet_id.to_ascii_lowercase(),
+        commitment_hex: hex::encode(nexus_protocol::tet_anon_commitment_v1(secret)),
+        registered_at_ms,
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: wallet_id.to_ascii_lowercase(),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::anon::tmail_anon_registration_auth_message_bytes(&reg, &pk);
+    reg.hybrid_sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    reg.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    reg
+}
+
+/// A registration verifies, lands in the registry, and changes the root.
+#[test]
+fn s8_registration_verifies_and_changes_the_root() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (words, wallet) = tmail_party_for_tests();
+    let reg = signed_anon_registration_for_tests(&words, &wallet, &[1u8; 32], 1_000);
+
+    assert!(crate::tmail::anon::verify_tmail_anon_registration_v1(&reg).is_ok());
+    let empty_root = store.anon_root();
+    assert_eq!(store.anon_member_count(), 0);
+
+    assert_eq!(
+        store.register_anon(&reg).unwrap(),
+        crate::tmail::store::AnonRegisterOutcome::Added
+    );
+    assert_eq!(store.anon_member_count(), 1);
+    assert_ne!(store.anon_root(), empty_root, "the root must change");
+
+    // Idempotent: the same registration again is a no-op.
+    assert_eq!(
+        store.register_anon(&reg).unwrap(),
+        crate::tmail::store::AnonRegisterOutcome::Duplicate
+    );
+    assert_eq!(store.anon_member_count(), 1);
+}
+
+/// A wallet must not be able to register a commitment **for someone else's wallet**.
+///
+/// The attack has to be built carefully or the test proves nothing. Mutating `wallet_id` after
+/// signing is caught by the signature alone, because `wallet_id` is inside the pre-image — that
+/// version of this test passed with the signer check deleted (negative control M1).
+///
+/// The real forgery is a *correctly signed* registration: attacker A signs, with A's own key, a
+/// pre-image that names B as the wallet. Every signature check passes. Only
+/// `signer == wallet_id` rejects it.
+#[test]
+fn s8_registration_signed_by_another_wallet_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words_a, wallet_a) = tmail_party_for_tests();
+    let (_wb, wallet_b) = tmail_party_for_tests();
+
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words_a).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words_a).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+
+    let mut reg = crate::tmail::anon::TmailAnonRegistrationV1 {
+        v: 1,
+        kind: crate::tmail::anon::TMAIL_ANON_REGISTRATION_KIND.to_string(),
+        // Claims to be B...
+        wallet_id: wallet_b.clone(),
+        commitment_hex: hex::encode(nexus_protocol::tet_anon_commitment_v1(&[1u8; 32])),
+        registered_at_ms: 1_000,
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            // ...but signed by A, and honest about whose key it is.
+            ed25519_pubkey_hex: wallet_a.clone(),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::anon::tmail_anon_registration_auth_message_bytes(&reg, &pk);
+    reg.hybrid_sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    reg.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+
+    // The signature itself is perfectly valid over these exact bytes -- that is the point.
+    assert!(
+        crate::quantum_shield::verify_hybrid(
+            &wallet_a,
+            Some(&reg.hybrid_sig.ed25519_sig_b64),
+            Some(&reg.hybrid_sig.mldsa_pubkey_b64),
+            Some(&reg.hybrid_sig.mldsa_sig_b64),
+            &msg,
+        )
+        .is_ok(),
+        "precondition: A really did sign this; only signer != wallet_id may reject it"
+    );
+
+    let err = crate::tmail::anon::verify_tmail_anon_registration_v1(&reg)
+        .expect_err("a registration naming someone else's wallet must be refused");
+    assert!(
+        format!("{err}").contains("signer ed25519 pubkey must equal wallet_id"),
+        "expected the signer-mismatch rejection, got: {err}"
+    );
+}
+
+/// Two nodes with the same registrations must compute the same root, regardless of arrival order.
+///
+/// Leaf order is the Merkle index, so this is the property that makes cross-node verification work
+/// at all. If it fails, proofs built on one node are unverifiable on another.
+#[test]
+fn s8_root_is_independent_of_registration_arrival_order() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (w1, wallet1) = tmail_party_for_tests();
+    let (w2, wallet2) = tmail_party_for_tests();
+    let (w3, wallet3) = tmail_party_for_tests();
+    let r1 = signed_anon_registration_for_tests(&w1, &wallet1, &[1u8; 32], 1_000);
+    let r2 = signed_anon_registration_for_tests(&w2, &wallet2, &[2u8; 32], 1_000);
+    let r3 = signed_anon_registration_for_tests(&w3, &wallet3, &[3u8; 32], 1_000);
+
+    let node_a = tmail_store_for_tests();
+    for r in [&r1, &r2, &r3] {
+        node_a.register_anon(r).unwrap();
+    }
+    let node_b = tmail_store_for_tests();
+    for r in [&r3, &r1, &r2] {
+        node_b.register_anon(r).unwrap();
+    }
+
+    assert_eq!(node_a.anon_member_count(), 3);
+    assert_eq!(
+        node_a.anon_root(),
+        node_b.anon_root(),
+        "roots must not depend on the order registrations arrived"
+    );
+}
+
+/// A member's path from the registry must verify against the root, using the same walk the guest
+/// performs.
+#[test]
+fn s8_registry_path_verifies_against_the_root() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let mut wallets = Vec::new();
+    for i in 0..5u8 {
+        let (w, wallet) = tmail_party_for_tests();
+        let secret = [i + 1; 32];
+        store
+            .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &secret, 1_000))
+            .unwrap();
+        wallets.push((wallet, secret));
+    }
+
+    let tree = store.anon_tree();
+    let root = tree.root();
+    for (wallet, secret) in &wallets {
+        let index = store.anon_leaf_index(wallet).expect("member is present");
+        let siblings = tree.path(index).expect("path exists");
+        assert_eq!(
+            siblings.len(),
+            nexus_protocol::TET_ANON_MERKLE_DEPTH,
+            "the path must always be full depth: a short path would let a prover claim a \
+             shallower tree"
+        );
+        let leaf = nexus_protocol::tet_anon_commitment_v1(secret);
+        assert_eq!(
+            nexus_protocol::tet_anon_merkle_root_from_path_v1(&leaf, index as u32, &siblings),
+            root,
+            "member {wallet} path must reach the root"
+        );
+    }
+}
+
+/// The registry is capped, and at the cap it refuses NEW wallets rather than evicting members.
+#[test]
+fn s8_registry_is_capped_and_refuses_rather_than_evicts() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _cap = EnvVarGuard::set("TET_TMAIL_ANON_MAX_MEMBERS", "2");
+    let store = tmail_store_for_tests();
+
+    let mut regs = Vec::new();
+    for i in 0..3u8 {
+        let (w, wallet) = tmail_party_for_tests();
+        regs.push(signed_anon_registration_for_tests(&w, &wallet, &[i + 1; 32], 1_000));
+    }
+    assert_eq!(
+        store.register_anon(&regs[0]).unwrap(),
+        crate::tmail::store::AnonRegisterOutcome::Added
+    );
+    assert_eq!(
+        store.register_anon(&regs[1]).unwrap(),
+        crate::tmail::store::AnonRegisterOutcome::Added
+    );
+    assert_eq!(
+        store.register_anon(&regs[2]).unwrap(),
+        crate::tmail::store::AnonRegisterOutcome::Full(2),
+        "at the cap a new wallet is refused"
+    );
+    assert_eq!(store.anon_member_count(), 2, "and no member is evicted");
+
+    // An existing member may still update -- refusing that would strand them.
+    let updated = signed_anon_registration_for_tests(
+        &tmail_party_for_tests().0,
+        &regs[0].wallet_id,
+        &[9u8; 32],
+        2_000,
+    );
+    let mut updated = updated;
+    updated.wallet_id = regs[0].wallet_id.clone();
+    assert!(matches!(
+        store.register_anon(&updated).unwrap(),
+        crate::tmail::store::AnonRegisterOutcome::Updated
+    ));
+}
+
+/// The root window: the current root is always accepted; a stale one is not; and the bucket bound
+/// overrides the window.
+#[test]
+fn s8_root_window_accepts_recent_and_refuses_stale() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (w, wallet) = tmail_party_for_tests();
+    store
+        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000))
+        .unwrap();
+
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    let current = store.anon_root();
+
+    assert!(
+        store.accepts_anon_root(&current, now_bucket),
+        "the current root is always accepted"
+    );
+    assert!(
+        !store.accepts_anon_root(&[0xEEu8; 32], now_bucket),
+        "an unknown root is refused"
+    );
+
+    // The bucket bound is an OUTER limit the window cannot override.
+    assert!(
+        !store.accepts_anon_root(&current, now_bucket + 5),
+        "a bucket far from now is refused even for the current root"
+    );
+    assert!(
+        store.accepts_anon_root(&current, now_bucket - 1),
+        "±1 bucket is inside the bound"
+    );
+}
+
+/// A superseded root stays acceptable inside the window, which is what covers the gap between
+/// building a proof and the receiving node verifying it.
+#[test]
+fn s8_superseded_root_stays_acceptable_inside_the_window() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (w1, wallet1) = tmail_party_for_tests();
+    store
+        .register_anon(&signed_anon_registration_for_tests(&w1, &wallet1, &[1u8; 32], 1_000))
+        .unwrap();
+    let old_root = store.anon_root();
+
+    // A second registration arrives, moving the root on.
+    let (w2, wallet2) = tmail_party_for_tests();
+    store
+        .register_anon(&signed_anon_registration_for_tests(&w2, &wallet2, &[2u8; 32], 1_000))
+        .unwrap();
+    assert_ne!(store.anon_root(), old_root, "precondition: the root moved");
+
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    assert!(
+        store.accepts_anon_root(&old_root, now_bucket),
+        "a root superseded seconds ago must still verify, or every proof built during \
+         propagation would be rejected"
+    );
+}
+
+/// Registry gossip goes through the same admission function as a local registration.
+#[test]
+fn s8_registry_gossip_event_admits_through_the_shared_path() {
+    let _g = env_lock();
+    set_test_env_base();
+    let node = TmailNode::new();
+    let (w, wallet) = tmail_party_for_tests();
+    let reg = signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000);
+
+    let wire = serde_json::to_string(&crate::models::NetworkEvent::TmailAnonRegistration {
+        registration: reg.clone(),
+    })
+    .unwrap();
+    assert!(matches!(
+        node.receive_gossip(&wire),
+        crate::p2p::TmailGossipOutcome::Registered { .. }
+    ));
+    assert_eq!(node.rest.tmail.anon_member_count(), 1);
+
+    // A registration with a broken signature is refused on the receive path too.
+    let mut bad = reg.clone();
+    bad.hybrid_sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode([0u8; 64]);
+    let wire = serde_json::to_string(&crate::models::NetworkEvent::TmailAnonRegistration {
+        registration: bad,
+    })
+    .unwrap();
+    assert!(matches!(
+        node.receive_gossip(&wire),
+        crate::p2p::TmailGossipOutcome::Rejected { .. }
+    ));
+}
+
+/// **The announce guard.** A local registration must reach BOTH delivery paths.
+///
+/// This is the `/ledger/transfer` failure written as a test before it can happen again: a handler
+/// that admits without announcing produces a member who is in their own node's anonymity set and
+/// nobody else's, and whose proofs then fail on every peer with nothing pointing at delivery.
+///
+/// It asserts both paths independently, so disabling either one fails — gossip working is not
+/// allowed to cover for the direct path being unwired, which is the exact way the tx-submit
+/// weakness hid.
+#[tokio::test]
+async fn s8_local_registration_announces_on_both_paths() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let mut state = rest_state_for_tests(ledger);
+
+    // Observe both channels.
+    let (gossip_tx, mut gossip_rx) = tokio::sync::mpsc::channel::<String>(8);
+    let (direct_tx, mut direct_rx) =
+        tokio::sync::mpsc::channel::<crate::p2p::AnonRegisterCmd>(8);
+    state.gossip_tx = Some(gossip_tx);
+    state.anon_register_tx = Some(direct_tx);
+
+    let (words, wallet) = tmail_party_for_tests();
+    let reg = signed_anon_registration_for_tests(&words, &wallet, &[1u8; 32], 1_000);
+
+    let outcome = state
+        .submit_local_anon_registration(&reg)
+        .await
+        .expect("registration must be admitted");
+    assert_eq!(outcome, crate::tmail::store::AnonRegisterOutcome::Added);
+    assert_eq!(state.tmail.anon_member_count(), 1, "admitted locally");
+
+    // Path 1: gossip.
+    let gossiped = gossip_rx
+        .try_recv()
+        .expect("registration must be published to gossip");
+    let ev: crate::models::NetworkEvent = serde_json::from_str(&gossiped).unwrap();
+    match ev {
+        crate::models::NetworkEvent::TmailAnonRegistration { registration } => {
+            assert_eq!(registration.wallet_id, reg.wallet_id);
+        }
+        other => panic!("wrong gossip event: {other:?}"),
+    }
+
+    // Path 2: the direct request. Independently asserted -- gossip succeeding must not be able to
+    // mask this being unwired.
+    let direct = direct_rx
+        .try_recv()
+        .expect("registration must also go out over the direct /tet/v1/anon-register path");
+    assert_eq!(direct.registration.wallet_id, reg.wallet_id);
 }

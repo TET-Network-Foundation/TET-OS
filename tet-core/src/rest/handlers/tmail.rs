@@ -13,6 +13,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::rest::RestState;
+use crate::tmail::anon::{TmailAnonRegistrationError, TmailAnonRegistrationV1};
 use crate::tmail::burn::{BurnRevokeOutcome, TmailBurnRevokeError, TmailBurnRevokeV1};
 use crate::tmail::envelope::{TmailEnvelopeError, TmailEnvelopeV1, verify_tmail_envelope_v1};
 use crate::tmail::keys::{TmailKeyError, TmailKeyRegistrationV1, verify_tmail_key_registration_v1};
@@ -285,3 +286,116 @@ pub async fn post_tmail_read_receipt(
             .into_response(),
     }
 }
+
+fn anon_registration_error_status(msg: &str) -> StatusCode {
+    if msg.contains("signature") || msg.contains("signer") {
+        StatusCode::UNAUTHORIZED
+    } else {
+        StatusCode::BAD_REQUEST
+    }
+}
+
+/// `POST /tmail/anon/register` — publish this wallet's anonymity-set commitment (spec §A.4.3).
+///
+/// Goes through [`crate::rest::RestState::submit_local_anon_registration`], the single entry point:
+/// it admits **and** announces over both gossip and the direct `/tet/v1/anon-register` request.
+/// There is no admit-only path for a local registration, because a member who is in their own
+/// node's set and nobody else's has proofs that fail everywhere with nothing pointing at delivery.
+///
+/// Registration is free and therefore **not sybil resistance** — see the disclosure text. The
+/// node's registry is capped; at the cap new wallets are refused rather than existing members
+/// evicted, since evicting silently shrinks other people's anonymity set.
+pub async fn post_tmail_anon_register(
+    State(state): State<RestState>,
+    Json(reg): Json<TmailAnonRegistrationV1>,
+) -> Response {
+    match state.submit_local_anon_registration(&reg).await {
+        Ok(outcome) => {
+            let tag = format!("{outcome:?}").to_lowercase();
+            let full = matches!(outcome, crate::tmail::store::AnonRegisterOutcome::Full(_));
+            let status = if full {
+                StatusCode::INSUFFICIENT_STORAGE
+            } else {
+                StatusCode::ACCEPTED
+            };
+            (
+                status,
+                Json(serde_json::json!({
+                    "ok": !full,
+                    "wallet_id": reg.wallet_id.trim().to_ascii_lowercase(),
+                    "outcome": tag,
+                    "members": state.tmail.anon_member_count(),
+                    "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
+                })),
+            )
+                .into_response()
+        }
+        Err(e) => (anon_registration_error_status(&e), e).into_response(),
+    }
+}
+
+/// `GET /tmail/anon/root` — this node's current registry root, member count and window.
+///
+/// The root is **node-local**: it covers the registrations this node has seen, which is also the
+/// anonymity set a proof verified here is anonymous within.
+pub async fn get_tmail_anon_root(State(state): State<RestState>) -> Response {
+    let tree = state.tmail.anon_tree();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "merkle_root": hex::encode(tree.root()),
+            "members": state.tmail.anon_member_count(),
+            "depth": nexus_protocol::TET_ANON_MERKLE_DEPTH,
+            "roots_remembered": state.tmail.anon_root_history_len(),
+            "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
+        })),
+    )
+        .into_response()
+}
+
+/// `GET /tmail/anon/path/:wallet_id` — the authentication path a member needs to build a proof.
+///
+/// Serving this reveals only which leaf belongs to a **public** registration, which is already
+/// public. The secret never appears, and the path is useless without it.
+pub async fn get_tmail_anon_path(
+    State(state): State<RestState>,
+    Path(wallet_id): Path<String>,
+) -> Response {
+    let w = wallet_id.trim().to_ascii_lowercase();
+    if !is_wallet_id_64hex(&w) {
+        return (StatusCode::BAD_REQUEST, "wallet must be 64 hex chars").into_response();
+    }
+    let Some(index) = state.tmail.anon_leaf_index(&w) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "ok": false,
+                "wallet_id": w,
+                "error": "not registered on this node -- registration may still be propagating",
+            })),
+        )
+            .into_response();
+    };
+    let tree = state.tmail.anon_tree();
+    let Some(siblings) = tree.path(index) else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, "path unavailable").into_response();
+    };
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "wallet_id": w,
+            "index": index,
+            "merkle_root": hex::encode(tree.root()),
+            "siblings": siblings.iter().map(hex::encode).collect::<Vec<_>>(),
+            "depth": nexus_protocol::TET_ANON_MERKLE_DEPTH,
+        })),
+    )
+        .into_response()
+}
+
+const _: fn() = || {
+    let _ = anon_registration_error_status;
+    let _: Option<TmailAnonRegistrationError> = None;
+};

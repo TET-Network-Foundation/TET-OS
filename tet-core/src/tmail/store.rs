@@ -26,6 +26,28 @@ use crate::tmail::keys::TmailKeyRegistrationV1;
 const TREE_BY_RECEIVER: &str = "tmail_by_receiver_v1";
 const TREE_BY_MSG_ID: &str = "tmail_by_msg_id_v1";
 const TREE_KEYS: &str = "tmail_keys_v1";
+/// Anonymity-set registrations: key `wallet_id`, value = `TmailAnonRegistrationV1` JSON.
+const TREE_ANON_REGISTRY: &str = "tmail_anon_registry_v1";
+
+/// Cap on registrations this node will hold. Registration is free, so the registry is an
+/// attacker-writable structure and must be bounded like the message buffer is.
+///
+/// At the cap the node stops accepting **new** wallets and says so; existing wallets can still
+/// update their commitment. The alternative — evicting members — is worse: it silently shrinks
+/// other people's anonymity set and invalidates in-flight proofs. Refusing to grow is visible and
+/// recoverable; evicting is neither.
+const DEFAULT_ANON_MAX_MEMBERS: usize = 50_000;
+
+/// How long a root stays acceptable after this node first computed it.
+///
+/// Sized from what actually has to happen inside it: build a proof (~33 s measured), gossip the
+/// envelope, pull the receipt, verify. Verification happens **on arrival**, so this window does not
+/// have to cover a receiver being offline — only the send-to-verify path. 60 min is far more than
+/// the measured margin; see `SPRINT_PLAN.md` § S8 for the numbers.
+const DEFAULT_ANON_ROOT_WINDOW_MS: u64 = 60 * 60 * 1000;
+
+/// Cap on remembered roots. One entry per root *change*, not per registration.
+const DEFAULT_ANON_ROOT_HISTORY: usize = 512;
 
 /// Tombstone marker written into `tmail_by_msg_id_v1` when a message is burned. The suffix is the
 /// original entry's expiry in ms, so `prune_expired` can reap tombstones instead of growing a tree
@@ -67,6 +89,11 @@ pub struct TmailStore {
     by_receiver: sled::Tree,
     by_msg_id: sled::Tree,
     keys: sled::Tree,
+    anon_registry: sled::Tree,
+    /// `(root, first_seen_ms)`, newest last. In memory: a restart drops it, after which only the
+    /// current root is accepted until the registry changes again. That is a liveness cost measured
+    /// in one proof, not a correctness problem.
+    anon_roots: std::sync::Mutex<Vec<([u8; 32], u64)>>,
 }
 
 fn now_ms() -> u64 {
@@ -138,6 +165,8 @@ impl TmailStore {
             by_receiver: db.open_tree(TREE_BY_RECEIVER)?,
             by_msg_id: db.open_tree(TREE_BY_MSG_ID)?,
             keys: db.open_tree(TREE_KEYS)?,
+            anon_registry: db.open_tree(TREE_ANON_REGISTRY)?,
+            anon_roots: std::sync::Mutex::new(Vec::new()),
         })
     }
 
@@ -457,5 +486,190 @@ impl TmailStore {
         let wallet = wallet_id.trim().to_ascii_lowercase();
         let v = self.keys.get(wallet.as_bytes()).ok().flatten()?;
         serde_json::from_slice(&v).ok()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Anonymity-set registry (spec §A.4.3).
+// ---------------------------------------------------------------------------
+
+/// Outcome of admitting a registration, so callers can log and respond without re-deriving it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnonRegisterOutcome {
+    /// New wallet added to the set.
+    Added,
+    /// Existing wallet's commitment replaced.
+    Updated,
+    /// Byte-identical to what we already hold.
+    Duplicate,
+    /// An older `registered_at_ms` than the one on file; ignored.
+    Stale,
+    /// Registry is at its member cap and this is a new wallet.
+    Full(usize),
+}
+
+impl TmailStore {
+    fn anon_max_members() -> usize {
+        env_usize("TET_TMAIL_ANON_MAX_MEMBERS", DEFAULT_ANON_MAX_MEMBERS)
+    }
+
+    fn anon_root_window_ms() -> u64 {
+        env_u64("TET_TMAIL_ANON_ROOT_WINDOW_MS", DEFAULT_ANON_ROOT_WINDOW_MS)
+    }
+
+    fn anon_root_history() -> usize {
+        env_usize("TET_TMAIL_ANON_ROOT_HISTORY", DEFAULT_ANON_ROOT_HISTORY)
+    }
+
+    /// Admit a (already signature-verified) registration.
+    ///
+    /// Callers MUST have run [`crate::tmail::anon::verify_tmail_anon_registration_v1`]. Both the
+    /// local and the gossip path go through here, so neither can be weaker than the other.
+    pub fn register_anon(
+        &self,
+        reg: &crate::tmail::anon::TmailAnonRegistrationV1,
+    ) -> Result<AnonRegisterOutcome, TmailStoreError> {
+        let wallet = reg.wallet_id.trim().to_ascii_lowercase();
+        if !is_wallet_id_64hex(&wallet) {
+            return Err(TmailStoreError::InvalidReceiver);
+        }
+        let existing = self.get_anon_registration(&wallet);
+        let outcome = match existing {
+            Some(prev) => {
+                if prev.commitment_hex.eq_ignore_ascii_case(&reg.commitment_hex)
+                    && prev.registered_at_ms == reg.registered_at_ms
+                {
+                    return Ok(AnonRegisterOutcome::Duplicate);
+                }
+                if prev.registered_at_ms > reg.registered_at_ms {
+                    return Ok(AnonRegisterOutcome::Stale);
+                }
+                AnonRegisterOutcome::Updated
+            }
+            None => {
+                let max = Self::anon_max_members();
+                if self.anon_registry.len() >= max {
+                    return Ok(AnonRegisterOutcome::Full(max));
+                }
+                AnonRegisterOutcome::Added
+            }
+        };
+        let val = serde_json::to_vec(reg).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
+        self.anon_registry.insert(wallet.as_bytes(), val)?;
+        self.note_anon_root();
+        Ok(outcome)
+    }
+
+    pub fn get_anon_registration(
+        &self,
+        wallet_id: &str,
+    ) -> Option<crate::tmail::anon::TmailAnonRegistrationV1> {
+        let w = wallet_id.trim().to_ascii_lowercase();
+        let v = self.anon_registry.get(w.as_bytes()).ok().flatten()?;
+        serde_json::from_slice(&v).ok()
+    }
+
+    pub fn anon_member_count(&self) -> usize {
+        self.anon_registry.len()
+    }
+
+    /// Leaves in canonical order: **sorted by wallet id ascending**.
+    ///
+    /// Leaf order is the Merkle index, so this ordering is consensus-in-miniature: two nodes with
+    /// identical registrations must produce identical roots or membership proofs stop verifying
+    /// across nodes. sled iterates keys in lexicographic order, which for lowercase-hex wallet ids
+    /// is exactly that.
+    pub fn anon_leaves(&self) -> Vec<[u8; 32]> {
+        let mut out = Vec::new();
+        for item in self.anon_registry.iter() {
+            let Ok((_k, v)) = item else { continue };
+            let Ok(reg) =
+                serde_json::from_slice::<crate::tmail::anon::TmailAnonRegistrationV1>(&v)
+            else {
+                continue;
+            };
+            let Ok(bytes) = hex::decode(reg.commitment_hex.trim()) else {
+                continue;
+            };
+            if let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                out.push(arr);
+            }
+        }
+        out
+    }
+
+    /// Index of a wallet's leaf in canonical order, for building its authentication path.
+    pub fn anon_leaf_index(&self, wallet_id: &str) -> Option<usize> {
+        let target = wallet_id.trim().to_ascii_lowercase();
+        let mut i = 0usize;
+        for item in self.anon_registry.iter() {
+            let Ok((k, _v)) = item else { continue };
+            if k.as_ref() == target.as_bytes() {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    pub fn anon_tree(&self) -> crate::tmail::anon::AnonMerkleTree {
+        crate::tmail::anon::AnonMerkleTree::build(self.anon_leaves())
+    }
+
+    pub fn anon_root(&self) -> [u8; 32] {
+        self.anon_tree().root()
+    }
+
+    /// Record the current root with the time it was first seen. Called on every registry change.
+    fn note_anon_root(&self) {
+        let root = self.anon_root();
+        let now = now_ms();
+        let Ok(mut hist) = self.anon_roots.lock() else {
+            return;
+        };
+        if hist.last().map(|(r, _)| *r == root).unwrap_or(false) {
+            return;
+        }
+        hist.push((root, now));
+        let cap = Self::anon_root_history();
+        if hist.len() > cap {
+            let excess = hist.len() - cap;
+            hist.drain(0..excess);
+        }
+        let window = Self::anon_root_window_ms();
+        hist.retain(|(_, t)| now.saturating_sub(*t) <= window);
+    }
+
+    /// Is `root` acceptable for a proof attached to a message in `bucket_index`?
+    ///
+    /// Three conditions, deliberately independent:
+    ///
+    /// 1. it is this node's **current** root — always accepted, so a node that just restarted and
+    ///    lost its history still works;
+    /// 2. or it is a root this node computed within [`anon_root_window_ms`] — covers the window
+    ///    between a sender building a proof and the receiving node verifying it;
+    /// 3. **and** the message's bucket is within ±1 of now. This is an outer bound that the window
+    ///    cannot override: a root from a month ago is refused even if somebody sets the window to a
+    ///    month, because the bucket already pins the message to a day.
+    pub fn accepts_anon_root(&self, root: &[u8; 32], bucket_index: u64) -> bool {
+        let now = now_ms();
+        let now_bucket = nexus_protocol::tmail_bucket_index_v1(now);
+        if bucket_index.abs_diff(now_bucket) > 1 {
+            return false;
+        }
+        if self.anon_root() == *root {
+            return true;
+        }
+        let window = Self::anon_root_window_ms();
+        let Ok(hist) = self.anon_roots.lock() else {
+            return false;
+        };
+        hist.iter()
+            .any(|(r, t)| r == root && now.saturating_sub(*t) <= window)
+    }
+
+    /// How many roots are currently remembered (for diagnostics and tests).
+    pub fn anon_root_history_len(&self) -> usize {
+        self.anon_roots.lock().map(|h| h.len()).unwrap_or(0)
     }
 }

@@ -63,6 +63,9 @@ pub struct RestState {
     pub files_fetch_tx: Option<mpsc::Sender<crate::p2p::FilesFetchCmd>>,
     /// Command channel for direct `/tet/v1/tx-submit` requests to bootnodes — the transaction
     /// equivalent of the pull-based block catch-up, and independent of gossip.
+    /// Direct `/tet/v1/anon-register` channel. `None` disables the direct path only — gossip is
+    /// unaffected, which is what makes the two paths independently testable.
+    pub anon_register_tx: Option<tokio::sync::mpsc::Sender<crate::p2p::AnonRegisterCmd>>,
     pub tx_submit_tx: Option<mpsc::Sender<crate::p2p::TxSubmitCmd>>,
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,
     pub workers: Arc<StdMutex<WorkerRegistry>>,
@@ -413,6 +416,49 @@ impl RestState {
         };
         if let Ok(json) = serde_json::to_string(&event) {
             let _ = tx.send(json).await;
+        }
+    }
+
+    /// **The only way a locally-originated anonymity-set registration enters this node.**
+    ///
+    /// Admits it *and* announces it — gossip for fan-out and a direct request to bootnodes. There
+    /// is deliberately no admit-only method for local registrations, for the same reason
+    /// `submit_local_tx` has none: a handler that stores without announcing produces a member who
+    /// is in their own node's anonymity set and nobody else's, whose proofs then fail on every
+    /// peer with nothing pointing at delivery. `/ledger/transfer` did exactly that until
+    /// 2026-09-23, and this is that lesson applied in advance.
+    ///
+    /// Receive paths must NOT use this — they go through `p2p::admit_anon_registration`, which
+    /// admits without re-publishing.
+    pub async fn submit_local_anon_registration(
+        &self,
+        reg: &crate::tmail::anon::TmailAnonRegistrationV1,
+    ) -> Result<crate::tmail::store::AnonRegisterOutcome, String> {
+        let outcome = crate::p2p::admit_anon_registration(&self.tmail, reg)?;
+        self.announce_anon_registration(reg).await;
+        Ok(outcome)
+    }
+
+    /// Both delivery paths, deliberately not nested: either can be unavailable without disabling
+    /// the other.
+    async fn announce_anon_registration(
+        &self,
+        reg: &crate::tmail::anon::TmailAnonRegistrationV1,
+    ) {
+        if let Some(tx) = self.gossip_tx.as_ref() {
+            let event = crate::models::NetworkEvent::TmailAnonRegistration {
+                registration: reg.clone(),
+            };
+            if let Ok(json) = serde_json::to_string(&event) {
+                let _ = tx.send(json).await;
+            }
+        }
+        if let Some(tx) = self.anon_register_tx.as_ref() {
+            let _ = tx
+                .send(crate::p2p::AnonRegisterCmd {
+                    registration: reg.clone(),
+                })
+                .await;
         }
     }
 

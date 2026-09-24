@@ -279,6 +279,7 @@ struct TetBehaviour {
     files_fetch: request_response::Behaviour<crate::files::fetch_codec::FilesFetchCodec>,
     /// Direct tx submission — see [`TX_SUBMIT_PROTOCOL`].
     tx_submit: request_response::json::Behaviour<TxSubmitRequest, TxSubmitResponse>,
+    anon_register: request_response::json::Behaviour<AnonRegisterRequest, AnonRegisterResponse>,
 }
 
 #[derive(Debug)]
@@ -293,6 +294,13 @@ enum Event {
     ChainSyncRange(request_response::Event<ChainSyncRangeRequest, ChainSyncRangeResponse>),
     FilesFetch(request_response::Event<crate::files::FileFetchRequest, crate::files::FileFetchResponse>),
     TxSubmit(request_response::Event<TxSubmitRequest, TxSubmitResponse>),
+    AnonRegister(request_response::Event<AnonRegisterRequest, AnonRegisterResponse>),
+}
+
+impl From<request_response::Event<AnonRegisterRequest, AnonRegisterResponse>> for Event {
+    fn from(e: request_response::Event<AnonRegisterRequest, AnonRegisterResponse>) -> Self {
+        Self::AnonRegister(e)
+    }
 }
 
 impl From<request_response::Event<TxSubmitRequest, TxSubmitResponse>> for Event {
@@ -370,6 +378,48 @@ pub struct FilesFetchCmd {
 /// then `publish` fails with `InsufficientPeers` forever. This protocol gives transactions the
 /// same shape blocks already have: gossip for fan-out, a direct request when you know who to ask.
 pub const TX_SUBMIT_PROTOCOL: &str = "/tet/v1/tx-submit";
+
+/// Direct anonymity-set registration (`/tet/v1/anon-register`) — the second path for registrations.
+///
+/// Same reasoning as [`TX_SUBMIT_PROTOCOL`], applied before the same thing goes wrong again. A
+/// registration that does not reach a peer is worse than a transaction that does not: the member
+/// is silently absent from that peer's anonymity set, so their proofs fail there with no
+/// diagnostic pointing at delivery. Gossip for fan-out, a direct request to bootnodes for
+/// certainty.
+pub const ANON_REGISTER_PROTOCOL: &str = "/tet/v1/anon-register";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AnonRegisterRequest {
+    pub v: u32,
+    pub registration: crate::tmail::anon::TmailAnonRegistrationV1,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AnonRegisterResponse {
+    pub accepted: bool,
+    /// `added` | `updated` | `duplicate` | `stale` | `full` | `rejected` | `rate_limited`
+    pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Ask peers to take a registration directly, bypassing gossip.
+#[derive(Debug, Clone)]
+pub struct AnonRegisterCmd {
+    pub registration: crate::tmail::anon::TmailAnonRegistrationV1,
+}
+
+/// Inbound `anon-register` budget per peer per second (`TET_ANON_REGISTER_RPS`, default 5).
+///
+/// Lower than tx-submit's 10: registration is free and permanent-ish, so it is a cheaper thing to
+/// flood with. Verification is ML-DSA, so the budget is spent before verifying, not after.
+fn anon_register_rps_from_env() -> u64 {
+    std::env::var("TET_ANON_REGISTER_RPS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(5)
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct TxSubmitRequest {
@@ -807,7 +857,18 @@ fn chain_sync_hello_behaviour() -> request_response::json::Behaviour<ChainHello,
 fn tx_submit_behaviour() -> request_response::json::Behaviour<TxSubmitRequest, TxSubmitResponse> {
     request_response::json::Behaviour::new(
         [(
-            StreamProtocol::new(TX_SUBMIT_PROTOCOL),
+            StreamProtocol::new(ANON_REGISTER_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+    )
+}
+
+fn anon_register_behaviour()
+-> request_response::json::Behaviour<AnonRegisterRequest, AnonRegisterResponse> {
+    request_response::json::Behaviour::new(
+        [(
+            StreamProtocol::new(ANON_REGISTER_PROTOCOL),
             request_response::ProtocolSupport::Full,
         )],
         request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
@@ -1221,7 +1282,25 @@ pub(crate) enum TmailGossipOutcome {
     Burned { msg_id: String },
     AlreadyBurned { msg_id: String },
     UnknownBurnTarget { msg_id: String },
+    /// An anonymity-set registration was admitted (or was already known).
+    Registered { wallet_id: String, outcome: String },
     Rejected { reason: String },
+}
+
+/// Admit a registration learned from anywhere (gossip, direct request, or local REST).
+///
+/// **The single verification point.** The local path and both receive paths call this, so a
+/// registration can never be admitted on weaker terms because it arrived a different way — the
+/// mistake `handle_tx_broadcast` was written to fix, applied before it can happen here.
+pub(crate) fn admit_anon_registration(
+    tmail_store: &Arc<crate::tmail::store::TmailStore>,
+    registration: &crate::tmail::anon::TmailAnonRegistrationV1,
+) -> Result<crate::tmail::store::AnonRegisterOutcome, String> {
+    crate::tmail::anon::verify_tmail_anon_registration_v1(registration)
+        .map_err(|e| format!("registration: {e}"))?;
+    tmail_store
+        .register_anon(registration)
+        .map_err(|e| format!("registry: {e}"))
 }
 
 /// Handle a Tmail-plane event learned from a peer: an envelope to buffer, or a burn revoke to
@@ -1256,6 +1335,15 @@ pub(crate) fn handle_tmail_network_event(
                 Err(e) => TmailGossipOutcome::Rejected {
                     reason: format!("store: {e}"),
                 },
+            }
+        }
+        crate::models::NetworkEvent::TmailAnonRegistration { registration } => {
+            match admit_anon_registration(tmail_store, registration) {
+                Ok(outcome) => TmailGossipOutcome::Registered {
+                    wallet_id: registration.wallet_id.clone(),
+                    outcome: format!("{outcome:?}"),
+                },
+                Err(reason) => TmailGossipOutcome::Rejected { reason },
             }
         }
         crate::models::NetworkEvent::TmailBurnRevoke { revoke } => {
@@ -1325,7 +1413,9 @@ fn network_event_topics(
             }
             topics
         }
-        Ok(NetworkEvent::TmailGossip { .. }) | Ok(NetworkEvent::TmailBurnRevoke { .. }) => {
+        Ok(NetworkEvent::TmailGossip { .. })
+        | Ok(NetworkEvent::TmailBurnRevoke { .. })
+        | Ok(NetworkEvent::TmailAnonRegistration { .. }) => {
             vec![tmail_topic.clone()]
         }
         Ok(NetworkEvent::FileAnnounce { .. }) => {
@@ -1422,6 +1512,7 @@ pub type BlockSwarmHandles = (
     mpsc::Sender<String>,
     mpsc::Sender<FilesFetchCmd>,
     mpsc::Sender<TxSubmitCmd>,
+    mpsc::Sender<AnonRegisterCmd>,
     tokio::task::JoinHandle<()>,
 );
 
@@ -1442,6 +1533,7 @@ pub fn start_mdns_ping_swarm(
     let (tx, rx) = mpsc::channel::<String>(256);
     let (files_fetch_tx, files_fetch_rx) = mpsc::channel::<FilesFetchCmd>(32);
     let (tx_submit_tx, tx_submit_rx) = mpsc::channel::<TxSubmitCmd>(256);
+    let (anon_register_tx, anon_register_rx) = mpsc::channel::<AnonRegisterCmd>(128);
     let join = tokio::spawn(async move {
         if let Err(e) = run_mdns_ping_swarm(
             ledger,
@@ -1449,6 +1541,7 @@ pub fn start_mdns_ping_swarm(
             rx,
             files_fetch_rx,
             tx_submit_rx,
+            anon_register_rx,
             keypair,
             listen,
             hello_registry,
@@ -1464,7 +1557,7 @@ pub fn start_mdns_ping_swarm(
             log::warn!("[p2p][mdns] swarm exited: {e}");
         }
     });
-    Ok((tx, files_fetch_tx, tx_submit_tx, join))
+    Ok((tx, files_fetch_tx, tx_submit_tx, anon_register_tx, join))
 }
 
 /// Run the block-plane libp2p swarm (gossip + chain-sync RPC).
@@ -1476,6 +1569,7 @@ async fn run_mdns_ping_swarm(
     mut publish_rx: mpsc::Receiver<String>,
     mut files_fetch_rx: mpsc::Receiver<FilesFetchCmd>,
     mut tx_submit_rx: mpsc::Receiver<TxSubmitCmd>,
+    mut anon_register_rx: mpsc::Receiver<AnonRegisterCmd>,
     keypair: identity::Keypair,
     listen: Multiaddr,
     hello_registry: SharedHelloRegistry,
@@ -1581,6 +1675,7 @@ async fn run_mdns_ping_swarm(
         chain_sync_range: chain_sync_range_behaviour(),
         files_fetch: files_fetch_behaviour(),
         tx_submit: tx_submit_behaviour(),
+        anon_register: anon_register_behaviour(),
     };
     let idle_timeout = idle_timeout_from_env();
     let mut swarm = Swarm::new(
@@ -1651,6 +1746,9 @@ async fn run_mdns_ping_swarm(
     let mut bootnode_peer_ids: std::collections::HashSet<PeerId> = std::collections::HashSet::new();
     let mut tx_submit_limiter = TxSubmitRateLimiter::default();
     let tx_submit_rps = tx_submit_rps_from_env();
+    let mut anon_register_limiter = TxSubmitRateLimiter::default();
+    let anon_register_rps = anon_register_rps_from_env();
+    let mut anon_register_closed = false;
 
     let bootnodes = crate::vision::fluid_net::bootnode_addrs_from_env();
     if !bootnodes.is_empty() {
@@ -1940,6 +2038,27 @@ async fn run_mdns_ping_swarm(
                     tx_submit_closed = true;
                 }
             }
+            maybe_reg = anon_register_rx.recv(), if !anon_register_closed => {
+                if let Some(cmd) = maybe_reg {
+                    // Same targeting as tx-submit: bootnodes when known, else every connected peer.
+                    let connected: Vec<PeerId> = swarm.connected_peers().copied().collect();
+                    let targets: Vec<PeerId> = if bootnode_peer_ids.is_empty() {
+                        connected
+                    } else {
+                        connected.into_iter().filter(|p| bootnode_peer_ids.contains(p)).collect()
+                    };
+                    if targets.is_empty() {
+                        println!("[P2P][anon-register] no connected target peer; gossip remains the only path");
+                    }
+                    for peer in targets {
+                        let req = AnonRegisterRequest { v: 1, registration: cmd.registration.clone() };
+                        let _rid = swarm.behaviour_mut().anon_register.send_request(&peer, req);
+                    }
+                } else {
+                    println!("[P2P][anon-register] command channel closed; direct path disabled, swarm continues");
+                    anon_register_closed = true;
+                }
+            }
             maybe_cmd = files_fetch_rx.recv(), if !files_fetch_closed => {
                 if let Some(cmd) = maybe_cmd {
                     // Prefer the announced storage node when it is a known connected peer;
@@ -2082,6 +2201,64 @@ async fn run_mdns_ping_swarm(
                 // Keep it noisy for debugging while stabilizing Phase 2 network discovery.
                 log::debug!("[p2p][kad] event={ev:?}");
             }
+            SwarmEvent::Behaviour(Event::AnonRegister(ev)) => match ev {
+                request_response::Event::Message {
+                    peer,
+                    message: request_response::Message::Request { request, channel, .. },
+                    ..
+                } => {
+                    // Budget spent before verifying: the hybrid ML-DSA check is the expensive part.
+                    anon_register_limiter.prune();
+                    let resp = if !anon_register_limiter.allow(&peer, anon_register_rps) {
+                        println!("[P2P][anon-register] ⛔ rate limited peer={peer}");
+                        AnonRegisterResponse {
+                            accepted: false,
+                            outcome: "rate_limited".into(),
+                            reason: Some(format!("over {anon_register_rps} reg/s")),
+                        }
+                    } else if request.v != 1 {
+                        AnonRegisterResponse {
+                            accepted: false,
+                            outcome: "rejected".into(),
+                            reason: Some("unsupported request version".into()),
+                        }
+                    } else {
+                        // Exactly the gossip admission path. A direct registration buys no trust
+                        // it would not get over gossip.
+                        match admit_anon_registration(&tmail_store, &request.registration) {
+                            Ok(outcome) => {
+                                let tag = format!("{outcome:?}").to_lowercase();
+                                println!("[P2P][anon-register] ✅ {tag} from {peer}");
+                                AnonRegisterResponse { accepted: true, outcome: tag, reason: None }
+                            }
+                            Err(reason) => {
+                                crate::metrics::inc_gossip_rejected();
+                                println!("[P2P][anon-register] ❌ rejected from {peer}: {reason}");
+                                AnonRegisterResponse {
+                                    accepted: false,
+                                    outcome: "rejected".into(),
+                                    reason: Some(reason),
+                                }
+                            }
+                        }
+                    };
+                    let _ = swarm.behaviour_mut().anon_register.send_response(channel, resp);
+                }
+                request_response::Event::Message {
+                    message: request_response::Message::Response { response, .. },
+                    peer,
+                    ..
+                } => {
+                    println!(
+                        "[P2P][anon-register] peer={peer} accepted={} outcome={}",
+                        response.accepted, response.outcome
+                    );
+                }
+                request_response::Event::OutboundFailure { peer, error, .. } => {
+                    println!("[P2P][anon-register] outbound failure peer={peer} err={error}");
+                }
+                _ => {}
+            },
             SwarmEvent::Behaviour(Event::TxSubmit(ev)) => match ev {
                 request_response::Event::Message {
                     peer,
@@ -2830,7 +3007,8 @@ async fn run_mdns_ping_swarm(
                                 }
                             }
                             ev @ (NetworkEvent::TmailGossip { .. }
-                            | NetworkEvent::TmailBurnRevoke { .. }) => {
+                            | NetworkEvent::TmailBurnRevoke { .. }
+                            | NetworkEvent::TmailAnonRegistration { .. }) => {
                                 // Tmail plane (spec §A.1, §A.3.2). Both branches live in
                                 // `handle_tmail_network_event` so the receive path is one
                                 // testable function rather than logic buried in this loop;
@@ -2853,6 +3031,11 @@ async fn run_mdns_ping_swarm(
                                     TmailGossipOutcome::UnknownBurnTarget { msg_id } => {
                                         println!(
                                             "[P2P] ⏭️ TMAIL BURN REVOKE FOR UNKNOWN msg_id={msg_id}"
+                                        );
+                                    }
+                                    TmailGossipOutcome::Registered { wallet_id, outcome } => {
+                                        println!(
+                                            "[P2P] 📇 ANON REGISTRATION {outcome} wallet={wallet_id}"
                                         );
                                     }
                                     TmailGossipOutcome::Rejected { reason } => {
@@ -3051,6 +3234,7 @@ mod tests {
             chain_sync_range: chain_sync_range_behaviour(),
             files_fetch: files_fetch_behaviour(),
             tx_submit: tx_submit_behaviour(),
+        anon_register: anon_register_behaviour(),
         };
 
         Swarm::new(

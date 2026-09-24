@@ -11,6 +11,7 @@
 //! Design invariant: Tmail ciphertext is **never** written to the ledger — envelopes only travel over
 //! libp2p gossip (`/tet/v1/tmail`) and a node-local TTL buffer ([`store::TmailStore`]).
 
+pub mod anon;
 pub mod burn;
 pub mod envelope;
 pub mod keys;

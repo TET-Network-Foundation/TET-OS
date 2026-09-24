@@ -2191,6 +2191,9 @@ impl Ledger {
             // Burn revokes are off-ledger too: they delete from the node-local Tmail buffer and
             // touch no balance. Handled in the p2p event loop; this arm keeps the match exhaustive.
             crate::models::NetworkEvent::TmailBurnRevoke { .. } => Ok(false),
+            // Anonymity-set registrations are off-ledger too: they touch the node's registry and
+            // no balance. Handled in the p2p event loop; this arm keeps the match exhaustive.
+            crate::models::NetworkEvent::TmailAnonRegistration { .. } => Ok(false),
             // File Sharing announce envelopes are off-ledger (gossip + node buffer only). Handled in
             // the p2p event loop; this arm only keeps the match exhaustive.
             crate::models::NetworkEvent::FileAnnounce { .. } => Ok(false),

@@ -217,6 +217,18 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::post(super::handlers::tmail::post_tmail_send),
         )
         .route(
+            "/tmail/anon/register",
+            axum::routing::post(super::handlers::tmail::post_tmail_anon_register),
+        )
+        .route(
+            "/tmail/anon/root",
+            axum::routing::get(super::handlers::tmail::get_tmail_anon_root),
+        )
+        .route(
+            "/tmail/anon/path/:wallet_id",
+            axum::routing::get(super::handlers::tmail::get_tmail_anon_path),
+        )
+        .route(
             "/tmail/read-receipt",
             axum::routing::post(super::handlers::tmail::post_tmail_read_receipt),
         )

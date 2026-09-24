@@ -72,6 +72,15 @@ pub enum NetworkEvent {
         revoke: crate::tmail::burn::TmailBurnRevokeV1,
     },
 
+    /// An anonymity-set registration gossiped to peers (spec §A.4.3).
+    ///
+    /// Off-ledger, like the other Tmail events. Receivers MUST run the same verification the local
+    /// registration path runs and MUST NOT re-publish — onward propagation is gossipsub's mesh,
+    /// never amplification by us.
+    TmailAnonRegistration {
+        registration: crate::tmail::anon::TmailAnonRegistrationV1,
+    },
+
     /// A File Sharing announce envelope gossiped to peers (spec `PHASE_0_FILE_SHARING_SPEC.md` §6).
     ///
     /// Off-ledger, mirroring [`NetworkEvent::TmailGossip`]: receivers MUST verify the hybrid
