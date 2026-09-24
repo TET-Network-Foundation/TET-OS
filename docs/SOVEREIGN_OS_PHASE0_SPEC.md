@@ -401,6 +401,28 @@ Anchor (A) ──fund──► Ephemeral (E) ──send Tmail──► Receiver
 
 **Verifier:** [`zk_verifier.rs`](../../tet-core/src/zk_verifier.rs) extend `VerifiedZkJournal` enum.
 
+**Proof system: STARK only. Groth16 wrapping is rejected (decided 2026-09-24).**
+
+A measured receipt is **318.7 KiB** base64 against a **128 KiB** gossip ceiling (`p2p.rs:439`), so
+the proof cannot ride inside the envelope and something has to give. The obvious fix — wrap the
+STARK in Groth16 to shrink it — is **refused on post-quantum grounds**, not on effort:
+
+| | Basis | Quantum |
+|---|---|---|
+| RISC Zero STARK (what we have) | hash-based (SHA-256 / Poseidon) | holds |
+| Groth16 (the compression) | **pairing-based, BN254** | **broken** |
+
+Wrapping a hash-based proof in a pairing-based one puts the anonymity of a post-quantum chain on
+the single classical assumption in the stack: a quantum adversary forges the wrapper and the
+anonymity claim collapses, while every other part of TET still stands. That is the same reason the
+ring-signature / stealth-address design was dropped from §A.1.2 — ECC-based, quantum-vulnerable,
+contrary to the premise. Groth16 also adds a trusted setup to a chain whose pitch includes not
+having one, so it contradicts the premise twice.
+
+**Therefore the receipt is not embedded.** §A.1.2's `anonymous.anchor_proof` carries only
+`image_id`, the journal and a `receipt_hash` (~300 B); the receipt itself is pulled over the Files
+fetch codec. See `SPRINT_PLAN.md` § S8 for the announce-then-pull design.
+
 **On send:** Gossip shows `sender_wallet_id = ANONYMOUS` + `anonymous.ephemeral_wallet_id` + ZK receipt — **not** anchor.
 
 ### A.4.4 Anchor-only audit trail — **client-side** (rewritten 2026-09-24)

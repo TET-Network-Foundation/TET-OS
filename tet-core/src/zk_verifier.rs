@@ -6,6 +6,47 @@ use base64::Engine as _;
 pub use nexus_protocol::{InferenceJournalV1, ZkCourtJournalV1};
 use risc0_zkvm::Receipt;
 
+/// **Compile-time guard: a `zk-prove` build must embed a real guest.**
+///
+/// `risc0-build` skips embedding when `RISC0_SKIP_BUILD` is merely *set*, regardless of value, so
+/// `RISC0_SKIP_BUILD=0` — which the Dockerfile and `zk-image.yml` both pass meaning "do build the
+/// guest" — once produced `NEXUS_GUEST_ELF = &[]` and `NEXUS_GUEST_ID = [0; 8]` **while the build
+/// went green**. The node then started normally, refused to prove with "guest ELF empty", and
+/// verified receipts against an all-zero image id. The zk image that passed CI on 2026-09-22 had
+/// exactly this shape.
+///
+/// `methods/build.rs` now removes the variable before calling `embed_methods`, but a build-script
+/// fix is only as good as the next person not reintroducing it. This assertion makes the broken
+/// state **unrepresentable**: any build carrying `--features zk-prove` fails to compile rather than
+/// producing a node that cannot prove. It covers the Docker image, CI and local builds alike, which
+/// a CI-only check would not.
+///
+/// It is deliberately compile-time rather than a test: a test can be skipped, and this one was —
+/// every ZK test in the repo runs on `MOCKJ1:`/`MOCKZC1:` mocks, which is why the empty guest
+/// survived for months.
+#[cfg(feature = "zk-prove")]
+const _: () = {
+    assert!(
+        !methods::NEXUS_GUEST_ELF.is_empty(),
+        "zk-prove build has an empty NEXUS_GUEST_ELF: the guest was not embedded. \
+         RISC0_SKIP_BUILD must be UNSET (not 0) for risc0-build, see methods/build.rs."
+    );
+    let id = methods::NEXUS_GUEST_ID;
+    let mut i = 0usize;
+    let mut any_nonzero = false;
+    while i < 8 {
+        if id[i] != 0 {
+            any_nonzero = true;
+        }
+        i += 1;
+    }
+    assert!(
+        any_nonzero,
+        "zk-prove build has an all-zero NEXUS_GUEST_ID: receipts would verify against a null \
+         image id. RISC0_SKIP_BUILD must be UNSET (not 0), see methods/build.rs."
+    );
+};
+
 #[derive(Debug, Clone)]
 pub enum VerifiedZkJournal {
     Inference(InferenceJournalV1),
