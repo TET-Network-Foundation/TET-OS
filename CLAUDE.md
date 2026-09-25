@@ -59,6 +59,26 @@ answering:
 The negative control is what caught both. A guard that cannot fail is worse than no guard, because
 it is counted.
 
+## In a must-be-refused assertion, never accept multiple reasons with `||`
+
+**Assert the specific error the test is named for.** If a cheaper check rejects first, construct the
+input so it passes every earlier check — otherwise the check under test is never reached and the
+guard is measuring something else.
+
+Two guards here were vacuous for exactly this reason, and both looked green:
+
+- **M1** (`s8_registration_signed_by_another_wallet_is_refused`) mutated `wallet_id` *after*
+  signing. `wallet_id` is inside the pre-image, so the **signature** rejected it and the
+  `signer == wallet_id` check never ran. The real forgery is a *correctly signed* registration: A
+  signs, with A's own key, a pre-image naming B.
+- **O3** (`s8_anonymous_envelope_journal_must_match_the_receiver`) re-pointed `receiver_wallet_id`
+  after signing, so again the signature fired first and the journal binding was never reached. Its
+  assertion allowed either reason via `||`, which is what let it pass. It now **re-signs** after
+  mutating, so the signature is genuinely valid and only the journal binding can refuse.
+
+An `||` in a rejection assertion is a smell: it usually means the author was not sure which check
+would fire, which is the thing the test exists to pin down.
+
 ## Bound every config- or input-driven loop, and make the bound observable
 
 **Every loop or scan driven by configuration or input needs an explicit upper bound, and the
