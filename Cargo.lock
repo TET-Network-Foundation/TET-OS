@@ -7631,6 +7631,7 @@ dependencies = [
 name = "nexus-protocol"
 version = "0.1.0"
 dependencies = [
+ "hkdf 0.12.4",
  "serde",
  "sha2 0.10.9",
 ]

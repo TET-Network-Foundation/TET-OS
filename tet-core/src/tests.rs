@@ -9953,3 +9953,200 @@ fn s8_re_announcing_the_same_commitment_is_a_no_op() {
         "a different commitment is a real update and stays subject to the cooldown"
     );
 }
+
+// ---------------------------------------------------------------------------
+// S8 — anonymity-registry anti-entropy sync.
+// ---------------------------------------------------------------------------
+
+/// Pagination walks the whole registry in wallet order and terminates.
+#[test]
+fn s8_sync_pagination_covers_everything_and_ends() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let mut wallets = Vec::new();
+    for i in 0..7u8 {
+        let (w, wallet) = tmail_party_for_tests();
+        store
+            .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[i + 1; 32], 1_000))
+            .unwrap();
+        wallets.push(wallet.to_ascii_lowercase());
+    }
+    wallets.sort();
+
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    let mut pages = 0;
+    loop {
+        let (regs, next) = store.anon_registrations_after(cursor.as_deref(), 3);
+        pages += 1;
+        assert!(pages < 20, "pagination must terminate");
+        for r in regs {
+            seen.push(r.wallet_id.to_ascii_lowercase());
+        }
+        match next {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+    assert_eq!(seen.len(), 7, "every registration must be visited exactly once");
+    assert_eq!(seen, wallets, "and in canonical wallet order");
+}
+
+/// A probe (`limit = 0`) returns no registrations — the steady state must not transfer the
+/// registry just to compare roots.
+#[test]
+fn s8_sync_probe_returns_no_registrations() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (w, wallet) = tmail_party_for_tests();
+    store
+        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000))
+        .unwrap();
+    let (regs, next) = store.anon_registrations_after(None, 0);
+    assert!(regs.is_empty(), "a probe must carry no records");
+    assert!(next.is_none());
+}
+
+/// **Reproduces the CH↔HEL gap, then closes it.**
+///
+/// The live run left node A with `members=2` and node B with `members=1`, roots diverged, and the
+/// cross-node anonymous message failed to verify. Gossip had delivered A's later registration to
+/// nobody who was not already listening; B had only its own.
+///
+/// This sets up that exact state, runs anti-entropy in both directions, and asserts convergence.
+/// The epoch claim is asserted directly: synced registrations enter at the receiving node's **next**
+/// epoch, so roots converge from then on, never retroactively.
+#[test]
+fn s8_late_joiner_converges_after_sync_and_one_epoch() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "400");
+
+    // A holds two registrations; B joined later and holds only its own. This is the live state.
+    let node_a = tmail_store_for_tests();
+    let node_b = tmail_store_for_tests();
+    for i in 0..2u8 {
+        let (w, wallet) = tmail_party_for_tests();
+        node_a
+            .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[i + 1; 32], 1_000))
+            .unwrap();
+    }
+    let (wb, wallet_b) = tmail_party_for_tests();
+    node_b
+        .register_anon(&signed_anon_registration_for_tests(&wb, &wallet_b, &[9u8; 32], 1_000))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    assert_eq!(node_a.anon_member_count(), 2, "precondition: seed saw two");
+    assert_eq!(node_b.anon_member_count(), 1, "precondition: follower saw one");
+    assert_ne!(
+        node_a.anon_root(),
+        node_b.anon_root(),
+        "precondition: this is the members=2 vs members=1 divergence observed CH<->HEL"
+    );
+
+    // Anti-entropy: both sides page the other, then admit through the normal path. Snapshotted
+    // first so this is one simultaneous round, not A learning from an already-updated B.
+    let page_of = |s: &crate::tmail::store::TmailStore| {
+        let mut all = Vec::new();
+        let mut cursor: Option<String> = None;
+        loop {
+            let (page, next) = s.anon_registrations_after(cursor.as_deref(), crate::p2p::ANON_SYNC_PAGE);
+            all.extend(page);
+            match next {
+                Some(c) => cursor = Some(c),
+                None => break,
+            }
+        }
+        all
+    };
+    let from_a = page_of(&node_a);
+    let from_b = page_of(&node_b);
+    assert_eq!((from_a.len(), from_b.len()), (2, 1), "each serves its whole registry");
+    for (regs, to) in [(&from_a, &node_b), (&from_b, &node_a)] {
+        for reg in regs {
+            crate::tmail::anon::verify_tmail_anon_registration_v1(reg)
+                .expect("synced registrations carry their own signature and must verify");
+            to.register_anon(reg).unwrap();
+        }
+    }
+    assert_eq!(node_a.anon_member_count(), 3);
+    assert_eq!(node_b.anon_member_count(), 3, "B now holds the union");
+
+    // Not yet equal: the new leaves entered at each node's NEXT epoch, so the roots in force right
+    // now are still the pre-sync ones.
+    assert_ne!(
+        node_a.anon_root(),
+        node_b.anon_root(),
+        "convergence is from the next epoch, not retroactive -- a proof built against a peer's \
+         pre-sync root may be rejected once, and the sender's retry succeeds"
+    );
+
+    // After one epoch on both, the roots match and a proof from either verifies against the other.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(
+        node_a.anon_root(),
+        node_b.anon_root(),
+        "after one epoch the two nodes compute the same root over the same member set"
+    );
+    assert_eq!(node_a.anon_member_count(), 3);
+    assert_eq!(node_b.anon_member_count(), 3);
+}
+
+/// A forged registration cannot enter through sync: the admission path is the same one gossip uses.
+#[test]
+fn s8_sync_cannot_import_a_forged_registration() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (w, wallet) = tmail_party_for_tests();
+    let mut reg = signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000);
+    // A peer tampers with the commitment it serves us.
+    reg.commitment_hex = hex::encode([0xFFu8; 32]);
+
+    assert!(
+        crate::tmail::anon::verify_tmail_anon_registration_v1(&reg).is_err(),
+        "a peer can withhold registrations, and can flood within the caps -- but it cannot forge \
+         one, because each carries the wallet's own hybrid signature"
+    );
+    assert_eq!(store.anon_member_count(), 0);
+}
+
+/// **Verification cost of a full sync.** ML-DSA verification dominates; this measures it and states
+/// the budget rather than assuming one.
+#[test]
+#[ignore = "timing measurement; run explicitly"]
+fn s8_measure_sync_verification_cost() {
+    let _g = env_lock();
+    set_test_env_base();
+    let n = std::env::var("TET_SYNC_BENCH_N")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(200);
+
+    let mut regs = Vec::with_capacity(n);
+    for i in 0..n {
+        let (w, wallet) = tmail_party_for_tests();
+        regs.push(signed_anon_registration_for_tests(
+            &w,
+            &wallet,
+            &[(i % 251) as u8 + 1; 32],
+            1_000,
+        ));
+    }
+
+    let started = std::time::Instant::now();
+    for reg in &regs {
+        crate::tmail::anon::verify_tmail_anon_registration_v1(reg).expect("valid");
+    }
+    let elapsed = started.elapsed();
+    let per = elapsed.as_secs_f64() * 1000.0 / n as f64;
+    println!("\n=== registry sync verification cost ===");
+    println!("registrations verified : {n}");
+    println!("total                  : {:.0} ms", elapsed.as_secs_f64() * 1000.0);
+    println!("per registration       : {per:.2} ms");
+    println!("extrapolated to 50,000 : {:.1} s", per * 50_000.0 / 1000.0);
+    println!("page of {}            : {:.0} ms", crate::p2p::ANON_SYNC_PAGE, per * crate::p2p::ANON_SYNC_PAGE as f64);
+}

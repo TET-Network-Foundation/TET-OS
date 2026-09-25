@@ -282,6 +282,7 @@ struct TetBehaviour {
     tx_submit: request_response::json::Behaviour<TxSubmitRequest, TxSubmitResponse>,
     anon_register: request_response::json::Behaviour<AnonRegisterRequest, AnonRegisterResponse>,
     anon_receipt: request_response::json::Behaviour<AnonReceiptRequest, AnonReceiptResponse>,
+    anon_sync: request_response::json::Behaviour<AnonSyncRequest, AnonSyncResponse>,
 }
 
 #[derive(Debug)]
@@ -298,6 +299,13 @@ enum Event {
     TxSubmit(request_response::Event<TxSubmitRequest, TxSubmitResponse>),
     AnonRegister(request_response::Event<AnonRegisterRequest, AnonRegisterResponse>),
     AnonReceipt(request_response::Event<AnonReceiptRequest, AnonReceiptResponse>),
+    AnonSync(request_response::Event<AnonSyncRequest, AnonSyncResponse>),
+}
+
+impl From<request_response::Event<AnonSyncRequest, AnonSyncResponse>> for Event {
+    fn from(e: request_response::Event<AnonSyncRequest, AnonSyncResponse>) -> Self {
+        Self::AnonSync(e)
+    }
 }
 
 impl From<request_response::Event<AnonReceiptRequest, AnonReceiptResponse>> for Event {
@@ -406,6 +414,89 @@ pub const ANON_REGISTER_PROTOCOL: &str = "/tet/v1/anon-register";
 /// response is checked against it before anything else happens. A node that has verified a receipt
 /// may cache and serve it, so the sender going offline does not strand every message it sent.
 pub const ANON_RECEIPT_PROTOCOL: &str = "/tet/v1/anon-receipt";
+
+/// Anti-entropy sync of the anonymity registry (`/tet/v1/anon-registry-sync`).
+///
+/// # Why gossip is not enough
+///
+/// Registrations propagate forward only: you learn one if you were listening when it was published.
+/// A node that joins later holds a strict subset of its peers' registries, computes a different
+/// Merkle root, and then correctly rejects perfectly valid proofs built against the peer's root.
+/// Observed CH↔HEL on 2026-09-25: follower `members=1`, seed `members=2`, roots divergent.
+///
+/// This is the same shape as transactions in S4 and blocks since S1: **gossip gives you the
+/// present, never the past**, so anything that must converge needs a pull as well as a push.
+///
+/// It runs on a timer as well as on connect, because the 2026-09-22 lost-subscription bug showed a
+/// node can be connected and healthy while silently receiving nothing on a topic. Periodic root
+/// comparison detects that; a join-only sync would not.
+pub const ANON_REGISTRY_SYNC_PROTOCOL: &str = "/tet/v1/anon-registry-sync";
+
+/// Registrations per page. Each carries an ML-DSA signature, so a page is the unit of verification
+/// work a peer can ask of us in one request.
+pub const ANON_SYNC_PAGE: usize = 256;
+/// Hard cap on pages per sync round: `256 * 200 = 51,200`, just over the 50,000 member cap, so a
+/// complete registry fits and nothing larger can be walked.
+pub const ANON_SYNC_MAX_PAGES: u32 = 200;
+/// How often to re-compare roots with peers.
+pub const ANON_SYNC_INTERVAL_SEC: u64 = 300;
+/// Wall-clock budget for *verifying* synced registrations, per peer per sync round.
+///
+/// Admission runs a hybrid Ed25519 + ML-DSA-44 verification per registration. Measured on this
+/// machine (`s8_measure_sync_verification_cost`, 300 registrations): **2.39 ms each**, so a
+/// [`ANON_SYNC_PAGE`] page costs ~0.61 s and a full 50,000-member registry ~119 s of pure
+/// verification. Unbounded, one peer claiming a full registry could hold the sync path for two
+/// minutes per round.
+///
+/// 30 s admits ~12,500 registrations per peer per round. A registry larger than that converges
+/// across several rounds via the resume cursor rather than in one — slower, but never at the cost
+/// of the node's responsiveness, and never by admitting anything unverified.
+pub const ANON_SYNC_VERIFY_BUDGET_MS: u64 = 30_000;
+
+/// The verification budget in force, honouring `TET_ANON_SYNC_VERIFY_BUDGET_MS`.
+fn anon_sync_verify_budget() -> Duration {
+    Duration::from_millis(
+        std::env::var("TET_ANON_SYNC_VERIFY_BUDGET_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(ANON_SYNC_VERIFY_BUDGET_MS),
+    )
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AnonSyncRequest {
+    pub v: u32,
+    /// Exclusive cursor: the last wallet id already held. `None` starts from the beginning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_wallet: Option<String>,
+    /// `0` is a **probe**: reply with the root and total only, no registrations. Anti-entropy sends
+    /// this first and pages only on a mismatch, so the steady state costs one small round trip
+    /// rather than a registry transfer.
+    pub limit: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AnonSyncResponse {
+    /// The responder's current epoch root, hex.
+    pub merkle_root_hex: String,
+    pub epoch: u64,
+    pub total_members: usize,
+    #[serde(default)]
+    pub registrations: Vec<crate::tmail::anon::TmailAnonRegistrationV1>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+}
+
+/// Inbound `anon-registry-sync` budget per peer per second. Low: a sync round is a handful of
+/// requests, and serving a page reads and serializes up to [`ANON_SYNC_PAGE`] records.
+fn anon_sync_rps_from_env() -> u64 {
+    std::env::var("TET_ANON_SYNC_RPS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(2)
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AnonReceiptRequest {
@@ -918,6 +1009,16 @@ fn anon_receipt_behaviour()
         )],
         // Longer than the others: the response is ~350 KB base64 over a possibly slow link.
         request_response::Config::default().with_request_timeout(Duration::from_secs(30)),
+    )
+}
+
+fn anon_sync_behaviour() -> request_response::json::Behaviour<AnonSyncRequest, AnonSyncResponse> {
+    request_response::json::Behaviour::new(
+        [(
+            StreamProtocol::new(ANON_REGISTRY_SYNC_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        request_response::Config::default().with_request_timeout(Duration::from_secs(20)),
     )
 }
 
@@ -1723,6 +1824,7 @@ async fn run_mdns_ping_swarm(
         tx_submit: tx_submit_behaviour(),
         anon_register: anon_register_behaviour(),
         anon_receipt: anon_receipt_behaviour(),
+        anon_sync: anon_sync_behaviour(),
     };
     let idle_timeout = idle_timeout_from_env();
     let mut swarm = Swarm::new(
@@ -1793,6 +1895,25 @@ async fn run_mdns_ping_swarm(
     let mut bootnode_peer_ids: std::collections::HashSet<PeerId> = std::collections::HashSet::new();
     let mut tx_submit_limiter = TxSubmitRateLimiter::default();
     let tx_submit_rps = tx_submit_rps_from_env();
+    let mut anon_sync_limiter = TxSubmitRateLimiter::default();
+    let anon_sync_rps = anon_sync_rps_from_env();
+    let anon_sync_budget = anon_sync_verify_budget();
+    let mut anon_sync_spent: std::collections::HashMap<PeerId, Duration> =
+        std::collections::HashMap::new();
+    // Where an interrupted round stopped, so the next one resumes instead of re-verifying the
+    // prefix it already admitted. Cleared on completion, so the round after a completed one starts
+    // from the beginning and picks up registrations that sort before the cursor.
+    let mut anon_sync_resume: std::collections::HashMap<PeerId, String> =
+        std::collections::HashMap::new();
+    let mut anon_sync_pages: std::collections::HashMap<PeerId, u32> =
+        std::collections::HashMap::new();
+    let mut anon_sync_ticker = tokio::time::interval(Duration::from_secs(
+        std::env::var("TET_ANON_SYNC_INTERVAL_SEC")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(ANON_SYNC_INTERVAL_SEC),
+    ));
     let mut anon_register_limiter = TxSubmitRateLimiter::default();
     let anon_register_rps = anon_register_rps_from_env();
     let mut anon_register_closed = false;
@@ -2085,6 +2206,17 @@ async fn run_mdns_ping_swarm(
                     tx_submit_closed = true;
                 }
             }
+            _ = anon_sync_ticker.tick() => {
+                // Anti-entropy, not just on join. A node can be connected and healthy while
+                // silently receiving nothing on a topic (observed 2026-09-22), so roots are
+                // re-compared periodically rather than trusted after one exchange.
+                for peer in swarm.connected_peers().copied().collect::<Vec<_>>() {
+                    let _ = swarm.behaviour_mut().anon_sync.send_request(
+                        &peer,
+                        AnonSyncRequest { v: 1, after_wallet: None, limit: 0 },
+                    );
+                }
+            }
             maybe_reg = anon_register_rx.recv(), if !anon_register_closed => {
                 if let Some(cmd) = maybe_reg {
                     // Same targeting as tx-submit: bootnodes when known, else every connected peer.
@@ -2248,6 +2380,155 @@ async fn run_mdns_ping_swarm(
                 // Keep it noisy for debugging while stabilizing Phase 2 network discovery.
                 log::debug!("[p2p][kad] event={ev:?}");
             }
+            SwarmEvent::Behaviour(Event::AnonSync(ev)) => match ev {
+                request_response::Event::Message {
+                    peer,
+                    message: request_response::Message::Request { request, channel, .. },
+                    ..
+                } => {
+                    anon_sync_limiter.prune();
+                    let root = tmail_store.anon_root();
+                    let resp = if !anon_sync_limiter.allow(&peer, anon_sync_rps) {
+                        AnonSyncResponse {
+                            merkle_root_hex: hex::encode(root),
+                            epoch: tmail_store.anon_current_epoch(),
+                            total_members: tmail_store.anon_member_count(),
+                            registrations: Vec::new(),
+                            next_cursor: None,
+                        }
+                    } else {
+                        // limit 0 is the probe: root and total only. Anti-entropy sends this first
+                        // so the steady state is one small round trip, not a registry transfer.
+                        let limit = request.limit.min(ANON_SYNC_PAGE);
+                        let (registrations, next_cursor) = if limit == 0 {
+                            (Vec::new(), None)
+                        } else {
+                            tmail_store
+                                .anon_registrations_after(request.after_wallet.as_deref(), limit)
+                        };
+                        AnonSyncResponse {
+                            merkle_root_hex: hex::encode(root),
+                            epoch: tmail_store.anon_current_epoch(),
+                            total_members: tmail_store.anon_member_count(),
+                            registrations,
+                            next_cursor,
+                        }
+                    };
+                    let _ = swarm.behaviour_mut().anon_sync.send_response(channel, resp);
+                }
+                request_response::Event::Message {
+                    peer,
+                    message: request_response::Message::Response { response, .. },
+                    ..
+                } => {
+                    let ours = hex::encode(tmail_store.anon_root());
+                    if response.registrations.is_empty() && response.next_cursor.is_none() {
+                        // Probe reply. Page only on a mismatch.
+                        if response.merkle_root_hex == ours {
+                            anon_sync_pages.remove(&peer);
+                            continue;
+                        }
+                        println!(
+                            "[P2P][anon-sync] root mismatch with {peer}: ours={} theirs={} (theirs has {} members) -- syncing",
+                            &ours[..16], &response.merkle_root_hex[..16.min(response.merkle_root_hex.len())],
+                            response.total_members
+                        );
+                        anon_sync_pages.insert(peer, 0);
+                        anon_sync_spent.insert(peer, Duration::ZERO);
+                        let after_wallet = anon_sync_resume.get(&peer).cloned();
+                        if let Some(c) = &after_wallet {
+                            println!("[P2P][anon-sync] resuming after {c}");
+                        }
+                        let _ = swarm.behaviour_mut().anon_sync.send_request(
+                            &peer,
+                            AnonSyncRequest { v: 1, after_wallet, limit: ANON_SYNC_PAGE },
+                        );
+                        continue;
+                    }
+                    // A page. Every record goes through the SAME admission path as gossip and
+                    // REST: a peer cannot forge a registration, because each carries the wallet's
+                    // own hybrid signature. What it CAN do is withhold (we stay partial and fail
+                    // closed) or flood (bounded by the member cap, the page size and the RPS).
+                    let mut added = 0usize;
+                    let verify_started = std::time::Instant::now();
+                    for reg in &response.registrations {
+                        match admit_anon_registration(&tmail_store, reg) {
+                            Ok(crate::tmail::store::AnonRegisterOutcome::Added) => added += 1,
+                            Ok(_) => {}
+                            Err(e) => {
+                                crate::metrics::inc_gossip_rejected();
+                                println!("[P2P][anon-sync] rejected a synced registration: {e}");
+                            }
+                        }
+                    }
+                    let spent = anon_sync_spent.entry(peer).or_insert(Duration::ZERO);
+                    *spent += verify_started.elapsed();
+                    let spent = *spent;
+                    let page = anon_sync_pages.entry(peer).or_insert(0);
+                    *page += 1;
+                    println!(
+                        "[P2P][anon-sync] page {} from {peer}: +{added} new, {} members now, {} ms \
+                         of {} ms verify budget used",
+                        *page,
+                        tmail_store.anon_member_count(),
+                        spent.as_millis(),
+                        anon_sync_budget.as_millis()
+                    );
+                    if spent >= anon_sync_budget {
+                        // Bound reached. Say so, and remember where to resume: a budget that
+                        // silently truncated would look identical to a completed sync.
+                        match &response.next_cursor {
+                            Some(cursor) => {
+                                println!(
+                                    "[P2P][anon-sync] verify budget spent after {} pages with {peer}; \
+                                     pausing at {cursor}, resuming next round",
+                                    *page
+                                );
+                                anon_sync_resume.insert(peer, cursor.clone());
+                            }
+                            None => {
+                                anon_sync_resume.remove(&peer);
+                            }
+                        }
+                        anon_sync_pages.remove(&peer);
+                        anon_sync_spent.remove(&peer);
+                        continue;
+                    }
+                    if let Some(cursor) = response.next_cursor
+                        && *page < ANON_SYNC_MAX_PAGES
+                    {
+                        let _ = swarm.behaviour_mut().anon_sync.send_request(
+                            &peer,
+                            AnonSyncRequest {
+                                v: 1,
+                                after_wallet: Some(cursor),
+                                limit: ANON_SYNC_PAGE,
+                            },
+                        );
+                    } else {
+                        if *page >= ANON_SYNC_MAX_PAGES {
+                            println!(
+                                "[P2P][anon-sync] page cap {ANON_SYNC_MAX_PAGES} reached with {peer}"
+                            );
+                        }
+                        anon_sync_pages.remove(&peer);
+                        anon_sync_spent.remove(&peer);
+                        // A completed round starts the next one from the beginning.
+                        anon_sync_resume.remove(&peer);
+                        println!(
+                            "[P2P][anon-sync] sync with {peer} complete: {} members, root {}",
+                            tmail_store.anon_member_count(),
+                            &hex::encode(tmail_store.anon_root())[..16]
+                        );
+                    }
+                }
+                request_response::Event::OutboundFailure { peer, error, .. } => {
+                    anon_sync_pages.remove(&peer);
+                    anon_sync_spent.remove(&peer);
+                    println!("[P2P][anon-sync] outbound failure peer={peer} err={error}");
+                }
+                _ => {}
+            },
             SwarmEvent::Behaviour(Event::AnonReceipt(ev)) => match ev {
                 request_response::Event::Message {
                     peer,
@@ -2765,6 +3046,15 @@ async fn run_mdns_ping_swarm(
                 );
                 log::info!("[p2p][mdns] connected peer_id={peer_id} endpoint={remote}");
                 peer_dial_book.insert(peer_id, remote);
+                // Probe the anonymity-registry root immediately, not only on the 5 min timer: a
+                // node that just joined is precisely the one holding a partial registry, and
+                // waiting a tick means its first anonymous message is rejected for no good reason.
+                if peer_id != *swarm.local_peer_id() {
+                    let _ = swarm.behaviour_mut().anon_sync.send_request(
+                        &peer_id,
+                        AnonSyncRequest { v: 1, after_wallet: None, limit: 0 },
+                    );
+                }
                 if peer_id != *swarm.local_peer_id() {
                     // Bootnodes only. This used to run for EVERY connected peer, and an explicit
                     // peer is excluded from `get_random_peers`, which fills both mesh and fanout
@@ -3396,6 +3686,7 @@ mod tests {
             tx_submit: tx_submit_behaviour(),
         anon_register: anon_register_behaviour(),
         anon_receipt: anon_receipt_behaviour(),
+        anon_sync: anon_sync_behaviour(),
         };
 
         Swarm::new(

@@ -471,6 +471,62 @@ wallet already makes, and the alternative is a replicated index that deanonymise
 
 </details>
 
+### A.4.4b Registry convergence — anti-entropy sync (added 2026-09-25)
+
+Gossip propagates a registration to whoever is subscribed **at that moment**. It has no history, so
+a node that joins later, or that misses a message, never learns the registration — and its Merkle
+root then differs from its peers' forever. This was observed live on 2026-09-25: the CH seed held
+`members=2`, the HEL follower `members=1`, roots divergent, and a cross-node anonymous message
+failed to verify with no error on either side that named the cause.
+
+`/tet/v1/anon-registry-sync` closes it by pulling as well as pushing.
+
+**Schedule.** On every peer connect, and every `ANON_SYNC_INTERVAL_SEC` (300 s) thereafter. Periodic
+comparison is not redundant with on-connect: the 2026-09-22 lost-subscription bug showed a node can
+be connected and healthy while silently receiving nothing on a topic. A join-only sync would not
+detect that; a root comparison every 5 minutes does.
+
+**Protocol.** Request/response on the block plane. A round begins with a **probe** (`limit = 0`)
+that returns only the responder's root, epoch and member count. Roots equal → done, one small round
+trip. Roots differ → page through the registry in wallet order, `ANON_SYNC_PAGE` (256) per request,
+each page cursored by the last wallet id.
+
+**Admission.** Every synced registration goes through `admit_anon_registration`, the same path as
+gossip and REST: hybrid Ed25519 + ML-DSA-44 signature check, one commitment per wallet, member cap,
+update cooldown. A peer therefore **cannot forge** a registration — each carries the registering
+wallet's own signature. What a peer *can* do is bounded and stated:
+
+| Peer behaviour | Effect | Bound |
+|---|---|---|
+| Withhold registrations | We stay partial and **fail closed** — proofs against roots we cannot compute are rejected, never accepted on trust | — |
+| Flood registrations | Bounded by the member cap, page size, page cap and per-peer RPS | `DEFAULT_ANON_MAX_MEMBERS` 50,000; `ANON_SYNC_PAGE` 256; `ANON_SYNC_MAX_PAGES` 200; `TET_ANON_SYNC_RPS` 2/s |
+| Serve garbage | Rejected at admission, counted in `gossip_rejected` | — |
+
+**Verification budget.** Admission runs one hybrid signature verification per registration. Measured
+(`s8_measure_sync_verification_cost`, 300 registrations): **2.39 ms each** → ~0.61 s per 256-page,
+~119 s for a full 50,000-member registry. That is too long to hand a single peer, so a round carries
+a wall-clock budget, `ANON_SYNC_VERIFY_BUDGET_MS` (30 s ≈ 12,500 registrations per peer per round).
+On exhaustion the round **pauses at its cursor and logs that it did so**, and the next round resumes
+there; a completed round clears the cursor so the following one starts from the beginning and picks
+up registrations that sort earlier. A registry larger than one budget converges over several rounds
+rather than in one — never by admitting anything unverified, and never silently truncated.
+
+**Epoch semantics — convergence is forward, not retroactive.** Roots advance on epoch boundaries
+(`DEFAULT_ANON_EPOCH_MS`, 60 s), so synced registrations enter at the **receiving node's next
+epoch**. Stated plainly:
+
+- Two nodes converge **from the first epoch after sync**, not for epochs already past. A past root
+  of ours can never be made to match a peer's past root; the history is what each node actually saw.
+- A proof built against a peer's root from before our sync **may be rejected once**. The rejection
+  is correct — we cannot verify a root we never held. The sender's retry, built against the
+  now-common root, succeeds.
+- Therefore: **one rejection after a late join is expected behaviour, not a failure.** Repeated
+  rejection after a full epoch has passed is a real bug.
+
+This claim is asserted directly, not assumed, in `s8_late_joiner_converges_after_sync_and_one_epoch`
+— which sets up the live `members=2` vs `members=1` state, syncs, asserts the roots are **still**
+unequal immediately after (not retroactive), and equal one epoch later.
+
 ### A.4.5 Misuse prevention
 
 | Control | Value (tunable) |

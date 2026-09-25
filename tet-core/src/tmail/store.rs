@@ -827,6 +827,44 @@ impl TmailStore {
         }
     }
 
+    /// A page of registrations for anti-entropy sync, ordered by wallet id.
+    ///
+    /// Returns `(registrations, next_cursor)`. `after` is exclusive, so a caller pages by feeding
+    /// back the last wallet id it received. Ordering is the same lexicographic order the Merkle
+    /// leaves use, so a full sync reconstructs the peer's set exactly.
+    pub fn anon_registrations_after(
+        &self,
+        after: Option<&str>,
+        limit: usize,
+    ) -> (Vec<crate::tmail::anon::TmailAnonRegistrationV1>, Option<String>) {
+        let mut out = Vec::new();
+        let mut last: Option<String> = None;
+        let iter: Box<dyn Iterator<Item = _>> = match after {
+            Some(a) => {
+                let start = a.trim().to_ascii_lowercase();
+                Box::new(self.anon_registry.range(start.clone().into_bytes()..))
+            }
+            None => Box::new(self.anon_registry.iter()),
+        };
+        for item in iter {
+            let Ok((k, v)) = item else { continue };
+            let wallet = String::from_utf8_lossy(k.as_ref()).to_string();
+            if let Some(a) = after
+                && wallet == a.trim().to_ascii_lowercase()
+            {
+                continue; // `after` is exclusive
+            }
+            if out.len() >= limit {
+                return (out, last);
+            }
+            if let Ok(stored) = serde_json::from_slice::<StoredAnonRegistration>(&v) {
+                out.push(stored.registration);
+                last = Some(wallet);
+            }
+        }
+        (out, None)
+    }
+
     /// Anonymous messages held here that have no verdict yet, as `(msg_id, envelope)`.
     ///
     /// Drives the receipt pull: when a receipt arrives, these are the messages it might belong to,
