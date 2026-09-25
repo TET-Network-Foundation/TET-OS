@@ -821,6 +821,31 @@ impl TmailStore {
         }
     }
 
+    /// Anonymous messages held here that have no verdict yet, as `(msg_id, envelope)`.
+    ///
+    /// Drives the receipt pull: when a receipt arrives, these are the messages it might belong to,
+    /// and the content address decides which. Bounded by the message store's own cap.
+    pub fn pending_anon_envelopes(&self) -> Vec<(String, TmailEnvelopeV1)> {
+        let mut out = Vec::new();
+        for item in self.by_receiver.iter() {
+            let Ok((_k, v)) = item else { continue };
+            let Ok(env) = serde_json::from_slice::<TmailEnvelopeV1>(&v) else {
+                continue;
+            };
+            if !env.flags.anonymous {
+                continue;
+            }
+            let msg_id = env.msg_id.trim().to_string();
+            if matches!(
+                self.get_anon_verdict(&msg_id),
+                None | Some(AnonVerdict::Pending)
+            ) {
+                out.push((msg_id, env));
+            }
+        }
+        out
+    }
+
     /// Test-only: drop the memoised epoch roots, forcing recomputation.
     #[cfg(test)]
     pub fn clear_anon_root_cache_for_tests(&self) {

@@ -4,6 +4,8 @@
 //! off-ledger: these handlers only touch the node-local [`crate::tmail::store::TmailStore`] buffer
 //! and the `/tet/v1/tmail` gossip plane (via [`crate::rest::RestState::broadcast_tmail`]).
 
+use base64::Engine as _;
+
 use axum::{
     Json,
     extract::{Path, Query, State},
@@ -71,6 +73,23 @@ pub async fn post_tmail_send(
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response();
         }
     }
+    // An anonymous message gets a verdict here too, not only on the receiving node. The sender's
+    // node holds the receipt it just deposited, so there is nothing to pull and no reason to leave
+    // its own copy reading "pending" -- which would otherwise look like a failure to the sender.
+    if env.flags.anonymous
+        && let Some(anon) = env.anonymous.as_ref()
+    {
+        let verdict = match state
+            .tmail
+            .get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex)
+        {
+            Some(bytes) => crate::tmail::anon::verify_anonymous_proof(&state.tmail, &env, &bytes),
+            // No receipt deposited: honestly pending, and the pull will resolve it.
+            None => crate::tmail::store::AnonVerdict::Pending,
+        };
+        let _ = state.tmail.set_anon_verdict(env.msg_id.trim(), &verdict);
+    }
+
     // Propagate to peers so an offline receiver's node can buffer it too.
     state.broadcast_tmail(&env).await;
     (
@@ -522,6 +541,79 @@ pub async fn get_tmail_anon_job(
                 "job_id": job_id,
                 "error": "unknown job -- jobs are node-local and do not survive a restart",
             })),
+        )
+            .into_response(),
+    }
+}
+
+/// `PUT /tmail/anon/receipt` — the sender deposits its membership receipt on its own node.
+///
+/// Announce-then-pull needs somebody to answer the pull. The sender's node is the first such
+/// somebody; every node that later verifies the receipt may cache and serve it too, so the sender
+/// going offline does not strand the messages it already sent.
+///
+/// The body is `{ receipt_sha256_hex, receipt_b64 }` and the hash is **checked against the bytes**,
+/// not trusted. That is what makes it safe for this endpoint to be unauthenticated: the store is
+/// content-addressed, so the worst a caller can do is insert data under its own hash.
+pub async fn put_tmail_anon_receipt(
+    State(state): State<RestState>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let hash = body
+        .get("receipt_sha256_hex")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let b64 = body
+        .get("receipt_b64")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64.as_bytes()) else {
+        return (StatusCode::BAD_REQUEST, "receipt_b64 is not valid base64").into_response();
+    };
+    match state.tmail.put_anon_receipt(&hash, &bytes) {
+        Ok(true) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "receipt_sha256_hex": hash,
+                "bytes": bytes.len(),
+                "cached": state.tmail.anon_receipt_count(),
+            })),
+        )
+            .into_response(),
+        Ok(false) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "ok": false,
+                "error": "receipt_b64 does not hash to receipt_sha256_hex",
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+    }
+}
+
+/// `GET /tmail/anon/receipt/:hash` — serve a cached receipt. Content-addressed, so any node that
+/// has one may serve it.
+pub async fn get_tmail_anon_receipt(
+    State(state): State<RestState>,
+    Path(hash): Path<String>,
+) -> Response {
+    match state.tmail.get_anon_receipt(&hash) {
+        Some(bytes) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "ok": true,
+                "receipt_sha256_hex": hash.trim().to_ascii_lowercase(),
+                "receipt_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            })),
+        )
+            .into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "ok": false, "error": "not held by this node" })),
         )
             .into_response(),
     }

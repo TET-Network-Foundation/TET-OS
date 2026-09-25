@@ -3,6 +3,7 @@
 //! Scope: establish that multiple nodes can discover peers, exchange signed transaction/block
 //! messages, and maintain lightweight sync/backfill channels around the ledger.
 
+use base64::Engine as _;
 use futures::StreamExt;
 use libp2p::core::transport::Transport as _;
 use libp2p::core::upgrade;
@@ -280,6 +281,7 @@ struct TetBehaviour {
     /// Direct tx submission — see [`TX_SUBMIT_PROTOCOL`].
     tx_submit: request_response::json::Behaviour<TxSubmitRequest, TxSubmitResponse>,
     anon_register: request_response::json::Behaviour<AnonRegisterRequest, AnonRegisterResponse>,
+    anon_receipt: request_response::json::Behaviour<AnonReceiptRequest, AnonReceiptResponse>,
 }
 
 #[derive(Debug)]
@@ -295,6 +297,13 @@ enum Event {
     FilesFetch(request_response::Event<crate::files::FileFetchRequest, crate::files::FileFetchResponse>),
     TxSubmit(request_response::Event<TxSubmitRequest, TxSubmitResponse>),
     AnonRegister(request_response::Event<AnonRegisterRequest, AnonRegisterResponse>),
+    AnonReceipt(request_response::Event<AnonReceiptRequest, AnonReceiptResponse>),
+}
+
+impl From<request_response::Event<AnonReceiptRequest, AnonReceiptResponse>> for Event {
+    fn from(e: request_response::Event<AnonReceiptRequest, AnonReceiptResponse>) -> Self {
+        Self::AnonReceipt(e)
+    }
 }
 
 impl From<request_response::Event<AnonRegisterRequest, AnonRegisterResponse>> for Event {
@@ -387,6 +396,31 @@ pub const TX_SUBMIT_PROTOCOL: &str = "/tet/v1/tx-submit";
 /// diagnostic pointing at delivery. Gossip for fan-out, a direct request to bootnodes for
 /// certainty.
 pub const ANON_REGISTER_PROTOCOL: &str = "/tet/v1/anon-register";
+
+/// Receipt pull (`/tet/v1/anon-receipt`) — the second half of announce-then-pull.
+///
+/// An anonymous envelope carries ~7 KB of proof metadata and the receipt's SHA-256; the receipt
+/// itself is ~250 KB and does not fit a 128 KiB gossip message. This fetches it.
+///
+/// Content-addressed, which is what makes it safe to ask anyone: the request is a hash and the
+/// response is checked against it before anything else happens. A node that has verified a receipt
+/// may cache and serve it, so the sender going offline does not strand every message it sent.
+pub const ANON_RECEIPT_PROTOCOL: &str = "/tet/v1/anon-receipt";
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AnonReceiptRequest {
+    pub v: u32,
+    /// SHA-256 of the receipt, hex.
+    pub receipt_sha256_hex: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AnonReceiptResponse {
+    pub found: bool,
+    /// Receipt bytes, base64. Empty when `found` is false.
+    #[serde(default)]
+    pub receipt_b64: String,
+}
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AnonRegisterRequest {
@@ -872,6 +906,18 @@ fn anon_register_behaviour()
             request_response::ProtocolSupport::Full,
         )],
         request_response::Config::default().with_request_timeout(Duration::from_secs(10)),
+    )
+}
+
+fn anon_receipt_behaviour()
+-> request_response::json::Behaviour<AnonReceiptRequest, AnonReceiptResponse> {
+    request_response::json::Behaviour::new(
+        [(
+            StreamProtocol::new(ANON_RECEIPT_PROTOCOL),
+            request_response::ProtocolSupport::Full,
+        )],
+        // Longer than the others: the response is ~350 KB base64 over a possibly slow link.
+        request_response::Config::default().with_request_timeout(Duration::from_secs(30)),
     )
 }
 
@@ -1676,6 +1722,7 @@ async fn run_mdns_ping_swarm(
         files_fetch: files_fetch_behaviour(),
         tx_submit: tx_submit_behaviour(),
         anon_register: anon_register_behaviour(),
+        anon_receipt: anon_receipt_behaviour(),
     };
     let idle_timeout = idle_timeout_from_env();
     let mut swarm = Swarm::new(
@@ -2201,6 +2248,74 @@ async fn run_mdns_ping_swarm(
                 // Keep it noisy for debugging while stabilizing Phase 2 network discovery.
                 log::debug!("[p2p][kad] event={ev:?}");
             }
+            SwarmEvent::Behaviour(Event::AnonReceipt(ev)) => match ev {
+                request_response::Event::Message {
+                    peer,
+                    message: request_response::Message::Request { request, channel, .. },
+                    ..
+                } => {
+                    // Serving is cheap and safe: the key IS the hash of the value, so a peer
+                    // cannot use us to distribute anything but the receipt it asked for.
+                    let resp = match tmail_store.get_anon_receipt(&request.receipt_sha256_hex) {
+                        Some(bytes) => AnonReceiptResponse {
+                            found: true,
+                            receipt_b64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+                        },
+                        None => AnonReceiptResponse { found: false, receipt_b64: String::new() },
+                    };
+                    println!(
+                        "[P2P][anon-receipt] serve hash={} found={} to {peer}",
+                        &request.receipt_sha256_hex[..16.min(request.receipt_sha256_hex.len())],
+                        resp.found
+                    );
+                    let _ = swarm.behaviour_mut().anon_receipt.send_response(channel, resp);
+                }
+                request_response::Event::Message {
+                    peer,
+                    message: request_response::Message::Response { response, .. },
+                    ..
+                } => {
+                    if !response.found {
+                        println!("[P2P][anon-receipt] peer={peer} does not have it");
+                        continue;
+                    }
+                    let Ok(bytes) = base64::engine::general_purpose::STANDARD
+                        .decode(response.receipt_b64.as_bytes())
+                    else {
+                        println!("[P2P][anon-receipt] peer={peer} sent undecodable base64");
+                        continue;
+                    };
+                    // Which message was this for? Match by the announced hash -- the receipt is
+                    // content-addressed, so this cannot be confused with another message's.
+                    let mut handled = 0usize;
+                    for (msg_id, env) in tmail_store.pending_anon_envelopes() {
+                        let Some(anon) = env.anonymous.as_ref() else { continue };
+                        let expected = anon.anchor_proof.receipt_sha256_hex.clone();
+                        if tmail_store.put_anon_receipt(&expected, &bytes).unwrap_or(false) {
+                            let verdict =
+                                crate::tmail::anon::verify_anonymous_proof(&tmail_store, &env, &bytes);
+                            let tag = match &verdict {
+                                crate::tmail::store::AnonVerdict::Verified { .. } => "VERIFIED",
+                                crate::tmail::store::AnonVerdict::Failed { reason, .. } => {
+                                    println!("[P2P][anon-receipt] ❌ {msg_id}: {reason}");
+                                    "FAILED"
+                                }
+                                crate::tmail::store::AnonVerdict::Pending => "PENDING",
+                            };
+                            println!("[P2P][anon-receipt] 🔎 {msg_id} -> {tag}");
+                            let _ = tmail_store.set_anon_verdict(&msg_id, &verdict);
+                            handled += 1;
+                        }
+                    }
+                    if handled == 0 {
+                        println!("[P2P][anon-receipt] receipt from {peer} matched no pending message");
+                    }
+                }
+                request_response::Event::OutboundFailure { peer, error, .. } => {
+                    println!("[P2P][anon-receipt] outbound failure peer={peer} err={error}");
+                }
+                _ => {}
+            },
             SwarmEvent::Behaviour(Event::AnonRegister(ev)) => match ev {
                 request_response::Event::Message {
                     peer,
@@ -3016,6 +3131,51 @@ async fn run_mdns_ping_swarm(
                                 match handle_tmail_network_event(&tmail_store, &ev) {
                                     TmailGossipOutcome::Stored { msg_id } => {
                                         println!("[P2P] ✅ TMAIL ENVELOPE STORED msg_id={msg_id}");
+                                        // Announce-then-PULL. An anonymous envelope carries only
+                                        // the receipt's hash, so verification needs a fetch. Do it
+                                        // on ARRIVAL: the verdict is stored with the message, so a
+                                        // receiver offline for days still reads a checked result,
+                                        // and the registry root window only has to cover
+                                        // send -> verify rather than send -> inbox-open.
+                                        if let Some(env) = tmail_store.get_by_msg_id(&msg_id)
+                                            && let Some(anon) = env.anonymous.as_ref()
+                                        {
+                                            let hash = anon.anchor_proof.receipt_sha256_hex.clone();
+                                            let _ = tmail_store.set_anon_verdict(
+                                                &msg_id,
+                                                &crate::tmail::store::AnonVerdict::Pending,
+                                            );
+                                            if tmail_store.get_anon_receipt(&hash).is_some() {
+                                                // Already cached (another message used the same
+                                                // proof, or we served it earlier): verify now.
+                                                if let Some(bytes) = tmail_store.get_anon_receipt(&hash) {
+                                                    let verdict = crate::tmail::anon::verify_anonymous_proof(
+                                                        &tmail_store, &env, &bytes,
+                                                    );
+                                                    let _ = tmail_store.set_anon_verdict(&msg_id, &verdict);
+                                                }
+                                            } else {
+                                                // Ask whoever we can. Content-addressed, so asking
+                                                // the wrong peer is harmless.
+                                                let targets: Vec<PeerId> = swarm
+                                                    .connected_peers()
+                                                    .copied()
+                                                    .collect();
+                                                if targets.is_empty() {
+                                                    println!("[P2P][anon-receipt] no peer to pull {hash} from; stays pending");
+                                                }
+                                                for peer in targets {
+                                                    let req = AnonReceiptRequest {
+                                                        v: 1,
+                                                        receipt_sha256_hex: hash.clone(),
+                                                    };
+                                                    let _ = swarm
+                                                        .behaviour_mut()
+                                                        .anon_receipt
+                                                        .send_request(&peer, req);
+                                                }
+                                            }
+                                        }
                                     }
                                     TmailGossipOutcome::Duplicate { msg_id } => {
                                         println!(
@@ -3235,6 +3395,7 @@ mod tests {
             files_fetch: files_fetch_behaviour(),
             tx_submit: tx_submit_behaviour(),
         anon_register: anon_register_behaviour(),
+        anon_receipt: anon_receipt_behaviour(),
         };
 
         Swarm::new(
