@@ -598,6 +598,11 @@ impl TmailStore {
         )
     }
 
+    /// Epoch length, for callers that need to compute a boundary (the UI countdown).
+    pub fn anon_epoch_ms_public() -> u64 {
+        Self::anon_epoch_ms()
+    }
+
     /// Epoch index for a wall-clock instant. Node-local Tmail policy, not consensus.
     pub fn anon_epoch_index(now_ms: u64) -> u64 {
         now_ms / Self::anon_epoch_ms()

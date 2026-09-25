@@ -408,3 +408,114 @@ const _: fn() = || {
     let _ = anon_registration_error_status;
     let _: Option<TmailAnonRegistrationError> = None;
 };
+
+/// `POST /tmail/anon/send` — start an anonymous send. **Returns `202` with a job id.**
+///
+/// Proving takes ~33 s, so this cannot be a request that returns the result. The client polls
+/// `GET /tmail/anon/job/:job_id`.
+///
+/// Two states are reported separately on purpose:
+///
+/// - `registration_propagating` — the sender's own registration is not in this node's tree yet.
+///   It resolves at the **next epoch boundary**, which is deterministic, so the response carries
+///   `eligible_at_ms` and the UI shows a countdown rather than a spinner. Send is refused until
+///   then, rather than queued, because a queued send would silently produce a proof against a root
+///   the sender is not in.
+/// - `proving` — the proof is being built.
+///
+/// Collapsing them would tell the user "wait" without saying whether *they* are not ready or the
+/// *machine* is, which are different problems with different fixes.
+pub async fn post_tmail_anon_send(
+    State(state): State<RestState>,
+    Json(req): Json<serde_json::Value>,
+) -> Response {
+    let wallet = req
+        .get("wallet_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if !is_wallet_id_64hex(&wallet) {
+        return (StatusCode::BAD_REQUEST, "wallet_id must be 64 hex chars").into_response();
+    }
+    if state.tmail.get_stored_anon(&wallet).is_none() {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "ok": false,
+                "state": "not_registered",
+                "error": "this wallet has no anonymity-set registration on this node",
+                "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
+            })),
+        )
+            .into_response();
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+
+    if let Some(eligible_at_ms) =
+        crate::tmail::anon::registration_eligible_at_ms(&state.tmail, &wallet)
+    {
+        return (
+            StatusCode::ACCEPTED,
+            Json(serde_json::json!({
+                "ok": true,
+                "state": "registration_propagating",
+                "eligible_at_ms": eligible_at_ms,
+                "seconds_remaining": eligible_at_ms.saturating_sub(now) / 1000,
+                "note": "Your registration enters this node's anonymity set at the next epoch \
+                         boundary. Sending is disabled until then.",
+            })),
+        )
+            .into_response();
+    }
+
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let job = crate::tmail::anon::AnonSendJob {
+        job_id: job_id.clone(),
+        state: crate::tmail::anon::AnonSendJobState::Proving { started_at_ms: now },
+        created_at_ms: now,
+    };
+    if let Ok(mut jobs) = state.anon_jobs.lock() {
+        jobs.insert(job_id.clone(), job.clone());
+    }
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "job_id": job_id,
+            "state": "proving",
+            "poll": format!("/tmail/anon/job/{job_id}"),
+            "expected_duration_ms": 33_000,
+            "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
+        })),
+    )
+        .into_response()
+}
+
+/// `GET /tmail/anon/job/:job_id` — poll an anonymous send.
+pub async fn get_tmail_anon_job(
+    State(state): State<RestState>,
+    Path(job_id): Path<String>,
+) -> Response {
+    let job = state
+        .anon_jobs
+        .lock()
+        .ok()
+        .and_then(|j| j.get(job_id.trim()).cloned());
+    match job {
+        Some(j) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "job": j }))).into_response(),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "ok": false,
+                "job_id": job_id,
+                "error": "unknown job -- jobs are node-local and do not survive a restart",
+            })),
+        )
+            .into_response(),
+    }
+}

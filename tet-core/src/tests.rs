@@ -123,6 +123,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         files_fetch_tx: None,
         tx_submit_tx: None,
         anon_register_tx: None,
+        anon_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
         )),
@@ -9427,6 +9428,7 @@ fn anonymous_envelope_for_tests(
     crate::tmail::envelope::TmailEnvelopeV1,
     Vec<u8>,
     crate::tmail::store::TmailStore,
+    String,
 ) {
     use sha2::{Digest as _, Sha256};
     let store = tmail_store_for_tests();
@@ -9488,7 +9490,7 @@ fn anonymous_envelope_for_tests(
         },
     });
     resign_tmail_env_for_tests(&mut envelope, &eph_words);
-    (envelope, receipt_bytes, store)
+    (envelope, receipt_bytes, store, eph_words)
 }
 
 /// **Step 3 + 6.** The envelope verifies on metadata alone, then the pulled receipt verifies it.
@@ -9499,7 +9501,7 @@ fn s8_anonymous_envelope_two_phase_verify() {
     set_test_env_base();
     let _epoch = anon_fast_epoch_guard();
     let (_rw, receiver) = tmail_party_for_tests();
-    let (envelope, receipt_bytes, store) = anonymous_envelope_for_tests(&receiver);
+    let (envelope, receipt_bytes, store, _eph) = anonymous_envelope_for_tests(&receiver);
 
     // Phase 1: no receipt needed. The envelope is small enough to gossip.
     assert!(
@@ -9539,11 +9541,11 @@ fn s8_anonymous_wrong_receipt_is_refused() {
     set_test_env_base();
     let _epoch = anon_fast_epoch_guard();
     let (_rw, receiver) = tmail_party_for_tests();
-    let (envelope, receipt_bytes, store) = anonymous_envelope_for_tests(&receiver);
+    let (envelope, receipt_bytes, store, _eph) = anonymous_envelope_for_tests(&receiver);
 
     // A different, individually valid receipt: same shape, different nullifier.
     let (_rw2, receiver2) = tmail_party_for_tests();
-    let (_env2, other_receipt, _s2) = anonymous_envelope_for_tests(&receiver2);
+    let (_env2, other_receipt, _s2, _e2) = anonymous_envelope_for_tests(&receiver2);
     assert_ne!(receipt_bytes, other_receipt, "precondition: really different");
 
     let verdict = crate::tmail::anon::verify_anonymous_proof(&store, &envelope, &other_receipt);
@@ -9611,15 +9613,156 @@ fn s8_anonymous_envelope_journal_must_match_the_receiver() {
     set_test_env_base();
     let _epoch = anon_fast_epoch_guard();
     let (_rw, receiver) = tmail_party_for_tests();
-    let (mut envelope, _receipt, _store) = anonymous_envelope_for_tests(&receiver);
+    let (mut envelope, _receipt, _store, eph_words) = anonymous_envelope_for_tests(&receiver);
 
-    // Re-point the envelope at someone else, keeping the same proof.
+    // Re-point the envelope at someone else AND RE-SIGN it. Without the re-sign the signature
+    // alone rejects this -- `receiver` is inside the §A.1.3 pre-image -- and the journal binding
+    // is never reached, which is how this guard was vacuous on its first run (control O3).
     let (_rw2, other) = tmail_party_for_tests();
     envelope.receiver_wallet_id = other;
+    resign_tmail_env_for_tests(&mut envelope, &eph_words);
+
+    // The signature is now genuinely valid over these bytes. Only the journal binding can reject.
     let err = crate::tmail::envelope::verify_tmail_envelope_v1(&envelope)
-        .expect_err("a proof for a different receiver must not be reusable");
+        .expect_err("a proof naming a different receiver must not be reusable");
+    let msg = format!("{err}");
     assert!(
-        format!("{err}").contains("journal receiver") || format!("{err}").contains("signature"),
-        "unexpected rejection: {err}"
+        msg.contains("journal receiver"),
+        "must be refused by the journal/receiver binding specifically, not by the signature: {msg}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// S8 step 4 — anonymous send as a job, and the two SENDER states.
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+async fn anon_send_response(
+    state: &crate::rest::RestState,
+    wallet: &str,
+) -> (StatusCode, Value) {
+    let resp = crate::rest::handlers::tmail::post_tmail_anon_send(
+        axum::extract::State(state.clone()),
+        axum::Json(serde_json::json!({ "wallet_id": wallet })),
+    )
+    .await;
+    let status = resp.status();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// **The two sender states are distinct.** Before the epoch boundary the answer is
+/// `registration_propagating` with a deterministic countdown; after it, `proving` with a job id.
+///
+/// Collapsing them would tell the user "wait" without saying whether *they* are not ready or the
+/// *machine* is — different problems, different fixes, and only one of them has a known end time.
+#[tokio::test]
+async fn s8_anon_send_reports_propagating_then_proving() {
+    let _g = env_lock();
+    set_test_env_base();
+    // A 3 s epoch: long enough to observe the propagating state, short enough to wait out.
+    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "3000");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (w, wallet) = tmail_party_for_tests();
+
+    // Not registered at all is a different answer again -- 409, not "wait".
+    let (status, body) = anon_send_response(&state, &wallet).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["state"], Value::String("not_registered".into()));
+
+    state
+        .tmail
+        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000))
+        .unwrap();
+
+    // Registered, but not yet in the tree.
+    let (status, body) = anon_send_response(&state, &wallet).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(
+        body["state"],
+        Value::String("registration_propagating".into()),
+        "before the epoch boundary the sender is not eligible"
+    );
+    let eligible_at = body["eligible_at_ms"].as_u64().expect("a deterministic instant");
+    assert!(
+        eligible_at > tmail_now_ms_for_tests(),
+        "the countdown target must be in the future"
+    );
+    assert!(
+        body["seconds_remaining"].as_u64().unwrap() <= 3,
+        "and within one epoch"
+    );
+    assert!(body["job_id"].is_null(), "no job is started while ineligible");
+
+    // Wait out the boundary.
+    tokio::time::sleep(std::time::Duration::from_millis(3200)).await;
+
+    let (status, body) = anon_send_response(&state, &wallet).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert_eq!(
+        body["state"],
+        Value::String("proving".into()),
+        "once in the tree the send becomes a proving job"
+    );
+    let job_id = body["job_id"].as_str().expect("a job id").to_string();
+    assert_eq!(body["expected_duration_ms"].as_u64(), Some(33_000));
+
+    // The job is pollable.
+    let resp = crate::rest::handlers::tmail::get_tmail_anon_job(
+        axum::extract::State(state.clone()),
+        axum::extract::Path(job_id.clone()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["job"]["job_id"], Value::String(job_id));
+    assert_eq!(json["job"]["state"]["state"], Value::String("proving".into()));
+}
+
+/// An unknown job id is a 404 that says why, rather than an empty 200 a client would read as
+/// "finished".
+#[tokio::test]
+async fn s8_unknown_anon_job_is_not_found() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let resp = crate::rest::handlers::tmail::get_tmail_anon_job(
+        axum::extract::State(state.clone()),
+        axum::extract::Path("no-such-job".to_string()),
+    )
+    .await;
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+/// The eligibility instant is the epoch boundary, computed rather than guessed.
+#[test]
+fn s8_registration_eligibility_is_the_next_epoch_boundary() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "5000");
+    let store = tmail_store_for_tests();
+    let (w, wallet) = tmail_party_for_tests();
+
+    assert!(
+        crate::tmail::anon::registration_eligible_at_ms(&store, &wallet).is_none(),
+        "an unregistered wallet has no eligibility instant"
+    );
+
+    store
+        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000))
+        .unwrap();
+    let at = crate::tmail::anon::registration_eligible_at_ms(&store, &wallet)
+        .expect("registered but not yet in the tree");
+    assert_eq!(at % 5000, 0, "must be an exact epoch boundary");
+    let now = tmail_now_ms_for_tests();
+    assert!(at > now && at - now <= 5000, "within one epoch");
+
+    std::thread::sleep(std::time::Duration::from_millis(5200));
+    assert!(
+        crate::tmail::anon::registration_eligible_at_ms(&store, &wallet).is_none(),
+        "once in the tree there is nothing to wait for"
     );
 }
