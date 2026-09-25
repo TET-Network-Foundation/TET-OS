@@ -662,10 +662,56 @@ The first is the Phase 0 answer and is the same lesson as tx delivery in S4: **g
 present, never the past.** Blocks have had a catch-up RPC since S1 for this reason; the registry
 needs its equivalent.
 
-**Status:** AT-5(a) passes on two nodes that were both present for the registration. It does not
-yet pass for a node that joined afterwards, which is the realistic case. Recorded as open rather
-than worked around — registering the same wallet on both nodes would have made the run green while
-leaving the network broken.
+**Status:** ~~BLOCKED~~ **RESOLVED 2026-09-26** by anti-entropy sync — see below. Left in place
+because the reasoning matters more than the outcome: it was recorded as open rather than worked
+around, and registering the same wallet on both nodes would have made the run green while leaving
+the network broken.
+
+### Cross-network AT-5(a) is GREEN: anti-entropy registry sync (2026-09-26)
+
+`/tet/v1/anon-registry-sync` (spec §A.4.4b, commit `c260922`) closes it. Probe on every peer connect
+and every 300 s; page only on a root mismatch; every synced record admitted through
+`admit_anon_registration`, so a peer cannot forge one — it can only withhold (we stay partial and
+fail closed) or flood (bounded by the member cap, page size, page cap and 2 req/s).
+
+**CH↔HEL rerun, fresh follower, no manual double registration — 8/8:**
+
+```
+registered on the SEED while the follower did not yet exist
+follower starts empty              members=0  root=554bab80…
+acquires it by PULL                1,272 ms after start
+enters the follower's tree         +55,677 ms (next epoch, ≤60 s bound)
+both nodes agree                   members=3, root=aac511e7e7ca0f49…
+follower serves a full-depth path for a wallet it never saw register, 20/20,
+  and that path's root equals the seed's current root
+```
+
+```
+[P2P][anon-sync] root mismatch with 12D3KooWNcdESJUC…: ours=554bab80 theirs=aac511e7 (theirs has 3 members) -- syncing
+[P2P][anon-sync] page 1: +3 new, 3 members now, 2 ms of 30000 ms verify budget used
+```
+
+Compared with the local two-node run, sync arrival is 1,272 ms CH↔HEL against ~0 ms local (the
+local run had already synced during the harness's startup wait, so only the CH↔HEL figure is a real
+measurement). The dominant term is the epoch boundary at 55.7 s, as it was for propagation in
+step 7 — a design constant, not a network effect.
+
+**Convergence is forward, not retroactive.** Synced registrations enter at the receiving node's next
+epoch, so two nodes agree from the first epoch after sync, never for epochs already past. A proof
+built against a peer's pre-sync root may be rejected **once**; the sender's retry succeeds. One
+rejection after a late join is expected behaviour; repeated rejection after a full epoch is a bug.
+Asserted directly in `s8_late_joiner_converges_after_sync_and_one_epoch`.
+
+**Negative controls, all three fail with the bug restored:** a live follower rebuilt from the
+pre-sync commit `43a6884` stays at `members=0` for 90 s and logs no sync at all; the unit test with
+admission removed fails on the member counts; and with the epoch rollover removed it fails on the
+root assertion specifically — which is why the third control exists, since the second would have
+left the root claim unexercised.
+
+Verification cost was measured rather than assumed: 2.39 ms per registration (hybrid Ed25519 +
+ML-DSA-44), so 0.61 s per 256-page and ~119 s for a full 50,000-member registry. A round therefore
+carries a 30 s budget per peer, pauses at its cursor when spent, **logs that it did so**, and
+resumes next round.
 
 ### Locked decision #6 — amended 2026-09-24
 

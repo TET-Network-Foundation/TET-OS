@@ -869,6 +869,14 @@ envelope is signed by the **ephemeral**, and a ZK receipt proves the ephemeral w
 *some* anchor without revealing which. The anchor can re-derive its own ephemerals (§A.4.4). A third
 party cannot link ephemeral → anchor. **No stake involved.** This is the Phase 0 deliverable.
 
+**AT-5(a) status: ✅ green cross-network, 2026-09-26.** Verified on two local nodes (16/16) and then
+**CH↔HEL with a fresh follower that was never present for the registration** (8/8) — the realistic
+case, which was red until anti-entropy registry sync landed (§A.4.4b). The follower pulled the
+registration 1,272 ms after start, entered it at its next epoch (+55.7 s), and converged on the
+seed's root `aac511e7e7ca0f49…`, serving a full-depth path for a wallet it never saw register. No
+manual double registration: the earlier red result was recorded as red rather than made green by
+registering the same wallet twice.
+
 **AT-5(b) — escrow-backed. ❌ fails until Phase 1.** The **1 TET** (1M Stevemon) escrow, the 24 h
 auto-settle and the ZK-Court slash are balance moves needing a new `TxV1` variant, and the timed
 settle is `PHASE_1_GENESIS_SPEC.md` §1's wall-clock-in-apply defect — so unlike Pin it cannot even
