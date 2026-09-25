@@ -627,6 +627,46 @@ would change nothing, which is what any client retrying its own registration doe
 commitment is a no-op regardless of the claimed `registered_at_ms`; a *different* commitment is
 still a real update and still subject to the cooldown.
 
+### Cross-network AT-5(a) is BLOCKED: a joining node never back-fills the registry (2026-09-25)
+
+The two-node run passes locally (16/16, above). The **CH↔HEL** run does not, and the reason is a
+design gap rather than a defect:
+
+```
+follower  members=1  root=eee51c43…
+seed      members=2  root=d5059524…
+```
+
+Registrations propagate **forward only**. A node learns a registration if it is listening when that
+registration is gossiped; nothing back-fills. A node that joins later therefore holds a strict
+subset of its peers' registries, computes a different root, and a proof built against its root is
+not a root the peer accepts — so verification fails, correctly, on a message that is perfectly
+valid.
+
+The seed's extra member is a registration from the step-7 measurement earlier the same day, which
+survived in its data volume. That is not contamination; it is the ordinary case. **Any** node that
+was offline for any registration is in this position permanently.
+
+This does not contradict the disclosure — "anonymous among the registrations **your node** has
+seen" is exactly what is happening — but it does mean cross-node anonymous messaging works only
+between nodes whose registry sets already agree, which on a live network is nobody.
+
+**What closes it, in order of preference:**
+
+| Fix | Shape | Cost |
+|---|---|---|
+| **Registry sync on join** | a `/tet/v1/anon-registry-sync` request/response returning all registrations, admitted through the existing `admit_anon_registration`, run on startup and on peer connect | mirrors block catch-up, which already exists for exactly this reason: gossip alone never gives a late joiner the past |
+| Consensus registry (option 2) | Phase 1 | every node has the same set by construction; already queued |
+
+The first is the Phase 0 answer and is the same lesson as tx delivery in S4: **gossip gives you the
+present, never the past.** Blocks have had a catch-up RPC since S1 for this reason; the registry
+needs its equivalent.
+
+**Status:** AT-5(a) passes on two nodes that were both present for the registration. It does not
+yet pass for a node that joined afterwards, which is the realistic case. Recorded as open rather
+than worked around — registering the same wallet on both nodes would have made the run green while
+leaving the network broken.
+
 ### Locked decision #6 — amended 2026-09-24
 
 The original locked decision reads: *"Marketing = **AT-3 + AT-4 + AT-5**"*.
