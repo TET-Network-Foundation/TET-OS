@@ -630,11 +630,17 @@ impl TmailStore {
         let existing = self.get_stored_anon(&wallet);
         let outcome = match existing {
             Some(prev) => {
+                // Same commitment is a NO-OP, whatever the claimed `registered_at_ms`.
+                //
+                // The cooldown exists to stop root churn, and re-announcing an unchanged
+                // commitment churns nothing: the leaf is identical, so the tree and the root are
+                // identical. Treating it as an update meant a client that re-sent its own
+                // registration -- on reconnect, on retry, or simply on a second run -- was refused
+                // with 429 for a request that would have changed nothing. Found in the live run.
                 if prev
                     .registration
                     .commitment_hex
                     .eq_ignore_ascii_case(&reg.commitment_hex)
-                    && prev.registration.registered_at_ms == reg.registered_at_ms
                 {
                     return Ok(AnonRegisterOutcome::Duplicate);
                 }

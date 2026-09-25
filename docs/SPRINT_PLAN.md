@@ -590,6 +590,43 @@ Same build-first-recreate-second pattern. Verified across the swap:
 | Block 18063 `block_id` | `0xa82651ff…e4b53a49` | **identical** |
 | `GET /tmail/anon/root` | `404` | live, epoch + root + effective window |
 
+### AT-5(a) verified live, two nodes, 2026-09-25
+
+Driver: `tet-network/ui/scripts/tmail_anon_send_step8.mjs`, in two passes (the driver shares the
+browser's crypto and cannot prove; the Rust helper `s8_emit_anon_proof_for_live_run` does that
+part). **16/16 green.**
+
+| Step | Result |
+|---|---|
+| Member registers, enters both trees | 44 s (epoch boundary), **identical root on both nodes** |
+| `POST /tmail/anon/send` | `202 state=proving` with a job id |
+| Proof built against the node's real Merkle path | **31.4 s**, receipt 257,010 bytes |
+| Receipt deposited on the sender's node | `200`, cached |
+| Anonymous envelope sent | `202`, **10,043 bytes on the wire** |
+| Envelope fits the gossip ceiling | 10,043 < 131,072 |
+| `sender_wallet_id` is the sentinel | ✅ |
+| **The registering wallet does not appear in the envelope** | ✅ `566d9dcb…` absent |
+| Verifier pulls the receipt and verifies | **506 ms after arrival** |
+| Receiver sees a **VERIFIED** anonymity verdict | ✅ |
+| Receiver decrypts; plaintext matches | ✅ |
+
+The verifying node's own log, independent of the driver:
+
+```
+[P2P] ✅ TMAIL ENVELOPE STORED msg_id=129cb348-…
+[P2P][anon-receipt] 🔎 129cb348-… -> VERIFIED
+```
+
+**Announce-then-pull is confirmed in practice:** 10 KB crosses gossip, 257 KB is fetched on demand,
+and the verdict lands half a second after arrival.
+
+**A defect the live run found.** Re-announcing an **unchanged** commitment was treated as an update
+and refused `429` under the 24 h cooldown. The cooldown exists to stop root churn, and an identical
+commitment produces an identical leaf and an identical root — so it was rate-limiting a request that
+would change nothing, which is what any client retrying its own registration does. Fixed: same
+commitment is a no-op regardless of the claimed `registered_at_ms`; a *different* commitment is
+still a real update and still subject to the cooldown.
+
 ### Locked decision #6 — amended 2026-09-24
 
 The original locked decision reads: *"Marketing = **AT-3 + AT-4 + AT-5**"*.

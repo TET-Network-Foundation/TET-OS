@@ -9842,3 +9842,114 @@ async fn s8_inbox_row_carries_the_anonymity_verdict() {
     let json = serde_json::to_string(&row).unwrap();
     assert!(json.contains("\"state\":\"failed\""), "verdict must serialize its state");
 }
+
+/// Emit a mode-3 proof for the live run, from parameters supplied in the environment.
+///
+/// The live driver is JavaScript (it shares the browser's crypto), and JavaScript cannot prove.
+/// Rather than reimplement the prover there, the driver writes the parameters it needs proved and
+/// this emits the receipt.
+///
+///   TET_PROVE_SECRET_HEX, TET_PROVE_INDEX, TET_PROVE_SIBLINGS_HEX (comma-separated),
+///   TET_PROVE_EPHEMERAL_HEX, TET_PROVE_RECEIVER_HEX, TET_PROVE_BUCKET
+#[test]
+#[ignore = "live-run helper; runs a real prover"]
+fn s8_emit_anon_proof_for_live_run() {
+    let _g = env_lock();
+    let hexenv = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} required"));
+    let arr = |h: &str| -> [u8; 32] {
+        <[u8; 32]>::try_from(hex::decode(h.trim()).expect("hex").as_slice()).expect("32 bytes")
+    };
+
+    let secret = arr(&hexenv("TET_PROVE_SECRET_HEX"));
+    let ephemeral = arr(&hexenv("TET_PROVE_EPHEMERAL_HEX"));
+    let receiver = arr(&hexenv("TET_PROVE_RECEIVER_HEX"));
+    let index: u32 = hexenv("TET_PROVE_INDEX").trim().parse().expect("index");
+    let bucket: u64 = hexenv("TET_PROVE_BUCKET").trim().parse().expect("bucket");
+    let siblings: Vec<[u8; 32]> = hexenv("TET_PROVE_SIBLINGS_HEX")
+        .split(',')
+        .map(|h| arr(h))
+        .collect();
+    assert_eq!(
+        siblings.len(),
+        nexus_protocol::TET_ANON_MERKLE_DEPTH,
+        "the node must serve a full-depth path"
+    );
+
+    let env = risc0_zkvm::ExecutorEnv::builder()
+        .write(&3u8).unwrap()
+        .write(&secret).unwrap()
+        .write(&index).unwrap()
+        .write(&siblings).unwrap()
+        .write(&ephemeral).unwrap()
+        .write(&receiver).unwrap()
+        .write(&bucket).unwrap()
+        .build()
+        .unwrap();
+    let started = std::time::Instant::now();
+    let receipt = risc0_zkvm::default_prover()
+        .prove(env, methods::NEXUS_GUEST_ELF)
+        .expect("prove")
+        .receipt;
+    let prove_ms = started.elapsed().as_millis();
+    receipt.verify(methods::NEXUS_GUEST_ID).expect("self-verify");
+
+    let bytes = bincode::serialize(&receipt).unwrap();
+    println!(
+        "PROOF_JSON {}",
+        serde_json::json!({
+            "receipt_b64": base64::engine::general_purpose::STANDARD.encode(&bytes),
+            "journal_b64": base64::engine::general_purpose::STANDARD.encode(&receipt.journal.bytes),
+            "image_id_hex": crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID),
+            "prove_ms": prove_ms,
+            "receipt_bytes": bytes.len(),
+        })
+    );
+}
+
+/// Re-announcing an **unchanged** commitment is a no-op, not a rate-limited update.
+///
+/// The cooldown exists to stop root churn. An identical commitment produces an identical leaf and
+/// therefore an identical root, so refusing it rate-limits a request that would change nothing —
+/// which is what happened to a client retrying its own registration. Found in the live run.
+#[test]
+fn s8_re_announcing_the_same_commitment_is_a_no_op() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let store = tmail_store_for_tests();
+    let (w, wallet) = tmail_party_for_tests();
+    let secret = [7u8; 32];
+
+    store
+        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &secret, 1_000))
+        .unwrap();
+    // Capture the root only AFTER the leaf has entered the tree. Reading it before the epoch
+    // boundary compares a pre-boundary root with a post-boundary one, and the difference is the
+    // boundary rather than anything this test is about.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let root_after_first = store.anon_root();
+    assert!(
+        store.anon_leaf_index(&wallet).is_some(),
+        "precondition: the member is in the tree before the root is captured"
+    );
+
+    // Same secret, later timestamp -- exactly what a retry looks like.
+    let again = signed_anon_registration_for_tests(&w, &wallet, &secret, 9_999);
+    assert_eq!(
+        store.register_anon(&again).unwrap(),
+        crate::tmail::store::AnonRegisterOutcome::Duplicate,
+        "an unchanged commitment must be a no-op, NOT UpdateTooSoon: it changes no leaf"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    assert_eq!(store.anon_root(), root_after_first, "and the root must not move");
+
+    // A genuinely different commitment is still rate-limited.
+    let changed = signed_anon_registration_for_tests(&w, &wallet, &[8u8; 32], 10_000);
+    assert!(
+        matches!(
+            store.register_anon(&changed).unwrap(),
+            crate::tmail::store::AnonRegisterOutcome::UpdateTooSoon { .. }
+        ),
+        "a different commitment is a real update and stays subject to the cooldown"
+    );
+}
