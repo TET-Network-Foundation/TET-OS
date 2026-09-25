@@ -125,7 +125,14 @@ pub async fn get_tmail_inbox(
         .tmail
         .get_inbox(&w, limit)
         .iter()
-        .map(|env| crate::tmail::timelock::to_inbox_row(env, now_ms))
+        .map(|env| {
+            let verdict = if env.flags.anonymous {
+                state.tmail.get_anon_verdict(env.msg_id.trim())
+            } else {
+                None
+            };
+            crate::tmail::timelock::to_inbox_row_with_verdict(env, now_ms, verdict)
+        })
         .collect();
     let locked_count = messages.iter().filter(|m| m.locked).count();
     (

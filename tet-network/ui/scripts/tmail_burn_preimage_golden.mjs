@@ -221,6 +221,33 @@ try {
   console.error(`  FAIL could not read the scheduled-release disclosure: ${e.message}`);
 }
 
+// ---------------------------------------------------------------------------
+// [4] The anonymity disclosure must be verbatim across node and UI.
+//
+// Same reasoning as [2] and [3]. This one is the most load-bearing of the three: it is the only
+// place the product admits that the anonymity set is small and that registration is free, which is
+// the difference between "anonymous" as a feature name and "anonymous" as a claim.
+// ---------------------------------------------------------------------------
+
+console.log("\n[4] anonymity disclosure is identical in node and UI");
+
+try {
+  const rustAnon = stringConst("tet-core/src/tmail/anon.rs", "pub const TMAIL_ANON_DISCLOSURE");
+  const uiAnon = stringConst(
+    "tet-network/ui/app/lib/tmail_anon.ts",
+    "export const TMAIL_ANON_DISCLOSURE",
+  );
+  check("UI copy equals the node copy verbatim", uiAnon, rustAnon);
+  check(
+    "copy still admits the set is small and registration is free",
+    /set is small/i.test(uiAnon) && /Registration is free/i.test(uiAnon),
+    true,
+  );
+} catch (e) {
+  failures += 1;
+  console.error(`  FAIL could not read the anonymity disclosure: ${e.message}`);
+}
+
 if (failures > 0) {
   console.error(
     `\n${failures} check(s) failed.\n` +

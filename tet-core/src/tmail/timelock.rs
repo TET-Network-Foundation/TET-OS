@@ -78,6 +78,12 @@ pub struct TmailInboxRowV1 {
     pub hybrid_sig: TmailHybridSig,
     /// `true` while `now < release_at_ms`.
     pub locked: bool,
+    /// Present only on anonymous messages: what this node concluded about the membership proof.
+    ///
+    /// **Absent is not "verified".** A client must render `pending` as *proof pending* and never
+    /// label a message anonymous-verified until this says `verified`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub anon_verdict: Option<crate::tmail::store::AnonVerdict>,
     /// Present only when `locked`; always [`TMAIL_TIME_LOCK_DISCLOSURE`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub locked_note: Option<&'static str>,
@@ -88,7 +94,25 @@ pub struct TmailInboxRowV1 {
 /// The signature block is kept either way: the receiver can verify who scheduled the message and
 /// for when before it opens, which is the point of listing it at all.
 pub fn to_inbox_row(env: &TmailEnvelopeV1, now_ms: u64) -> TmailInboxRowV1 {
+    to_inbox_row_with_verdict(env, now_ms, None)
+}
+
+/// As [`to_inbox_row`], attaching the stored anonymity verdict.
+///
+/// An anonymous message with **no** stored verdict is reported as
+/// [`crate::tmail::store::AnonVerdict::Pending`] rather than as an absent field: "we have not
+/// checked yet" must be a value the client sees, not a gap it interprets.
+pub fn to_inbox_row_with_verdict(
+    env: &TmailEnvelopeV1,
+    now_ms: u64,
+    verdict: Option<crate::tmail::store::AnonVerdict>,
+) -> TmailInboxRowV1 {
     let locked = is_locked(env, now_ms);
+    let anon_verdict = if env.flags.anonymous {
+        Some(verdict.unwrap_or(crate::tmail::store::AnonVerdict::Pending))
+    } else {
+        None
+    };
     TmailInboxRowV1 {
         v: env.v,
         kind: env.kind.clone(),
@@ -113,5 +137,6 @@ pub fn to_inbox_row(env: &TmailEnvelopeV1, now_ms: u64) -> TmailInboxRowV1 {
         } else {
             None
         },
+        anon_verdict,
     }
 }

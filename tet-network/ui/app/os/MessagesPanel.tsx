@@ -18,13 +18,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  getTmailAnonRoot,
   getTmailInbox,
   getTmailKeys,
   normalizeWalletId64,
+  postTmailAnonSend,
   postTmailReadReceipt,
   postTmailSend,
   putTmailKeys,
 } from "../lib/tet_core_http";
+import {
+  anonLabel,
+  secondsUntil,
+  TMAIL_ANON_DISCLOSURE,
+  type AnonVerdict,
+} from "../lib/tmail_anon";
 import { buildTmailEnvelopeV1, TMAIL_MAX_PLAINTEXT_CHARS, type TmailInboxRowV1 } from "../lib/tmail";
 import { buildTmailBurnRevokeV1, TMAIL_BURN_DISCLOSURE } from "../lib/tmail_burn";
 import {
@@ -41,10 +49,20 @@ import { b64ToBytes } from "../lib/encoding";
 
 const INBOX_POLL_MS = 5_000;
 
+/** Sender-side anonymous state. `propagating` has a known end; `proving` does not. */
+type AnonSendUi =
+  | { state: "idle" }
+  | { state: "not_registered" }
+  | { state: "propagating"; eligibleAtMs: number }
+  | { state: "proving"; jobId: string }
+  | { state: "error"; reason: string };
+
 type InboxItem = {
   msgId: string;
   sender: string;
   sentAtMs: number;
+  /** Present only on anonymous messages. Absent or pending both mean NOT verified. */
+  anonVerdict?: AnonVerdict;
   /** Signed `flags.burn_after_read` from the envelope — the node's authority, not a local guess. */
   burnAfterRead: boolean;
 } & (
@@ -83,6 +101,11 @@ export default function MessagesPanel(props: {
   const [burnAfterRead, setBurnAfterRead] = useState(false);
   const [scheduled, setScheduled] = useState(false);
   const [scheduleMinutes, setScheduleMinutes] = useState(60);
+  const [anonymous, setAnonymous] = useState(false);
+  const [anonSend, setAnonSend] = useState<AnonSendUi>({ state: "idle" });
+  const [anonMembers, setAnonMembers] = useState<number | null>(null);
+  // Re-renders once a second so the propagating countdown actually counts.
+  const [, setTick] = useState(0);
   const [sendBusy, setSendBusy] = useState(false);
   const [sendNotice, setSendNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
@@ -100,6 +123,13 @@ export default function MessagesPanel(props: {
     myWalletId ? { state: "loading" } : { state: "no-session" },
   );
   const [registerBusy, setRegisterBusy] = useState(false);
+
+  // Only ticks while a countdown is on screen; idle compose does no work.
+  useEffect(() => {
+    if (anonSend.state !== "propagating") return;
+    const h = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(h);
+  }, [anonSend.state]);
 
   const mountedRef = useRef(true);
   useEffect(() => {
@@ -132,6 +162,7 @@ export default function MessagesPanel(props: {
         sender: row.sender_wallet_id,
         sentAtMs: row.sent_at_ms,
         burnAfterRead: row.flags?.burn_after_read === true,
+        anonVerdict: row.flags?.anonymous === true ? (row.anon_verdict ?? { state: "pending" as const }) : undefined,
       };
       // No ciphertext means the node is still withholding it. Nothing to decrypt, and nothing to
       // guess at: show it as scheduled with the node's own wording.
@@ -319,6 +350,29 @@ export default function MessagesPanel(props: {
    * The plaintext stays on screen afterwards. The reader has read it — blanking it would be
    * theatre, and §A.3.2 Layer 3 is explicit that this is a network burn, not local amnesia.
    */
+  /**
+   * Ask the node whether this wallet can send anonymously yet.
+   *
+   * The three answers stay distinct all the way to the screen: not registered is a different
+   * problem from waiting, and waiting-for-the-boundary has a known end time while proving does not.
+   */
+  async function refreshAnonEligibility() {
+    if (!myWalletId) return;
+    const root = await getTmailAnonRoot(baseUrl);
+    if (mountedRef.current && root.ok) setAnonMembers(root.members ?? null);
+    const r = await postTmailAnonSend(baseUrl, myWalletId);
+    if (!mountedRef.current) return;
+    if (r.status === 409 || r.state === "not_registered") {
+      setAnonSend({ state: "not_registered" });
+    } else if (r.state === "registration_propagating" && r.eligibleAtMs) {
+      setAnonSend({ state: "propagating", eligibleAtMs: r.eligibleAtMs });
+    } else if (r.state === "proving" && r.jobId) {
+      setAnonSend({ state: "proving", jobId: r.jobId });
+    } else {
+      setAnonSend({ state: "error", reason: r.text ?? `HTTP ${r.status}` });
+    }
+  }
+
   async function onOpenAndBurn(msgId: string) {
     setOpened((prev) => ({ ...prev, [msgId]: { state: "burning" } }));
     try {
@@ -419,19 +473,68 @@ export default function MessagesPanel(props: {
             <span className="block text-black/60">{TMAIL_TIME_LOCK_DISCLOSURE}</span>
           </span>
         </label>
+        <label className="flex items-start gap-2 text-[11px] text-black/80">
+          <input
+            type="checkbox"
+            checked={anonymous}
+            onChange={(e) => {
+              setAnonymous(e.target.checked);
+              if (e.target.checked) void refreshAnonEligibility();
+              else setAnonSend({ state: "idle" });
+            }}
+            className="mt-[2px]"
+          />
+          <span className="flex-1">
+            <span className="font-semibold">Send anonymously</span>
+            {anonMembers !== null ? (
+              <span className="ml-2 text-black/60">
+                anonymity set on this node: {anonMembers}
+              </span>
+            ) : null}
+            <span className="block text-black/60">{TMAIL_ANON_DISCLOSURE}</span>
+            {anonymous && anonSend.state === "not_registered" ? (
+              <span className="block text-[#8a1f1f]">
+                This wallet has no anonymity-set registration on this node. Register first.
+              </span>
+            ) : null}
+            {anonymous && anonSend.state === "propagating" ? (
+              <span className="block text-[#1f3f7a]">
+                Registration propagating — you can send in {secondsUntil(anonSend.eligibleAtMs)}s
+                (next registry epoch). Sending is disabled until then.
+              </span>
+            ) : null}
+            {anonymous && anonSend.state === "proving" ? (
+              <span className="block text-[#1f3f7a]">
+                Building your membership proof — this takes about 33 seconds.
+              </span>
+            ) : null}
+            {anonymous && anonSend.state === "error" ? (
+              <span className="block text-[#8a1f1f]">{anonSend.reason}</span>
+            ) : null}
+          </span>
+        </label>
         <div className="flex items-center justify-between gap-2">
           <span className="text-[11px] text-black/60">
             {messageText.length}/{TMAIL_MAX_PLAINTEXT_CHARS}
           </span>
           <button
             type="button"
-            disabled={sendBusy}
+            disabled={
+              sendBusy ||
+              (anonymous &&
+                anonSend.state !== "proving" &&
+                anonSend.state !== "idle")
+            }
             onClick={() => void onSend()}
             className={`${winBtn} bg-[#DAD8D2] px-4 py-1 text-sm ${sendBusy ? "opacity-60" : ""}`}
           >
             {sendBusy
               ? "Encrypting…"
-              : scheduled
+              : anonymous && anonSend.state === "propagating"
+                ? `Waiting ${secondsUntil(anonSend.eligibleAtMs)}s…`
+                : anonymous
+                  ? "Send Anonymously"
+                  : scheduled
                 ? "Send Scheduled"
                 : burnAfterRead
                   ? "Send Burn-After-Read"
@@ -470,6 +573,24 @@ export default function MessagesPanel(props: {
                   <div className="flex items-center justify-between text-[10px] font-mono text-black/60">
                     <span title={m.sender}>from {shortId(m.sender)}</span>
                     <span className="flex items-center gap-2">
+                      {m.anonVerdict ? (
+                        (() => {
+                          // A label, never a boolean: there is no place in this UI where a missing
+                          // verdict could be read optimistically as "verified".
+                          const l = anonLabel(m.anonVerdict);
+                          const tone =
+                            l.tone === "ok"
+                              ? "text-[#1f5132]"
+                              : l.tone === "bad"
+                                ? "text-[#8a1f1f]"
+                                : "text-[#7a5c1f]";
+                          return (
+                            <span className={`font-semibold ${tone}`} title={l.detail}>
+                              {l.text}
+                            </span>
+                          );
+                        })()
+                      ) : null}
                       {m.state === "scheduled" ? (
                         <span className="font-semibold text-[#1f3f7a]">SCHEDULED</span>
                       ) : null}
@@ -510,6 +631,17 @@ export default function MessagesPanel(props: {
                       </div>
                       {burn?.state === "burning" ? (
                         <div className="mt-1 text-[10px] text-black/60">Burning…</div>
+                      ) : null}
+                      {m.anonVerdict ? (
+                        <div className="mt-1 text-[10px] text-black/55">
+                          {anonLabel(m.anonVerdict).detail}
+                          {m.anonVerdict.state !== "verified" ? (
+                            <span className="block">
+                              Do not treat this as a proven anonymous sender until it reads
+                              VERIFIED.
+                            </span>
+                          ) : null}
+                        </div>
                       ) : null}
                       {burn?.state === "burned" ? (
                         <div className="mt-1 text-[10px] text-black/55">

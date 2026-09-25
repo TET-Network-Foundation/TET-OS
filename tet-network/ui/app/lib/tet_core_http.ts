@@ -1117,3 +1117,77 @@ export async function deleteFilesItem(
   if (!r.ok) return { ok: false, status: r.status, text: r.text };
   return { ok: true, status: r.status, deleted: r.data?.deleted ?? true };
 }
+
+export type AnonSendResult = {
+  ok: boolean;
+  status: number;
+  state?: string;
+  jobId?: string;
+  eligibleAtMs?: number;
+  secondsRemaining?: number;
+  expectedDurationMs?: number;
+  text?: string;
+};
+
+/**
+ * `POST /tmail/anon/send` — start an anonymous send.
+ *
+ * Never returns the finished result: proving takes ~33 s. The three answers are distinct on
+ * purpose — `not_registered` (nothing to do but register), `registration_propagating` (wait, with a
+ * known end time), `proving` (wait, with a job to poll).
+ */
+export async function postTmailAnonSend(
+  baseUrl: string,
+  walletId: string,
+): Promise<AnonSendResult> {
+  const r = await fetchJson<{
+    ok?: boolean;
+    state?: string;
+    job_id?: string;
+    eligible_at_ms?: number;
+    seconds_remaining?: number;
+    expected_duration_ms?: number;
+  }>(tetCoreUrl(baseUrl, "/tmail/anon/send"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ wallet_id: walletId }),
+  });
+  return {
+    ok: r.ok,
+    status: r.status,
+    state: r.data?.state,
+    jobId: r.data?.job_id,
+    eligibleAtMs: r.data?.eligible_at_ms,
+    secondsRemaining: r.data?.seconds_remaining,
+    expectedDurationMs: r.data?.expected_duration_ms,
+    text: r.text,
+  };
+}
+
+export type AnonRootResult = {
+  ok: boolean;
+  status: number;
+  members?: number;
+  merkleRoot?: string;
+  epoch?: number;
+  note?: string;
+};
+
+/** `GET /tmail/anon/root` — this node's registry root, member count and disclosure. */
+export async function getTmailAnonRoot(baseUrl: string): Promise<AnonRootResult> {
+  const r = await fetchJson<{
+    ok?: boolean;
+    members?: number;
+    merkle_root?: string;
+    epoch?: number;
+    note?: string;
+  }>(tetCoreUrl(baseUrl, "/tmail/anon/root"));
+  return {
+    ok: r.ok,
+    status: r.status,
+    members: r.data?.members,
+    merkleRoot: r.data?.merkle_root,
+    epoch: r.data?.epoch,
+    note: r.data?.note,
+  };
+}

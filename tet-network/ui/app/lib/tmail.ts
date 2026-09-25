@@ -150,6 +150,8 @@ export type TmailInboxRowV1 = Omit<TmailEnvelopeV1, "e2ee"> & {
   e2ee?: TmailE2eeBlock;
   locked?: boolean;
   locked_note?: string;
+  /** Present on anonymous messages. Absent or `pending` both mean NOT verified. */
+  anon_verdict?: import("./tmail_anon").AnonVerdict;
 };
 
 /**

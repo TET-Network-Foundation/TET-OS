@@ -9766,3 +9766,79 @@ fn s8_registration_eligibility_is_the_next_epoch_boundary() {
         "once in the tree there is nothing to wait for"
     );
 }
+
+/// **The receiver's three states reach the client.** An anonymous row always carries a verdict, and
+/// an unchecked one reads `pending` rather than being absent.
+///
+/// Absence would be the dangerous encoding: a client that sees no verdict field has to *decide*
+/// what that means, and the optimistic reading is the wrong one.
+#[tokio::test]
+async fn s8_inbox_row_carries_the_anonymity_verdict() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (words, sender) = tmail_party_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    // A named (non-anonymous) message must carry NO verdict field at all.
+    let plain = signed_tmail_env_for_tests(
+        &words,
+        &sender,
+        &receiver,
+        "named-1",
+        tmail_flags_for_tests(false),
+        None,
+    );
+    state.tmail.store_tmail(&plain).unwrap();
+
+    let row = crate::tmail::timelock::to_inbox_row(&plain, tmail_now_ms_for_tests());
+    assert!(
+        row.anon_verdict.is_none(),
+        "a named message has no anonymity verdict to report"
+    );
+
+    // An anonymous message with nothing stored must read PENDING, not absent.
+    let mut anon = plain.clone();
+    anon.msg_id = "anon-1".to_string();
+    anon.flags.anonymous = true;
+    let row = crate::tmail::timelock::to_inbox_row_with_verdict(
+        &anon,
+        tmail_now_ms_for_tests(),
+        None,
+    );
+    assert_eq!(
+        row.anon_verdict,
+        Some(crate::tmail::store::AnonVerdict::Pending),
+        "an unchecked anonymous message must report pending, never an absent field"
+    );
+
+    // Stored verdicts are reported as-is.
+    let verified = crate::tmail::store::AnonVerdict::Verified {
+        nullifier_hex: hex::encode([1u8; 32]),
+        verified_at_ms: 42,
+    };
+    state.tmail.set_anon_verdict("anon-1", &verified).unwrap();
+    let row = crate::tmail::timelock::to_inbox_row_with_verdict(
+        &anon,
+        tmail_now_ms_for_tests(),
+        state.tmail.get_anon_verdict("anon-1"),
+    );
+    assert_eq!(row.anon_verdict, Some(verified));
+
+    let failed = crate::tmail::store::AnonVerdict::Failed {
+        reason: "nullifier already used by another message (replay)".to_string(),
+        failed_at_ms: 43,
+    };
+    state.tmail.set_anon_verdict("anon-1", &failed).unwrap();
+    let row = crate::tmail::timelock::to_inbox_row_with_verdict(
+        &anon,
+        tmail_now_ms_for_tests(),
+        state.tmail.get_anon_verdict("anon-1"),
+    );
+    assert_eq!(row.anon_verdict, Some(failed));
+
+    // And the JSON a client actually receives says so in words.
+    let json = serde_json::to_string(&row).unwrap();
+    assert!(json.contains("\"state\":\"failed\""), "verdict must serialize its state");
+}
