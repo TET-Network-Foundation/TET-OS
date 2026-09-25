@@ -35,6 +35,12 @@ pub enum TmailEnvelopeError {
         "time_lock block disagrees with the signed release_at_ms, or carries a VDF proof (Phase 0.1)"
     )]
     InconsistentTimeLockBlock,
+    #[error("anonymous envelope requires sender_wallet_id = ANONYMOUS_SENTINEL and an anonymous block")]
+    MalformedAnonymous,
+    #[error("anonymous envelope signer must equal anonymous.ephemeral_wallet_id")]
+    EphemeralSignerMismatch,
+    #[error("anchor proof journal disagrees with the envelope: {0}")]
+    InconsistentAnchorProof(&'static str),
     #[error("signer ed25519 pubkey must equal sender_wallet_id")]
     SignerMismatch,
     #[error("invalid wallet id (expected 64 lowercase hex chars)")]
@@ -100,13 +106,40 @@ pub struct TmailHybridSig {
     pub mldsa_sig_b64: String,
 }
 
-/// Anonymous-mode block (spec §A.1.2 `anonymous`). Out of scope for the Basic task; always `None`.
+/// `sender_wallet_id` for an anonymous envelope (spec §A.1.2).
+///
+/// Not a wallet id and deliberately not 64-hex, so it can never collide with a real one or be
+/// mistaken for a lookup key.
+pub const ANONYMOUS_SENTINEL: &str = "anonymous";
+
+/// The anchor proof carried by an anonymous envelope — **metadata only, ~300 bytes**.
+///
+/// The receipt itself is **not** here. A real receipt is ~335 KiB base64 against a 128 KiB gossip
+/// ceiling (`p2p.rs`), so the envelope announces the proof and the receiver pulls it
+/// (`/tet/v1/anon-receipt`). `receipt_sha256_hex` is what makes the pull safe: the receipt is
+/// content-addressed, so any peer may serve it and a wrong one is detected before it is verified.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TmailAnchorProof {
+    /// Guest image id the receipt must verify against, as 8 little-endian u32 words in hex.
+    pub image_id_hex: String,
+    /// The risc0 journal (268 bytes), base64. Carries root, nullifier, ephemeral, receiver, bucket.
+    pub journal_b64: String,
+    /// SHA-256 of the serialized receipt, hex. The pull key.
+    pub receipt_sha256_hex: String,
+}
+
+/// Anonymous-mode block (spec §A.1.2 `anonymous`).
+///
+/// **Not covered by the §A.1.3 pre-image** — like the `burn` and `time_lock` blocks. It is not left
+/// unchecked, though: [`verify_tmail_envelope_v1`] requires the journal to agree with the
+/// ephemeral, the receiver and the bucket, and the envelope signature is made by the ephemeral key
+/// itself. Swapping this block for another *valid* proof therefore requires a valid proof **for the
+/// same ephemeral, receiver and bucket**, which only the member holding that secret can produce.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmailAnonymous {
-    #[serde(default)]
-    pub ring_proof_b64: Option<String>,
-    #[serde(default)]
-    pub stealth_addr: Option<String>,
+    /// 64-hex Ed25519 key that signs this envelope. The anchor is nowhere in it.
+    pub ephemeral_wallet_id: String,
+    pub anchor_proof: TmailAnchorProof,
 }
 
 /// Time-lock block (spec §A.1.2 `time_lock`).
@@ -243,9 +276,15 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
     if env.kind != TMAIL_ENVELOPE_KIND {
         return Err(TmailEnvelopeError::Kind(env.kind.clone()));
     }
-    // S7-1 opened `burn_after_read`; S7-2 opens `time_lock`. `anonymous` (S8) stays closed.
-    if !env.flags.basic || env.flags.anonymous || env.anonymous.is_some() {
+    // S7-1 opened `burn_after_read`, S7-2 `time_lock`, S8 `anonymous`. `basic` is still required:
+    // every envelope is a Basic E2EE envelope with features layered on, never instead of.
+    if !env.flags.basic {
         return Err(TmailEnvelopeError::UnsupportedFlags);
+    }
+    // The flag and the block must agree. A flag with no block has no proof to check; a block with
+    // no flag is a proof nothing consults.
+    if env.flags.anonymous != env.anonymous.is_some() {
+        return Err(TmailEnvelopeError::MalformedAnonymous);
     }
     // The schedule must be coherent with the flag, both of which are signed. A `release_at_ms`
     // without the flag would be a signed value the node ignores; the flag without a future
@@ -273,17 +312,37 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
 
     let sender = env.sender_wallet_id.trim().to_ascii_lowercase();
     let receiver = env.receiver_wallet_id.trim().to_ascii_lowercase();
-    if !is_wallet_id_64hex(&sender) || !is_wallet_id_64hex(&receiver) {
+    if !is_wallet_id_64hex(&receiver) {
         return Err(TmailEnvelopeError::InvalidWalletId);
     }
-
     let signer = env
         .hybrid_sig
         .ed25519_pubkey_hex
         .trim()
         .to_ascii_lowercase();
-    if signer != sender {
-        return Err(TmailEnvelopeError::SignerMismatch);
+
+    if let Some(anon) = env.anonymous.as_ref() {
+        // Anonymous: the sender field is the sentinel and the SIGNER is the ephemeral. The anchor
+        // appears nowhere, which is the entire point.
+        if sender != ANONYMOUS_SENTINEL {
+            return Err(TmailEnvelopeError::MalformedAnonymous);
+        }
+        let ephemeral = anon.ephemeral_wallet_id.trim().to_ascii_lowercase();
+        if !is_wallet_id_64hex(&ephemeral) {
+            return Err(TmailEnvelopeError::InvalidWalletId);
+        }
+        if signer != ephemeral {
+            return Err(TmailEnvelopeError::EphemeralSignerMismatch);
+        }
+        verify_anchor_proof_consistency(env, anon, &ephemeral, &receiver)?;
+    } else {
+        // Named: the signer is the sender.
+        if !is_wallet_id_64hex(&sender) {
+            return Err(TmailEnvelopeError::InvalidWalletId);
+        }
+        if signer != sender {
+            return Err(TmailEnvelopeError::SignerMismatch);
+        }
     }
 
     let msg = tmail_envelope_auth_message_bytes(env, &env.hybrid_sig.mldsa_pubkey_b64)?;
@@ -296,5 +355,68 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
     )
     .map_err(|e| TmailEnvelopeError::Signature(format!("{e:?}")))?;
 
+    Ok(())
+}
+
+/// Check that the announced journal actually describes **this** envelope.
+///
+/// The receipt is pulled later; this runs on the metadata alone and is what makes deferring the
+/// pull safe. Every check binds values already present, so a mismatched journal is rejected before
+/// any network fetch happens.
+///
+/// It deliberately does **not** verify the receipt — that needs the ~335 KiB body, which is the
+/// whole reason for announce-then-pull. A message that passes this is *proof pending*, never
+/// verified.
+fn verify_anchor_proof_consistency(
+    env: &TmailEnvelopeV1,
+    anon: &TmailAnonymous,
+    ephemeral: &str,
+    receiver: &str,
+) -> Result<(), TmailEnvelopeError> {
+    let journal_bytes = base64::engine::general_purpose::STANDARD
+        .decode(anon.anchor_proof.journal_b64.trim().as_bytes())
+        .map_err(|_| TmailEnvelopeError::Encoding {
+            field: "anonymous.anchor_proof.journal_b64",
+        })?;
+    let journal: nexus_protocol::TmailAnonMembershipV1 =
+        risc0_zkvm::serde::from_slice(&journal_bytes)
+            .map_err(|_| TmailEnvelopeError::InconsistentAnchorProof("journal does not decode"))?;
+
+    if journal.journal_kind != nexus_protocol::TMAIL_ANON_JOURNAL_KIND {
+        return Err(TmailEnvelopeError::InconsistentAnchorProof("wrong journal kind"));
+    }
+    let eph_bytes = hex::decode(ephemeral)
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+        .ok_or(TmailEnvelopeError::InvalidWalletId)?;
+    if journal.ephemeral_pubkey_bytes != eph_bytes {
+        return Err(TmailEnvelopeError::InconsistentAnchorProof(
+            "journal ephemeral does not match the signer",
+        ));
+    }
+    let rx_bytes = hex::decode(receiver)
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+        .ok_or(TmailEnvelopeError::InvalidWalletId)?;
+    if journal.receiver_wallet_bytes != rx_bytes {
+        return Err(TmailEnvelopeError::InconsistentAnchorProof(
+            "journal receiver does not match the envelope",
+        ));
+    }
+    // The bucket comes from the envelope's own `sent_at_ms`, so one proof authorises one
+    // (member, receiver, 24 h) window and cannot be carried into the next day.
+    if journal.bucket_index != nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms) {
+        return Err(TmailEnvelopeError::InconsistentAnchorProof(
+            "journal bucket does not match sent_at_ms",
+        ));
+    }
+    if hex::decode(anon.anchor_proof.receipt_sha256_hex.trim())
+        .map(|b| b.len() != 32)
+        .unwrap_or(true)
+    {
+        return Err(TmailEnvelopeError::InconsistentAnchorProof(
+            "receipt_sha256_hex must be 32 bytes of hex",
+        ));
+    }
     Ok(())
 }

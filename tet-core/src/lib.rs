@@ -18,3 +18,4 @@ pub mod wallet;
 pub mod workers;
 pub mod worker_ai;
 pub mod worker_config;
+pub mod zk_verifier;

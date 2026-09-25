@@ -28,6 +28,16 @@ const TREE_BY_MSG_ID: &str = "tmail_by_msg_id_v1";
 const TREE_KEYS: &str = "tmail_keys_v1";
 /// Anonymity-set registrations: key `wallet_id`, value = `TmailAnonRegistrationV1` JSON.
 const TREE_ANON_REGISTRY: &str = "tmail_anon_registry_v1";
+/// Verdict per anonymous message: key `msg_id`, value = [`AnonVerdict`] JSON.
+const TREE_ANON_VERDICT: &str = "tmail_anon_verdict_v1";
+/// Content-addressed receipt cache: key = SHA-256 of the receipt, value = receipt bytes.
+const TREE_ANON_RECEIPTS: &str = "tmail_anon_receipts_v1";
+/// Nullifiers already seen, so one member cannot publish two ephemerals per (receiver, bucket).
+const TREE_ANON_NULLIFIERS: &str = "tmail_anon_nullifiers_v1";
+
+/// Cap on cached receipts. Each is ~250 KiB, so this is the one Tmail structure where size, not
+/// count, is the binding constraint: 2,000 × 250 KiB ≈ 500 MB.
+const DEFAULT_ANON_RECEIPT_CACHE: usize = 2_000;
 
 /// Cap on registrations this node will hold. Registration is free, so the registry is an
 /// attacker-writable structure and must be bounded like the message buffer is.
@@ -129,6 +139,9 @@ pub struct TmailStore {
     by_msg_id: sled::Tree,
     keys: sled::Tree,
     anon_registry: sled::Tree,
+    anon_verdict: sled::Tree,
+    anon_receipts: sled::Tree,
+    anon_nullifiers: sled::Tree,
     /// Memoised `(epoch, root)`. Purely a cache — a miss is recomputed from the registry, so
     /// losing it (restart, eviction, flood) costs time and never acceptance.
     anon_roots: std::sync::Mutex<Vec<(u64, [u8; 32])>>,
@@ -204,6 +217,9 @@ impl TmailStore {
             by_msg_id: db.open_tree(TREE_BY_MSG_ID)?,
             keys: db.open_tree(TREE_KEYS)?,
             anon_registry: db.open_tree(TREE_ANON_REGISTRY)?,
+            anon_verdict: db.open_tree(TREE_ANON_VERDICT)?,
+            anon_receipts: db.open_tree(TREE_ANON_RECEIPTS)?,
+            anon_nullifiers: db.open_tree(TREE_ANON_NULLIFIERS)?,
             anon_roots: std::sync::Mutex::new(Vec::new()),
         })
     }
@@ -837,4 +853,98 @@ impl TmailStore {
         self.anon_roots.lock().map(|h| h.len()).unwrap_or(0)
     }
 
+}
+
+// ---------------------------------------------------------------------------
+// Anonymous message verdicts — verify on ARRIVAL, read the stored verdict later.
+// ---------------------------------------------------------------------------
+
+/// What this node concluded about an anonymous message's proof.
+///
+/// Stored when the message arrives, not computed when it is read. That is what keeps the root
+/// window small: the window must cover send → verify, not send → *someone opens their inbox*, which
+/// could be days.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum AnonVerdict {
+    /// The receipt has not been pulled or checked yet. **Never render this as anonymous-verified.**
+    Pending,
+    /// Receipt verified against the image id, journal matched, root accepted, nullifier unused.
+    Verified { nullifier_hex: String, verified_at_ms: u64 },
+    /// Checked and refused. `reason` is for operators, not for trusting.
+    Failed { reason: String, failed_at_ms: u64 },
+}
+
+impl TmailStore {
+    fn anon_receipt_cache_cap() -> usize {
+        env_usize("TET_TMAIL_ANON_RECEIPT_CACHE", DEFAULT_ANON_RECEIPT_CACHE)
+    }
+
+    pub fn set_anon_verdict(&self, msg_id: &str, verdict: &AnonVerdict) -> Result<(), TmailStoreError> {
+        let val = serde_json::to_vec(verdict).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
+        self.anon_verdict.insert(msg_id.trim().as_bytes(), val)?;
+        Ok(())
+    }
+
+    pub fn get_anon_verdict(&self, msg_id: &str) -> Option<AnonVerdict> {
+        let v = self.anon_verdict.get(msg_id.trim().as_bytes()).ok().flatten()?;
+        serde_json::from_slice(&v).ok()
+    }
+
+    /// Claim a nullifier for a message. `Ok(false)` means it was already used by a *different*
+    /// message — the replay rule.
+    ///
+    /// Re-claiming for the same `msg_id` is idempotent, so a duplicate delivery of one message does
+    /// not look like a replay.
+    pub fn claim_anon_nullifier(
+        &self,
+        nullifier_hex: &str,
+        msg_id: &str,
+    ) -> Result<bool, TmailStoreError> {
+        let key = nullifier_hex.trim().to_ascii_lowercase();
+        match self.anon_nullifiers.get(key.as_bytes())? {
+            Some(existing) if existing.as_ref() != msg_id.trim().as_bytes() => Ok(false),
+            Some(_) => Ok(true),
+            None => {
+                self.anon_nullifiers
+                    .insert(key.as_bytes(), msg_id.trim().as_bytes())?;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Store a receipt under its own SHA-256.
+    ///
+    /// Content-addressed on purpose: **any** node may cache and serve a receipt it has verified,
+    /// and a bad cache entry cannot forge anything because the key is the hash of the value. The
+    /// caller supplies the expected hash and this refuses a mismatch rather than trusting the peer.
+    pub fn put_anon_receipt(
+        &self,
+        expected_sha256_hex: &str,
+        bytes: &[u8],
+    ) -> Result<bool, TmailStoreError> {
+        use sha2::{Digest as _, Sha256};
+        let actual = hex::encode(Sha256::digest(bytes));
+        if !actual.eq_ignore_ascii_case(expected_sha256_hex.trim()) {
+            return Ok(false);
+        }
+        if self.anon_receipts.len() >= Self::anon_receipt_cache_cap() {
+            // Receipts are large; drop the oldest key rather than grow without bound. Losing a
+            // cached receipt costs a re-pull, never correctness -- the hash is the authority.
+            if let Ok(Some((k, _))) = self.anon_receipts.first() {
+                let _ = self.anon_receipts.remove(k);
+            }
+        }
+        self.anon_receipts.insert(actual.as_bytes(), bytes)?;
+        Ok(true)
+    }
+
+    pub fn get_anon_receipt(&self, sha256_hex: &str) -> Option<Vec<u8>> {
+        let k = sha256_hex.trim().to_ascii_lowercase();
+        self.anon_receipts.get(k.as_bytes()).ok().flatten().map(|v| v.to_vec())
+    }
+
+    pub fn anon_receipt_count(&self) -> usize {
+        self.anon_receipts.len()
+    }
 }

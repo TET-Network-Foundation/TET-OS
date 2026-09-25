@@ -9411,3 +9411,215 @@ fn s8_registration_flood_does_not_invalidate_an_honest_root() {
     // ...and a root that never existed is still refused.
     assert!(!store.accepts_anon_root(&[0x77u8; 32], now_bucket));
 }
+
+// ---------------------------------------------------------------------------
+// S8 steps 3 + 6 — announce-then-pull envelope and two-phase verification.
+// ---------------------------------------------------------------------------
+
+/// Build a real anonymous envelope: a genuine mode-3 proof, a registry containing the member, and
+/// an envelope signed by the ephemeral.
+///
+/// Returns `(envelope, receipt_bytes, store)`. Slow — it proves for real.
+#[cfg(test)]
+fn anonymous_envelope_for_tests(
+    receiver_wallet: &str,
+) -> (
+    crate::tmail::envelope::TmailEnvelopeV1,
+    Vec<u8>,
+    crate::tmail::store::TmailStore,
+) {
+    use sha2::{Digest as _, Sha256};
+    let store = tmail_store_for_tests();
+
+    // A member registers and becomes effective.
+    let secret = [0x5Au8; 32];
+    let (rw, reg_wallet) = tmail_party_for_tests();
+    store
+        .register_anon(&signed_anon_registration_for_tests(&rw, &reg_wallet, &secret, 1_000))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+
+    // The ephemeral that will sign the envelope.
+    let (eph_words, ephemeral) = tmail_party_for_tests();
+    let eph_bytes: [u8; 32] = hex::decode(&ephemeral).unwrap().try_into().unwrap();
+    let rx_bytes: [u8; 32] = hex::decode(receiver_wallet).unwrap().try_into().unwrap();
+
+    let sent_at_ms = tmail_now_ms_for_tests();
+    let bucket = nexus_protocol::tmail_bucket_index_v1(sent_at_ms);
+    let index = store.anon_leaf_index(&reg_wallet).expect("member in tree");
+    let tree = store.anon_tree();
+    let siblings = tree.path(index).expect("path");
+
+    let env_builder = risc0_zkvm::ExecutorEnv::builder()
+        .write(&3u8).unwrap()
+        .write(&secret).unwrap()
+        .write(&(index as u32)).unwrap()
+        .write(&siblings).unwrap()
+        .write(&eph_bytes).unwrap()
+        .write(&rx_bytes).unwrap()
+        .write(&bucket).unwrap()
+        .build()
+        .unwrap();
+    let receipt = risc0_zkvm::default_prover()
+        .prove(env_builder, methods::NEXUS_GUEST_ELF)
+        .expect("prove mode 3")
+        .receipt;
+    let receipt_bytes = bincode::serialize(&receipt).unwrap();
+    let journal_b64 =
+        base64::engine::general_purpose::STANDARD.encode(&receipt.journal.bytes);
+
+    let mut envelope = signed_tmail_env_for_tests(
+        &eph_words,
+        &ephemeral,
+        receiver_wallet,
+        "anon-msg-1",
+        tmail_flags_for_tests(false),
+        None,
+    );
+    envelope.sent_at_ms = sent_at_ms;
+    envelope.flags.anonymous = true;
+    envelope.sender_wallet_id = crate::tmail::envelope::ANONYMOUS_SENTINEL.to_string();
+    envelope.anonymous = Some(crate::tmail::envelope::TmailAnonymous {
+        ephemeral_wallet_id: ephemeral.clone(),
+        anchor_proof: crate::tmail::envelope::TmailAnchorProof {
+            image_id_hex: crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID),
+            journal_b64,
+            receipt_sha256_hex: hex::encode(Sha256::digest(&receipt_bytes)),
+        },
+    });
+    resign_tmail_env_for_tests(&mut envelope, &eph_words);
+    (envelope, receipt_bytes, store)
+}
+
+/// **Step 3 + 6.** The envelope verifies on metadata alone, then the pulled receipt verifies it.
+#[test]
+#[ignore = "runs a real RISC Zero prover; needs a zk build"]
+fn s8_anonymous_envelope_two_phase_verify() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (envelope, receipt_bytes, store) = anonymous_envelope_for_tests(&receiver);
+
+    // Phase 1: no receipt needed. The envelope is small enough to gossip.
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&envelope).is_ok(),
+        "an anonymous envelope must verify on metadata alone"
+    );
+    let wire = serde_json::to_vec(&envelope).unwrap();
+    assert!(
+        wire.len() < crate::p2p::DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES,
+        "the envelope must fit the gossip ceiling: {} bytes",
+        wire.len()
+    );
+    println!("\nanonymous envelope on the wire: {} bytes", wire.len());
+    println!("receipt pulled separately     : {} bytes", receipt_bytes.len());
+
+    // The anchor appears nowhere.
+    let wire_str = String::from_utf8_lossy(&wire);
+    assert!(
+        wire_str.contains(crate::tmail::envelope::ANONYMOUS_SENTINEL),
+        "sender must be the sentinel"
+    );
+
+    // Phase 2: with the receipt.
+    let verdict = crate::tmail::anon::verify_anonymous_proof(&store, &envelope, &receipt_bytes);
+    match verdict {
+        crate::tmail::store::AnonVerdict::Verified { .. } => {}
+        other => panic!("expected Verified, got {other:?}"),
+    }
+}
+
+/// **The wrong-receipt control.** A peer serving a different receipt must be refused, and cheaply —
+/// on the hash, before any verification work.
+#[test]
+#[ignore = "runs a real RISC Zero prover; needs a zk build"]
+fn s8_anonymous_wrong_receipt_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (envelope, receipt_bytes, store) = anonymous_envelope_for_tests(&receiver);
+
+    // A different, individually valid receipt: same shape, different nullifier.
+    let (_rw2, receiver2) = tmail_party_for_tests();
+    let (_env2, other_receipt, _s2) = anonymous_envelope_for_tests(&receiver2);
+    assert_ne!(receipt_bytes, other_receipt, "precondition: really different");
+
+    let verdict = crate::tmail::anon::verify_anonymous_proof(&store, &envelope, &other_receipt);
+    match verdict {
+        crate::tmail::store::AnonVerdict::Failed { reason, .. } => {
+            assert!(
+                reason.contains("receipt hash"),
+                "must be refused on the content address, before verification: {reason}"
+            );
+        }
+        other => panic!("a receipt for a different message must be refused, got {other:?}"),
+    }
+}
+
+/// A receipt whose nullifier was already used by another message is a replay.
+#[test]
+fn s8_anonymous_nullifier_replay_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let nullifier = hex::encode([0xABu8; 32]);
+
+    assert!(store.claim_anon_nullifier(&nullifier, "msg-a").unwrap());
+    assert!(
+        store.claim_anon_nullifier(&nullifier, "msg-a").unwrap(),
+        "re-claiming for the SAME message is idempotent -- gossip delivers duplicates"
+    );
+    assert!(
+        !store.claim_anon_nullifier(&nullifier, "msg-b").unwrap(),
+        "a different message may not reuse a nullifier: that is the replay rule"
+    );
+}
+
+/// The receipt cache is content-addressed, so a wrong body cannot be stored under a right hash.
+#[test]
+fn s8_receipt_cache_refuses_a_hash_mismatch() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    use sha2::{Digest as _, Sha256};
+    let body = b"a receipt".to_vec();
+    let good = hex::encode(Sha256::digest(&body));
+
+    assert!(store.put_anon_receipt(&good, &body).unwrap());
+    assert_eq!(store.get_anon_receipt(&good).unwrap(), body);
+
+    assert!(
+        !store.put_anon_receipt(&good, b"a DIFFERENT receipt").unwrap(),
+        "a body that does not hash to the key must be refused -- this is what makes it safe for \
+         any node to cache and serve receipts"
+    );
+    assert_eq!(
+        store.get_anon_receipt(&good).unwrap(),
+        body,
+        "and the good entry must survive the attempt"
+    );
+}
+
+/// An anonymous envelope whose journal names a different receiver must be refused in phase 1,
+/// before any receipt is pulled.
+#[test]
+#[ignore = "runs a real RISC Zero prover; needs a zk build"]
+fn s8_anonymous_envelope_journal_must_match_the_receiver() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (mut envelope, _receipt, _store) = anonymous_envelope_for_tests(&receiver);
+
+    // Re-point the envelope at someone else, keeping the same proof.
+    let (_rw2, other) = tmail_party_for_tests();
+    envelope.receiver_wallet_id = other;
+    let err = crate::tmail::envelope::verify_tmail_envelope_v1(&envelope)
+        .expect_err("a proof for a different receiver must not be reusable");
+    assert!(
+        format!("{err}").contains("journal receiver") || format!("{err}").contains("signature"),
+        "unexpected rejection: {err}"
+    );
+}

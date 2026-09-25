@@ -214,3 +214,112 @@ impl AnonMerkleTree {
         Some(siblings)
     }
 }
+
+/// Verify an anonymous envelope's proof, given the pulled receipt bytes, and produce a verdict.
+///
+/// This is **phase two** of announce-then-pull. Phase one (`verify_tmail_envelope_v1`) already
+/// established that the journal describes this envelope; it could not check the proof, because the
+/// proof is ~250 KiB and does not fit in a gossip message.
+///
+/// Checks, in order, cheapest first:
+///
+/// 1. the receipt's SHA-256 matches what the envelope announced — so a peer cannot serve a
+///    different receipt, and this costs one hash rather than a verification;
+/// 2. the receipt verifies against the image id, and its journal is byte-identical to the
+///    announced one;
+/// 3. the journal's `merkle_root` is a root this node accepts (epoch window + bucket bound);
+/// 4. the nullifier has not been used by a different message.
+///
+/// Order matters: 1 and 2 are the integrity of what we were handed, 3 and 4 are policy. Running
+/// policy first would let a peer make us do registry work on a receipt that was never valid.
+pub fn verify_anonymous_proof(
+    store: &crate::tmail::store::TmailStore,
+    env: &crate::tmail::envelope::TmailEnvelopeV1,
+    receipt_bytes: &[u8],
+) -> crate::tmail::store::AnonVerdict {
+    use base64::Engine as _;
+    use sha2::{Digest as _, Sha256};
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let fail = |reason: &str| crate::tmail::store::AnonVerdict::Failed {
+        reason: reason.to_string(),
+        failed_at_ms: now,
+    };
+
+    let Some(anon) = env.anonymous.as_ref() else {
+        return fail("not an anonymous envelope");
+    };
+
+    // 1. content address
+    let actual = hex::encode(Sha256::digest(receipt_bytes));
+    if !actual.eq_ignore_ascii_case(anon.anchor_proof.receipt_sha256_hex.trim()) {
+        return fail("receipt hash does not match the announced receipt_sha256_hex");
+    }
+
+    // 2. the proof itself
+    let Ok(image_id) = decode_image_id_hex(&anon.anchor_proof.image_id_hex) else {
+        return fail("malformed image_id_hex");
+    };
+    let receipt_b64 = base64::engine::general_purpose::STANDARD.encode(receipt_bytes);
+    let verified = match crate::zk_verifier::verify_tx_receipt_and_journal(
+        image_id,
+        anon.anchor_proof.journal_b64.trim(),
+        &receipt_b64,
+    ) {
+        Ok(v) => v,
+        Err(e) => return fail(&format!("receipt verification failed: {e}")),
+    };
+    let journal = match verified {
+        crate::zk_verifier::VerifiedZkJournal::TmailAnon(j) => j,
+        _ => return fail("receipt proves a different claim than anonymous membership"),
+    };
+
+    // 3. is the root one we accept?
+    let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
+    if !store.accepts_anon_root(&journal.merkle_root, bucket) {
+        return fail("registry root not recognised, or outside the acceptance window");
+    }
+
+    // 4. replay
+    let nullifier_hex = hex::encode(journal.nullifier);
+    match store.claim_anon_nullifier(&nullifier_hex, env.msg_id.trim()) {
+        Ok(true) => {}
+        Ok(false) => return fail("nullifier already used by another message (replay)"),
+        Err(e) => return fail(&format!("nullifier store error: {e}")),
+    }
+
+    crate::tmail::store::AnonVerdict::Verified {
+        nullifier_hex,
+        verified_at_ms: now,
+    }
+}
+
+/// `image_id_hex` is 8 little-endian `u32` words, 64 hex chars.
+fn decode_image_id_hex(s: &str) -> Result<[u32; 8], ()> {
+    let bytes = hex::decode(s.trim()).map_err(|_| ())?;
+    if bytes.len() != 32 {
+        return Err(());
+    }
+    let mut out = [0u32; 8];
+    for (i, w) in out.iter_mut().enumerate() {
+        *w = u32::from_le_bytes([
+            bytes[i * 4],
+            bytes[i * 4 + 1],
+            bytes[i * 4 + 2],
+            bytes[i * 4 + 3],
+        ]);
+    }
+    Ok(out)
+}
+
+/// Render an image id as the hex the envelope carries.
+pub fn encode_image_id_hex(id: &[u32; 8]) -> String {
+    let mut bytes = Vec::with_capacity(32);
+    for w in id {
+        bytes.extend_from_slice(&w.to_le_bytes());
+    }
+    hex::encode(bytes)
+}
