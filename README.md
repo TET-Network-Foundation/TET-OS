@@ -89,7 +89,10 @@ Substrate / Solana experiments and legacy nested copies were **removed from this
 | `nexus-onchain/` | Solana Anchor experiment |
 | `nexus network/` | Legacy nested copies |
 
-To recover sources, check git history before [`32f8eee`](https://github.com/TET-Network-Foundation/TET-OS/commit/32f8eee).
+To recover sources, check git history before [`a43eb22`](https://github.com/TET-Network-Foundation/TET-OS/commit/a43eb22).
+
+> Commit hashes before 2026-09-26 were rewritten when key material was purged from history
+> (see [`SECURITY.md`](./SECURITY.md)). `32f8eee` was this commit's hash prior to that rewrite.
 
 ## License
 
