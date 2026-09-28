@@ -96,4 +96,11 @@ To recover sources, check git history before [`a43eb22`](https://github.com/TET-
 
 ## License
 
-MIT (see [`LICENSE`](./LICENSE) if present).
+Dual-licensed under either of
+
+- Apache License, Version 2.0 ([`LICENSE-APACHE`](./LICENSE-APACHE))
+- MIT License ([`LICENSE-MIT`](./LICENSE-MIT))
+
+at your option. Unless you explicitly state otherwise, any contribution you
+intentionally submit for inclusion in this work shall be dual-licensed as above,
+without any additional terms or conditions.

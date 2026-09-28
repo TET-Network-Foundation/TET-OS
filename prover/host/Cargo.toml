@@ -2,7 +2,7 @@
 name = "tet-prover-host"
 version = "0.1.0"
 edition = "2021"
-license = "MIT-0"
+license.workspace = true
 publish = false
 
 [[bin]]

@@ -11,6 +11,11 @@ members = [
 ]
 resolver = "2"
 
+# Shared package metadata. Every member inherits the licence with
+# `license.workspace = true`, so there is one place to change it.
+[workspace.package]
+license = "MIT OR Apache-2.0"
+
 # Shared by `prover/methods` and `prover/host` (RISC Zero + HTTP daemon).
 [workspace.dependencies]
 anyhow = "1"
