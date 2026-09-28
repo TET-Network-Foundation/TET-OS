@@ -125,14 +125,14 @@ These are all consensus- or schema-breaking and are cheap only at a ceremony.
 
 | Item | Source | Why it must wait for genesis |
 |------|--------|------------------------------|
-| **`/ai/infer` settlement → consensus** | `ai.rs:744`, this doc §2.1 | Needs a new `TxV1` variant **and** a client-signed settlement envelope; see §2.1 |
+| **`/ai/infer` settlement → consensus** | this doc §2.1 | Needs a new `TxV1` variant **and** a client-signed settlement envelope; see §2.1 |
 | **Founder vesting: cliff + linear** | WP §17.3, `DAILY_LOG_2026-05-29` | The live chain has a one-shot 365-day 100% cliff on 2.5B TET burned into genesis, with no early-unlock path. This is the reason Strategy C exists |
 | **`TxV1::Transfer` nonce** | `DAILY_LOG_2026-05-31` | Identical transfers currently collide on tx hash, so only the first applies. Adding a nonce changes the tx schema |
 | **FIPS-203 ML-KEM migration** | WP §17.17 | Tmail/Files KEM keys are mnemonic-derived; changing the algorithm invalidates every messaging identity. Free when the key directory is discarded anyway |
 | **Minimum ML-DSA level** | WP §7.1 | Verification infers the level from pubkey length and accepts 44/65/87, so the effective security level is the signer's choice. Pinning a floor is a consensus rule |
 | **Protocol reserve allocation** | WP §11.4 | `WALLET_PROTOCOL_RESERVE` mints 0 and is committed in the genesis hash. Changing it needs a new ceremony |
-| **Consensus-route all remaining balance writes** | [§4 table](#4-direct-write-path-inventory), this doc §2.5 | Ten paths still move funds outside the block pipeline. Each needs a new `TxV1` variant or a client-signed settlement envelope, several need both |
-| **Stake / unstake / worker-bond as consensus txs** | [§4 table](#4-direct-write-path-inventory), `wallet.rs:261`, `ledger.rs:1113`, `ledger.rs:1171` | `TxV1` has **no** `Stake`, `Unstake` or `WorkerBond` variant — the nine are `SignerLink`, `FoundingMemberEnroll`, `Transfer`, `GenesisBridge`, `InitialAirdrop`, `FileFee`, `WorkerRegister`, `EnterpriseInference`, `VerifyZkProof`. Routing these through the mempool therefore needs new tx variants, which is a schema change |
+| **Consensus-route all remaining balance writes** | this doc [§2.5](#25-consensus-route-all-remaining-balance-writes) | **Nine** paths still move funds outside the block pipeline. Each needs a new `TxV1` variant or a client-signed settlement envelope, several need both. (Said "ten" until 2026-09-28; nine is the count §2.5 actually lists) |
+| **Stake / unstake / worker-bond as consensus txs** | this doc [§2.5](#25-consensus-route-all-remaining-balance-writes); locations in `TET-OS-security` | `TxV1` has **no** `Stake`, `Unstake` or `WorkerBond` variant — the nine are `SignerLink`, `FoundingMemberEnroll`, `Transfer`, `GenesisBridge`, `InitialAirdrop`, `FileFee`, `WorkerRegister`, `EnterpriseInference`, `VerifyZkProof`. Routing these through the mempool therefore needs new tx variants, which is a schema change |
 | **Per-plane libp2p keypairs** | [post-mortem 2026-09](./postmortems/2026-09-gossip-lost-subscriptions.md), this doc §2.4 | Changes every node's `PeerId` on at least two planes, so every published bootnode multiaddr must be reissued. Free at a ceremony, disruptive on a live network |
 | **`TxV1::AnonymousEscrow` (open / settle / slash)** | `SOVEREIGN_OS_PHASE0_SPEC.md` §A.4.5, `SPRINT_PLAN.md` § S8 | Anonymous Mode locks **1 TET** from the anchor into escrow per ephemeral. That is a balance move, so it needs a new `TxV1` variant — the same schema break as `TmailPin`. **It cannot be brought forward by a flag day**, because the 24 h auto-settle is §1's defect: "if `now > created_at + 24h` … → escrow → anchor" is `ledger_now_ms()` deciding a balance move, and an escrow row with a deadline is `VestLockV1`-shaped, read by the time-gated `locked_balance_micro` (`ledger.rs:4571`). Shipping it before §1 lands would add a second wall-clock consensus input, not remove one. Decided 2026-09-24 |
 | **`TxV1::TmailPin`** | `SOVEREIGN_OS_PHASE0_SPEC.md` Appendix C, `SPRINT_PLAN.md` §S7 | Tmail Pin is a 1_000 µTET fee (50% treasury / 50% burn). `TxV1` is `#[serde(tag = "kind")]` and blocks carry `Vec<SignedTxEnvelopeV1>` (`consensus.rs:81`), so a node on the current binary cannot **deserialize** a block containing a new variant — it fails before reaching the `apply_consensus_block_batch` catch-all. Adding it to a live chain is a flag-day upgrade for every node; free at a ceremony. Decided 2026-09-23 not to spend a flag day on it |
@@ -141,7 +141,8 @@ These are all consensus- or schema-breaking and are cheap only at a ceremony.
 
 ### 2.1 `/ai/infer` settlement must become a consensus tx
 
-`rest/handlers/ai.rs:744` calls `settle_ai_inference_dynamic_charge` — a **direct balance write**.
+The `/ai/infer` handler calls `settle_ai_inference_dynamic_charge` — a **direct balance write**.
+(Exact location in `TET-OS-security`, per the note in §2.5.)
 Whichever node serves the request forks its `state_root` while block history stays identical: the
 block 9828 signature. `3bd2009` removed the welcome-airdrop mutation from this handler in June but
 left the settlement.
@@ -286,61 +287,43 @@ contract is free.
 
 ### 2.5 Consensus-route all remaining balance writes
 
-After the 2026-09-23 sweep, ten paths still write balances outside the block pipeline. Every one
+After the 2026-09-23 sweep, **nine paths** still write balances outside the block pipeline. Every one
 forks `state_root` on the serving node while block history stays byte-identical — the block-9828
 signature. None is reachable anonymously any more; all are hybrid-signed or admin-gated. **That is
 not the same as being safe:** a signature authorises the caller, it does not put the write through
 consensus. Two nodes serving the same signed request still diverge.
 
-| # | path | file:line | what it needs |
-|---|---|---|---|
-| 7 | `POST /ai/infer` → `settle_ai_inference_dynamic_charge` | `ai.rs:744` | new `TxV1::AiInferenceCharge`, client-signed — §2.1 |
-| 8 | `POST /ai/proxy` → `settle_transfer_internal` | `ai_proxy.rs` | client-signed settlement envelope |
-| 9 | `POST /ai/proxy` → `mint_worker_network_reward` | `ai_proxy.rs` | new mint variant, consensus-validated amount |
-| 10 | `POST /v1/compute` → `mint_worker_network_reward` | `network.rs:292` | as #9 |
-| 11 | `POST /enterprise/inference` → `settle_ai_utility_payment` | `enterprise.rs:216` | as #8 |
-| 12 | `POST /ledger/genesis_bridge` → `transfer_no_fee` | `ledger.rs:625` | **needs a `GenesisBridge` apply arm.** The variant is signable but `apply_consensus_block_batch` has no arm for it — see below |
-| 13 | ~~`POST /ledger/zk_verify` → `slash_worker_bond_to_ecosystem_all`~~ | `ledger.rs:992` | ✅ REST-side slash deleted. **Slashing must be a consensus tx (new variant), not a REST side effect** — until that variant exists, an invalid receipt is refused and unpunished |
-| 14 | `POST /wallet/slash` → `slash_stake_micro` | `wallet.rs:294` | admin-gated; needs a slash variant |
-| 17 | ZK-Court → `zkcourt_settle_challenger_bond` | `vision/zk_court.rs` | settle at block-apply, not at challenge submission |
+By class:
+
+| Class | Count | What each needs |
+|---|---|---|
+| Stake / unstake / worker bond | 3 | new `TxV1` variants — `TxV1` has no `Stake`, `Unstake` or `WorkerBond` |
+| AI settlement and worker-reward mints | 4 | client-signed settlement envelopes and consensus-validated mint amounts; blocked on the optimistic-execution model below |
+| Genesis bridge | 1 | an **apply arm** — the variant is signable but `apply_consensus_block_batch` has none, so enqueueing one would make every node reject the block |
+| Admin-gated slash | 1 | a slash tx variant |
+| ZK-Court challenger bond | 1 | settle at block-apply, not at challenge submission |
+| Dev faucet | 1 | not network-reachable, off by default, refused on mainnet |
+
+> **Locations withheld.** `file:line` for each path, and the per-path fork analysis, live in the
+> private [`TET-OS-security`](https://github.com/TET-Network-Foundation/TET-OS-security) repository
+> (`DIRECT_WRITE_PATHS.md`). Three of these need nothing but a caller's own valid signature, so
+> publishing exact locations alongside "these fork `state_root`" would be a working recipe for
+> forking the public testnet. The counts, the classes and the fix plan are here because they cost an
+> attacker nothing and a reader everything. This note goes away when the last path closes.
 
 **The blocker is shared.** Settlement runs *after* the work and *before* the `200 OK`. Routing it
 through the mempool means the caller receives the result before payment confirms, and a tx that
 never mines leaves the node having worked for free. That is the optimistic-execution model the
 whitepaper specifies (§5.1, §8 ZK-Court) and which is not built — ZK-Court has no challenger
-incentive, so the dispute path is never exercised. Settling that model is a prerequisite for #7,
-#8, #9, #10 and #11, not a consequence of them.
+incentive, so the dispute path is never exercised. Settling that model is a prerequisite for the
+four AI-settlement paths, not a consequence of them.
 
-#### Correction: neither #12 nor #13 is a cheap sprint win
-
-An earlier draft of this section claimed #12 and #13 "already have their `TxV1` variants and write
-directly out of habit". That was derived from the enum and the signing path without reading the
-apply path, and it is wrong in both cases.
-
-**#12 would halt block production.** `apply_consensus_block_batch` (`ledger.rs:1641`) has arms for
-exactly six variants — `Transfer`, `VerifyZkProof`, `EnterpriseInference`, `FileFee`,
-`WorkerRegister`, `InitialAirdrop` — and its catch-all does not ignore the rest:
-
-```rust
-_ => {
-    return Err(LedgerError::Invalid("unsupported tx in consensus block".into()));
-}
-```
-
-`TxV1::GenesisBridge` hits that arm. Its only other appearance in `ledger.rs` is line 610, mapping
-the variant to the string `"genesis_bridge"`. So enqueueing a bridge tx would put it in a block
-and **every node would reject that block** — block production stops the first time anyone bridges.
-A variant being *signable* is not the same as being *appliable*. Adding the apply arm changes what
-every node computes for the same block, so this is a consensus change and belongs in this section,
-not in a sprint.
-
-**#13 was already routed; the direct write was on the failure path.** The handler enqueues the
-`VerifyZkProof` tx normally. The slash happened only when `verify_tx_receipt_and_journal` failed,
-and that path returned `400` *without* enqueuing — so consensus never saw the tx and "let consensus
-handle the slash" would have deleted the penalty rather than relocating it. Resolved by deleting
-the REST-side slash outright (see §4); making the penalty itself consensus-routed needs a new
-slash tx variant, which is why it stays in this section.
-
+**A signable variant is not an appliable one.** `apply_consensus_block_batch` has arms for exactly
+six variants, and its catch-all returns `Err("unsupported tx in consensus block")` rather than
+ignoring the rest — so enqueueing an unhandled variant does not silently drop the write, it makes
+every node reject the whole block. An earlier draft of this section claimed two of these paths were
+cheap sprint wins "because the variants already exist"; that was derived from the enum and the
+signing path without reading the apply path, and it was wrong in both cases.
 ## 3. Fixed before Phase 1 — do not redo
 
 Recorded so the ceremony checklist does not re-litigate them.
@@ -363,54 +346,29 @@ Recorded so the ceremony checklist does not re-litigate them.
 
 ## 4. Direct-write path inventory
 
-Replaces the earlier "~15 direct-write paths" placeholder, which pointed at an audit that was
-never written down. Derived 2026-09-23 by taking every `pub fn` in `ledger.rs` that writes the
-balances tree and reading every caller.
+**Moved.** The per-path inventory — every `pub fn` in the ledger that writes the balances tree, each
+caller, the trigger, and whether it forks `state_root` — is in the private
+[`TET-OS-security`](https://github.com/TET-Network-Foundation/TET-OS-security) repository,
+`DIRECT_WRITE_PATHS.md`.
 
-**The fork test is objective:** `compute_state_root` (`ledger.rs:1359`) iterates `self.balances`,
-so any method that changes a balance outside block-apply forks the serving node's root while block
-history stays identical. Note that block *validation* counts too: a write that survives a rejected
-block is a write no other node made.
+What belongs in public, and is not withheld:
 
-| # | path | trigger | forks? | status |
-|---|---|---|---|---|
-| 1 | `POST /wallet/stake` → `stake_micro` | REST, hybrid-signed | yes | **open** — §2, needs a `Stake` variant |
-| 2 | `POST /worker/register` → `grant_genesis_guardian_if_eligible` | REST, unauthenticated | **no** — writes cert/meta, not balances | open, not a fork risk |
-| 3 | `POST /ledger/stake` → `stake_worker_bond_micro` | REST, hybrid-signed | yes | **open** — §2 |
-| 4 | `POST /ledger/unstake` → `unstake_worker_bond_micro` | REST, hybrid-signed | yes | **open** — §2 |
-| 5 | `POST /genesis/1000/claim` → `genesis_1k_claim` | REST, hybrid-signed | yes | ✅ removed `0c64dd4`; method deleted `6df13f9` |
-| 6 | gossip `AiResult` → `settle_ai_utility_payment` | **remote peer, gossip on 8002** | yes | ✅ removed `33b521a` |
-| 7–12 | AI settlement, mints, genesis bridge | REST, hybrid-signed | yes | **open** — §2.5 |
-| 13 | ~~`POST /ledger/zk_verify` → slash on verification failure~~ | REST, hybrid-signed | yes | ✅ removed `ff6bfa4`; penalty needs a slash tx variant (§2) |
-| 14 | `POST /wallet/slash` → `slash_stake_micro` | REST, admin bearer | yes | **open** — §2.5 |
-| 15 | `POST /ledger/mint_demo` → `mint_reward_with_proof` | REST, admin + signed | yes | ✅ removed `4d8d7ea` |
-| 16 | startup dev faucet → `mint_reward_with_proof` | internal, `TET_DEV_FAUCET_MICRO`, `!is_prod` | yes | open — not network-reachable, off by default, refused on mainnet |
-| 17 | ZK-Court → `zkcourt_settle_challenger_bond` | internal, `submit_challenge` | yes | **open** — §2.5 |
-| 18 | ~~`validate_zk_task_claims` → `slash_worker_bond_to_ecosystem_all`~~ | block validation, was reachable from 8002 via a malicious candidate | yes | ✅ removed `dbe1b24` — fork removal, block validity unchanged |
-| — | `admin_rest_faucet`, `claim_initial_airdrop`, `mint_fiat_chf_topup` | no production caller | n/a | ✅ `#[cfg(test)]` `6df13f9` |
-| — | `slash_worker_bond_zk_court_burn_all`, `slash_wallet_liquid_burn_micro` | no caller at all | n/a | ✅ deleted `6df13f9` |
-
-**Nine paths remain open** (#1, #3, #4, #7–12, #14, #16, #17 — of which #16 is not
-network-reachable). Closed so far: #2 writes no balance, #5, #6, #13, #15 and #18 are removed, and
-the dead methods are deleted or gated to the test build.
-
-**Correction on record — #18 is not consensus-routed.** The first version of this table recorded
-`validate_zk_task_claims` (`consensus.rs:571`) as "✅ already consensus-routed, no fork", on the
-grounds that it is called from block validation. Reading it settles otherwise: on an invalid
-receipt it slashes the worker's bond **and then returns `Err`**, rejecting the block
-(`consensus.rs:971` `validate_and_record_backfill_candidate`, `:1071` `apply_block_record_forward`).
-
-The slash persists; the block does not. A node that received the bad candidate slashes, a node
-that never saw it does not, and the two diverge — with no block in the canonical chain to explain
-why. It is reachable by any peer that can send a block candidate, which on the public seed means
-anyone who can reach 8002.
-
-**Correction on record.** The first pass labelled #1, #3, #4 and #5 "unauthenticated". They are
-not: each verifies a hybrid Ed25519 + ML-DSA signature, but by hand
-(`verify_ed25519_hex_on_message` + `verify_mldsa_b64`, or signature headers) rather than through
-`verify_envelope_v1`, so a scan for the usual helper names missed them. The removals of #5 and #15
-stand on fork grounds, not on an authentication gap.
+- **Eighteen paths were audited** on 2026-09-23 by taking every balance-writing function and reading
+  every caller. This replaced an earlier "~15 direct-write paths" placeholder that pointed at an
+  audit nobody had written down.
+- **Nine are closed:** five removed outright, one writes no balance, and the dead methods are either
+  deleted or gated to the test build.
+- **Nine remain open**, summarised by class in [§2.5](#25-consensus-route-all-remaining-balance-writes).
+  One of those is not network-reachable.
+- **The fork test is objective:** `compute_state_root` iterates the balances map, so any method that
+  changes a balance outside block-apply forks the serving node's root while block history stays
+  identical. Block *validation* counts too — a write that survives a rejected block is a write no
+  other node made.
+- **Two corrections are on record** in the private file: one path was first labelled
+  "already consensus-routed, no fork" and is not, and four were first labelled "unauthenticated" and
+  are not — they verify hybrid signatures by hand rather than through the usual helper, so a scan for
+  helper names missed them. Both errors were found by reading the code rather than the enum, which is
+  the same lesson as the apply-arm correction in §2.5.
 
 **Still open, unrelated to balance writes:** ZK-Court has no challenger incentive, so the dispute
-path is never exercised (WP §8). `chf_top_up_mint` and the CHF/AML/fiat meta keys remain live v0
-machinery.
+path is never exercised (WP §8). The CHF/AML/fiat top-up meta machinery remains live v0 code.
