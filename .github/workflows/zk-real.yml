@@ -1,0 +1,130 @@
+name: zk real prover
+
+# Runs the tests that use a REAL RISC Zero prover. Nothing else does.
+#
+# WHY THIS EXISTS. Every other job sets RISC0_SKIP_BUILD=1, because building the
+# zkVM guests takes tens of minutes. The consequence was that seven tests marked
+# `#[ignore]` — the only ones that exercise a real receipt end to end — never ran
+# anywhere. They pass when run by hand and that is not a guarantee of anything.
+#
+# Two real defects had already survived for months behind that gap, both found on
+# 2026-09-24 and both invisible to a green suite:
+#
+#   * `decode_journal_bytes` parsed journals with bincode while `env::commit` writes
+#     risc0 word-aligned serde. bincode does not fail on those bytes — it consumes
+#     72 of 264 and returns a struct of garbage, and `compute_reward_for_block` then
+#     folds a nonsense `flops_u64` into the block reward.
+#   * The production zk image shipped an EMPTY guest ELF (the RISC0_SKIP_BUILD=0
+#     defect), and nothing noticed because nothing ever needed a real guest.
+#
+# CLAUDE.md's rule — "a mock-only path counts as untested" — was being followed in
+# letter and not in effect. This job is what makes a green suite mean something
+# other than "the mocks agree with themselves".
+#
+# It is NOT on every push: installing rzup and building the guests is far too slow
+# for that, and the whole reason RISC0_SKIP_BUILD=1 exists elsewhere. It runs
+# weekly, on demand, and on any push that touches the code it covers.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Weekly, Mondays 04:00 UTC. Frequent enough that a break is attributable to a
+    # week of commits rather than a month of them.
+    - cron: '0 4 * * 1'
+  push:
+    branches: [main]
+    paths:
+      - 'methods/**'
+      - 'prover/**'
+      - 'tet-core/src/zk_verifier.rs'
+      - 'tet-core/src/fips204_vectors.rs'
+      - 'tet-core/src/testdata/fips204_acvp_ml_dsa_44.json'
+      - 'nexus-protocol/**'
+      - '.github/workflows/zk-real.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zk-real:
+    name: zk (real prover, no mocks)
+    runs-on: ubuntu-latest
+    # Proving is minutes per receipt and there are several. The guest build alone
+    # is tens of minutes on a cold cache.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      # Same reclaim as the rust job: ubuntu-latest ships ~14 GB free and the
+      # workspace plus the risc0 toolchain does not fit.
+      - name: Free disk space
+        run: |
+          echo "before: $(df -h / --output=avail | tail -1)"
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          echo "after:  $(df -h / --output=avail | tail -1)"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: zkreal-${{ hashFiles('**/Cargo.lock') }}
+
+      # x86_64 only — rzup has no linux/aarch64 build. Same constraint the
+      # Dockerfile documents.
+      - name: Install the RISC Zero toolchain
+        run: |
+          set -euo pipefail
+          curl -L https://risczero.com/install | bash
+          echo "$HOME/.risc0/bin" >> "$GITHUB_PATH"
+      - name: rzup install
+        run: rzup install
+
+      # The guard that the ELF is non-empty runs first and cheaply. If the guest
+      # did not build, every proving test below would fail with something far less
+      # obvious than "the ELF is empty" — which is exactly how the 2026-09-24
+      # empty-ELF defect stayed hidden.
+      - name: Guest ELF is really embedded
+        env:
+          RISC0_SKIP_BUILD: "0"
+        run: |
+          cargo test -p tet-core --bin TET-Core --features zk-prove -- --ignored --exact \
+            tests::s8_guest_elf_is_embedded_in_a_zk_build --nocapture
+
+      # Named individually rather than `-- --ignored`, so that a test being renamed
+      # or deleted turns this job red instead of silently reducing its scope. The
+      # same reasoning as the named guard list in ci.yml.
+      - name: Real-receipt tests (mocks disabled)
+        env:
+          RISC0_SKIP_BUILD: "0"
+        run: |
+          set -euo pipefail
+          tests=(
+            s8_anon_membership_real_receipt_verifies_with_mocks_disabled
+            s8_anonymous_envelope_two_phase_verify
+            s8_anonymous_wrong_receipt_is_refused
+            s8_anonymous_envelope_journal_must_match_the_receiver
+            s8_measure_receipt_size_against_the_gossip_ceiling
+            s8_anon_membership_executor_cost
+          )
+          fail=0
+          for t in "${tests[@]}"; do
+            echo "::group::$t"
+            out=$(cargo test -p tet-core --bin TET-Core --features zk-prove -- \
+                  --ignored --exact "tests::$t" --nocapture 2>&1) || { echo "$out"; fail=1; }
+            # A filter that matches nothing exits 0, so assert each ran exactly once.
+            if ! grep -q '1 passed; 0 failed' <<<"$out"; then
+              echo "::error::$t did not run as exactly one passing test — renamed, deleted, or failing"
+              grep -E 'test result:' <<<"$out" || true
+              fail=1
+            else
+              echo "ok  $t"
+            fi
+            echo "::endgroup::"
+          done
+          exit $fail
