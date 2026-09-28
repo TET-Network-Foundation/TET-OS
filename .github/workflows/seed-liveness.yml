@@ -1,24 +1,38 @@
 name: seed liveness
 
-# External reachability check for the public seed. This tests the one thing the
-# on-box probe cannot: that 8002 is reachable FROM THE INTERNET, i.e. that the
-# Hetzner cloud firewall and routing are intact. The on-box probe
-# (deploy/seed-healthcheck.sh) covers chain progress and host health.
+# External reachability check for the public seed. This tests the two things the
+# on-box probe cannot, because both are statements about the view FROM THE
+# INTERNET rather than from the host:
 #
-# Two caveats, both real:
+#   * 8002 IS reachable  — the Hetzner cloud firewall and routing are intact
+#   * 5010 is NOT reachable — the node's REST API has not become public
 #
-#  1. GitHub's scheduled runners are best-effort and are routinely 15-60+ minutes
-#     late under load. Treat the interval as nominal. The on-box probe, pinging
-#     healthchecks.io every minute, is the timely signal; this is the
-#     "is it reachable from outside" signal.
-#  2. GitHub disables scheduled workflows after 60 days with no repository
-#     activity. This project has already been dormant for three months once, so
-#     that is a realistic way for this check to stop silently. If the repo goes
-#     quiet, re-enable it in the Actions tab.
+# Everything else about the seed — chain progress, host health, liveness — is
+# covered by deploy/seed-healthcheck.sh pinging healthchecks.io every minute,
+# which is both more timely and free.
+#
+# INTERVAL: every 6 hours, deliberately. It ran every 15 minutes until
+# 2026-09-28, which is 2,880 runs a month; GitHub bills each job at a ONE MINUTE
+# MINIMUM regardless of how long it takes, so this 8-second check was consuming
+# ~2,880 of the 2,000 free private-repo minutes on its own and had blocked all
+# CI on the account. Six hours costs 120 minutes a month.
+#
+# Losing timeliness costs nothing here: healthchecks.io already alerts within a
+# minute if the seed dies. What this job catches is a firewall or routing change,
+# which is a thing someone does, not a thing that happens spontaneously — and a
+# 15-minute cadence was never the real detection window anyway, because GitHub's
+# scheduled runners are best-effort and routinely 15-60+ minutes late under load.
+#
+# Still true: GitHub disables scheduled workflows after 60 days with no repository
+# activity. This project has already been dormant for three months once, so that
+# is a realistic way for this check to stop silently. If the repo goes quiet,
+# re-enable it in the Actions tab.
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # Every 6 hours. See the INTERVAL note above before making this more frequent:
+    # the one-minute-minimum billing makes cadence, not duration, the whole cost.
+    - cron: '0 */6 * * *'
   workflow_dispatch:
 
 permissions:
