@@ -207,6 +207,39 @@ jobs:
 
       - run: npm run build
 
+      # Lives in this job because it is the one that already has Node; it checks
+      # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --
+      # which would cost another billed minute per push AND have to be mirrored in
+      # ci-noop.yml, since required-check names must match across both files.
+      #
+      # WHY THIS EXISTS. src/wallet_client_bundled.js is committed, embedded into the
+      # node binary with include_str! and served to browsers at
+      # /assets/wallet_client_bundled.js. On 2026-09-28 it was found to be
+      # unreproducible: no version combination rebuilt it, because it predated its own
+      # source. That staleness was hiding a real bug -- the source signed with ML-DSA-65
+      # while the node verifies ML-DSA-44, so an honest rebuild would have broken every
+      # browser-signed request. A stale artifact can hide a broken source, so from now on
+      # the artifact must be reproducible from the repo or CI fails.
+      - name: wallet-client bundle is reproducible from the pinned lockfile
+        working-directory: tet-core
+        run: |
+          set -euo pipefail
+          committed=$(shasum -a 256 src/wallet_client_bundled.js | cut -d' ' -f1)
+          npm ci --silent
+          npm run build-wallet-client --silent
+          rebuilt=$(shasum -a 256 src/wallet_client_bundled.js | cut -d' ' -f1)
+          echo "committed: $committed"
+          echo "rebuilt  : $rebuilt"
+          if [ "$committed" != "$rebuilt" ]; then
+            echo "::error::wallet_client_bundled.js does not match a rebuild from the pinned lockfile."
+            echo "Commit the rebuilt bundle together with any dependency change, or pin the"
+            echo "dependency that moved. Do NOT commit a bundle nobody can reproduce: the last"
+            echo "one hid an ML-DSA level mismatch that would have broken every browser wallet."
+            git --no-pager diff --stat -- src/wallet_client_bundled.js || true
+            exit 1
+          fi
+          echo "bundle reproduces byte-for-byte"
+
   wasm:
     name: wasm (tet-pqc-wasm → ui/public/pqc)
     runs-on: ubuntu-latest

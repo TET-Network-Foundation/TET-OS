@@ -94,6 +94,33 @@ visible rather than a surprise during an incident.
 Silent truncation is the specific failure to avoid: a bound nobody can see is a bound nobody can
 debug.
 
+## A committed build artifact must be reproducible from the repo in CI
+
+**A stale artifact can hide a broken source.** If a build output is committed, CI must rebuild it
+from the pinned manifest and fail when the result differs. Never commit an artifact nobody can
+reproduce.
+
+This is not hypothetical, and the failure was worse than staleness. `wallet_client_bundled.js` is
+committed, embedded into the node binary with `include_str!`, and served to browsers. It could not
+be reproduced: seventeen builds across every plausible version of five dependencies failed to match
+it, because the artifact predated its own source and lockfile.
+
+The dangerous part was what that concealed. The entry source signed with **ML-DSA-65** while the
+node verifies **ML-DSA-44** — so an honest rebuild would have rejected every browser-signed request
+on the network. Nobody had noticed because the stale bundle still signed 44. **The artifact was
+correct by accident and was the only thing holding the system together**, and the "safe" act of
+leaving it alone was what kept the bug alive.
+
+Two guards, because they catch different things:
+
+1. **Reproducibility** — CI rebuilds and compares hashes. Catches the artifact drifting from the
+   source at all.
+2. **Behaviour** — fixtures produced by the real artifact, verified by the code that consumes them
+   in production. Catches the artifact being rebuildable *and wrong*.
+
+The second one is what a hash check cannot give you: a matching hash proves only that the output is
+the one the source produces, never that the source is right.
+
 ## Design principle — check every new replicated field against it
 
 > **Your keys, your data, your device — TET only proves, never stores.**

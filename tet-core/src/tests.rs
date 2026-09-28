@@ -10150,3 +10150,119 @@ fn s8_measure_sync_verification_cost() {
     println!("extrapolated to 50,000 : {:.1} s", per * 50_000.0 / 1000.0);
     println!("page of {}            : {:.0} ms", crate::p2p::ANON_SYNC_PAGE, per * crate::p2p::ANON_SYNC_PAGE as f64);
 }
+
+// ---------------------------------------------------------------------------
+// Browser wallet <-> node interop. The guard that would have caught 2026-09-28.
+// ---------------------------------------------------------------------------
+
+/// Fixtures signed by the **browser** wallet bundle and verified by the node's own verifiers.
+const BROWSER_WALLET_HYBRID_SIGS: &str = include_str!("testdata/browser_wallet_hybrid_sigs.json");
+
+/// **The browser wallet and the node must agree on the ML-DSA level.**
+///
+/// `wallet_client_bundled.js` signs in the browser; `verify_mldsa_b64` verifies here. Nothing
+/// forced those two to use the same parameter set, and on 2026-09-28 they did not: the entry
+/// source signed with **ML-DSA-65** while the node verifies **ML-DSA-44** (WP §7.1). It had not
+/// broken anyone only because the committed bundle predated that change and still signed 44 — the
+/// stale artifact was the only thing holding the system together. The next honest rebuild would
+/// have rejected every browser-signed transfer on the network.
+///
+/// A size check alone is not enough, so this verifies the real signatures: `verify_mldsa_b64`
+/// infers the mode from the **public key** length and then requires the signature to match it, so
+/// a level mismatch fails here exactly as it would at `/wallet/transfer`.
+#[test]
+fn browser_wallet_hybrid_signatures_verify_on_the_node() {
+    let doc: serde_json::Value =
+        serde_json::from_str(BROWSER_WALLET_HYBRID_SIGS).expect("fixture JSON must parse");
+    let cases = doc["cases"].as_array().expect("cases array");
+    assert!(!cases.is_empty(), "fixtures must not be empty — an empty array passes vacuously");
+
+    for (i, c) in cases.iter().enumerate() {
+        let wallet = c["wallet_id"].as_str().unwrap();
+        let pk_b64 = c["mldsa_pubkey_b64"].as_str().unwrap();
+        let msg = c["message_utf8"].as_str().unwrap();
+        let ed_b64 = c["ed25519_sig_b64"].as_str().unwrap();
+        let ml_b64 = c["mldsa_sig_b64"].as_str().unwrap();
+
+        crate::quantum_shield::verify_ed25519(wallet, ed_b64, msg.as_bytes())
+            .unwrap_or_else(|e| panic!("case {i}: browser Ed25519 signature rejected by the node: {e:?}"));
+        crate::wallet::verify_mldsa_b64(pk_b64, ml_b64, msg.as_bytes())
+            .unwrap_or_else(|e| panic!("case {i}: browser ML-DSA signature rejected by the node: {e}"));
+    }
+}
+
+/// The fixtures are ML-DSA-**44** specifically, pinned by byte length.
+///
+/// Separate from the verification test on purpose: if someone regenerates the fixtures from a
+/// future bundle that signs at another level, the test above would still pass — `verify_mldsa_b64`
+/// infers the mode from the key it is handed, so a consistent 65/65 pair verifies fine. It would
+/// just disagree with every wallet already on the network. This pins the level itself.
+#[test]
+fn browser_wallet_fixtures_are_ml_dsa_44() {
+    use base64::Engine as _;
+    let doc: serde_json::Value = serde_json::from_str(BROWSER_WALLET_HYBRID_SIGS).unwrap();
+    let b64 = base64::engine::general_purpose::STANDARD;
+    for (i, c) in doc["cases"].as_array().unwrap().iter().enumerate() {
+        let pk = b64.decode(c["mldsa_pubkey_b64"].as_str().unwrap()).unwrap();
+        let sig = b64.decode(c["mldsa_sig_b64"].as_str().unwrap()).unwrap();
+        assert_eq!(pk.len(), dilithium::ML_DSA_44.public_key_bytes(),
+            "case {i}: browser public key is not ML-DSA-44 ({} bytes)", pk.len());
+        assert_eq!(sig.len(), dilithium::ML_DSA_44.signature_bytes(),
+            "case {i}: browser signature is not ML-DSA-44 ({} bytes) — this is the 2026-09-28 bug",
+            sig.len());
+    }
+}
+
+/// Fixtures signed by the **Sovereign OS UI's** wasm signer (`tet-pqc-wasm`).
+const WASM_SIGNER_MLDSA44_SIGS: &str = include_str!("testdata/wasm_signer_mldsa44_sigs.json");
+
+/// **The wasm signer and the node must agree too.**
+///
+/// There are three ML-DSA implementations in this system and no compiler forces them to agree:
+/// the node (`dilithium-rs`), the browser wallet page (`@noble/post-quantum`, bundled), and the
+/// Sovereign OS UI (`tet-pqc-wasm`, `dilithium-rs` compiled to wasm). They must match on the
+/// parameter set **and** on the HKDF seed info string and the deterministic-signing label, or
+/// signatures verify locally and are rejected by every peer.
+///
+/// `browser_wallet_hybrid_signatures_verify_on_the_node` pins the browser half. This pins the wasm
+/// half, against the artifact the UI actually loads.
+#[test]
+fn wasm_signer_signatures_verify_on_the_node() {
+    use base64::Engine as _;
+    let doc: serde_json::Value =
+        serde_json::from_str(WASM_SIGNER_MLDSA44_SIGS).expect("fixture JSON must parse");
+    let cases = doc["cases"].as_array().expect("cases array");
+    assert!(!cases.is_empty(), "fixtures must not be empty — an empty array passes vacuously");
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    for (i, c) in cases.iter().enumerate() {
+        let pk_b64 = c["mldsa_pubkey_b64"].as_str().unwrap();
+        let msg = c["message_utf8"].as_str().unwrap();
+        let sig_b64 = c["mldsa_sig_b64"].as_str().unwrap();
+
+        assert_eq!(b64.decode(pk_b64).unwrap().len(), dilithium::ML_DSA_44.public_key_bytes(),
+            "case {i}: wasm public key is not ML-DSA-44");
+        assert_eq!(b64.decode(sig_b64).unwrap().len(), dilithium::ML_DSA_44.signature_bytes(),
+            "case {i}: wasm signature is not ML-DSA-44");
+
+        crate::wallet::verify_mldsa_b64(pk_b64, sig_b64, msg.as_bytes())
+            .unwrap_or_else(|e| panic!("case {i}: wasm ML-DSA signature rejected by the node: {e}"));
+    }
+}
+
+/// All three implementations derive the **same** ML-DSA-44 public key from the same mnemonic.
+///
+/// This is the invariant the level bug actually violated: a wallet whose key comes from one
+/// implementation and whose signature comes from another is unusable, and each half looks correct
+/// on its own. Asserted directly rather than inferred from the two suites above passing.
+#[test]
+fn browser_wasm_and_node_derive_the_same_mldsa44_pubkeys() {
+    let browser: serde_json::Value = serde_json::from_str(BROWSER_WALLET_HYBRID_SIGS).unwrap();
+    let wasm: serde_json::Value = serde_json::from_str(WASM_SIGNER_MLDSA44_SIGS).unwrap();
+    let bp: Vec<&str> = browser["cases"].as_array().unwrap().iter()
+        .map(|c| c["mldsa_pubkey_b64"].as_str().unwrap()).collect();
+    let wp: Vec<&str> = wasm["cases"].as_array().unwrap().iter()
+        .map(|c| c["mldsa_pubkey_b64"].as_str().unwrap()).collect();
+    assert_eq!(bp.len(), wp.len(), "fixture sets must cover the same mnemonics");
+    assert_eq!(bp, wp, "browser bundle and wasm signer derive different ML-DSA-44 public keys");
+}
