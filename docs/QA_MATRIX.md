@@ -1,6 +1,8 @@
 # QA matrix — S11
 
-**Status:** read-only audit, 2026-09-28. No tests written for this. It records what exists.
+**Status:** audit 2026-09-28; gaps #2, #6, #7, #8, #9 and #10 closed 2026-09-29 (see
+[What changed](#what-changed-2026-09-29) at the end). Cells below are updated; the ranked gap list
+is kept as written, with outcomes appended, because the reasoning is worth more than the scoreboard.
 
 267 `#[test]`/`#[tokio::test]` functions across 9 files. Cells cite real test names, read rather
 than inferred from the name — several tests do not do what their name suggests, which is the point
@@ -20,12 +22,16 @@ generic checklist.
    (deserialization, gossipsub validation, message-size limits, topic routing). Wherever a cell
    says *handler-level*, that gap is what it means.
 2. **Every real-prover test is `#[ignore]`.** Ten tests are ignored; the proving ones need
-   `RISC0_SKIP_BUILD=0` and the `zk-prove` feature. They exist and they pass when run by hand. They
-   do not run in `cargo test`, and CI does not run them either.
-3. **No test restarts a node.** Nothing closes a store and reopens it at the same path.
-   `bootnode_failure_recovery_no_manual_intervention` kills a peer's swarm task and checks the
-   *others* keep going; the dead node never comes back. Every "after restart" cell is UNTESTED, and
-   that is one finding, not eleven.
+   `RISC0_SKIP_BUILD=0` and the `zk-prove` feature. ~~CI does not run them either.~~ **Closed
+   2026-09-29:** the `zk-real` workflow runs them weekly, on demand, and on pushes touching the zk
+   paths. They are still `#[ignore]` for the default suite, which is correct — the point was that
+   *nothing* ran them.
+3. ~~**No test restarts a node.**~~ **Closed 2026-09-29.** Two tests now do:
+   `anon_root_history_survives_a_restart` and
+   `rest_admitted_tx_survives_a_restart_and_a_mined_one_does_not`, both closing a store and
+   reopening it at the same path. Writing them found a real bug — a REST-admitted transaction died
+   with the process — now fixed. Restart cells for *other* behaviours (Tmail, files, block sync)
+   remain UNTESTED.
 
 **Negative controls.** 22 of 188 commits record one. Where a commit body documents restoring the bug
 and watching the test fail, the cell is marked ✅ctl. Where no record exists the cell is marked
@@ -185,3 +191,28 @@ Live-run evidence (CH↔HEL, seed↔follower) exists for AT-3, AT-4 and AT-5(a) 
 `SPRINT_PLAN.md`. Those runs are real and they are not tests: they were driven by hand, they are not
 repeatable by CI, and they do not fail anybody's build when they regress. Where a cell says
 "UNTESTED in-suite (live-run only)", that is what it means.
+
+---
+
+## What changed, 2026-09-29
+
+Six of the ten ranked gaps are closed. Each closure has a negative control recorded in its commit.
+Three of them turned up a real bug, which is the argument for writing the matrix rather than
+reasoning about coverage from memory.
+
+| Gap | Status | Commit | What it actually found |
+|---|---|---|---|
+| #2 oversized / malformed frames | **closed** | `61e8609` | Two surprises. libp2p drops oversized frames in the codec, so the app-level length check is a *second* line of defence, not the first. And an oversized frame **costs the sender its connection** — measured: an honest frame from the same peer arrives in 0.04 s without it, nothing in 30 s with it |
+| #6 / #7 restart | **closed** | `2efe104` | **A REST-admitted transaction died with the process.** Submitted, `202` returned, gone on restart, no retry, nothing to tell the sender. Now persisted in `mempool_pending_v1`. The anon root history was already safe — recomputed from the registry — verified rather than assumed |
+| #8 `reset_db.sh` | **closed** | `5af365e` | The script deleted a path the seed **stopped using**, so it would have reported a successful wipe having deleted nothing. Its `read -p` prompt was also no safeguard: demonstrated bypassed by `yes \|` |
+| #9 real prover in CI | **closed** | `c150bac` | `cargo test` **exits 0 when a filter matches nothing**, so a bare `-- --ignored` would have gone green running nothing after a rename. Each test is named and asserted to be "1 passed" |
+| #10 twelve missing controls | **closed** | `ad51b6e` | All twelve fire; none vacuous. One imprecise and fixed: `envelope_signed_against_a_different_genesis_hash_is_rejected` passed with *either* binding removed, because `genesis_hash` is derived from `chain_id` |
+
+Still open, and unchanged: **#1** (no hostile message driven over a real swarm — #2 covers frames,
+not forged application messages), **#3** (receipt-pull path), **#4** (registry sync serving under a
+hostile requester), **#5** (mixed versions).
+
+Note on #1 and #2: closing #2 does **not** close #1. #2 covers malformed and oversized *frames* —
+the transport layer. #1 is about application-level hostile messages (a forged registration, a
+replayed nullifier, a tampered burn revoke) driven over a wire rather than into a handler. Those
+handlers are well tested; the wire path in front of them is still only covered for frame shape.
