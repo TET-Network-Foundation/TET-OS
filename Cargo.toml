@@ -2,7 +2,6 @@
 members = [
     "tet-core",
     "methods",
-    "nexus-wasm",
     "nexus-protocol",
     "tet-pqc-wasm",
     "prover/methods",

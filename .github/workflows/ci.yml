@@ -151,7 +151,7 @@ jobs:
           exit $fail
 
       # NON-BLOCKING, deliberately. The tree is not clippy-clean: 37 warnings as of 2026-09-20
-      # (tet-core 28, nexus-wasm 6, tet-pqc-wasm 3), of which 3 are plain rustc `unused` warnings
+      # (tet-core 28, tet-pqc-wasm 3), of which 3 are plain rustc `unused` warnings
       # left by the faucet-route removal and the rest are style lints (collapsible_if,
       # redundant_closure, too_many_arguments, needless_return, doc_lazy_continuation ...).
       # Turning on `-D warnings` today would make CI red on arrival and teach everyone to ignore it.
