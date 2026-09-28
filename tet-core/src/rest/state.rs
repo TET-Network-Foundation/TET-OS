@@ -254,6 +254,9 @@ impl RestState {
             // gossipsub `InsufficientPeers` because the txs-topic mesh has not grafted yet.
             // Registering first means the retry loop owns it regardless of what happens next.
             if let Ok(tx_hash) = crate::consensus::tx_hash_for_env(env) {
+                // Durable before in-memory: a crash between the two should leave a transaction
+                // that gets restored, not one that was acknowledged and forgotten.
+                self.ledger.mempool_persist(&tx_hash, env);
                 self.pending_rebroadcast.lock().await.insert(tx_hash, 0);
             }
         }

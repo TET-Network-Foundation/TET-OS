@@ -10266,3 +10266,116 @@ fn browser_wasm_and_node_derive_the_same_mldsa44_pubkeys() {
     assert_eq!(bp.len(), wp.len(), "fixture sets must cover the same mnemonics");
     assert_eq!(bp, wp, "browser bundle and wasm signer derive different ML-DSA-44 public keys");
 }
+
+// ---------------------------------------------------------------------------
+// Restart. The condition the QA matrix found nothing covered, and the one
+// flip day guarantees.
+// ---------------------------------------------------------------------------
+
+/// **A proof built before a restart must still verify after it.**
+///
+/// The epoch→root memo (`anon_roots`) is a `Mutex<Vec<…>>` and does not survive a process restart.
+/// Whether that matters depends on something subtler: `anon_root_for_epoch` recomputes from the
+/// registry on a cache miss, and the registry is in sled. A past epoch's leaf set is immutable —
+/// a registration admitted later carries a later `admitted_at_ms` and enters from its own epoch
+/// onward — so recomputation must reproduce the pre-restart root exactly.
+///
+/// If that ever stops holding, the symptom is the worst kind: after a seed restart, proofs built
+/// against a pre-restart root are rejected with no error naming the cause. That is the shape of the
+/// CH↔HEL bug that cost a day.
+#[test]
+fn anon_root_history_survives_a_restart() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "400");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("restart.db");
+
+    let (epoch_before, root_before, wallet) = {
+        let ledger = crate::ledger::Ledger::open(path.to_str().unwrap()).unwrap();
+        let store = crate::tmail::store::TmailStore::open(&ledger.sled_db()).unwrap();
+        let (w, wallet) = tmail_party_for_tests();
+        store
+            .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[3u8; 32], 1_000))
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let e = store.anon_current_epoch();
+        let r = store.anon_root_for_epoch(e);
+        assert_eq!(store.anon_member_count(), 1, "precondition: the registration is in the tree");
+        (e, r, wallet)
+    }; // both dropped — sled closed, the in-memory memo is gone
+
+    // Reopen the SAME path. This is the restart.
+    let ledger = crate::ledger::Ledger::open(path.to_str().unwrap()).unwrap();
+    let store = crate::tmail::store::TmailStore::open(&ledger.sled_db()).unwrap();
+
+    assert_eq!(store.anon_member_count(), 1, "the registry itself must survive — it is in sled");
+    assert_eq!(
+        store.anon_root_for_epoch(epoch_before),
+        root_before,
+        "the pre-restart epoch root must be recomputable; a proof against it is otherwise rejected \
+         with nothing naming the cause"
+    );
+    assert!(
+        store.anon_leaf_index_for_epoch(&wallet, epoch_before).is_some(),
+        "the wallet's leaf must still be locatable in the pre-restart epoch, or no authentication \
+         path can be served for a proof built before the restart"
+    );
+    assert_eq!(store.anon_root_cache_len(), 1, "exactly the one epoch recomputed above is memoised");
+}
+
+/// **A transaction admitted over REST must survive a restart.**
+///
+/// The mempool is a `Vec` in `RestState` and dies with the process, so before 2026-09-28 a signed
+/// transaction that a user submitted, got a `202` for, and that was still waiting when the node
+/// restarted was gone: no error, no retry, nothing to tell the sender. The seed was restarted twice
+/// by hand this month, so the window is real rather than theoretical.
+///
+/// This closes the store and reopens it at the same path — a real restart, not a second node — and
+/// checks the durable copy is there to restore, that the restored set is what the rebroadcast
+/// sweep will pick up, and that a transaction already mined does NOT come back.
+#[tokio::test]
+async fn rest_admitted_tx_survives_a_restart_and_a_mined_one_does_not() {
+    let _g = env_lock();
+    set_test_env_base();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("restart.db");
+
+    let (kept_hash, mined_hash) = {
+        let ledger = crate::ledger::Ledger::open(path.to_str().unwrap()).unwrap();
+        let (_w, env_a) = airdrop_env_for_tests();
+        let (_w2, env_b) = airdrop_env_for_tests();
+        let ha = crate::consensus::tx_hash_for_env(&env_a).unwrap();
+        let hb = crate::consensus::tx_hash_for_env(&env_b).unwrap();
+        assert_ne!(ha, hb, "the two fixtures must differ or this proves nothing");
+
+        ledger.mempool_persist(&ha, &env_a);
+        ledger.mempool_persist(&hb, &env_b);
+        assert_eq!(ledger.mempool_restore().len(), 2, "both persisted before the restart");
+
+        // One of them gets mined: the block path forgets it.
+        ledger.mempool_forget([hb.clone()]);
+        (ha, hb)
+    }; // sled closed
+
+    // Reopen the same path. This is the restart.
+    let ledger = crate::ledger::Ledger::open(path.to_str().unwrap()).unwrap();
+    let restored = ledger.mempool_restore();
+
+    assert_eq!(restored.len(), 1, "exactly the un-mined tx survives");
+    assert_eq!(restored[0].0, kept_hash, "and it is the one that was never in a block");
+    assert!(
+        !restored.iter().any(|(h, _)| *h == mined_hash),
+        "a mined tx must not be resurrected — that would re-broadcast a settled transfer"
+    );
+
+    // The restored hash is what the rebroadcast tracker is keyed on, so the sweep will own it.
+    let env = &restored[0].1;
+    assert_eq!(
+        crate::consensus::tx_hash_for_env(env).unwrap(),
+        kept_hash,
+        "the restored envelope must re-hash to its key, or the tracker and the mempool disagree \
+         and the sweep silently skips it"
+    );
+}

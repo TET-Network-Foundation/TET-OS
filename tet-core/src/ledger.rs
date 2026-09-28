@@ -3555,6 +3555,69 @@ impl Ledger {
     /// Used by side stores that need to live in the **same** sled database so that deleting
     /// `TET_DB_DIR` also clears them (clean-restart correctness). The Tmail node buffer
     /// ([`crate::tmail::store::TmailStore`]) opens its own trees on this handle.
+    /// Durable copy of the transactions this node admitted over REST and has not yet seen mined.
+    ///
+    /// The mempool itself is a `Vec` in `RestState` and dies with the process. A signed transaction
+    /// that a user submitted, got a `202` for, and that was still waiting when the node restarted
+    /// was simply gone: no error, no retry, nothing to tell the sender. The seed restarts (twice by
+    /// hand this month alone), so this is not hypothetical.
+    ///
+    /// Only REST-admitted transactions are persisted. A transaction learned from a peer is that
+    /// peer's to retry — persisting it here would make every node re-publish everything it ever
+    /// heard, which is the gossip storm the `pending_rebroadcast` origin marker exists to prevent.
+    fn mempool_tree(&self) -> Result<sled::Tree, LedgerError> {
+        Ok(self.db.open_tree("mempool_pending_v1")?)
+    }
+
+    /// Record a REST-admitted transaction so a restart can restore it.
+    pub fn mempool_persist(&self, tx_hash: &str, env: &crate::protocol::SignedTxEnvelopeV1) {
+        let Ok(tree) = self.mempool_tree() else { return };
+        if let Ok(bytes) = serde_json::to_vec(env) {
+            let _ = tree.insert(tx_hash.as_bytes(), bytes);
+        }
+    }
+
+    /// Forget transactions that are now in a block — mined here or applied from a peer.
+    pub fn mempool_forget<I, S>(&self, tx_hashes: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let Ok(tree) = self.mempool_tree() else { return };
+        for h in tx_hashes {
+            let _ = tree.remove(h.as_ref().as_bytes());
+        }
+    }
+
+    /// Restore the persisted transactions at startup. Undecodable rows are dropped rather than
+    /// failing the boot: a transaction that cannot be parsed can never be mined either, and a node
+    /// that refuses to start because of one bad mempool row is worse than one that loses it.
+    pub fn mempool_restore(&self) -> Vec<(String, crate::protocol::SignedTxEnvelopeV1)> {
+        let Ok(tree) = self.mempool_tree() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut dropped = 0usize;
+        for kv in tree.iter() {
+            let Ok((k, v)) = kv else { continue };
+            let Ok(hash) = String::from_utf8(k.to_vec()) else {
+                dropped += 1;
+                continue;
+            };
+            match serde_json::from_slice::<crate::protocol::SignedTxEnvelopeV1>(&v) {
+                Ok(env) => out.push((hash, env)),
+                Err(_) => {
+                    dropped += 1;
+                    let _ = tree.remove(k);
+                }
+            }
+        }
+        if dropped > 0 {
+            println!("[mempool] dropped {dropped} undecodable persisted tx row(s) at startup");
+        }
+        out
+    }
+
     pub fn sled_db(&self) -> sled::Db {
         self.db.clone()
     }

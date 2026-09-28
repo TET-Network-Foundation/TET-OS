@@ -690,6 +690,27 @@ async fn main() -> Result<(), AnyErr> {
     // Without it a tx submitted before the gossipsub txs-topic mesh grafts is published once,
     // fails with InsufficientPeers, and is never retried — it then sits in this node's mempool
     // forever unless this node happens to be a producer.
+    // Restore transactions this node admitted over REST and had not yet seen mined. Before this,
+    // a restart silently dropped them: the sender held a 202 for a transaction that no longer
+    // existed anywhere. Restoring into BOTH the mempool and the rebroadcast tracker matters —
+    // the tracker is the origin marker that decides what the sweep below re-publishes, so a tx
+    // restored into the mempool alone would sit there until this node happened to mine.
+    {
+        let restored = state.ledger.mempool_restore();
+        if !restored.is_empty() {
+            let mut mp = state.mempool.lock().await;
+            let mut tracker = state.pending_rebroadcast.lock().await;
+            for (hash, env) in restored {
+                mp.push(env);
+                tracker.insert(hash, 0);
+            }
+            log::info!(
+                "[startup] restored {} pending tx(s) from the previous run; rebroadcast resumes",
+                mp.len()
+            );
+        }
+    }
+
     match RestState::spawn_mempool_rebroadcast(state.clone()) {
         Some(_h) => log::info!(
             "[startup] mempool rebroadcast every {}s, max {} attempts/tx",

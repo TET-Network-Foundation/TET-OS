@@ -1333,6 +1333,13 @@ pub async fn mine_pending_block_as(
         }
         std::mem::take(&mut *mp)
     };
+    // Mined here: these are in a block now, so the durable copy must go or a restart would
+    // resurrect transactions that have already settled.
+    for env in &txs {
+        if let Ok(h) = tx_hash_for_env(env) {
+            state.ledger.mempool_forget([h]);
+        }
+    }
 
     // Drop within-block duplicates and any tx already settled into a prior canonical block.
     // This mirrors the receiver-side duplicate-tx rejection in `apply_remote_block_from_gossip`
@@ -1752,6 +1759,7 @@ pub async fn apply_remote_block_from_gossip(
     // event loop / async runtime stays responsive during block application (the last hot path
     // left inline after the 83e0074 read-only offloads).
     let ledger_for_sync = ledger.clone();
+    let ledger_for_mempool = ledger.clone();
     let sync_outcome =
         tokio::task::spawn_blocking(move || apply_remote_block_from_gossip_sync(&ledger_for_sync, block))
             .await
@@ -1772,6 +1780,8 @@ pub async fn apply_remote_block_from_gossip(
             schedule_history_prune(ledger, block_height);
 
             let block_hashes: HashSet<&str> = tx_hashes.iter().map(String::as_str).collect();
+            // Same reasoning as the local-mine path: a peer mined them, so drop the durable copy.
+            ledger_for_mempool.mempool_forget(tx_hashes.iter());
             let evicted_count = {
                 let mut mp = mempool.lock().await;
                 let before = mp.len();
