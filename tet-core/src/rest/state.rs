@@ -38,7 +38,10 @@ pub struct E2eeJobQueue {
 #[derive(Clone)]
 pub struct RestState {
     pub ledger: Arc<Ledger>,
-    pub solana: Arc<crate::ledger::solana_client::NexusSolanaClient>,
+    /// This node's own wallet id (`TET_WALLET_ID`). Used to identify work this node
+    /// performed itself — the local-inference fallback in `/ai/infer`. Replaced the
+    /// Solana founder pubkey, which was read from a file absent in the image.
+    pub wallet_id: String,
     pub p2p_tx: Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>,
     pub p2p_client: Option<crate::p2p_network::P2pClient>,
     pub gossip_tx: Option<mpsc::Sender<String>>,

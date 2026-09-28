@@ -24,7 +24,6 @@ use crate::{
 };
 
 use sha2::Digest as _;
-use solana_sdk::pubkey::Pubkey;
 
 use crate::models::NetworkEvent;
 
@@ -53,13 +52,6 @@ fn faucet_max_per_ip_per_window() -> u32 {
 fn disable_rate_limit() -> bool {
     matches!(
         std::env::var("TET_DISABLE_RATE_LIMIT").ok().as_deref(),
-        Some("1") | Some("true") | Some("TRUE")
-    )
-}
-
-fn faucet_also_mint_solana() -> bool {
-    matches!(
-        std::env::var("TET_FAUCET_ALSO_MINT_SOLANA").ok().as_deref(),
         Some("1") | Some("true") | Some("TRUE")
     )
 }

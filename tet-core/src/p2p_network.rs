@@ -4,7 +4,6 @@
 //! to avoid breaking Phase 0 server behavior.
 
 use base64::Engine as _;
-use clone_solana_sdk::signature::Signer as _;
 use futures::future::Either;
 use libp2p::autonat;
 use libp2p::core::muxing::StreamMuxerBox;
@@ -1020,64 +1019,15 @@ pub async fn run_swarm_loop(
                                         res.worker_id
                                     );
 
-                                    let do_slash = std::env::var("TET_ONCHAIN_SLASH")
-                                        .ok()
-                                        .as_deref()
-                                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                                        .unwrap_or(false);
-                                    if do_slash {
-                                        let program_id = match crate::onchain::default_program_id() {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                log::error!("[onchain] default_program_id failed: {e}");
-                                                continue;
-                                            }
-                                        };
-                                        let admin_kp = match crate::onchain::load_worker_keypair_from_env() {
-                                            Ok(v) => v,
-                                            Err(e) => {
-                                                log::error!("[onchain] load admin keypair failed: {e}");
-                                                continue;
-                                            }
-                                        };
-
-                                        let worker_pk: clone_solana_sdk::pubkey::Pubkey =
-                                            match std::env::var("TET_ONCHAIN_SLASH_WORKER_PUBKEY")
-                                                .ok()
-                                                .filter(|s| !s.trim().is_empty())
-                                                .unwrap_or_else(|| admin_kp.pubkey().to_string())
-                                                .parse()
-                                            {
-                                                Ok(v) => v,
-                                                Err(e) => {
-                                                    log::error!("[onchain] bad TET_ONCHAIN_SLASH_WORKER_PUBKEY: {e}");
-                                                    continue;
-                                                }
-                                            };
-
-                                        let treasury: clone_solana_sdk::pubkey::Pubkey =
-                                            match std::env::var("TET_ONCHAIN_TREASURY")
-                                                .ok()
-                                                .filter(|s| !s.trim().is_empty())
-                                                .unwrap_or_else(|| admin_kp.pubkey().to_string())
-                                                .parse()
-                                            {
-                                                Ok(v) => v,
-                                                Err(e) => {
-                                                    log::error!("[onchain] bad TET_ONCHAIN_TREASURY: {e}");
-                                                    continue;
-                                                }
-                                            };
-
-                                        if let Err(e) = crate::onchain::slash_bad_worker(
-                                            &admin_kp,
-                                            &worker_pk,
-                                            &program_id,
-                                            &treasury,
-                                        ) {
-                                            log::error!("[onchain] slash_bad_worker failed: {e}");
-                                        }
-                                    }
+                                    // Solana removed 2026-09-28. A block here slashed the worker's stake in a
+                                    // Solana program on a failed receipt, behind TET_ONCHAIN_SLASH (default off).
+                                    // It never ran in production and could not have: it needed an admin keypair
+                                    // from disk and a validator on 127.0.0.1:8899.
+                                    //
+                                    // The receipt is still rejected — that is the log line above. What is gone is
+                                    // the penalty, and it stays gone: slashing has to be a consensus tx and that
+                                    // TxV1 variant does not exist (PHASE_1_GENESIS_SPEC.md §2.5). An invalid
+                                    // receipt is refused and unpunished, exactly as SECURITY.md states.
                                     continue;
                                 }
                                 log::info!("🛡️ [p2p][zk] ZK Receipt Verified! IMAGE_ID matched. Proof size: {} bytes", proof_size);

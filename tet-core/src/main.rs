@@ -18,7 +18,6 @@ mod marketplace;
 mod metrics;
 mod models;
 mod network;
-mod onchain;
 mod oracle;
 mod p2p;
 mod p2p_keystore;
@@ -544,9 +543,11 @@ async fn main() -> Result<(), AnyErr> {
         None
     };
 
-    if let Err(e) = crate::onchain::maybe_register_worker_before_p2p() {
-        eprintln!("[onchain][warn] worker register/stake skipped or failed: {e}");
-    }
+    // Solana removed 2026-09-28. A call to onchain::maybe_register_worker_before_p2p()
+    // stood here: it registered and staked the worker in a Solana program, behind
+    // TET_ONCHAIN_STAKE (default off), against a localnet validator at 127.0.0.1:8899.
+    // Nothing ran it in production. Worker staking is a TET-ledger concern — see
+    // PHASE_1_GENESIS_SPEC.md §2, which needs a Stake tx variant that does not exist yet.
 
     let nexus_p2p_client = match libp2p_keypair.as_ref() {
         Some(kp) => match crate::p2p_network::start_p2p_node(ledger.clone(), kp.clone()) {
@@ -663,7 +664,7 @@ async fn main() -> Result<(), AnyErr> {
 
     let state = RestState {
         ledger,
-        solana: Arc::new(crate::ledger::solana_client::NexusSolanaClient::devnet()),
+        wallet_id: config.initial_wallet.clone(),
         p2p_tx: p2p,
         p2p_client: nexus_p2p_client,
         gossip_tx,

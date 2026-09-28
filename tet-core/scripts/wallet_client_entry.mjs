@@ -1,3 +1,33 @@
+/**
+ * Source for `src/wallet_client_bundled.js`, built with `npm run build-wallet-client`.
+ *
+ * ⚠ THE COMMITTED BUNDLE IS NOT REPRODUCIBLE FROM THIS MANIFEST. Rebuilding does not
+ * produce the committed artifact, and that is a known, measured state — not a bug you
+ * have just introduced:
+ *
+ *     committed src/wallet_client_bundled.js   sha256 8bdfc906…  74,223 bytes
+ *     rebuild from the pinned package.json     sha256 52c01c6f…  74,904 bytes
+ *
+ * The bundle predates its own lockfile. Both files entered the repository in the same
+ * commit, but the artifact was built earlier, on a machine whose dependency versions
+ * were never recorded. Seventeen builds across @noble/ed25519 (2.2.3, 2.3.0),
+ * @noble/hashes (1.7.1, 1.8.0), @noble/post-quantum (0.5.4, 0.6.0, 0.6.1, 0.7.0),
+ * @scure/bip39 (1.4.0, 1.6.0) and esbuild (0.25.0 … 0.25.12) failed to reproduce it;
+ * the target size falls *between* the nearest combinations, so no available version set
+ * yields it. esbuild's version is not the variable — it moves the output by one byte.
+ *
+ * Dependencies are now pinned to EXACT versions, so every build from here is
+ * deterministic. The one artifact that cannot be reproduced is the one already committed.
+ *
+ * DO NOT rebuild and commit the result before launch. The diff is not cosmetic: the
+ * rebuilt bundle carries a restructured @noble/post-quantum ML-DSA implementation, so
+ * refreshing it changes the code that signs with ML-DSA in the browser wallet. That
+ * belongs in its own change, after launch, with CI running and the wallet exercised
+ * end-to-end — not as a side effect of a dependency bump.
+ *
+ * When you do refresh it: rebuild, commit the new bundle and these pins together, and
+ * delete this notice. From that commit on, the artifact and the manifest agree.
+ */
 import { generateMnemonic, mnemonicToSeedSync, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import * as ed from "@noble/ed25519";

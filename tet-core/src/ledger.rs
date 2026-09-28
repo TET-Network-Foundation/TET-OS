@@ -12,7 +12,6 @@ use zeroize::{Zeroize as _, ZeroizeOnDrop};
 
 mod crypto;
 mod peers;
-pub mod solana_client;
 
 /// Smallest unit: 1 TET = 1,000,000 Stevemon (6 decimals; whitepaper).
 pub const STEVEMON: u64 = 1_000_000;

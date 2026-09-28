@@ -110,7 +110,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
     );
     crate::rest::RestState {
         ledger,
-        solana: std::sync::Arc::new(crate::ledger::solana_client::NexusSolanaClient::devnet()),
+        wallet_id: "test-node-wallet".to_string(),
         p2p_tx: None,
         p2p_client: None,
         gossip_tx: None,

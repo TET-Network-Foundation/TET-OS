@@ -63,12 +63,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ["client"] }
 methods = { path = "../methods" }
 nexus-protocol = { path = "../nexus-protocol" }
-clone-solana-rpc-client = "2.2.12"
-clone-solana-sdk = "2.2.2"
-solana-client = "2.2.12"
-solana-sdk = "2.2.12"
-spl-token = "6"
-spl-associated-token-account = "4"
 libp2p-webrtc = { version = "0.10.0-alpha", features = ["tokio"] }
 
 [features]

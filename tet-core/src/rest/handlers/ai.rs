@@ -2,7 +2,6 @@ use axum::{
     Json, extract::Path, extract::Query, extract::State, http::HeaderMap, response::IntoResponse,
 };
 use base64::Engine as _;
-use solana_sdk::pubkey::Pubkey;
 
 use crate::rest::{
     AiHistoryQuery, AiInferReq, AiInferSignedReq, AiNonceQuery, AiNonceResp, AiPricingQuery,
@@ -436,39 +435,24 @@ async fn post_ai_utility_impl(
                 let receipt_ok =
                     crate::zk_verifier::verify_receipt(&v.receipt_b64).unwrap_or(false);
                 if receipt_ok {
-                    let wid = v.worker_id.trim().to_ascii_lowercase();
-                    if wid.len() == 64
-                        && wid.chars().all(|c| c.is_ascii_hexdigit())
-                        && let Ok(bytes) = hex::decode(wid.as_bytes())
-                        && let Ok(arr) = <[u8; 32]>::try_from(bytes.as_slice())
-                    {
-                        let pk = Pubkey::new_from_array(arr);
-                        let sol = state.solana.clone();
-                        tokio::spawn(async move {
-                            let res =
-                                tokio::task::spawn_blocking(move || sol.pay_worker_reward(&pk))
-                                    .await;
-                            match res {
-                                Ok(Ok(sig)) => {
-                                    log::info!(
-                                        "Settlement complete: {} TET paid to Worker {} sig={}",
-                                        crate::ledger::solana_client::REWARD_PER_INFERENCE_TET,
-                                        wid,
-                                        sig
-                                    );
-                                }
-                                Ok(Err(e)) => {
-                                    log::error!("[settlement] payout failed worker={} err={e}", wid)
-                                }
-                                Err(e) => {
-                                    log::error!(
-                                        "[settlement] payout join failed worker={} err={e}",
-                                        wid
-                                    )
-                                }
-                            }
-                        });
-                    }
+                    // Solana removed 2026-09-28. A spawned task here paid the worker
+                    // REWARD_PER_INFERENCE_TET through a Solana SPL transfer. It could never
+                    // have paid anyone in production: the transfer loaded a founder keypair
+                    // from ~/.config/solana/founder.json, which does not exist in the image,
+                    // so every payout failed at that read before reaching the network. The
+                    // log line claiming "Settlement complete" was only ever reachable on a
+                    // developer's laptop with a local validator.
+                    //
+                    // Worker reward settlement is a TET-ledger concern and is unbuilt: it
+                    // needs the consensus-routed settlement described in
+                    // PHASE_1_GENESIS_SPEC.md §2.1. Until that exists a verified receipt earns
+                    // nothing, and saying so in the log is more honest than a payout that
+                    // silently failed.
+                    log::warn!(
+                        "[settlement] receipt verified for worker={} but NO reward was paid: \
+                         worker settlement is not implemented (PHASE_1_GENESIS_SPEC.md §2.1)",
+                        v.worker_id
+                    );
                 } else {
                     log::warn!(
                         "[settlement] receipt invalid; skipping payout worker={}",
@@ -702,21 +686,23 @@ pub async fn post_ai_infer(
 
     let Some(tid) = target_worker_id else {
         // Phase 5.2 dev UX: single-node local fallback (no P2P workers available).
-        let worker_pk = match state.solana.founder_pubkey() {
-            Ok(v) => v,
-            Err(e) => {
-                log::error!("[ai][local_fallback] failed to load founder pubkey: {e}");
-                return (
-                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                    Json(serde_json::json!({
-                        "error": "NO_WORKERS",
-                        "message": "No workers available and local fallback is not configured (missing founder.json).",
-                    })),
-                )
-                    .into_response();
-            }
-        };
-        let worker_id = hex::encode(worker_pk.to_bytes());
+        // Solana removed 2026-09-28. This identified the local fallback worker by the
+        // Solana founder pubkey read from ~/.config/solana/founder.json — a file absent from
+        // the image, so this branch returned 503 NO_WORKERS on every deployed node. The
+        // node's own wallet id is the correct identity for work this node performed, and it
+        // is always present.
+        let worker_id = state.wallet_id.trim().to_ascii_lowercase();
+        if worker_id.is_empty() {
+            log::error!("[ai][local_fallback] node wallet id is not configured");
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error": "NO_WORKERS",
+                    "message": "No workers available and this node has no wallet id configured for local fallback.",
+                })),
+            )
+                .into_response();
+        }
 
         let metrics = match crate::worker_engine::run_local_inference(prompt.trim(), "").await {
             Ok(v) => v,
@@ -786,10 +772,19 @@ pub async fn post_ai_infer(
             log::warn!("[ai][history] append_ai_infer_session failed: {e}");
         }
 
+        // Worker identity bytes for the receipt. Previously the Solana founder pubkey's
+        // 32 bytes; now the node's own wallet id, which is a 64-hex Ed25519 public key.
+        // A non-hex or wrong-length wallet id yields zeroes rather than failing the
+        // inference — the receipt binds identity, it does not authorise payment, and
+        // there is no payment on this path any more.
+        let worker_pk_bytes: [u8; 32] = hex::decode(&worker_id)
+            .ok()
+            .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+            .unwrap_or([0u8; 32]);
         let receipt_b64 = match crate::worker_engine::generate_receipt_b64(
             prompt.trim(),
             resp.trim(),
-            worker_pk.to_bytes(),
+            worker_pk_bytes,
             charge_micro,
         )
         .await
