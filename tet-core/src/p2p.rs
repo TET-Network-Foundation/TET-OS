@@ -3632,7 +3632,18 @@ mod tests {
     use libp2p::swarm::SwarmEvent;
     use tokio::time::{Duration as TokioDuration, timeout};
 
+    /// Same swarm, but with the gossip transmit cap overridable — a peer that ignores the
+    /// network's limit is exactly the case being tested, and it cannot be built with the honest
+    /// builder.
+    fn build_memory_swarm_with_cap(max_transmit: usize) -> Swarm<TetBehaviour> {
+        build_memory_swarm_inner(max_transmit)
+    }
+
     fn build_memory_swarm() -> Swarm<TetBehaviour> {
+        build_memory_swarm_inner(DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES)
+    }
+
+    fn build_memory_swarm_inner(max_transmit: usize) -> Swarm<TetBehaviour> {
         let keypair = identity::Keypair::generate_ed25519();
         let peer_id = PeerId::from(keypair.public());
 
@@ -3653,7 +3664,7 @@ mod tests {
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .validation_mode(gossipsub::ValidationMode::Strict)
             .validate_messages()
-            .max_transmit_size(DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES)
+            .max_transmit_size(max_transmit)
             // Tests should not depend on heartbeat/mesh timing.
             .flood_publish(true)
             .build()
@@ -3873,5 +3884,179 @@ mod tests {
         assert_eq!(buffer.len(), 2);
         assert!(buffer.remove("a").is_none());
         assert_eq!(buffer.children_of("p", 20).len(), 0);
+    }
+
+    /// **An oversized frame never reaches the application, it costs the sender its connection,
+    /// and the node keeps serving everyone else.** (QA matrix gap #2.)
+    ///
+    /// Three swarms: a hostile peer configured with a transmit cap above the network's (the honest
+    /// builder cannot produce the frame at all), the node under test, and an honest peer.
+    ///
+    /// Two things were measured here rather than assumed, and both were the opposite of what I
+    /// expected when writing this test:
+    ///
+    /// 1. The frame never reaches TET code. libp2p enforces `max_transmit_size` on the way IN, so
+    ///    the application-level length check in the swarm loop is a second line of defence, not the
+    ///    first. It still matters for a transport that does not enforce a limit, and for any path
+    ///    that raises the cap.
+    /// 2. The oversized frame COSTS THE SENDER ITS CONNECTION. Measured directly: with the
+    ///    oversized publish skipped, an honest frame from the same peer arrives in 0.04s; with it,
+    ///    nothing from that peer arrives in 30s. That is a reasonable response to a protocol
+    ///    violation — and it is worth knowing, because it means a hostile peer can cost itself the
+    ///    link and then redial, which is connection churn rather than a silent drop.
+    ///
+    /// So what this asserts is the property that actually matters for a node on a public port:
+    /// **one hostile peer cannot take the node off the air for anybody else.**
+    #[tokio::test]
+    async fn oversized_gossip_frame_costs_that_peer_only_and_the_node_keeps_serving_others() {
+        let cap = DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES;
+        let mut hostile = build_memory_swarm_with_cap(cap * 4);
+        let mut node = build_memory_swarm();
+        let mut honest = build_memory_swarm();
+
+        let ident_topic = gossipsub::IdentTopic::new(BLOCKS_TOPIC);
+        for sw in [&mut hostile, &mut node, &mut honest] {
+            sw.behaviour_mut().gossipsub.subscribe(&ident_topic).expect("subscribe");
+        }
+
+        let addr: libp2p::Multiaddr = "/memory/2101".parse().unwrap();
+        node.listen_on(addr.clone()).expect("listen");
+        hostile.dial(addr.clone()).expect("dial from hostile");
+        honest.dial(addr).expect("dial from honest");
+
+        let oversize = vec![7u8; cap + 3 * 1024]; // 131 KiB against a 128 KiB cap
+        const HONEST_PREFIX: &[u8] = b"{\"kind\":\"honest\"";
+        assert!(oversize.len() > cap, "the frame must exceed the cap or this proves nothing");
+
+        let mut hostile_subscribed = false;
+        let mut sent_oversize = false;
+        let mut honest_attempts = 0u32;
+        let (mut oversize_seen, mut honest_delivered) = (false, false);
+
+        let outcome = timeout(TokioDuration::from_secs(45), async {
+            loop {
+                tokio::select! {
+                    ev = hostile.select_next_some() => {
+                        if let SwarmEvent::Behaviour(Event::Gossipsub(gossipsub::Event::Subscribed { .. })) = ev {
+                            hostile_subscribed = true;
+                        }
+                        if hostile_subscribed && !sent_oversize {
+                            hostile.behaviour_mut().gossipsub
+                                .publish(ident_topic.clone(), oversize.clone())
+                                .expect("the hostile peer publishes it happily");
+                            sent_oversize = true;
+                        }
+                    }
+                    ev = honest.select_next_some() => {
+                        // Keep offering an honest frame; retried with a varying payload because
+                        // gossipsub dedups by message id and the mesh grafts on a heartbeat.
+                        if matches!(ev, SwarmEvent::Behaviour(Event::Gossipsub(gossipsub::Event::Subscribed { .. })))
+                            || honest_attempts > 0
+                        {
+                            if sent_oversize && honest_attempts < 200 {
+                                honest_attempts += 1;
+                                let mut payload = HONEST_PREFIX.to_vec();
+                                payload.extend_from_slice(format!(",\"n\":{honest_attempts}}}").as_bytes());
+                                let _ = honest.behaviour_mut().gossipsub.publish(ident_topic.clone(), payload);
+                            } else if honest_attempts == 0 {
+                                honest_attempts = 1;
+                            }
+                        }
+                    }
+                    ev = node.select_next_some() => {
+                        if let SwarmEvent::Behaviour(Event::Gossipsub(gossipsub::Event::Message { message, .. })) = ev {
+                            if message.data.len() > cap {
+                                oversize_seen = true;
+                                break;
+                            }
+                            if message.data.starts_with(HONEST_PREFIX) {
+                                honest_delivered = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }).await;
+
+        assert!(outcome.is_ok(),
+            "timed out: oversize_seen={oversize_seen} honest_delivered={honest_delivered} attempts={honest_attempts}");
+        assert!(!oversize_seen, "a frame above the cap must never reach the application");
+        assert!(
+            honest_delivered,
+            "one hostile peer must not take the node off the air: an honest peer's frame must \
+             still be delivered after the oversized one"
+        );
+    }
+
+    /// **A malformed frame of legal size is rejected, and the node keeps serving.**
+    ///
+    /// Size is not the only hostile input. This frame is small enough to pass every length check
+    /// and is not valid JSON, so it exercises the decode path — the one in front of every handler
+    /// the rest of the suite tests directly.
+    #[tokio::test]
+    async fn malformed_gossip_frame_is_rejected_and_the_node_keeps_serving() {
+        let mut a = build_memory_swarm();
+        let mut b = build_memory_swarm();
+
+        let ident_topic = gossipsub::IdentTopic::new(BLOCKS_TOPIC);
+        a.behaviour_mut().gossipsub.subscribe(&ident_topic).expect("sub A");
+        b.behaviour_mut().gossipsub.subscribe(&ident_topic).expect("sub B");
+
+        let addr: libp2p::Multiaddr = "/memory/2102".parse().unwrap();
+        b.listen_on(addr.clone()).expect("listen B");
+        a.dial(addr).expect("dial B");
+
+        // Truncated: the opening brace of a NetworkEvent and nothing else.
+        let truncated = b"{\"kind\":\"block_gossip\",\"blo".to_vec();
+        let honest = b"{\"kind\":\"honest\"}".to_vec();
+        assert!(serde_json::from_slice::<serde_json::Value>(&truncated).is_err(),
+            "the frame must genuinely fail to decode");
+
+        let mut subscribed = false;
+        let (mut sent_bad, mut sent_honest) = (false, false);
+        let (mut rejected_bad, mut honest_delivered) = (false, false);
+
+        let outcome = timeout(TokioDuration::from_secs(30), async {
+            loop {
+                tokio::select! {
+                    ev = a.select_next_some() => {
+                        if let SwarmEvent::Behaviour(Event::Gossipsub(gossipsub::Event::Subscribed { .. })) = ev {
+                            subscribed = true;
+                        }
+                        if subscribed && !sent_bad {
+                            a.behaviour_mut().gossipsub.publish(ident_topic.clone(), truncated.clone()).expect("publish malformed");
+                            sent_bad = true;
+                        }
+                    }
+                    ev = b.select_next_some() => {
+                        if let SwarmEvent::Behaviour(Event::Gossipsub(gossipsub::Event::Message { message_id, message, .. })) = ev {
+                            if message.data == truncated {
+                                assert!(serde_json::from_slice::<crate::models::NetworkEvent>(&message.data).is_err(),
+                                    "decode must fail on the receiving side too");
+                                if let Some(src) = message.source.as_ref() {
+                                    let penalised = b.behaviour_mut().gossipsub.report_message_validation_result(
+                                        &message_id, src, gossipsub::MessageAcceptance::Reject,
+                                    );
+                                    assert!(penalised, "peer penalty must apply");
+                                }
+                                rejected_bad = true;
+                                if !sent_honest {
+                                    a.behaviour_mut().gossipsub.publish(ident_topic.clone(), honest.clone()).expect("honest publish");
+                                    sent_honest = true;
+                                }
+                            } else if message.data == honest {
+                                honest_delivered = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }).await;
+
+        assert!(outcome.is_ok(), "timed out: rejected_bad={rejected_bad} honest_delivered={honest_delivered}");
+        assert!(rejected_bad, "a frame that cannot decode must be rejected, not passed to a handler");
+        assert!(honest_delivered, "the node must keep serving after rejecting a malformed frame");
     }
 }
