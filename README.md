@@ -66,11 +66,9 @@ See [`tet-core/README.md`](./tet-core/README.md) for the 5-minute single-node se
 
 ### Project context
 
-- [`docs/FOUNDER_NOTES.md`](./docs/FOUNDER_NOTES.md) — Founder philosophy and design principles
 - [`docs/CODEBASE_ATLAS.md`](./docs/CODEBASE_ATLAS.md) — Codebase deep-dive for new contributors
 - [`docs/WORKER_MODE_AUDIT.md`](./docs/WORKER_MODE_AUDIT.md) — AI worker mode current state (Phase 0.5 backlog)
 - [`docs/AUDIT_WORKER_REGISTER_AND_STAKE.md`](./docs/AUDIT_WORKER_REGISTER_AND_STAKE.md) — Worker register + stake audit
-- [`PUBLIC_API.md`](./PUBLIC_API.md) — Public HTTP surface summary
 
 ### Archive (historical)
 

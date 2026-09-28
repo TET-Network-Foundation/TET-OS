@@ -67,7 +67,7 @@ P=docs/WHITEPAPER_v1.1_DRAFT.pdf          # or tet-network/ui/public/tet-network
 mdimport -t -d3 $P 2>&1 | grep -ic "tetsteve"        # expect > 0  — current contact is present
 mdimport -t -d3 $P 2>&1 | grep -ic "quantum"         # expect > 0  — CONTROL, see below
 mdimport -t -d3 $P 2>&1 | grep -ic "tetnetwork.org"  # expect 0    — domain never registered
-mdimport -t -d3 $P 2>&1 | grep -ic "yizhenxianshi"   # expect 0    — personal address, scrubbed
+mdimport -t -d3 $P 2>&1 | grep -ic "$WP_DEAD_PERSONAL" # expect 0    — personal address, scrubbed
 
 # elsewhere
 pdftotext $P - | grep -ic "tetnetwork.org"
@@ -84,11 +84,17 @@ reached the rendered PDF.
 
 | Address | Why it must not appear | Removed |
 |---|---|---|
-| `yizhenxianshi@gmail.com` | personal address, never meant to be forward-facing | 2026-09-18 |
+| *(personal address — literal withheld, see below)* | personal address, never meant to be forward-facing | 2026-09-18 |
 | `steve@tetnetwork.org` | the replacement — but `tetnetwork.org` was never registered, so it bounced | 2026-09-23 |
 
 Current contact is **`tetsteve@proton.me`**, which exists. Both dead addresses are probed above
 because a stale PDF is exactly how the first one survived a source-level scrub.
+
+**Why the first one is not written here.** Spelling a personal address out in a public file, in order
+to assert that it was removed, republishes it on every clone. The literal is in the private
+[`TET-OS-security`](https://github.com/TET-Network-Foundation/TET-OS-security) repo
+(`dead-addresses.txt`); export it as `WP_DEAD_PERSONAL` before running the probe. The second address
+is a dead domain, not personal, so it stays spelled out — there is nothing to protect.
 
 ## Related
 

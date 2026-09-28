@@ -194,7 +194,7 @@ Secondary discovery: `p2p.rs` enables **mDNS** on the same host/LAN (useful in D
 - Whitepaper: [`../WHITEPAPER.md`](../WHITEPAPER.md)
 - Litepaper: [`../LITEPAPER.md`](../LITEPAPER.md)
 - Architecture notes: `src/vision/`, [`BRIDGE_INTERFACES.md`](./BRIDGE_INTERFACES.md)
-- API reference: [`openapi.yaml`](./openapi.yaml), [`../PUBLIC_API.md`](../PUBLIC_API.md)
+- API reference: [`openapi.yaml`](./openapi.yaml)
 
 ## Status
 

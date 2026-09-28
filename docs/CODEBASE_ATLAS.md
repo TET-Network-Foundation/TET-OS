@@ -666,7 +666,7 @@ Consolidated from `CODEBASE_OVERVIEW.md`, `WHITEPAPER_v1.0_GAPS.md`, `STATUS.md`
 3. Add request/response types to `rest/types.rs` if needed.
 4. Wire business logic through `RestState.ledger` (hold `ledger` lock per existing patterns).
 5. Add integration test in `tests.rs` using `RestState` helper `rest_state_for_tests`.
-6. Document in `PUBLIC_API.md` / this atlas (Phase 1).
+6. Document in `openapi.yaml` / this atlas (Phase 1).
 
 **Auth patterns:** hybrid (`wallet.rs` messages), `SignedTxEnvelopeV1` (`verify_envelope_v1`), or `require_admin_bearer`.
 
