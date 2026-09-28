@@ -852,7 +852,21 @@ Register in [`lib.rs`](../../tet-core/src/lib.rs), [`main.rs`](../../tet-core/sr
 
 **AT-F1 (L1 Foundation):** New builder on clean laptop → `RUNNING_A_NODE.md` → join **public seed** → faucet → `GET /ledger/me` shows balance → Send **1 TET** to second wallet on network.
 
-**AT-0:** Mac user opens `http://localhost:3000/os` → Win95 boot → desktop.
+**AT-0 Boot. ❌ RED — the boot sequence does not exist (2026-09-28).**
+
+As written — "opens `http://localhost:3000/os` → Win95 boot → desktop" — this cannot pass. The shell
+is **tabbed**, not a window manager: there is no boot sequence, no taskbar and no sounds. Grepping the
+UI for `BootSequence`, `Taskbar` or any sound hook returns nothing, so there is no partial
+implementation either. S6 is 🟡 for exactly this reason.
+
+It is marked red rather than quietly reworded, for the same reason as AT-5(b) and AT-7(b): a test
+rewritten to match what got built is not a passing test, it is a deleted one. The desktop **does**
+open at `/os` and the apps work — what is absent is the Win95 boot theatre, which is cosmetic and
+sits behind every functional item in the queue.
+
+To close it, either build the boot sequence (S6 remainder, spec §A.5.6) or replace AT-0 with a
+functional assertion — "the desktop loads and the wallet, Tmail and Files apps mount" — and say in
+the changelog that the theatrical requirement was dropped. Do not do the second silently.
 
 **AT-1 Wallet:** Send **1 TET** to friend wallet_id; friend sees balance increase on `GET /ledger/me`.
 
