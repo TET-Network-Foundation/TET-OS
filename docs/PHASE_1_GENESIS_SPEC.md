@@ -8,7 +8,7 @@ is exactly one window to make them. Anything on this list that is missed stays b
 
 ---
 
-## 0. The §2 batch is growing — revisit the ceremony date after S8-3
+## 0. The §2 batch is growing — ceremony targets **Q1 2027**
 
 **Added 2026-09-24.** This list was written as a catalogue of things that *would* be nice to fix at
 a ceremony. It is turning into the critical path for shipping features.
@@ -30,9 +30,29 @@ available for the anonymous escrow, because that one's auto-settle **is** §1's 
 defect; a flag day would ship the defect rather than route around it. So the escrow cannot jump the
 queue, and Pin jumping it alone buys little.
 
-**Action:** after S8-3 lands, revisit whether to bring the genesis ceremony forward rather than
-continue accumulating deferred halves. The question is not "is each deferral correct" — each one is
-— but "at what point does the batch cost more than the ceremony".
+**Decision, 2026-09-28: the ceremony targets Q1 2027, and the date is published as a quarter.**
+
+S8-3 has landed, so this is the promised revisit. Three findings:
+
+1. **Not before the Phase 0 public launch.** A new genesis resets the chain, and the FIPS-203 row
+   below means every messaging identity is invalidated with it. Doing that in the week strangers
+   first arrive is the worst available timing.
+2. **The batch is dominated by one item.** §1 — wall-clock time as a consensus input — blocks the
+   anonymous escrow directly, and is a consensus design change needing its own spec, its own guards
+   and a negative control, not a ceremony-day edit. Of the fifteen items in §2, six are nearly free
+   *once the ceremony happens* (`TmailPin`, the `Transfer` nonce, per-plane keypairs, the ML-DSA
+   floor, the reserve allocation, denomination naming). They are waiting on §1, not on each other.
+3. **So the batch does not yet cost more than the ceremony** — but it will, and the answer to "when"
+   is "when §1 is designed", not a calendar date.
+
+**A quarter, not a day.** Three acceptance tests are red by design (AT-5(b), AT-7(b), Pin), and a
+reader deserves better than "deferred". They also deserve better than a specific date that this
+project's own history says will slip — the Phase 0 target of 2026-09-15 was missed, and inventing a
+precise successor would repeat the mistake rather than learn from it. **Q1 2027** is what can be
+said honestly: far enough out for §1 to be designed and tested properly, near enough to be a
+commitment.
+
+Revisit the quarter if §1's design lands materially early or late. Move it in public if it moves.
 
 ---
 

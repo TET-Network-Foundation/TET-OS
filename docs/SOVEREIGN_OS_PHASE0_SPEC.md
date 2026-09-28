@@ -891,7 +891,7 @@ seed's root `aac511e7e7ca0f49…`, serving a full-depth path for a wallet it nev
 manual double registration: the earlier red result was recorded as red rather than made green by
 registering the same wallet twice.
 
-**AT-5(b) — escrow-backed. ❌ fails until Phase 1.** The **1 TET** (1M Stevemon) escrow, the 24 h
+**AT-5(b) — escrow-backed. ❌ fails until the Phase 1 genesis ceremony, targeted Q1 2027.** The **1 TET** (1M Stevemon) escrow, the 24 h
 auto-settle and the ZK-Court slash are balance moves needing a new `TxV1` variant, and the timed
 settle is `PHASE_1_GENESIS_SPEC.md` §1's wall-clock-in-apply defect — so unlike Pin it cannot even
 be brought forward by a flag day without shipping that defect. Batched into
@@ -918,7 +918,7 @@ restore it. Conversation = counterparty wallet pair (Appendix K.3 flat threads),
 counterparties keep 5 each, not 5 between them.
 Guards: `at7_a_*` in `tet-core/src/tests.rs`.
 
-**AT-7(b) — Pin buys retention. ❌ fails, and must keep failing until Phase 1.** Paying the
+**AT-7(b) — Pin buys retention. ❌ fails, and must keep failing until the Phase 1 genesis ceremony, targeted Q1 2027.** Paying the
 Appendix C fee (**1 000 µTET**) pins a thread, which exempts it from (a) and retains >5.
 **Nothing can pin in Phase 0:** `TxV1::TmailPin` is batched into the Phase 1 genesis
 ([`PHASE_1_GENESIS_SPEC.md`](./PHASE_1_GENESIS_SPEC.md) §2) rather than shipped as a flag-day
