@@ -6144,8 +6144,29 @@ async fn envelope_signed_against_a_different_genesis_hash_is_rejected() {
     );
 
     // Re-signing under chain B works, proving only the binding differed.
-    let env_chain_b = signed_env_for_tests(tx, &words, &wallet_id);
+    let env_chain_b = signed_env_for_tests(tx.clone(), &words, &wallet_id);
     assert!(crate::rest::helpers::verify_envelope_v1(&env_chain_b).is_ok());
+
+    // BOTH binding fields must be present, asserted separately.
+    //
+    // Added 2026-09-28 after running this guard's negative control. `chain_id` and
+    // `genesis_hash` are redundant — the genesis hash is DERIVED from the chain id — so removing
+    // either one on its own left every assertion above green. The guard could not tell which
+    // field was load-bearing, and deleting `chain_id=` from the preimage as "already covered by
+    // genesis_hash" would have passed review and passed CI.
+    //
+    // Checking the preimage bytes directly is what makes each field individually defended.
+    let preimage = crate::wallet::tx_v1_auth_message_bytes(&tx, &env_chain_b.sig.mldsa_pubkey_b64)
+        .expect("preimage builds");
+    let text = String::from_utf8_lossy(&preimage);
+    assert!(
+        text.contains("chain_id=tet-chain-b"),
+        "the auth preimage must bind chain_id explicitly, not rely on genesis_hash deriving from          it: {text}"
+    );
+    assert!(
+        text.contains("genesis_hash=") && !text.contains("genesis_hash=|"),
+        "the auth preimage must bind a non-empty genesis_hash: {text}"
+    );
     // TET_CHAIN_ID restored by the guards.
 }
 
