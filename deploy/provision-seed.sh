@@ -82,6 +82,7 @@ die()  { printf '\n\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 
 # --- 1. host preflight ------------------------------------------------------
 log "Host preflight"
+# shellcheck source=/dev/null  # exists on the target host, not in this repo
 . /etc/os-release
 ok "$PRETTY_NAME  kernel $(uname -r)  $(nproc) vCPU  $(free -m | awk '/^Mem:/{print $2}') MB RAM"
 [ "${ID:-}" = ubuntu ] || warn "not Ubuntu ($ID) — apt steps below assume Debian-family"

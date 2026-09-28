@@ -58,6 +58,12 @@ jobs:
     steps:
       - run: echo "docs-only change — no UI source touched, nothing to build."
 
+  shell:
+    name: shell (shellcheck deploy scripts)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "docs-only change — no shell script touched, nothing to check."
+
   wasm:
     name: wasm (tet-pqc-wasm → ui/public/pqc)
     runs-on: ubuntu-latest

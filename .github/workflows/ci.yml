@@ -240,6 +240,57 @@ jobs:
           fi
           echo "bundle reproduces byte-for-byte"
 
+  shell:
+    name: shell (shellcheck deploy scripts)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # deploy/ was untested by anything until 2026-09-29, and it is the code with the most
+      # authority in the repository: it provisions the seed, deploys to it, and deletes its
+      # ledger. reset_db.sh had a hardcoded path that no longer matched where the seed keeps its
+      # database, so it would have reported a successful wipe having deleted nothing.
+      #
+      # shellcheck will not catch a stale path. It does catch the class of mistake that makes a
+      # destructive script dangerous rather than merely wrong: unquoted expansions, `rm -rf $VAR/`
+      # where VAR can be empty, and `A && B || C` read as if-then-else.
+      - name: shellcheck
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          # Every script, and the run fails on ANY finding. The four are clean as of this commit,
+          # so there is no backlog to normalise and a new finding is always new.
+          shellcheck deploy/*.sh
+
+      # The refusal paths are the whole safety property, so they are asserted rather than assumed.
+      # None of these reaches ssh: each exits during argument validation.
+      - name: reset_db.sh refuses without an explicit, matching confirmation
+        run: |
+          set -euo pipefail
+          refuses() {
+            local desc="$1"; shift
+            if ./deploy/reset_db.sh "$@" >/dev/null 2>&1; then
+              echo "::error::reset_db.sh ACCEPTED a call it must refuse: $desc"
+              exit 1
+            fi
+            echo "ok  refused: $desc"
+          }
+          refuses "no confirmation flag"        --server 203.0.113.9 --db-path /data/tet.db
+          refuses "confirmation names another path" --server 203.0.113.9 --db-path /data/tet.db --yes-delete-the-ledger-at /data/other.db
+          refuses "relative path"               --server 203.0.113.9 --db-path tet.db --yes-delete-the-ledger-at tet.db
+          refuses "deny-listed path /var"       --server 203.0.113.9 --db-path /var --yes-delete-the-ledger-at /var
+          refuses "deny-listed path /"          --server 203.0.113.9 --db-path / --yes-delete-the-ledger-at /
+          refuses "missing --server"            --db-path /data/tet.db --yes-delete-the-ledger-at /data/tet.db
+          refuses "unknown argument"            --server 203.0.113.9 --wipe-everything
+          # The bypass that defeated the old interactive prompt: a pipe is not a terminal, so
+          # `read -r -p` was skipped entirely and the wipe proceeded.
+          if yes | ./deploy/reset_db.sh --server 203.0.113.9 --db-path /data/tet.db >/dev/null 2>&1; then
+            echo "::error::reset_db.sh was satisfied by piping 'yes' — the confirmation is not a flag"
+            exit 1
+          fi
+          echo "ok  refused: piped 'yes' (the old prompt's bypass)"
+
   wasm:
     name: wasm (tet-pqc-wasm → ui/public/pqc)
     runs-on: ubuntu-latest

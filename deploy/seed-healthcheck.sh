@@ -89,6 +89,10 @@ echo "$now" > "$RESTART_FILE"
 ping_hc "/fail" "height $height stalled ${stalled_for}s — restarting tet-core"
 cd "$COMPOSE_DIR" || fail "compose dir $COMPOSE_DIR missing"
 COMPOSE=(docker compose -f docker-compose.yml -f docker-compose.dev.yml -f deploy/docker-compose.seed.yml)
-"${COMPOSE[@]}" restart tet-core >/dev/null 2>&1 \
-  && fail "restarted tet-core after ${stalled_for}s stall at height $height" \
-  || fail "restart FAILED after ${stalled_for}s stall at height $height"
+# if/else rather than `A && B || C`. fail() exits, so the old form was correct -- but it is the
+# shape SC2015 exists to catch, and a reader has to know fail() exits to see that it is not a bug.
+if "${COMPOSE[@]}" restart tet-core >/dev/null 2>&1; then
+  fail "restarted tet-core after ${stalled_for}s stall at height $height"
+else
+  fail "restart FAILED after ${stalled_for}s stall at height $height"
+fi
