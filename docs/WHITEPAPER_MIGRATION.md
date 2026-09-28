@@ -82,7 +82,7 @@
 
 | ファイル | 検出キーワード | ラベル |
 |----------|----------------|--------|
-| `PUBLIC_API.md` | `community_stevemon_earned_micro` | **要判断**（API フィールド名；WP 非掲載なら **残してOK**） |
+| ~~`PUBLIC_API.md`~~ | `community_stevemon_earned_micro` | **解決済み** — ファイルは 2026-09-28 に削除（実装と乖離した stub、かつ pre-sale USD 価格を掲載していたため）。フィールド名は `openapi.yaml` を参照 |
 | `tet-network/ui/app/os/OsClient.tsx` | `amount_stevemon` | **要判断**（API 互換） |
 | `tet-network/ui/app/page.tsx` | `amount_stevemon` | **要判断** |
 | `tet-network/ui/app/lib/tx_store.ts` | `amount_stevemon` | **要判断** |
