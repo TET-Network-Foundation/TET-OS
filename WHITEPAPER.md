@@ -593,7 +593,7 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path
 
 | Item | Policy |
 |------|--------|
-| **Ship target** | **2026-09-15** (feature freeze **2026-08-31**, 2-week polish) |
+| **Ship target** | Phase 0 ships when AT-0…AT-9 pass or are explicitly red with a reason. The original **2026-09-15** target was missed; see `SPRINT_PLAN.md` for live status rather than a date |
 | **Public seed** | **1×** Hetzner EU (~$5/mo) pre-ship; 2nd node when traffic warrants (SPOF accepted) |
 | **Faucet** | **100 TET / day / IP** |
 | **Sprint plan** | S4 Foundation → S5 Tmail protocol → S6 E2EE+shell → S7 time-lock/burn/pin → S8 Anonymous+ZK → S9 Files → S10 mini-apps → S11 QA |
@@ -838,7 +838,7 @@ Differentiates **L1 + messaging** on two axes — not only consensus:
 | **Network burn-after-read** | No | Limited (timer) | No | **Yes** (best-effort) |
 | **ZK anonymous sender + anchor audit** | No | No | Partial (Session ID) | **Yes** (1 TET escrow) |
 
-**Do not over-claim:** Rows assume **2026-09-15** ship targets pass AT-3..AT-5 on public testnet. Until then, table is **design intent**.
+**Do not over-claim:** Rows assume AT-3…AT-5 pass on the public testnet. AT-3 (scheduled release), AT-4 (burn-after-read) and AT-5(a) (anonymity) now pass cross-network; AT-5(b), the escrow that gives anonymous sending a cost, does **not** and is Phase 1. Everything not covered by a passing acceptance test is **design intent**.
 
 **Sources (indicative):** TET — this document + `tet-core` + [`SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md); Signal/Telegram/Session — public product docs.
 
@@ -873,7 +873,7 @@ Differentiates **L1 + messaging** on two axes — not only consensus:
 
 **Explicit non-goals:** Part II primitives (§14–§16), mainnet freeze, SP1, cross-chain bridges, productized AI Worker earn (Phase 0.5).
 
-**Target:** **2026-09-15** public Phase 0 ship (feature freeze **2026-08-31**). Operator / builder preview — not financial promotion.
+**Target:** public Phase 0 ship, date driven by the acceptance tests rather than the calendar — the original 2026-09-15 target was missed and saying so is cheaper than restating it. Operator / builder preview — not financial promotion.
 
 ### 19.2 Phase 1 — CAAC + economics hardening
 

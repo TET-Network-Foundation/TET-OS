@@ -2,8 +2,10 @@
 
 ![Phrack-style Whitepaper v1.1](docs/WHITEPAPER_v1.1_DRAFT.phrack_preview.png)
 
-**Post-quantum Layer 1 (ML-DSA) + AI-native workloads + hardware-adaptive consensus.**
-Built primarily in Rust (`tet-core`), with a Sovereign OS UI on libp2p.
+**A Layer 1 whose signatures a quantum computer cannot forge, with a desktop on top of it.**
+Written in Rust (`tet-core`): every transaction and message is signed twice, Ed25519 **and**
+ML-DSA-44 (FIPS 204), over libp2p. The Sovereign OS UI ships a wallet, encrypted mail and file
+sharing as a Win95-style desktop, so the chain is something you use rather than something you query.
 
 > **Your keys, your data, your device — TET only proves, never stores.**
 >
@@ -11,8 +13,9 @@ Built primarily in Rust (`tet-core`), with a Sovereign OS UI on libp2p.
 > device. The chain holds public keys and proofs. Any design that would put a secret — or anything
 > derived from one that could re-identify it — on chain or in replicated state is rejected.
 
-> ⚠️ **Phase 0 — public testnet / developer preview.**
-> Active development toward 2026-09-15 ship target.
+> ⚠️ **Phase 0 — public testnet / developer preview. Unaudited. The token has no value.**
+> Read [`SECURITY.md`](./SECURITY.md) before running anything: it lists the known limitations as
+> plainly as we can state them, including the ones that are still broken.
 > See [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./docs/SOVEREIGN_OS_PHASE0_SPEC.md) for the Phase 0 plan
 > and [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md) for operator guidance.
 
@@ -20,9 +23,17 @@ Built primarily in Rust (`tet-core`), with a Sovereign OS UI on libp2p.
 
 ## What TET ships in Phase 0
 
-- **Sovereign OS UI** — Win95-style desktop environment (Wallet + Tmail + Files + mini-apps)
-- **Tmail** — encrypted P2P messaging (X25519 + CRYSTALS-Kyber-768 Round-3 + ChaCha20-Poly1305).
-  Time-locked delivery, burn-after-read and ZK-anonymous sender are **specified, not yet built**
+- **Sovereign OS UI** — Win95-style desktop: wallet, Tmail and Files in a tabbed shell
+- **Tmail** — encrypted P2P messaging (X25519 + CRYSTALS-Kyber-768 Round-3 + ChaCha20-Poly1305),
+  with three things you can try today, all verified between two countries:
+  - **Scheduled release** — a message that will not decrypt before a chosen time
+  - **Burn-after-read** — the ciphertext is gone from both nodes once it is read
+  - **Anonymous sending** — a zero-knowledge proof that the sender is a registered
+    user, without revealing which one. Hash-only (SHA-256), so the proof itself has
+    nothing in it for a quantum computer to break
+
+  Not built: pinned messages, and the deposit that would make anonymous sending cost
+  something. Both are Phase 1 and both have acceptance tests that fail on purpose.
   (WP §17.17 covers the FIPS-203 ML-KEM migration)
 - **Hybrid wallet** — Ed25519 + **ML-DSA-44** (FIPS 204, NIST level 2) signatures, BIP39 seed compatible.
   Verification infers the level from public-key length and accepts 44/65/87; operators may select
@@ -30,7 +41,7 @@ Built primarily in Rust (`tet-core`), with a Sovereign OS UI on libp2p.
 - **Multi-node testnet** — libp2p block plane, faucet, public seed node
 - **Energy-pegged tokenomics** — `R(T) = Σ[η(W_i)·C(t_i)] / D(t)` (Phase 0 approximation; formal η in §17.1)
 
-Worker mode (AI inference earn) ships in **Phase 0.5** (post-2026-09-15).
+Worker mode (AI inference earn) ships in **Phase 0.5**, after the Phase 0 ship.
 
 ## Canonical components
 
@@ -42,18 +53,47 @@ Worker mode (AI inference earn) ships in **Phase 0.5** (post-2026-09-15).
   [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md)
 - [`methods/`](./methods), [`prover/`](./prover) — RISC0 zkVM foundation for ZK-Court
 
-## Quick start
+## Quick start — join the live testnet in about 10 minutes
+
+This brings up a node that syncs from the public seed in Helsinki, plus the desktop UI.
+Most of the ten minutes is the Docker build.
 
 ```bash
-cd tet-core
-docker compose up -d
-sleep 30
-curl http://localhost:5010/ledger/state
-curl http://localhost:5020/ledger/state
-# UI: http://localhost:3000
+git clone https://github.com/TET-Network-Foundation/TET-OS.git
+cd TET-OS
+
+# Follow the public seed. TET_AUTO_MINE=0 because the seed produces the blocks --
+# a second producer on the same genesis just races it.
+cat >> .env <<'EOF'
+TET_ENABLE_P2P=1
+TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
+TET_AUTO_MINE=0
+EOF
+
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
-See [`tet-core/README.md`](./tet-core/README.md) for the 5-minute single-node setup.
+Then confirm you are actually on the seed's chain. Equal height is **not** enough — a fork can sit
+at the same height — so compare `block_id` and `state_root`:
+
+```bash
+curl -sf http://127.0.0.1:5010/health/swarm | jq '.peer_count'        # 1 once the dial lands
+H=$(curl -sf http://127.0.0.1:5010/ledger/blocks | jq '.[0].height')
+curl -sf http://127.0.0.1:5010/ledger/block/$H | jq '.block | {height, block_id, state_root}'
+```
+
+Open the desktop at **http://localhost:3000/os**, create a wallet, and the three Tmail features
+above work against the live network.
+
+Leave the genesis variables in the committed compose alone: they are what the seed runs, and a
+mismatch changes the genesis hash, which makes every signed request fail with
+`401 ed25519 verification failed`.
+
+**The seed's REST API is deliberately not public** — only `8002/tcp` is open, so port 5010 in the
+commands above is *your* node, not the seed's.
+
+Single node with no network, or the full three-node local stack: [`tet-core/README.md`](./tet-core/README.md).
+Operator detail, env reference and troubleshooting: [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md).
 
 ## Further reading
 
@@ -62,7 +102,7 @@ See [`tet-core/README.md`](./tet-core/README.md) for the 5-minute single-node se
 - [`WHITEPAPER.md`](./WHITEPAPER.md) — **Whitepaper v1.1** (current, Sovereign OS Suite integrated, 2026-05-21)
 - **Phrack-style PDF** — not tracked; regenerate with `python3 docs/scripts/render_phrack_wp_pdf.py` (see [`docs/WHITEPAPER_BUILD.md`](./docs/WHITEPAPER_BUILD.md))
 - [`docs/WHITEPAPER_v1.1_DRAFT_JP.md`](./docs/WHITEPAPER_v1.1_DRAFT_JP.md) — Japanese translation
-- [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./docs/SOVEREIGN_OS_PHASE0_SPEC.md) — Phase 0 ship plan (target: 2026-09-15)
+- [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./docs/SOVEREIGN_OS_PHASE0_SPEC.md) — Phase 0 ship plan
 
 ### Project context
 
