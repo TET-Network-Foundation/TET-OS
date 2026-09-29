@@ -13,12 +13,37 @@ and the ruleset the repository is public and unprotected.
 | Blocker | Why it blocks | Status 2026-09-29 |
 |---|---|---|
 | **GitHub Actions billing** | Nothing has been CI-verified since `36147565171`. Flipping public with a red CI badge and no passing run is worse than waiting. Public repos get free minutes, so this may self-resolve at the Oct 1 reset — verify, don't assume | ❌ blocked, resets Oct 1 |
-| **The public seed is down** | Unreachable on 22, 8002 and ICMP since 2026-09-29. The README quickstart tells a stranger to dial it. A Show HN whose first instruction fails is worse than no Show HN | ❌ **host down, needs Hetzner console** |
+| ~~**The public seed is down**~~ | **Retracted 2026-09-29 — it was never down.** The laptop's network blocked 22/8002/ICMP; healthchecks.io showed the seed pinging every minute throughout. See ["I can't reach the seed" is not "the seed is down"](#i-cant-reach-the-seed-is-not-the-seed-is-down) below | ✅ seed healthy |
+| **SSH reachable from wherever you are flipping** | The flip itself needs no SSH, but step 7's devlog and any incident response do. Outbound 22 is blocked on at least one network Steve uses | ⚠️ sshd on 443 pending (see `RUNNING_A_NODE.md`) |
 | **Seed running the current binary** | The mempool-persistence fix (`2efe104`) is not deployed. Not release-blocking, but the redeploy should happen while nobody is watching, not during a launch | ⚠️ pending, needs the host back |
 
 If the seed cannot be restored, **do not flip**. A single-seed network with the seed down is not a
 testnet, and SECURITY.md already names the single seed as the top limitation. Publishing while it is
 dead turns a documented weakness into a live demonstration of it.
+
+## "I can't reach the seed" is not "the seed is down"
+
+**Check healthchecks.io first.** The on-box probe (`deploy/seed-healthcheck.sh`) pings it every
+minute **from inside the seed**, so it is the only one of these signals that reports on the seed
+rather than on the path to it. If the last ping is recent, the seed is up and the problem is
+between you and it.
+
+This was got wrong on 2026-09-29: SSH, 8002 and ICMP all timed out from a laptop, and the
+conclusion drawn was "the host is down". It was not. The school network blocked outbound 22, 8002
+and ICMP while passing 443. The seed had been healthy throughout, pinging healthchecks.io every
+minute the whole time.
+
+"GitHub is reachable, therefore my connection is fine" does **not** follow. It shows 443 works to
+one host. It says nothing about other ports, or about any particular destination.
+
+**The discriminating test** — does the port work to a *third party*?
+
+```bash
+nc -z -G 6 github.com 22        # filtered here too => YOUR network blocks 22, not the seed
+nc -z -G 6 95.217.158.153 443   # connects => the path to the seed is fine on this port
+```
+
+If `github.com:22` is also filtered, stop diagnosing the seed. Nothing about it is broken.
 
 ---
 

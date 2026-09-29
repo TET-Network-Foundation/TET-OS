@@ -819,4 +819,91 @@ Specifications that **may change before mainnet** (v1.1 whitepaper):
 - [`STATUS.md`](./STATUS.md) — whitepaper vs implementation matrix  
 - [`SPRINT1_DESIGN.md`](./SPRINT1_DESIGN.md) — block sync MVP design  
 - [`SYNC_ISSUE.md`](./SYNC_ISSUE.md) — historical sync root-cause notes  
-- [`tet-core/README.md`](../tet-core/README.md) — Docker quick start  
+- [`tet-core/README.md`](../tet-core/README.md) — Docker quick start
+
+---
+
+## "I can't reach the seed" is not "the seed is down"
+
+**Check healthchecks.io first.** The on-box probe (`deploy/seed-healthcheck.sh`) pings it every
+minute **from inside the seed**, so it is the only one of these signals that reports on the seed
+rather than on the path to it. If the last ping is recent, the seed is up and the problem is
+between you and it.
+
+This was got wrong on 2026-09-29: SSH, 8002 and ICMP all timed out from a laptop, and the
+conclusion drawn was "the host is down". It was not. The school network blocked outbound 22, 8002
+and ICMP while passing 443. The seed had been healthy throughout, pinging healthchecks.io every
+minute the whole time.
+
+"GitHub is reachable, therefore my connection is fine" does **not** follow. It shows 443 works to
+one host. It says nothing about other ports, or about any particular destination.
+
+**The discriminating test** — does the port work to a *third party*?
+
+```bash
+nc -z -G 6 github.com 22        # filtered here too => YOUR network blocks 22, not the seed
+nc -z -G 6 95.217.158.153 443   # connects => the path to the seed is fine on this port
+```
+
+If `github.com:22` is also filtered, stop diagnosing the seed. Nothing about it is broken.
+
+## sshd on 443 as well as 22
+
+Outbound 22 is blocked on at least one network the operator uses (a school network, 2026-09-29),
+while 443 passes. Without a second port, the seed is unadministrable from there — and the one time
+it mattered, the operator could not tell a blocked port from a dead host.
+
+**443 is chosen because it is the port that survives hostile networks.** Nothing else on the seed
+uses it: only 22 and 8002 are open today, and the node's REST is loopback-only.
+
+### Apply it (Hetzner Cloud Console → the server → Console)
+
+Run from the web console, not over SSH — if SSH already worked you would not need this, and a
+mistake in `sshd_config` locks you out of the session applying it.
+
+```bash
+# 1. sshd listens on BOTH. Keep 22: 443 is an addition, not a replacement, so a mistake here
+#    does not cost the working port.
+printf '\nPort 22\nPort 443\n' >> /etc/ssh/sshd_config
+sshd -t && echo "config OK"          # MUST print OK before going further
+
+# 2. host firewall
+ufw allow 443/tcp
+ufw status | grep 443
+
+# 3. reload, do not restart — a reload keeps existing sessions alive
+systemctl reload sshd
+ss -lntp | grep -E ':(22|443)\s'     # expect sshd on both
+```
+
+If `sshd -t` does not print OK, run `sed -i '$d' /etc/ssh/sshd_config` twice to undo the two
+appended lines and start again. Do not reload a config that fails its own syntax check.
+
+### Then, in the Hetzner Cloud firewall (web UI, not the server)
+
+Add an inbound rule: **TCP 443, source 0.0.0.0/0 and ::/0**. The cloud firewall sits in front of
+the host, so ufw alone is not enough — this is the step that is easy to forget and produces a
+"still blocked" that looks identical to the problem being fixed.
+
+### Verify from a blocked network
+
+```bash
+ssh -p 443 root@95.217.158.153 'echo ok; ss -lntp | grep :443'
+```
+
+Add it to `~/.ssh/config` so it is not a thing to remember under pressure:
+
+```
+Host tet-seed
+  HostName 95.217.158.153
+  User root
+  Port 443
+```
+
+### What this does not do
+
+It does not make 8002 reachable from a network that blocks it, so a **follower** cannot join from
+there — 8002 is the block plane and cannot move to 443 without changing every published bootnode
+multiaddr, which is a Phase 1 ceremony item (per-plane keypairs, `PHASE_1_GENESIS_SPEC.md` §2.4).
+This is for administering the seed, not for using the network.
+
