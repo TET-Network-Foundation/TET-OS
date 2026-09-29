@@ -850,48 +850,57 @@ If `github.com:22` is also filtered, stop diagnosing the seed. Nothing about it 
 ## sshd on 443 as well as 22
 
 Outbound 22 is blocked on at least one network the operator uses (a school network, 2026-09-29),
-while 443 passes. Without a second port, the seed is unadministrable from there — and the one time
-it mattered, the operator could not tell a blocked port from a dead host.
+while 443 passes. Without a second port the seed is unadministrable from there — and the one time
+it mattered, a blocked port was misread as a dead host.
 
 **443 is chosen because it is the port that survives hostile networks.** Nothing else on the seed
-uses it: only 22 and 8002 are open today, and the node's REST is loopback-only.
+uses it: only 22 and 8002 were open, and the node's REST is loopback-only.
 
-### Apply it (Hetzner Cloud Console → the server → Console)
+### Ubuntu 24.04 socket-activates sshd, so `Port` in `sshd_config` does nothing
 
-Run from the web console, not over SSH — if SSH already worked you would not need this, and a
-mistake in `sshd_config` locks you out of the session applying it.
+This is the trap. `ssh.socket` is active and holds the listening socket:
+
+```console
+$ ss -lntp | grep sshd
+LISTEN 0 4096 0.0.0.0:22 ... users:(("sshd",...),("systemd",pid=1,fd=170))
+                                                  ^^^^^^^ systemd owns it
+$ systemctl is-active ssh.socket
+active
+```
+
+Adding `Port 443` to `/etc/ssh/sshd_config` is accepted, survives `sshd -t`, and changes nothing.
+The ports come from `ssh.socket`. Check `systemctl is-active ssh.socket` before believing any
+instruction that edits `sshd_config` — including older versions of this section.
+
+### Applied (2026-09-29)
 
 ```bash
-# 1. sshd listens on BOTH. Keep 22: 443 is an addition, not a replacement, so a mistake here
-#    does not cost the working port.
-printf '\nPort 22\nPort 443\n' >> /etc/ssh/sshd_config
-sshd -t && echo "config OK"          # MUST print OK before going further
-
-# 2. host firewall
+mkdir -p /etc/systemd/system/ssh.socket.d
+cat > /etc/systemd/system/ssh.socket.d/10-port443.conf <<'EOF'
+[Socket]
+ListenStream=0.0.0.0:443
+ListenStream=[::]:443
+EOF
+systemctl daemon-reload && systemctl restart ssh.socket
 ufw allow 443/tcp
-ufw status | grep 443
-
-# 3. reload, do not restart — a reload keeps existing sessions alive
-systemctl reload sshd
-ss -lntp | grep -E ':(22|443)\s'     # expect sshd on both
+ss -lntp | grep -E ':(22|443)\s'     # expect 0.0.0.0 and [::] for BOTH ports
 ```
 
-If `sshd -t` does not print OK, run `sed -i '$d' /etc/ssh/sshd_config` twice to undo the two
-appended lines and start again. Do not reload a config that fails its own syntax check.
+Two details that cost a round trip each:
 
-### Then, in the Hetzner Cloud firewall (web UI, not the server)
+- `ListenStream` in a drop-in **appends**, so 22 is untouched. That is deliberate: 443 is an
+  addition, and a mistake cannot cost the working port.
+- A single `ListenStream=443` binds **IPv6 only** — `[::]:443` appeared with no `0.0.0.0:443`,
+  despite `net.ipv6.bindv6only=0`. Both families are listed explicitly, exactly as the shipped
+  unit does for 22.
 
-Add an inbound rule: **TCP 443, source 0.0.0.0/0 and ::/0**. The cloud firewall sits in front of
-the host, so ufw alone is not enough — this is the step that is easy to forget and produces a
-"still blocked" that looks identical to the problem being fixed.
+### No Hetzner cloud firewall rule was needed
 
-### Verify from a blocked network
+Verified by connecting: `ssh -p 443` works from outside. If a cloud firewall is ever added, 443
+must be allowed there too — the cloud firewall sits in front of the host, so `ufw` alone would not
+be enough, and forgetting it produces a "still blocked" indistinguishable from the original problem.
 
-```bash
-ssh -p 443 root@95.217.158.153 'echo ok; ss -lntp | grep :443'
-```
-
-Add it to `~/.ssh/config` so it is not a thing to remember under pressure:
+### Use it
 
 ```
 Host tet-seed
@@ -900,10 +909,9 @@ Host tet-seed
   Port 443
 ```
 
-### What this does not do
+### What this does not fix
 
-It does not make 8002 reachable from a network that blocks it, so a **follower** cannot join from
-there — 8002 is the block plane and cannot move to 443 without changing every published bootnode
-multiaddr, which is a Phase 1 ceremony item (per-plane keypairs, `PHASE_1_GENESIS_SPEC.md` §2.4).
-This is for administering the seed, not for using the network.
-
+8002 stays blocked on such a network, so a **follower cannot join** from there. 8002 is the block
+plane and cannot move to 443 without reissuing every published bootnode multiaddr — a Phase 1
+ceremony item (per-plane keypairs, `PHASE_1_GENESIS_SPEC.md` §2.4). This is for administering the
+seed, not for using the network.

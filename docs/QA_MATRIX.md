@@ -203,7 +203,7 @@ reasoning about coverage from memory.
 | Gap | Status | Commit | What it actually found |
 |---|---|---|---|
 | #2 oversized / malformed frames | **closed** | `61e8609` | Two surprises. libp2p drops oversized frames in the codec, so the app-level length check is a *second* line of defence, not the first. And an oversized frame **costs the sender its connection** — measured: an honest frame from the same peer arrives in 0.04 s without it, nothing in 30 s with it |
-| #6 / #7 restart | **closed** | `2efe104` | **A REST-admitted transaction died with the process.** Submitted, `202` returned, gone on restart, no retry, nothing to tell the sender. Now persisted in `mempool_pending_v1`. The anon root history was already safe — recomputed from the registry — verified rather than assumed |
+| #6 / #7 restart | **closed + verified live** | `2efe104` | **A REST-admitted transaction died with the process.** Submitted, `202` returned, gone on restart, no retry, nothing to tell the sender. Now persisted in `mempool_pending_v1`. The anon root history was already safe — recomputed from the registry — verified rather than assumed |
 | #8 `reset_db.sh` | **closed** | `5af365e` | The script deleted a path the seed **stopped using**, so it would have reported a successful wipe having deleted nothing. Its `read -p` prompt was also no safeguard: demonstrated bypassed by `yes \|` |
 | #9 real prover in CI | **closed** | `c150bac` | `cargo test` **exits 0 when a filter matches nothing**, so a bare `-- --ignored` would have gone green running nothing after a rename. Each test is named and asserted to be "1 passed" |
 | #10 twelve missing controls | **closed** | `ad51b6e` | All twelve fire; none vacuous. One imprecise and fixed: `envelope_signed_against_a_different_genesis_hash_is_rejected` passed with *either* binding removed, because `genesis_hash` is derived from `chain_id` |
@@ -216,3 +216,26 @@ Note on #1 and #2: closing #2 does **not** close #1. #2 covers malformed and ove
 the transport layer. #1 is about application-level hostile messages (a forged registration, a
 replayed nullifier, a tampered burn revoke) driven over a wire rather than into a handler. Those
 handlers are well tested; the wire path in front of them is still only covered for frame shape.
+
+### Restart persistence, verified on the live seed (2026-09-29)
+
+The one check `2efe104` could not make: the seed was running the pre-fix binary.
+
+```
+seed redeployed to the current binary (mempool_pending_v1 present, PeerId unchanged)
+height before submit                53,964
+POST /ledger/initial_airdrop/claim  202, status "pending"
+docker restart -t 2                 issued ~1s after submit, before the 12s block
+[startup] restored 1 pending tx(s) from the previous run; rebroadcast resumes
+wallet balance after restart        1,000,000,000 micro-TET  <- mined AFTER the restart
+```
+
+The restore log line is the proof it was still pending when the node stopped: a tx already in a
+block is forgotten by `mempool_forget`, so it could not have been restored.
+
+Before the fix this transaction would have been accepted with a `202`, then silently lost.
+
+Host also updated in the same window: `apt upgrade` (61 packages), kernel 6.8.0-90 → 6.8.0-142,
+reboot. The container auto-restarted healthy, PeerId unchanged, anon registry intact (members=3),
+and a follower watching throughout kept its connection.
+
