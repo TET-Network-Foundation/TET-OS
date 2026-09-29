@@ -3626,7 +3626,7 @@ async fn run_mdns_ping_swarm(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use libp2p::core::transport::MemoryTransport;
     use libp2p::swarm::SwarmEvent;
@@ -3635,11 +3635,11 @@ mod tests {
     /// Same swarm, but with the gossip transmit cap overridable — a peer that ignores the
     /// network's limit is exactly the case being tested, and it cannot be built with the honest
     /// builder.
-    fn build_memory_swarm_with_cap(max_transmit: usize) -> Swarm<TetBehaviour> {
+    pub(crate) fn build_memory_swarm_with_cap(max_transmit: usize) -> Swarm<TetBehaviour> {
         build_memory_swarm_inner(max_transmit)
     }
 
-    fn build_memory_swarm() -> Swarm<TetBehaviour> {
+    pub(crate) fn build_memory_swarm() -> Swarm<TetBehaviour> {
         build_memory_swarm_inner(DEFAULT_GLOBAL_GOSSIP_MAX_MSG_BYTES)
     }
 
@@ -4059,4 +4059,74 @@ mod tests {
         assert!(rejected_bad, "a frame that cannot decode must be rejected, not passed to a handler");
         assert!(honest_delivered, "the node must keep serving after rejecting a malformed frame");
     }
+
+/// Drive `hostile` then `honest` across three real swarms into the production handler.
+///
+/// Returns `(hostile_outcome, honest_outcome)`. The honest message is published only after the
+/// hostile one has been handled, so "kept serving" is ordered rather than coincidental.
+pub(crate) async fn hostile_then_honest_over_a_swarm(
+    port: u16,
+    store: &std::sync::Arc<crate::tmail::store::TmailStore>,
+    hostile: crate::models::NetworkEvent,
+    honest: crate::models::NetworkEvent,
+) -> (TmailGossipOutcome, TmailGossipOutcome) {
+
+    let mut hostile_sw = build_memory_swarm();
+    let mut node = build_memory_swarm();
+    let mut honest_sw = build_memory_swarm();
+
+    let topic = gossipsub::IdentTopic::new(TMAIL_TOPIC);
+    for sw in [&mut hostile_sw, &mut node, &mut honest_sw] {
+        sw.behaviour_mut().gossipsub.subscribe(&topic).expect("subscribe");
+    }
+    let addr: libp2p::Multiaddr = format!("/memory/{port}").parse().unwrap();
+    node.listen_on(addr.clone()).expect("listen");
+    hostile_sw.dial(addr.clone()).expect("dial hostile");
+    honest_sw.dial(addr).expect("dial honest");
+
+    let hostile_bytes = serde_json::to_vec(&hostile).unwrap();
+    let honest_bytes = serde_json::to_vec(&honest).unwrap();
+
+    let (mut hostile_sent, mut honest_attempts) = (false, 0u32);
+    let (mut hostile_out, mut honest_out) = (None, None);
+
+    let run = tokio::time::timeout(std::time::Duration::from_secs(45), async {
+        loop {
+            tokio::select! {
+                ev = hostile_sw.select_next_some() => {
+                    if matches!(ev, SwarmEvent::Behaviour(Event::Gossipsub(gossipsub::Event::Subscribed { .. }))) && !hostile_sent {
+                        hostile_sw.behaviour_mut().gossipsub
+                            .publish(topic.clone(), hostile_bytes.clone()).expect("hostile publish");
+                        hostile_sent = true;
+                    }
+                }
+                ev = honest_sw.select_next_some() => {
+                    // Retried: gossipsub dedups by message id and the mesh grafts on a heartbeat,
+                    // so a single publish can lose a race that has nothing to do with the subject.
+                    if hostile_out.is_some() && honest_attempts < 200 {
+                        honest_attempts += 1;
+                        let _ = honest_sw.behaviour_mut().gossipsub.publish(topic.clone(), honest_bytes.clone());
+                    }
+                    let _ = ev;
+                }
+                ev = node.select_next_some() => {
+                    if let SwarmEvent::Behaviour(Event::Gossipsub(gossipsub::Event::Message { message, .. })) = ev {
+                        // The production decode + handler, on bytes that crossed a wire.
+                        let Ok(decoded) = serde_json::from_slice::<crate::models::NetworkEvent>(&message.data) else { continue };
+                        let outcome = handle_tmail_network_event(store, &decoded);
+                        if message.data == hostile_bytes {
+                            hostile_out = Some(outcome);
+                        } else {
+                            honest_out = Some(outcome);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }).await;
+
+    assert!(run.is_ok(), "timed out: hostile={hostile_out:?} honest={honest_out:?} attempts={honest_attempts}");
+    (hostile_out.expect("hostile message never arrived"), honest_out.expect("honest message never arrived"))
+}
 }

@@ -10400,3 +10400,221 @@ async fn rest_admitted_tx_survives_a_restart_and_a_mined_one_does_not() {
          and the sweep silently skips it"
     );
 }
+
+// ---------------------------------------------------------------------------
+// QA gap #1 — hostile APPLICATION messages over a real swarm.
+//
+// The rest of the suite calls handlers directly. These drive the same hostile inputs across an
+// actual libp2p wire and into the production handler, with a third honest node present, so the
+// assertion is not merely "it was refused" but "it was refused and the node kept serving
+// everyone else". Frame-level hostility (oversized, malformed) is covered separately in
+// p2p::tests; this is the layer above, where the bytes decode fine and the CONTENT is a lie.
+// ---------------------------------------------------------------------------
+
+/// A registration that claims to be `wallet_b` but is signed, validly, by `wallet_a`.
+///
+/// The signature verifies over exactly these bytes. Only the `signer == wallet_id` check refuses
+/// it, which is the point: a forgery that fails on a cheaper check proves nothing about the check
+/// under test (CLAUDE.md, M1/O3).
+fn forged_registration_for_tests() -> crate::tmail::anon::TmailAnonRegistrationV1 {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let (words_a, wallet_a) = tmail_party_for_tests();
+    let (_wb, wallet_b) = tmail_party_for_tests();
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words_a).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(&words_a).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+
+    let mut reg = crate::tmail::anon::TmailAnonRegistrationV1 {
+        v: 1,
+        kind: crate::tmail::anon::TMAIL_ANON_REGISTRATION_KIND.to_string(),
+        wallet_id: wallet_b,
+        commitment_hex: hex::encode(nexus_protocol::tet_anon_commitment_v1(&[42u8; 32])),
+        registered_at_ms: 1_000,
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: wallet_a,
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::anon::tmail_anon_registration_auth_message_bytes(&reg, &pk);
+    reg.hybrid_sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    reg.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    reg
+}
+
+
+/// **(a) A forged registration is refused over gossip, and the node keeps serving.**
+///
+/// The signature is valid over exactly these bytes — only `signer == wallet_id` refuses it. Driven
+/// across a real swarm rather than into `admit_anon_registration` directly, so the decode path in
+/// front of the handler is exercised too.
+#[tokio::test]
+async fn forged_registration_over_a_swarm_is_refused_and_the_node_keeps_serving() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = std::sync::Arc::new(tmail_store_for_tests());
+
+    let forged = forged_registration_for_tests();
+    let (w, wallet) = tmail_party_for_tests();
+    let honest = signed_anon_registration_for_tests(&w, &wallet, &[9u8; 32], 1_000);
+
+    let (hostile_out, honest_out) = crate::p2p::tests::hostile_then_honest_over_a_swarm(
+        3301,
+        &store,
+        crate::models::NetworkEvent::TmailAnonRegistration { registration: forged },
+        crate::models::NetworkEvent::TmailAnonRegistration { registration: honest },
+    )
+    .await;
+
+    match hostile_out {
+        crate::p2p::TmailGossipOutcome::Rejected { ref reason } => {
+            assert!(reason.contains("registration"), "wrong rejection reason: {reason}");
+        }
+        other => panic!("a forged registration must be rejected, got {other:?}"),
+    }
+    assert!(
+        matches!(honest_out, crate::p2p::TmailGossipOutcome::Registered { .. }),
+        "the node must keep serving an honest peer afterwards, got {honest_out:?}"
+    );
+    assert_eq!(store.anon_member_count(), 1, "only the honest registration is in the registry");
+}
+
+/// **(a2) The same forgery is refused over the SYNC RPC, not just over gossip.**
+///
+/// Registry sync is a second, independent way into the same registry, added 2026-09-25. It admits
+/// through `admit_anon_registration` by design — this asserts that is actually true of the code
+/// rather than of the comment, because a sync path that verified less than gossip would be the
+/// obvious hole to walk through.
+#[test]
+fn forged_registration_over_the_sync_path_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = std::sync::Arc::new(tmail_store_for_tests());
+    let forged = forged_registration_for_tests();
+
+    // The exact call the sync response arm makes for each paged record.
+    let err = crate::p2p::admit_anon_registration(&store, &forged)
+        .expect_err("a forged registration must not enter through sync either");
+    assert!(err.contains("registration"), "wrong rejection reason: {err}");
+    assert_eq!(store.anon_member_count(), 0, "nothing entered the registry");
+
+    // And the honest path through the same function still works, so the refusal above is not
+    // simply "this function rejects everything".
+    let (w, wallet) = tmail_party_for_tests();
+    let honest = signed_anon_registration_for_tests(&w, &wallet, &[11u8; 32], 1_000);
+    crate::p2p::admit_anon_registration(&store, &honest).expect("honest registration admitted");
+    assert_eq!(store.anon_member_count(), 1);
+}
+
+/// **(c) A burn revoke signed by neither sender nor receiver is dropped, and the node keeps
+/// serving.**
+///
+/// The revoke is validly signed — by a third party. Only the authorisation check refuses it, and a
+/// message that survived it would let anyone destroy anyone's mail.
+#[tokio::test]
+async fn third_party_burn_revoke_over_a_swarm_is_dropped_and_the_node_keeps_serving() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (store, _sender_words, _sender, receiver_words, receiver, msg_id) =
+        stored_burn_message_for_tests();
+    let store = std::sync::Arc::new(store);
+
+    let (stranger_words, stranger) = tmail_party_for_tests();
+    let hostile = signed_burn_revoke_for_tests(&stranger_words, &stranger, &msg_id);
+    let honest = signed_burn_revoke_for_tests(&receiver_words, &receiver, &msg_id);
+
+    assert!(
+        crate::tmail::burn::verify_tmail_burn_revoke_v1(&hostile).is_ok(),
+        "the stranger's signature is genuine; only authorisation may reject it"
+    );
+    assert!(store.get_by_msg_id(&msg_id).is_some(), "precondition: the message is stored");
+
+    let (hostile_out, honest_out) = crate::p2p::tests::hostile_then_honest_over_a_swarm(
+        3303,
+        &store,
+        crate::models::NetworkEvent::TmailBurnRevoke { revoke: hostile },
+        crate::models::NetworkEvent::TmailBurnRevoke { revoke: honest },
+    )
+    .await;
+
+    assert!(
+        matches!(hostile_out, crate::p2p::TmailGossipOutcome::Rejected { .. }),
+        "a third-party revoke must be dropped, got {hostile_out:?}"
+    );
+    assert!(
+        matches!(honest_out, crate::p2p::TmailGossipOutcome::Burned { .. }),
+        "the receiver's own revoke must still work afterwards, got {honest_out:?}"
+    );
+    assert!(store.get_by_msg_id(&msg_id).is_none(), "the honest revoke destroyed the message");
+}
+
+/// **(b) A replayed nullifier is refused — over a real swarm, with a real receipt.**
+///
+/// `#[ignore]` and run by the `zk-real` workflow, not by `cargo test`. That is not a dodge: the
+/// nullifier lives in the ZK journal, and the replay rule is enforced inside
+/// `verify_anonymous_proof`, which calls `verify_tx_receipt_and_journal`. There is no honest way to
+/// drive this case without a real receipt, and a mock one would test the mock.
+///
+/// Two envelopes, different `msg_id`, the SAME journal and therefore the same nullifier — one
+/// ephemeral identity trying to spend its anonymity twice. Both cross a real wire; the first
+/// verifies, the second is refused as a replay, and a third node's honest traffic keeps flowing.
+#[tokio::test]
+#[ignore = "runs a real RISC Zero prover; needs a zk build"]
+async fn replayed_nullifier_over_a_swarm_is_refused_and_the_node_keeps_serving() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let (_rw, receiver) = tmail_party_for_tests();
+
+    let (first, receipt_bytes, store, eph_words) = anonymous_envelope_for_tests(&receiver);
+    let store = std::sync::Arc::new(store);
+
+    // The replay: same proof, same nullifier, a different message id.
+    let mut second = first.clone();
+    second.msg_id = format!("{}-replay", first.msg_id);
+    resign_tmail_env_for_tests(&mut second, &eph_words);
+    assert_ne!(first.msg_id, second.msg_id);
+    assert_eq!(
+        first.anonymous.as_ref().unwrap().anchor_proof.journal_b64,
+        second.anonymous.as_ref().unwrap().anchor_proof.journal_b64,
+        "both envelopes must carry the same journal, or this is not a replay"
+    );
+
+    // Both announce fine — phase 1 is metadata only and is NOT where the defence is. Driving them
+    // over a swarm is how that gets demonstrated rather than assumed.
+    let (first_out, second_out) = crate::p2p::tests::hostile_then_honest_over_a_swarm(
+        3305,
+        &store,
+        crate::models::NetworkEvent::TmailGossip { envelope: first.clone() },
+        crate::models::NetworkEvent::TmailGossip { envelope: second.clone() },
+    )
+    .await;
+    assert!(matches!(first_out, crate::p2p::TmailGossipOutcome::Stored { .. }),
+        "the first announce is stored, got {first_out:?}");
+    assert!(matches!(second_out, crate::p2p::TmailGossipOutcome::Stored { .. }),
+        "the replay ALSO announces fine — gossip confers no verification, got {second_out:?}");
+
+    // Phase 2 is the defence, and it is where the replay dies.
+    let v1 = crate::tmail::anon::verify_anonymous_proof(&store, &first, &receipt_bytes);
+    assert!(matches!(v1, crate::tmail::store::AnonVerdict::Verified { .. }),
+        "the first use must verify, got {v1:?}");
+
+    let v2 = crate::tmail::anon::verify_anonymous_proof(&store, &second, &receipt_bytes);
+    match v2 {
+        crate::tmail::store::AnonVerdict::Failed { ref reason, .. } => {
+            assert!(reason.contains("replay") || reason.contains("nullifier"),
+                "expected the replay rejection, got: {reason}");
+        }
+        other => panic!("a replayed nullifier must be refused, got {other:?}"),
+    }
+
+    // Re-verifying the FIRST message is still fine: the rule is per-nullifier-per-message, not
+    // "one verification ever", and gossip delivers duplicates constantly.
+    let v1_again = crate::tmail::anon::verify_anonymous_proof(&store, &first, &receipt_bytes);
+    assert!(matches!(v1_again, crate::tmail::store::AnonVerdict::Verified { .. }),
+        "re-verifying the same message must stay Verified, got {v1_again:?}");
+}
