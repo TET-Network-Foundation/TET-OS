@@ -39,6 +39,15 @@ on:
       - '.gitignore'
   pull_request:
     paths-ignore: *docs_only
+  # Manual trigger, deliberately only here and not on the no-op mirror: a dispatch must run the REAL
+  # jobs, and two workflows reporting the same five check names for one event would be ambiguous for
+  # a required-checks ruleset.
+  #
+  # It also exists because `git commit --allow-empty` does NOT work as a way to re-run CI: a push
+  # with no changed files cannot match `paths-ignore`, so the workflow is skipped rather than run.
+  # When a green run is needed on demand — a flip gate, a re-check after a runner outage — this is
+  # the button.
+  workflow_dispatch:
 
 # A second push to the same branch cancels the first — private-repo Actions minutes are billed.
 concurrency:

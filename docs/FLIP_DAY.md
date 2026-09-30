@@ -51,11 +51,11 @@ If `github.com:22` is also filtered, stop diagnosing the seed. Nothing about it 
 
 ```bash
 gh run list --workflow=ci.yml --limit 3
-gh run view <id>          # all four jobs green: rust, ui, shell, wasm, docker
+gh run view <id>          # all five jobs green: rust, ui, shell, wasm, docker
 ```
 
 Required: a green run **on `main`, on the current HEAD**. Not a green run from last week, and not a
-`ci-noop` run — the no-op mirror reports the same four check names by design, so read the workflow
+`ci-noop` run — the no-op mirror reports the same five check names by design, so read the workflow
 file that produced it, not just the check names.
 
 Also worth one look: the `zk-real` job has never run on GitHub. Trigger it once manually
