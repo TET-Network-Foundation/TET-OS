@@ -59,6 +59,17 @@ answering:
 The negative control is what caught both. A guard that cannot fail is worse than no guard, because
 it is counted.
 
+**A collision guard must use inputs that contain the separator; inputs that don't only measure the
+separator (C5b).** A guard that two encodings cannot collide has to be fed the character the encoding
+uses to divide fields, or it is testing the divider rather than the defence.
+
+The agent payload encoding is length-prefixed, `<len> SP <field> SP`, so that no two field lists can
+produce the same bytes. Its guard compared `("a","bc")` with `("ab","c")` — and passed with the length
+prefixes **removed**, because the trailing space still landed in a different position. It was
+measuring the space. A length-free encoding only collides when a field contains the separator, so the
+cases now do: `("a","b c")` against `("a b","c")`, plus payloads that imitate the length prefix
+itself. With those, the control fails as it must.
+
 ## In a must-be-refused assertion, never accept multiple reasons with `||`
 
 **Assert the specific error the test is named for.** If a cheaper check rejects first, construct the
