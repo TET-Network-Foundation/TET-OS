@@ -4,7 +4,7 @@ import type { HybridKeyMaterial } from "./types.js";
 import { estimateVisionInferFlopsFromPromptChars, type InferCostEstimateJson } from "./estimate.js";
 
 export type AgentClientOptions = {
-  /** Tet-Core REST base URL (no trailing slash), e.g. `http://5.75.175.170:5010`. */
+  /** Tet-Core REST base URL (no trailing slash), e.g. `http://127.0.0.1:5010`. */
   baseUrl: string;
   /** 12-word BIP39 phrase (same normalization as Sovereign OS). */
   mnemonic: string;
@@ -85,10 +85,10 @@ export class AgentClient {
   }
 
   /**
-   * Reads `TET_CORE_URL` (default `http://5.75.175.170:5010`) and `TET_MNEMONIC` or `TET_MNEMONIC_12`.
+   * Reads `TET_CORE_URL` (default `http://127.0.0.1:5010`) and `TET_MNEMONIC` or `TET_MNEMONIC_12`.
    */
   static async fromEnv(): Promise<AgentClient> {
-    const baseUrl = normalizeBaseUrl(process.env.TET_CORE_URL ?? "http://5.75.175.170:5010");
+    const baseUrl = normalizeBaseUrl(process.env.TET_CORE_URL ?? "http://127.0.0.1:5010");
     const m = (process.env.TET_MNEMONIC ?? process.env.TET_MNEMONIC_12 ?? "").trim();
     if (!m) {
       throw new Error("TET_MNEMONIC (or TET_MNEMONIC_12) is required");

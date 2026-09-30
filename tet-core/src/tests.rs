@@ -10289,6 +10289,125 @@ fn browser_wasm_and_node_derive_the_same_mldsa44_pubkeys() {
 }
 
 // ---------------------------------------------------------------------------
+// tet-agent-sdk <-> node interop. The THIRD copy of the signer, and the wallet
+// it was deriving.
+// ---------------------------------------------------------------------------
+
+/// Fixtures signed by **tet-agent-sdk** — its BIP39 Ed25519 plus its own vendored `tet-pqc-wasm`.
+const AGENT_SDK_HYBRID_SIGS: &str = include_str!("testdata/agent_sdk_hybrid_sigs.json");
+
+/// **The agent SDK must derive the same wallet as everything else from the same mnemonic.**
+///
+/// It did not. `tet-agent-sdk/src/wallet_from_mnemonic.ts` used `@polkadot/keyring`'s
+/// `addFromMnemonic`, which derives Ed25519 from the **substrate mini-secret** — PBKDF2 over the
+/// mnemonic *entropy*, salt `"mnemonic"` — while TET uses the **BIP39 seed**, PBKDF2 over the
+/// mnemonic *phrase* ([`crate::wallet::ed25519_signing_key_from_mnemonic`]). Measured on the
+/// standard vector: `9125f505…` under polkadot, `c5785e18…` here and in every browser.
+///
+/// Nothing rejected it, which is why it lived since May. Both halves were internally consistent
+/// and `mldsa_pk` is inside every pre-image, so [`crate::quantum_shield::verify_hybrid`] passed —
+/// the agent was simply a *different wallet* from the one its owner could open with the same
+/// phrase, and its ML-DSA-44 key (correctly HKDF'd off the BIP39 seed by the wasm) belonged to
+/// that other wallet. One identity, two wallets, no error anywhere.
+///
+/// So this asserts the derivation, not just that verification succeeds. Verification succeeding is
+/// precisely what the bug did.
+#[test]
+fn agent_sdk_derives_the_same_hybrid_identity_as_the_node() {
+    use base64::Engine as _;
+    let doc: serde_json::Value =
+        serde_json::from_str(AGENT_SDK_HYBRID_SIGS).expect("fixture JSON must parse");
+    let browser: serde_json::Value = serde_json::from_str(BROWSER_WALLET_HYBRID_SIGS).unwrap();
+    let cases = doc["cases"].as_array().expect("cases array");
+    let browser_cases = browser["cases"].as_array().unwrap();
+    assert!(!cases.is_empty(), "fixtures must not be empty — an empty array passes vacuously");
+    assert_eq!(
+        cases.len(),
+        browser_cases.len(),
+        "fixture sets must cover the same mnemonics, in the same order"
+    );
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    for (i, c) in cases.iter().enumerate() {
+        let mnemonic = c["mnemonic"].as_str().expect("fixture carries the mnemonic");
+        let wallet = c["wallet_id"].as_str().unwrap();
+        let pk_b64 = c["mldsa_pubkey_b64"].as_str().unwrap();
+
+        // The node's own derivation, which is also what `tet-cli` uses.
+        let sk = crate::wallet::ed25519_signing_key_from_mnemonic(mnemonic)
+            .unwrap_or_else(|e| panic!("case {i}: node rejected the fixture mnemonic: {e:?}"));
+        let node_wallet = hex::encode(sk.verifying_key().to_bytes());
+        assert_eq!(
+            node_wallet, wallet,
+            "case {i}: agent SDK wallet id disagrees with the node for the same mnemonic"
+        );
+
+        let kp = crate::wallet::mldsa44_keypair_from_mnemonic(mnemonic).unwrap();
+        assert_eq!(
+            b64.encode(kp.public_key()),
+            pk_b64,
+            "case {i}: agent SDK ML-DSA-44 public key disagrees with the node"
+        );
+
+        // …and with the browser wallet, which is what the UI ships.
+        assert_eq!(
+            browser_cases[i]["wallet_id"].as_str().unwrap(),
+            wallet,
+            "case {i}: agent SDK wallet id disagrees with the browser wallet"
+        );
+        assert_eq!(
+            browser_cases[i]["mldsa_pubkey_b64"].as_str().unwrap(),
+            pk_b64,
+            "case {i}: agent SDK ML-DSA-44 public key disagrees with the browser wallet"
+        );
+    }
+}
+
+/// **Both halves of an agent SDK signature verify on the node, at ML-DSA-44 specifically.**
+///
+/// The level is pinned with [`crate::wallet::verify_mldsa44_b64`] rather than
+/// [`crate::wallet::verify_mldsa_b64`], which infers the parameter set from the public key it is
+/// handed and so accepts a consistent 65/65 pair happily — green, and unusable by every wallet on
+/// the network. `tet-agent-sdk/vendor/` is a third committed copy of the signer with no
+/// reproducibility diff until today; this is the behaviour half of that guard, and a hash check
+/// cannot give it, because a matching hash proves only that the bytes are the ones the source
+/// produces, never that the source is right.
+#[test]
+fn agent_sdk_signatures_verify_on_the_node() {
+    use base64::Engine as _;
+    let doc: serde_json::Value = serde_json::from_str(AGENT_SDK_HYBRID_SIGS).unwrap();
+    let cases = doc["cases"].as_array().expect("cases array");
+    assert!(!cases.is_empty(), "fixtures must not be empty — an empty array passes vacuously");
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    for (i, c) in cases.iter().enumerate() {
+        let wallet = c["wallet_id"].as_str().unwrap();
+        let pk_b64 = c["mldsa_pubkey_b64"].as_str().unwrap();
+        let msg = c["message_utf8"].as_str().unwrap();
+        let ed_b64 = c["ed25519_sig_b64"].as_str().unwrap();
+        let ml_b64 = c["mldsa_sig_b64"].as_str().unwrap();
+
+        assert_eq!(
+            b64.decode(pk_b64).unwrap().len(),
+            dilithium::ML_DSA_44.public_key_bytes(),
+            "case {i}: agent SDK public key is not ML-DSA-44"
+        );
+        assert_eq!(
+            b64.decode(ml_b64).unwrap().len(),
+            dilithium::ML_DSA_44.signature_bytes(),
+            "case {i}: agent SDK signature is not ML-DSA-44"
+        );
+
+        crate::quantum_shield::verify_ed25519(wallet, ed_b64, msg.as_bytes()).unwrap_or_else(|e| {
+            panic!("case {i}: agent SDK Ed25519 signature rejected by the node: {e:?}")
+        });
+        crate::wallet::verify_mldsa44_b64(pk_b64, ml_b64, msg.as_bytes()).unwrap_or_else(|e| {
+            panic!("case {i}: agent SDK ML-DSA-44 signature rejected by the node: {e}")
+        });
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Restart. The condition the QA matrix found nothing covered, and the one
 // flip day guarantees.
 // ---------------------------------------------------------------------------

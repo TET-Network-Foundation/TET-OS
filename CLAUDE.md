@@ -121,6 +121,20 @@ Two guards, because they catch different things:
 The second one is what a hash check cannot give you: a matching hash proves only that the output is
 the one the source produces, never that the source is right.
 
+**When the artifact cannot be byte-reproducible, say so and guard the behaviour instead.** Not every
+build output is deterministic across toolchains. `wasm-pack` is not: on 2026-09-30 a fresh build of
+`tet-pqc-wasm` matched **neither** committed copy of the signer, while producing identical public
+keys and identical signatures for all four interop vectors. A hash diff against a fresh build would
+have gone red on the next compiler bump and said nothing about the crypto, and a guard people learn
+to ignore is worse than no guard. So the hash comparison is pinned where it is meaningful — between
+the copies, which must be identical to each other — and the rebuild is held to the *fixture the
+consumer verifies*.
+
+**Count the copies.** The same signer was committed twice, and the second copy
+(`tet-agent-sdk/vendor/`) was five months behind the first, unreferenced by any guard, and still
+being shipped. It happened to behave identically; that was luck. An artifact committed in two places
+is one artifact with two chances to go stale, so either dedupe it or assert the copies match.
+
 ## Design principle — check every new replicated field against it
 
 > **Your keys, your data, your device — TET only proves, never stores.**
