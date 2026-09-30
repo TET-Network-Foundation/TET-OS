@@ -926,3 +926,33 @@ Host tet-seed
 plane and cannot move to 443 without reissuing every published bootnode multiaddr — a Phase 1
 ceremony item (per-plane keypairs, `PHASE_1_GENESIS_SPEC.md` §2.4). This is for administering the
 seed, not for using the network.
+
+## Liveness monitoring: a follower must not restart itself
+
+Both seeds run `deploy/seed-healthcheck.sh` on a one-minute systemd timer
+(`tet-healthcheck.timer`), pinging a per-node healthchecks.io check. The URL lives in
+`/etc/tet/healthcheck.env`, mode 600 — it is a credential: anyone holding it can post a fake
+healthy ping and hide a real outage.
+
+**The probe restarts the container when the height stalls, and that is only correct for a
+producer.** If Helsinki stops advancing, Helsinki is the broken thing and restarting it is the
+right reflex. If *Nuremberg* stops advancing, the producer stopped — restarting Nuremberg fixes
+nothing, churns the container once an hour, and buries the real signal.
+
+So `TET_HC_ALLOW_RESTART` (default `1`, added 2026-09-30):
+
+| Node | Setting | Behaviour on a stalled height |
+|---|---|---|
+| Helsinki (producer) | unset → `1` | alert **and** restart, at most once an hour |
+| Nuremberg (follower) | `0` in `/etc/tet/healthcheck.env` | alert only: *"this node does not produce blocks, so NOT restarting (check the producer)"* |
+
+Both paths were exercised on Nuremberg rather than assumed, by forcing the stall branch with
+`TET_HC_STALL_SEC=0` twice inside one block time so the height was genuinely unchanged:
+
+- with `0`: the alert fired and `docker inspect .State.StartedAt` was unchanged
+- with `1`: the container **was** restarted — which is the check that mattered, because the knob
+  was added to a script Helsinki also runs. A broken default would have silently removed
+  Helsinki's self-healing.
+
+If you add a third node, set `TET_HC_ALLOW_RESTART=0` unless it is in the validator set.
+

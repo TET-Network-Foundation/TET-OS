@@ -27,6 +27,14 @@ COMPOSE_DIR="${TET_HC_COMPOSE_DIR:-/opt/TET-OS}"
 STATE_DIR="${TET_HC_STATE_DIR:-/var/lib/tet-healthcheck}"
 RESTART_COOLDOWN_SEC="${TET_HC_RESTART_COOLDOWN_SEC:-3600}"
 
+# May this node restart itself when its height stalls? Default yes, which is right for a BLOCK
+# PRODUCER: if Helsinki stops advancing, Helsinki is the thing that is broken.
+#
+# Set 0 on a NON-PRODUCING node. A follower's height stalls when THE PRODUCER stops, and
+# restarting the follower fixes nothing — it just churns the container once an hour and buries the
+# real signal, which is that the producer is down. Nuremberg runs with 0 for exactly this reason.
+ALLOW_RESTART="${TET_HC_ALLOW_RESTART:-1}"
+
 mkdir -p "$STATE_DIR"
 HEIGHT_FILE="$STATE_DIR/last_height"
 SEEN_FILE="$STATE_DIR/last_change_epoch"
@@ -78,6 +86,12 @@ fi
 # The cooldown matters. If the node is stalled by a consensus defect rather than
 # a transient, restarting every five minutes destroys the evidence and produces
 # an endless alert stream. Alert every time; restart rarely.
+if [ "$ALLOW_RESTART" != "1" ]; then
+  # Alert, do not act. On a follower a stall means the producer stopped; this node restarting
+  # would be noise standing in for a diagnosis.
+  fail "height $height stalled ${stalled_for}s; this node does not produce blocks, so NOT restarting (check the producer)"
+fi
+
 last_restart=$(cat "$RESTART_FILE" 2>/dev/null || echo 0)
 since_restart=$(( now - last_restart ))
 
