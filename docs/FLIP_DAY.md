@@ -10,12 +10,13 @@ and the ruleset the repository is public and unprotected.
 
 ## 0. Blockers — none of this runs until these are true
 
-| Blocker | Why it blocks | Status 2026-09-29 |
+| Blocker | Why it blocks | Status 2026-09-30 22:15 UTC |
 |---|---|---|
-| **GitHub Actions billing** | Nothing has been CI-verified since `36147565171`. Flipping public with a red CI badge and no passing run is worse than waiting. Public repos get free minutes, so this may self-resolve at the Oct 1 reset — verify, don't assume | ❌ blocked, resets Oct 1 |
+| **GitHub Actions billing** | Nothing has been CI-verified since `36147565171`. Flipping public with a red CI badge and no passing run is worse than waiting. Public repos get free minutes, so this may self-resolve at the Oct 1 reset — verify, don't assume | ❌ **still blocked.** The reset is on the 1st **UTC**, and it is 2026-09-30 22:15 UTC. Local calendars showing October 1 are ahead of the billing period. Run `36783502739`: all five no-op jobs failed in 2 s with no logs, which is a spending block, not a failure |
 | ~~**The public seed is down**~~ | **Retracted 2026-09-29 — it was never down.** The laptop's network blocked 22/8002/ICMP; healthchecks.io showed the seed pinging every minute throughout. See ["I can't reach the seed" is not "the seed is down"](#i-cant-reach-the-seed-is-not-the-seed-is-down) below | ✅ seed healthy |
-| **SSH reachable from wherever you are flipping** | The flip itself needs no SSH, but step 7's devlog and any incident response do. Outbound 22 is blocked on at least one network Steve uses | ⚠️ sshd on 443 pending (see `RUNNING_A_NODE.md`) |
-| **Seed running the current binary** | The mempool-persistence fix (`2efe104`) is not deployed. Not release-blocking, but the redeploy should happen while nobody is watching, not during a launch | ⚠️ pending, needs the host back |
+| ~~**SSH reachable from wherever you are flipping**~~ | Resolved 2026-09-29: `sshd` listens on 443 as well as 22 on **both** seeds, via an `ssh.socket` drop-in listing both address families. `ufw` allows 443 | ✅ `ssh -p 443` verified on both |
+| ~~**Seed running the current binary**~~ | Resolved 2026-09-29: Helsinki redeployed, kernel updated, rebooted, and mempool persistence verified live — a tx submitted before a container restart was still mined after it, with a follower watching | ✅ deployed and verified |
+| **A second node exists now** | Not a blocker, but it changes what step 7b checks. Nuremberg (`46.224.223.54`) is a full node and bootnode, **not** a second producer. Block production still depends on Helsinki alone | ⚠️ spec risk R10 still open |
 
 If the seed cannot be restored, **do not flip**. A single-seed network with the seed down is not a
 testnet, and SECURITY.md already names the single seed as the top limitation. Publishing while it is
