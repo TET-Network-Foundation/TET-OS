@@ -62,11 +62,14 @@ Most of the ten minutes is the Docker build.
 git clone https://github.com/TET-Network-Foundation/TET-OS.git
 cd TET-OS
 
-# Follow the public seed. TET_AUTO_MINE=0 because the seed produces the blocks --
-# a second producer on the same genesis just races it.
+# Follow the public seeds. Two are listed: Helsinki produces the blocks, Nuremberg is a
+# full node and bootnode that does not mine. Either will catch you up; listing both means
+# one being down does not stop you joining.
+# TET_AUTO_MINE=0 because the seed produces the blocks -- a second producer on the same
+# genesis just races it.
 cat >> .env <<'EOF'
 TET_ENABLE_P2P=1
-TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
+TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM
 TET_AUTO_MINE=0
 EOF
 

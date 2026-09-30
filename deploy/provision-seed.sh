@@ -73,6 +73,22 @@ TREASURY="${TET_TREASURY_ADDRESS:-fedcba0987654321fedcba0987654321fedcba09876543
 FOUNDER="${TET_GENESIS_FOUNDER_WALLET_ID:-57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0}"
 CHAIN_ID="${TET_CHAIN_ID:-tet-local-dev}"
 
+# Joining an existing chain vs starting one. The .env template below was written for the FIRST
+# seed: a producer with no bootnode to dial. A SECOND seed is the opposite and neither of these
+# was honoured until 2026-09-30 — provisioning Nuremberg produced a node with no bootnode and
+# TET_AUTO_MINE=1 in .env, so it sat at height 0 and would have become a second producer on the
+# next `docker compose up`.
+#
+# TET_AUTO_MINE defaults to 1 only when no bootnode is given. Supply TET_BOOTNODES and the
+# default flips to 0, because two producers on one genesis race each other — see
+# RUNNING_A_NODE.md "Joining the public testnet seed".
+BOOTNODES="${TET_BOOTNODES:-}"
+if [ -n "$BOOTNODES" ]; then
+  AUTO_MINE="${TET_AUTO_MINE:-0}"
+else
+  AUTO_MINE="${TET_AUTO_MINE:-1}"
+fi
+
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[32mok\033[0m %s\n' "$*"; }
 warn() { printf '    \033[33mwarn\033[0m %s\n' "$*"; }
@@ -222,8 +238,9 @@ TET_CHAIN_ID=$CHAIN_ID
 # opposite: it listens, and it is the node everyone else dials.
 TET_ENABLE_P2P=1
 TET_P2P_LISTEN=/ip4/0.0.0.0/tcp/$P2P_PORT
-TET_AUTO_MINE=1
+TET_AUTO_MINE=$AUTO_MINE
 TET_BLOCK_TIME_SEC=12
+${BOOTNODES:+TET_BOOTNODES=$BOOTNODES}
 RUST_LOG=info
 
 # --- build profile ($PROFILE) -----------------------------------------------

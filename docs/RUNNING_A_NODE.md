@@ -293,17 +293,28 @@ The node does not expose its genesis hash over REST — it appears only inside s
 
 ```
 /ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
+/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM
 ```
 
-Helsinki (Hetzner, `ubuntu-4gb-hel1-3`). It auto-mines on a 12 s block time and is the only
-published seed, so it is currently a single point of failure — spec risk **R10**, still open.
+| Seed | Host | Role |
+|---|---|---|
+| Helsinki | Hetzner `ubuntu-4gb-hel1-3` | **Block producer.** `TET_AUTO_MINE=1`, 12 s block time. The only node in the validator set, so it is the only node that mines |
+| Nuremberg | Hetzner `ubuntu-4gb-nbg1-1` | **Full node + bootnode, not a producer.** `TET_AUTO_MINE=0`. It verifies and serves every block and will catch a new node up, but it does not build them |
+
+Added 2026-09-30. Two seeds means one being unreachable no longer stops a new node joining —
+but it does **not** remove spec risk **R10**: block production is still one machine. If Helsinki
+stops, the chain stops advancing and Nuremberg serves a frozen tip. Making Nuremberg a producer
+needs a validator-set change, not a config flag, because two producers on one genesis race each
+other.
+
+List both in `TET_BOOTNODES`, comma-separated. The dialler tries them in order.
 
 Put three lines in `.env` at the repository root and bring the stack up:
 
 ```bash
 cat >> .env <<'EOF'
 TET_ENABLE_P2P=1
-TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
+TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM
 TET_AUTO_MINE=0
 EOF
 

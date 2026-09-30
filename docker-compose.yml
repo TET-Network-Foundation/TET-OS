@@ -47,9 +47,13 @@ x-tet-core-common: &tet-core-common
     TET_DB_DIR: "/data/tet.db"
     TET_AUTO_MINE: "${TET_AUTO_MINE:-1}"
     TET_BLOCK_TIME_SEC: "${TET_BLOCK_TIME_SEC:-12}"
-    # Single-node quickstart: no bootnodes exist to dial, so the block-plane
-    # swarm is off by default. Set to 1 and supply TET_BOOTNODES to join a mesh.
+    # Single-node quickstart: the block-plane swarm is off by default, so this
+    # composes up as an isolated chain. Set TET_ENABLE_P2P=1 to join the testnet.
     TET_ENABLE_P2P: "${TET_ENABLE_P2P:-0}"
+    # Both public seeds, so TET_ENABLE_P2P=1 alone is enough to join. Helsinki
+    # produces blocks; Nuremberg is a full node and bootnode that does not mine.
+    # Inert while TET_ENABLE_P2P=0. Comma-separated; first reachable one wins.
+    TET_BOOTNODES: "${TET_BOOTNODES:-/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM}"
     TET_P2P_LISTEN: "${TET_P2P_LISTEN:-/ip4/0.0.0.0/tcp/8002}"
     RUST_LOG: "${RUST_LOG:-info}"
   ports:

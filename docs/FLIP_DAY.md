@@ -153,6 +153,21 @@ need refreshing, and it currently says the seed is healthy.
 Publish this **before** Show HN, not after: the post is the honest version of the story, and it
 should be findable by the first person who goes looking.
 
+## 7b. Confirm both seeds are serving
+
+```bash
+for h in 95.217.158.153 46.224.223.54; do
+  ssh -p 443 root@$h 'curl -s localhost:5010/metrics | grep ^tet_block_height'
+done
+```
+
+Heights should match within a block or two. Helsinki produces; Nuremberg follows and serves.
+If Nuremberg is behind by more than a few blocks it is catching up, not broken — check again
+before worrying.
+
+The README quickstart lists both, so a stranger joining does not depend on either one
+individually. Block production still depends on Helsinki alone (spec risk R10).
+
 ## 8. Show HN
 
 Only after 1–7. The title and first comment should say what the QA matrix says: what works, what is
