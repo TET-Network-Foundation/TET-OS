@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+mod agent;
 mod ai_filter;
 mod ai_proxy;
 mod attestation;

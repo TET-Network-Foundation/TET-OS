@@ -1,3 +1,4 @@
+pub mod agent;
 pub mod ai_filter;
 pub mod ai_local;
 pub mod e2ee;
