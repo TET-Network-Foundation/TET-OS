@@ -1,6 +1,6 @@
 # Agent identity (v0)
 
-Status: **Day 1 of 3, on branch `agent-identity`. Not merged, not shipped.** Day 1 is the
+Status: **Day 2 of 3, on branch `agent-identity`. Not merged, not shipped.** Day 1 was the
 cryptography: the generic signer and the manifest. Day 2 is the SDK / CLI surface and the on-disk
 format. Day 3 is the first real user.
 
@@ -151,6 +151,94 @@ premise.
 Worth revisiting C2PA as a *second*, image-specific manifest once there is a post-quantum COSE
 algorithm identifier to name.
 
+## The detached format (Day 2)
+
+DSSE's *shape*, written next to the artefact as `<name>.sig.json`:
+
+```json
+{
+  "payloadType": "text/plain",
+  "payload": "aGVsbG8gYWdlbnQ=",
+  "signatures": [
+    { "keyid": "tet-ed25519:c5785e18…", "sig": "…64 bytes…" },
+    { "keyid": "tet-mldsa44:7596fae5…", "sig": "…2420 bytes…" }
+  ],
+  "tet": {
+    "v": 1,
+    "pae": "tet agent payload v1",
+    "agent_ed25519_pubkey_hex": "c5785e18…",
+    "agent_mldsa44_pubkey_b64": "…1312 bytes…"
+  }
+}
+```
+
+DSSE has nowhere to put a 1312-byte public key and no notion of two signatures from one identity at
+two security levels, so the `tet` block carries both. `keyid` for ML-DSA is `SHA-256` of the raw key,
+because a 1312-byte key does not belong in an identifier, and the keyid is checked against the key the
+envelope carries — an envelope whose keyid names something else is refused.
+
+**`tet.pae` is not decoration.** The signed bytes are TET's PAE, not DSSE's, so a standard DSSE
+verifier computes a different pre-image and rejects. That is the right outcome, and naming the
+encoding makes the difference machine-visible instead of a trap. An envelope naming any other
+encoding — `DSSEv1` included — is refused rather than verified against these rules.
+
+**The envelope carries no chain identity, and one smuggled in is refused rather than ignored.** A
+verifier that read `chain_id` out of the file it is checking would verify every file against whatever
+chain that file names, which is not a check. `deny_unknown_fields` makes it a parse error, because the
+distance between "ignored" and "read" is one future patch.
+
+## The inline path
+
+For messages and HTTP bodies rather than files, the same signature travels as headers:
+
+```
+x-tet-agent-payload-type: text/plain
+x-tet-ed25519-pubkey-hex: …
+x-tet-ed25519-sig-b64:    …
+x-tet-mldsa-pubkey-b64:   …
+x-tet-mldsa-sig-b64:      …
+```
+
+The four signature headers are the ones the AI-infer path already sends, from one shared builder so
+the names cannot drift apart. The two paths sign **different** pre-images —
+`tet ai infer hybrid v1` versus `tet agent payload v1` — so a signature made for one can never be
+replayed as the other even though the headers look identical on the wire. `x-tet-agent-payload-type`
+is required: without it the four signature headers are unverifiable, because `payload_type` is bound
+into the pre-image.
+
+## The CLI
+
+```
+tet-cli agent sign   --in <file> --payload-type <type> [--out <file>.sig.json]
+tet-cli agent verify --sig <file>.sig.json [--payload <file>]
+```
+
+`sign` takes the mnemonic from `TET_MNEMONIC`; `--mnemonic` works and warns, because an argument is
+visible in shell history and to every other process via `ps`. There is deliberately no way to ask for
+a bare signature over raw bytes — that would be the signing oracle this design exists to prevent.
+
+`verify` prints the chain it checked against *before* the verdict: a verification tool that does not
+say which chain it used has not said what it checked. It exits non-zero on failure, and `--payload`
+additionally requires the file on disk to be the bytes the envelope signed, which is the actual
+question for a detached signature.
+
+## Cross-language: byte-identical, not "both verify"
+
+`tet-core/src/testdata/agent_payload_envelopes.json` is produced by `tet-agent-sdk` and asserted in
+three places: the SDK rebuilds it, `tet-core` re-signs and compares **signature bytes**, and
+`tet-cli` verifies it and reproduces the envelope byte for byte. Five payloads, including every byte
+value 0x00–0xFF, an empty payload, and one that imitates both the length prefix and another
+pre-image's delimiter.
+
+Comparing bytes rather than "both verify" is possible only because the ML-DSA signing randomness is
+`SHA256(label ‖ msg)`. It is also what makes the guard sharp: changing the encoding on either side —
+dropping the length prefixes, the domain tag or the chain fields — turns 12–13 tests red immediately.
+
+One real gap: **the node does not expose `chain_id` or `genesis_hash` over REST**, so an agent cannot
+discover its own chain binding and must be configured with both. The SDK refuses to guess — a wrong
+genesis hash produces signatures that verify nowhere while looking fine. Worth an endpoint before
+this has outside users.
+
 ## Guards (Day 1)
 
 All in `tet-core/src/tests.rs`. Each was run with its protection removed and confirmed to fail; the
@@ -174,10 +262,35 @@ results are in the commit body.
 | `agent_manifest_version_and_kind_are_checked` | discriminators |
 | `agent_manifest_preimage_is_typed_as_a_manifest` | a manifest cannot be replayed as content |
 
+## Guards (Day 2)
+
+Rust, in `tet-core/src/tests.rs`:
+
+| Guard | What it pins |
+|---|---|
+| `sdk_agent_payload_signatures_are_byte_identical_in_rust` | the SDK and the node produce the *same bytes*, not merely both verify |
+| `sdk_agent_envelopes_verify_in_rust` | the SDK's envelopes verify here, and Rust rebuilds them identically |
+| `agent_envelope_from_another_chain_is_refused` | the chain binding survives the envelope |
+| `agent_envelope_structure_is_checked_field_by_field` | version, `pae`, payload type, signature count and set, both keyids, payload, payload type |
+| `agent_envelope_carrying_a_chain_id_is_refused_not_ignored` | a smuggled chain identity is a parse error |
+
+TypeScript, in `tet-agent-sdk/tests/agent_sign.test.ts` (27 assertions): fixture byte equality for
+every case, envelope rebuild equality, tampered payload, swapped `payload_type`, **`chain_id` and
+`genesis_hash` separately**, each signature half individually wrong, keyid mismatch, unknown `pae`,
+duplicated signature set, the separator-containing ambiguity cases, `chainBindingFromEnv` refusing to
+guess, and the inline headers.
+
+Shell, in `tet-cli/scripts/agent_cli_interop.sh`: five cases through the real binary, both signing
+directions, and `verify` exiting non-zero for another chain and for a payload that is not what was
+signed.
+
 ## Still to do
 
-- **Day 2**: `tetSign` / `tetVerify` in `tet-agent-sdk`, `tet-cli agent sign|verify`, the detached
-  `.sig.json` format, and the inline `x-tet-*` header path.
 - **Day 3**: devlog signing in `~/site/tools/build.mjs`, the honest limit stated on the site, and a
   lazy-loaded browser verifier.
-- Not before the flip, and not merged to `main` until all three are done.
+- An endpoint exposing `chain_id` and `genesis_hash`, so an agent can discover its binding instead of
+  being handed it.
+- `tet-agent-sdk/tests/slashing_audit.test.ts` is skipped: `examples/attacker.ts` posts to
+  `POST /ledger/faucet`, removed in the September clean-up. Reviving it means porting the example to
+  the hybrid-signed `POST /ledger/initial_airdrop/claim`.
+- Not before the flip, and not merged to `main` until all three days are done.

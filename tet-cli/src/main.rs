@@ -150,6 +150,45 @@ enum Command {
         #[command(subcommand)]
         action: FaucetAction,
     },
+    /// Agent identity: sign and verify arbitrary bytes with a TET hybrid key.
+    Agent {
+        #[command(subcommand)]
+        action: AgentAction,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentAction {
+    /// Hybrid-sign a file and write a detached `<file>.sig.json` envelope.
+    ///
+    /// The signed bytes are NOT the file's bytes: they are the agent pre-image, which binds the
+    /// chain and the payload type as length-prefixed fields (see docs/AGENT_IDENTITY.md). A generic
+    /// signer without that binding is a signing oracle, so there is no way to ask this command for a
+    /// bare signature over raw bytes.
+    Sign {
+        /// File to sign. `-` reads stdin.
+        #[arg(long = "in")]
+        input: String,
+        /// Label bound into the signature, e.g. `text/plain`.
+        #[arg(long, default_value = "application/octet-stream")]
+        payload_type: String,
+        /// Where to write the envelope. Defaults to `<in>.sig.json`.
+        #[arg(long)]
+        out: Option<String>,
+        /// 12/24-word phrase. Prefer the `TET_MNEMONIC` environment variable: an argument is
+        /// visible in shell history and to every other process on the machine via `ps`.
+        #[arg(long)]
+        mnemonic: Option<String>,
+    },
+    /// Verify a detached envelope, and optionally that a file on disk is what it signed.
+    Verify {
+        /// The `.sig.json` envelope.
+        #[arg(long)]
+        sig: String,
+        /// If given, also require the envelope's payload to equal this file's bytes.
+        #[arg(long)]
+        payload: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -693,6 +732,105 @@ TET_TREASURY_ADDRESS / TET_GENESIS_FOUNDER_WALLET_ID do not match the node's."
                         }
                     );
                 }
+            }
+        },
+        Command::Agent { action } => match action {
+            AgentAction::Sign {
+                input,
+                payload_type,
+                out,
+                mnemonic,
+            } => {
+                let payload = if input == "-" {
+                    use std::io::Read as _;
+                    let mut buf = Vec::new();
+                    std::io::stdin()
+                        .read_to_end(&mut buf)
+                        .context("failed to read stdin")?;
+                    buf
+                } else {
+                    std::fs::read(&input).with_context(|| format!("failed to read {input}"))?
+                };
+
+                let phrase = match mnemonic {
+                    Some(m) => {
+                        eprintln!(
+                            "{}warning:{} --mnemonic is visible in shell history and in `ps`; prefer TET_MNEMONIC",
+                            red_bold(),
+                            reset()
+                        );
+                        m
+                    }
+                    None => std::env::var("TET_MNEMONIC").context(
+                        "no mnemonic: pass --mnemonic or set TET_MNEMONIC",
+                    )?,
+                };
+
+                let envelope = tet_core::agent::sign_agent_payload_envelope(
+                    phrase.trim(),
+                    &payload_type,
+                    &payload,
+                )
+                .map_err(|e| anyhow::anyhow!("signing failed: {e}"))?;
+
+                let out_path = out.unwrap_or_else(|| {
+                    if input == "-" {
+                        "payload.sig.json".to_string()
+                    } else {
+                        format!("{input}.sig.json")
+                    }
+                });
+                let json = serde_json::to_string_pretty(&envelope)?;
+                std::fs::write(&out_path, format!("{json}\n"))
+                    .with_context(|| format!("failed to write {out_path}"))?;
+
+                println!("signed {} bytes as {payload_type}", payload.len());
+                println!("chain      : {}", tet_core::genesis::chain_id_from_env());
+                for sig in &envelope.signatures {
+                    println!("keyid      : {}", sig.keyid);
+                }
+                println!("envelope   : {out_path}");
+            }
+            AgentAction::Verify { sig, payload } => {
+                let raw = std::fs::read_to_string(&sig)
+                    .with_context(|| format!("failed to read {sig}"))?;
+                let envelope: tet_core::agent::AgentSigEnvelopeV1 = serde_json::from_str(&raw)
+                    .with_context(|| format!("{sig} is not a TET agent envelope"))?;
+
+                // Printed before the verdict: a verification tool that does not say WHICH chain it
+                // checked against has not told you what it checked.
+                println!("chain      : {}", tet_core::genesis::chain_id_from_env());
+                println!("payloadType: {}", envelope.payload_type);
+                println!("signer     : {}", envelope.tet.agent_ed25519_pubkey_hex);
+
+                if let Err(e) = envelope.verify() {
+                    println!("{}FAIL{}       : {e}", red_bold(), reset());
+                    std::process::exit(1);
+                }
+
+                if let Some(path) = payload {
+                    let on_disk =
+                        std::fs::read(&path).with_context(|| format!("failed to read {path}"))?;
+                    let signed = envelope
+                        .payload_bytes()
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    if on_disk != signed {
+                        println!(
+                            "{}FAIL{}       : {path} is not the {} bytes this envelope signed",
+                            red_bold(),
+                            reset(),
+                            signed.len()
+                        );
+                        std::process::exit(1);
+                    }
+                    println!("payload    : {path} matches ({} bytes)", signed.len());
+                }
+
+                println!(
+                    "{}OK{}         : ed25519 + ML-DSA-44 both verify",
+                    green_bold(),
+                    reset()
+                );
             }
         },
         Command::Admin { action } => match action {

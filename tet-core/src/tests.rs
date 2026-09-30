@@ -11347,3 +11347,261 @@ fn agent_manifest_preimage_is_typed_as_a_manifest() {
         "the manifest payload_type is not a field of its own pre-image"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Day 2: cross-language agent payloads and the detached envelope.
+//
+// The fixture is produced by tet-agent-sdk and compared BYTE FOR BYTE, not
+// merely "both verify". That is possible only because ML-DSA signing randomness
+// here is SHA256(label || msg) rather than random — the property that caught the
+// ML-DSA-65/44 divergence, and the reason docs/AGENT_IDENTITY.md says not to
+// randomise it.
+// ---------------------------------------------------------------------------
+
+const AGENT_PAYLOAD_ENVELOPES: &str = include_str!("testdata/agent_payload_envelopes.json");
+
+struct AgentFixtureChain {
+    _chain: EnvVarGuard,
+    _genesis: EnvVarGuard,
+    _mainnet: EnvVarGuard,
+}
+
+/// Bind the process to the fixture's chain for the duration of a test.
+fn agent_fixture_chain(doc: &serde_json::Value) -> AgentFixtureChain {
+    AgentFixtureChain {
+        _chain: EnvVarGuard::set("TET_CHAIN_ID", doc["chain"]["chain_id"].as_str().unwrap()),
+        _genesis: EnvVarGuard::set(
+            "TET_GENESIS_HASH",
+            doc["chain"]["genesis_hash"].as_str().unwrap(),
+        ),
+        _mainnet: EnvVarGuard::unset("TET_MAINNET"),
+    }
+}
+
+fn agent_fixture_doc() -> serde_json::Value {
+    let doc: serde_json::Value =
+        serde_json::from_str(AGENT_PAYLOAD_ENVELOPES).expect("fixture JSON must parse");
+    assert!(
+        !doc["cases"].as_array().unwrap().is_empty(),
+        "fixtures must not be empty — an empty array passes vacuously"
+    );
+    doc
+}
+
+/// **The SDK and the node produce the same bytes.** Not "both verify" — the same bytes.
+#[test]
+fn sdk_agent_payload_signatures_are_byte_identical_in_rust() {
+    use base64::Engine as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let _bound = agent_fixture_chain(&doc);
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    for (i, c) in doc["cases"].as_array().unwrap().iter().enumerate() {
+        let mnemonic = c["mnemonic"].as_str().unwrap();
+        let payload_type = c["payload_type"].as_str().unwrap();
+        let payload = b64.decode(c["payload_b64"].as_str().unwrap()).unwrap();
+
+        let sig = crate::agent::sign_agent_payload(mnemonic, payload_type, &payload)
+            .unwrap_or_else(|e| panic!("case {i}: rust could not sign: {e}"));
+
+        assert_eq!(
+            sig.ed25519_pubkey_hex,
+            c["agent_wallet_id"].as_str().unwrap(),
+            "case {i}: wallet id disagrees between the SDK and the node"
+        );
+        assert_eq!(
+            sig.ed25519_sig_b64,
+            c["ed25519_sig_b64"].as_str().unwrap(),
+            "case {i}: Ed25519 signature bytes differ between the SDK and the node"
+        );
+        assert_eq!(
+            sig.mldsa_sig_b64,
+            c["mldsa_sig_b64"].as_str().unwrap(),
+            "case {i}: ML-DSA-44 signature bytes differ between the SDK and the node"
+        );
+
+        // And the node's verifier accepts the SDK's signature, not merely its own.
+        let sdk_sig = crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: c["agent_wallet_id"].as_str().unwrap().to_string(),
+            ed25519_sig_b64: c["ed25519_sig_b64"].as_str().unwrap().to_string(),
+            mldsa_pubkey_b64: c["envelope"]["tet"]["agent_mldsa44_pubkey_b64"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            mldsa_sig_b64: c["mldsa_sig_b64"].as_str().unwrap().to_string(),
+        };
+        crate::agent::verify_agent_payload(
+            c["agent_wallet_id"].as_str().unwrap(),
+            &sdk_sig,
+            payload_type,
+            &payload,
+        )
+        .unwrap_or_else(|e| panic!("case {i}: node rejected the SDK's signature: {e}"));
+    }
+}
+
+/// The detached envelopes the SDK writes verify here, including the every-byte-value payload.
+#[test]
+fn sdk_agent_envelopes_verify_in_rust() {
+    use base64::Engine as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let _bound = agent_fixture_chain(&doc);
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    for (i, c) in doc["cases"].as_array().unwrap().iter().enumerate() {
+        let env: crate::agent::AgentSigEnvelopeV1 =
+            serde_json::from_value(c["envelope"].clone())
+                .unwrap_or_else(|e| panic!("case {i}: envelope does not parse: {e}"));
+        env.verify()
+            .unwrap_or_else(|e| panic!("case {i}: envelope rejected: {e}"));
+        assert_eq!(
+            env.payload_bytes().unwrap(),
+            b64.decode(c["payload_b64"].as_str().unwrap()).unwrap(),
+            "case {i}: envelope payload is not the payload that was signed"
+        );
+        // Round-trip: Rust re-signing the same payload rebuilds the same envelope.
+        let mine = crate::agent::sign_agent_payload_envelope(
+            c["mnemonic"].as_str().unwrap(),
+            c["payload_type"].as_str().unwrap(),
+            &env.payload_bytes().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mine, env, "case {i}: rust rebuilt a different envelope");
+    }
+}
+
+/// An envelope signed for one chain must not verify on another.
+#[test]
+fn agent_envelope_from_another_chain_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let env: crate::agent::AgentSigEnvelopeV1 =
+        serde_json::from_value(doc["cases"][0]["envelope"].clone()).unwrap();
+
+    {
+        let _bound = agent_fixture_chain(&doc);
+        env.verify().expect("verifies on the chain it was signed for");
+    }
+
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let _chain = EnvVarGuard::set("TET_CHAIN_ID", "tet-some-other-chain");
+    let _genesis = EnvVarGuard::set(
+        "TET_GENESIS_HASH",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    );
+    match env.verify() {
+        Err(crate::agent::AgentEnvelopeError::Agent(crate::agent::AgentError::Ed25519(_))) => {}
+        other => panic!("an envelope from another chain verified: {other:?}"),
+    }
+}
+
+/// Every structural claim in the envelope is checked, each with its own error.
+#[test]
+fn agent_envelope_structure_is_checked_field_by_field() {
+    use crate::agent::{AgentEnvelopeError, AgentSigEnvelopeV1, DsseSignature};
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let _bound = agent_fixture_chain(&doc);
+    let good: AgentSigEnvelopeV1 = serde_json::from_value(doc["cases"][0]["envelope"].clone()).unwrap();
+    good.verify().expect("baseline must verify");
+
+    let mut e = good.clone();
+    e.tet.v = 2;
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::UnsupportedVersion(2)));
+
+    // A genuine DSSE envelope, or a future encoding, must be refused rather than verified against
+    // this one's rules.
+    let mut e = good.clone();
+    e.tet.pae = "DSSEv1".to_string();
+    match e.verify() {
+        Err(AgentEnvelopeError::UnknownPae { got, .. }) => assert_eq!(got, "DSSEv1"),
+        other => panic!("expected UnknownPae, got {other:?}"),
+    }
+
+    let mut e = good.clone();
+    e.payload_type = "   ".to_string();
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::PayloadType));
+
+    let mut e = good.clone();
+    e.signatures.push(e.signatures[0].clone());
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::SignatureCount(3)));
+
+    // Two ed25519 entries and no ML-DSA one: the count is right and the SET is wrong. The
+    // duplicate is caught on the ed25519 lookup, which runs first — asserted as the error that
+    // actually fires rather than the one that reads better.
+    let mut e = good.clone();
+    e.signatures[1] = e.signatures[0].clone();
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::SignatureSet("ed25519")));
+
+    // The mirror case: two ML-DSA entries, no ed25519 one.
+    let mut e = good.clone();
+    e.signatures[0] = e.signatures[1].clone();
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::SignatureSet("ed25519")));
+
+    // A keyid that names a different key than the one carried.
+    let mut e = good.clone();
+    e.signatures[0] = DsseSignature {
+        keyid: format!("{}{}", crate::agent::AGENT_KEYID_ED25519_PREFIX, "ab".repeat(32)),
+        sig: e.signatures[0].sig.clone(),
+    };
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::KeyIdMismatch("ed25519")));
+
+    let mut e = good.clone();
+    e.signatures[1] = DsseSignature {
+        keyid: format!("{}{}", crate::agent::AGENT_KEYID_MLDSA44_PREFIX, "cd".repeat(32)),
+        sig: e.signatures[1].sig.clone(),
+    };
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::KeyIdMismatch("ml-dsa-44")));
+
+    // The payload is what is signed, so swapping it must break the signature.
+    let mut e = good.clone();
+    e.payload = base64::engine::general_purpose::STANDARD.encode(b"a different payload");
+    match e.verify() {
+        Err(AgentEnvelopeError::Agent(crate::agent::AgentError::Ed25519(_))) => {}
+        other => panic!("a swapped payload was accepted: {other:?}"),
+    }
+
+    // …and so must swapping only the payload_type, even with identical bytes.
+    let mut e = good.clone();
+    e.payload_type = "application/json".to_string();
+    match e.verify() {
+        Err(AgentEnvelopeError::Agent(crate::agent::AgentError::Ed25519(_))) => {}
+        other => panic!("a swapped payload_type was accepted: {other:?}"),
+    }
+}
+
+/// **An envelope may not carry its own chain identity.** Refused at parse, not ignored.
+///
+/// A verifier that read `chain_id` out of the file it is checking would verify every file against
+/// whatever chain that file names, which is not a check. Ignoring such a field would work today and
+/// be one patch away from being read, so `deny_unknown_fields` refuses it outright.
+#[test]
+fn agent_envelope_carrying_a_chain_id_is_refused_not_ignored() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+
+    for (where_, mutate) in [
+        ("top level", 0usize),
+        ("tet block", 1usize),
+    ] {
+        let mut raw = doc["cases"][0]["envelope"].clone();
+        let smuggled = serde_json::json!("tet-attacker-chain");
+        if mutate == 0 {
+            raw.as_object_mut().unwrap().insert("chain_id".into(), smuggled);
+        } else {
+            raw["tet"].as_object_mut().unwrap().insert("chain_id".into(), smuggled);
+        }
+        let parsed: Result<crate::agent::AgentSigEnvelopeV1, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_err(),
+            "a chain_id smuggled into the {where_} was accepted by the parser"
+        );
+    }
+}

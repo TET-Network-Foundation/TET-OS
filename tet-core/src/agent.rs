@@ -399,3 +399,196 @@ pub fn sign_agent_manifest(owner_mnemonic: &str, m: &mut AgentManifestV1) -> Res
     m.hybrid_sig = sign_agent_message_bytes(owner_mnemonic, &msg)?;
     Ok(())
 }
+
+// ── Detached signatures: a DSSE-shaped envelope ───────────────────────────────────────────────────
+
+/// `keyid` prefix for the Ed25519 half.
+pub const AGENT_KEYID_ED25519_PREFIX: &str = "tet-ed25519:";
+/// `keyid` prefix for the ML-DSA-44 half. The value is SHA-256 of the raw public key, because a
+/// 1312-byte key does not belong in an identifier.
+pub const AGENT_KEYID_MLDSA44_PREFIX: &str = "tet-mldsa44:";
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum AgentEnvelopeError {
+    #[error("unsupported envelope version: {0}")]
+    UnsupportedVersion(u32),
+    #[error("unknown pre-image encoding {got:?} (this build signs {expected:?})")]
+    UnknownPae { got: String, expected: String },
+    #[error("expected exactly 2 signatures (ed25519 + ml-dsa-44), got {0}")]
+    SignatureCount(usize),
+    #[error("missing or duplicated {0} signature")]
+    SignatureSet(&'static str),
+    #[error("keyid does not match the key it names: {0}")]
+    KeyIdMismatch(&'static str),
+    #[error("payload is not valid base64")]
+    PayloadEncoding,
+    #[error("empty payload_type")]
+    PayloadType,
+    #[error(transparent)]
+    Agent(#[from] AgentError),
+}
+
+/// One DSSE `signatures[]` entry.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DsseSignature {
+    pub keyid: String,
+    /// Standard base64.
+    pub sig: String,
+}
+
+/// TET's extension block.
+///
+/// DSSE has nowhere to put a 1312-byte public key, and it has no notion of two signatures from one
+/// identity at two security levels. This carries both, and names the pre-image encoding the
+/// signatures are actually over.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSigEnvelopeTet {
+    pub v: u32,
+    /// Which pre-image encoding was signed. See [`AgentSigEnvelopeV1`] for why this is not optional.
+    pub pae: String,
+    pub agent_ed25519_pubkey_hex: String,
+    pub agent_mldsa44_pubkey_b64: String,
+}
+
+/// A detached signature, written next to the thing it signs as `<name>.sig.json`.
+///
+/// DSSE's *shape* — `payloadType`, `payload`, `signatures[{keyid, sig}]` — so the structure is
+/// familiar and tooling can read it. The signed bytes are **not** DSSE's PAE: they are
+/// [`agent_payload_auth_message_bytes`], which additionally binds the chain. A standard DSSE
+/// verifier would compute a different pre-image and reject, which is the correct outcome and is why
+/// `tet.pae` states the encoding rather than leaving it to be guessed.
+///
+/// **The envelope carries no chain identity, deliberately.** A verifier that read `chain_id` out of
+/// the file it is checking would verify every file against whatever chain that file names, which is
+/// not a check. The verifier uses its own configuration, and an envelope that tries to carry one is
+/// refused outright rather than ignored — the difference between "ignored" and "read" is one future
+/// patch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentSigEnvelopeV1 {
+    #[serde(rename = "payloadType")]
+    pub payload_type: String,
+    /// Standard base64 of the raw payload bytes, per DSSE.
+    pub payload: String,
+    pub signatures: Vec<DsseSignature>,
+    pub tet: AgentSigEnvelopeTet,
+}
+
+fn mldsa44_keyid(pubkey_b64: &str) -> Result<String, AgentEnvelopeError> {
+    use sha2::{Digest as _, Sha256};
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(pubkey_b64.trim().as_bytes())
+        .map_err(|_| {
+            AgentEnvelopeError::Agent(AgentError::AgentKeyLevel {
+                got: 0,
+                expected: AGENT_MLDSA44_PUBKEY_BYTES,
+            })
+        })?;
+    let mut h = Sha256::new();
+    h.update(&raw);
+    Ok(format!(
+        "{AGENT_KEYID_MLDSA44_PREFIX}{}",
+        hex::encode(h.finalize())
+    ))
+}
+
+impl AgentSigEnvelopeV1 {
+    /// Build a detached envelope from a signature over `payload`.
+    pub fn new(
+        sig: &HybridSigV1,
+        payload_type: &str,
+        payload: &[u8],
+    ) -> Result<Self, AgentEnvelopeError> {
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let ed_hex = sig.ed25519_pubkey_hex.trim().to_ascii_lowercase();
+        Ok(Self {
+            payload_type: payload_type.trim().to_string(),
+            payload: b64.encode(payload),
+            signatures: vec![
+                DsseSignature {
+                    keyid: format!("{AGENT_KEYID_ED25519_PREFIX}{ed_hex}"),
+                    sig: sig.ed25519_sig_b64.clone(),
+                },
+                DsseSignature {
+                    keyid: mldsa44_keyid(&sig.mldsa_pubkey_b64)?,
+                    sig: sig.mldsa_sig_b64.clone(),
+                },
+            ],
+            tet: AgentSigEnvelopeTet {
+                v: 1,
+                pae: AGENT_PAYLOAD_DOMAIN_V1.to_string(),
+                agent_ed25519_pubkey_hex: ed_hex,
+                agent_mldsa44_pubkey_b64: sig.mldsa_pubkey_b64.trim().to_string(),
+            },
+        })
+    }
+
+    /// The raw payload bytes.
+    pub fn payload_bytes(&self) -> Result<Vec<u8>, AgentEnvelopeError> {
+        base64::engine::general_purpose::STANDARD
+            .decode(self.payload.as_bytes())
+            .map_err(|_| AgentEnvelopeError::PayloadEncoding)
+    }
+
+    fn signature_named(&self, prefix: &str, what: &'static str) -> Result<&DsseSignature, AgentEnvelopeError> {
+        let mut found = self.signatures.iter().filter(|s| s.keyid.starts_with(prefix));
+        let first = found.next().ok_or(AgentEnvelopeError::SignatureSet(what))?;
+        if found.next().is_some() {
+            return Err(AgentEnvelopeError::SignatureSet(what));
+        }
+        Ok(first)
+    }
+
+    /// Verify the envelope against **this build's** chain configuration.
+    pub fn verify(&self) -> Result<(), AgentEnvelopeError> {
+        if self.tet.v != 1 {
+            return Err(AgentEnvelopeError::UnsupportedVersion(self.tet.v));
+        }
+        // Refuse rather than assume: a future encoding, or a genuine DSSE envelope, must not be
+        // verified against this one's rules.
+        if self.tet.pae != AGENT_PAYLOAD_DOMAIN_V1 {
+            return Err(AgentEnvelopeError::UnknownPae {
+                got: self.tet.pae.clone(),
+                expected: AGENT_PAYLOAD_DOMAIN_V1.to_string(),
+            });
+        }
+        if self.payload_type.trim().is_empty() {
+            return Err(AgentEnvelopeError::PayloadType);
+        }
+        if self.signatures.len() != 2 {
+            return Err(AgentEnvelopeError::SignatureCount(self.signatures.len()));
+        }
+
+        let ed_hex = self.tet.agent_ed25519_pubkey_hex.trim().to_ascii_lowercase();
+        let ed = self.signature_named(AGENT_KEYID_ED25519_PREFIX, "ed25519")?;
+        if ed.keyid != format!("{AGENT_KEYID_ED25519_PREFIX}{ed_hex}") {
+            return Err(AgentEnvelopeError::KeyIdMismatch("ed25519"));
+        }
+        let ml = self.signature_named(AGENT_KEYID_MLDSA44_PREFIX, "ml-dsa-44")?;
+        if ml.keyid != mldsa44_keyid(&self.tet.agent_mldsa44_pubkey_b64)? {
+            return Err(AgentEnvelopeError::KeyIdMismatch("ml-dsa-44"));
+        }
+
+        let payload = self.payload_bytes()?;
+        let sig = HybridSigV1 {
+            ed25519_pubkey_hex: ed_hex.clone(),
+            ed25519_sig_b64: ed.sig.clone(),
+            mldsa_pubkey_b64: self.tet.agent_mldsa44_pubkey_b64.clone(),
+            mldsa_sig_b64: ml.sig.clone(),
+        };
+        verify_agent_payload(&ed_hex, &sig, &self.payload_type, &payload)?;
+        Ok(())
+    }
+}
+
+/// Sign `payload` and wrap it in a detached envelope.
+pub fn sign_agent_payload_envelope(
+    mnemonic: &str,
+    payload_type: &str,
+    payload: &[u8],
+) -> Result<AgentSigEnvelopeV1, AgentEnvelopeError> {
+    let sig = sign_agent_payload(mnemonic, payload_type, payload)?;
+    AgentSigEnvelopeV1::new(&sig, payload_type, payload)
+}
