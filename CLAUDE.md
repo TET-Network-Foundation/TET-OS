@@ -70,6 +70,19 @@ measuring the space. A length-free encoding only collides when a field contains 
 cases now do: `("a","b c")` against `("a b","c")`, plus payloads that imitate the length prefix
 itself. With those, the control fails as it must.
 
+**For a hybrid check, the negative control must break exactly ONE half at a time; breaking the payload
+breaks both and proves nothing about either (C4).** Every TET signature has an Ed25519 half and an
+ML-DSA-44 half, and the obvious tampering — edit the payload, edit a signed field — invalidates both
+at once. A verifier that silently stopped checking one half passes every such test.
+
+The agent payload suite had exactly that hole. Deleting the ML-DSA verification entirely left it
+green, because no case distinguished the halves. It now swaps in a **valid** signature from a
+different payload, once per half, so precisely one is wrong and only a verifier that checks that half
+can refuse it. With those cases the control fails as it must.
+
+The same shape applies wherever two independent checks guard one thing: break them one at a time, or
+you have measured their disjunction and learned nothing about either.
+
 ## In a must-be-refused assertion, never accept multiple reasons with `||`
 
 **Assert the specific error the test is named for.** If a cheaper check rejects first, construct the
