@@ -11605,3 +11605,82 @@ fn agent_envelope_carrying_a_chain_id_is_refused_not_ignored() {
         );
     }
 }
+
+/// `GET /chain` must report exactly the two values every signature is bound to — and nothing else.
+///
+/// Both are public: `chain_id` is in the README and `genesis_hash` is derived from public genesis
+/// parameters and appears inside every pre-image on the network. The route exists because an agent
+/// cannot DERIVE the genesis hash — `tet-core` computes it from treasury configuration — so before it
+/// existed an agent had to be configured with a value it could not check.
+///
+/// Asserted against `genesis::*` rather than a literal, and then asserted again with a different
+/// treasury, because a route returning a constant would satisfy the first assertion alone.
+#[tokio::test]
+async fn chain_route_reports_the_binding_every_signature_uses() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let _no_override = EnvVarGuard::unset("TET_GENESIS_HASH");
+    let _chain = EnvVarGuard::set("TET_CHAIN_ID", "tet-chain-route-probe");
+
+    let fetch = || async {
+        let ledger = std::sync::Arc::new(open_temp_ledger());
+        let state = rest_state_for_tests(ledger);
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/chain")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = crate::rest::routes::build_router(state).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "/chain must be public and read-only");
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).expect("JSON body")
+    };
+
+    let treasury_a = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+    let treasury_b = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    let json = {
+        let _t = EnvVarGuard::set("TET_TREASURY_ADDRESS", treasury_a);
+        let json = fetch().await;
+        assert_eq!(
+            json["chain_id"].as_str().unwrap(),
+            crate::genesis::chain_id_from_env()
+        );
+        assert_eq!(
+            json["genesis_hash"].as_str().unwrap(),
+            crate::genesis::expected_genesis_hash_from_env()
+        );
+        json
+    };
+
+    // The shape the SDK validates: `0x` + 64 lowercase hex. The prefix is part of the signed string,
+    // so a client that stripped it would produce signatures no node accepts.
+    let hash_a = json["genesis_hash"].as_str().unwrap().to_string();
+    assert!(
+        hash_a.starts_with("0x") && hash_a.len() == 66,
+        "genesis_hash must be 0x + 64 hex, got {hash_a:?}"
+    );
+    assert!(hash_a[2..].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+
+    // Nothing else is exposed. A route that grew a field would be a new public surface on a node
+    // whose REST API is otherwise not internet-facing.
+    let obj = json.as_object().unwrap();
+    assert_eq!(
+        obj.len(),
+        2,
+        "/chain must expose exactly chain_id and genesis_hash, got {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+
+    // Derived, not constant.
+    let hash_b = {
+        let _t = EnvVarGuard::set("TET_TREASURY_ADDRESS", treasury_b);
+        fetch().await["genesis_hash"].as_str().unwrap().to_string()
+    };
+    assert_ne!(
+        hash_a, hash_b,
+        "two different treasuries produced the same genesis_hash — /chain is not derived"
+    );
+}

@@ -12,6 +12,7 @@ export {
   agentPayloadAuthMessageBytes,
   buildSigEnvelope,
   chainBindingFromEnv,
+  fetchChainBinding,
   mldsa44KeyId,
   signPayloadEnvelope,
   tetSign,

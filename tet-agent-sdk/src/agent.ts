@@ -77,6 +77,48 @@ export function chainBindingFromEnv(env: NodeJS.ProcessEnv = process.env): TetCh
   return { chainId, genesisHash };
 }
 
+/**
+ * Ask a node which chain it is on: `GET /chain` → `{ chain_id, genesis_hash }`.
+ *
+ * Both values are public and both are inside every signature pre-image, so this is the binding an
+ * agent needs and cannot derive: `tet-core` computes the genesis hash from its treasury configuration,
+ * and reimplementing that here would be a second source of truth for a value that silently decides
+ * whether a signature is valid anywhere.
+ *
+ * The response is VALIDATED, not trusted in shape: a node that answers `{}` or with a malformed hash
+ * must produce an error rather than a binding made of empty strings, which would sign happily and
+ * verify nowhere.
+ *
+ * Discovery, not authority. Signing against a hostile node's answer yields signatures bound to a
+ * chain nobody recognises — useless rather than replayable, because a real verifier recomputes the
+ * binding locally. For anything that matters, pin the values and use this to notice disagreement.
+ */
+export async function fetchChainBinding(baseUrl: string): Promise<TetChainBinding> {
+  const url = new URL("/chain", baseUrl.replace(/\/+$/, "")).toString();
+  const r = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw new Error(`GET /chain failed: HTTP ${r.status}`);
+  let body: unknown;
+  try {
+    body = await r.json();
+  } catch {
+    throw new Error("GET /chain did not return JSON");
+  }
+  const o = body as { chain_id?: unknown; genesis_hash?: unknown };
+  const chainId = typeof o.chain_id === "string" ? o.chain_id.trim() : "";
+  const genesisHash =
+    typeof o.genesis_hash === "string" ? o.genesis_hash.trim().toLowerCase() : "";
+  if (!chainId) throw new Error("GET /chain returned no chain_id");
+  // `0x`-prefixed is the form tet-core DERIVES (`format!("0x{}", hex::encode(...))`); a bare 64-hex
+  // value is accepted because `TET_GENESIS_HASH` is taken verbatim when an operator sets it. Either
+  // way the string goes into the pre-image EXACTLY as served — lower-cased to match
+  // `expected_genesis_hash_from_env`, and otherwise untouched. Stripping the prefix would change the
+  // signed bytes and produce signatures no node accepts.
+  if (!/^(?:0x)?[0-9a-f]{64}$/.test(genesisHash)) {
+    throw new Error(`GET /chain returned a malformed genesis_hash: ${JSON.stringify(genesisHash)}`);
+  }
+  return { chainId, genesisHash };
+}
+
 function concat(parts: Uint8Array[]): Uint8Array {
   const total = parts.reduce((n, p) => n + p.length, 0);
   const out = new Uint8Array(total);

@@ -23,7 +23,11 @@ const OUT = join(repoRoot, "tet-core", "src", "testdata", "agent_payload_envelop
 /** Fixed binding, so the fixture is reproducible and the Rust side can set the same env. */
 const CHAIN = {
   chain_id: "tet-agent-interop-1",
-  genesis_hash: "9f2c1b7a4d6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f607182",
+  // `0x`-prefixed, because that is what tet-core actually derives
+  // (`format!("0x{}", hex::encode(...))`). The fixture used a bare 64-hex value until 2026-09-30,
+  // which is a shape no real node serves — and that mismatch is exactly what let the SDK ship a
+  // validation regex rejecting the live format.
+  genesis_hash: "0x9f2c1b7a4d6e8f0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f607182",
 };
 const chain = { chainId: CHAIN.chain_id, genesisHash: CHAIN.genesis_hash };
 

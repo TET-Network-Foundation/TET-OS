@@ -19,6 +19,7 @@ import {
   agentPayloadAuthMessageBytes,
   buildSigEnvelope,
   chainBindingFromEnv,
+  fetchChainBinding,
   mldsa44KeyId,
   signPayloadEnvelope,
   tetSign,
@@ -280,5 +281,123 @@ describe("configuration and transport", () => {
     expect(id.startsWith(TET_AGENT_KEYID_MLDSA44_PREFIX)).toBe(true);
     expect(id.length).toBe(TET_AGENT_KEYID_MLDSA44_PREFIX.length + 64);
     expect(id).not.toContain(pk.slice(0, 24));
+  });
+});
+
+/**
+ * `GET /chain` discovery. These cover the VALIDATION; the real-node path — a live `tet-core` serving
+ * a derived hash, signed by this SDK and verified by `tet-core` — is
+ * `tet-cli/scripts/agent_chain_discovery.sh`, because a stub server proves nothing about the node.
+ */
+describe("chain discovery", () => {
+  const serve = async (
+    handler: (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => void,
+  ) => {
+    const { createServer } = await import("node:http");
+    const server = createServer(handler);
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const addr = server.address();
+    const port = typeof addr === "object" && addr ? addr.port : 0;
+    return {
+      url: `http://127.0.0.1:${port}`,
+      close: () => new Promise<void>((r) => server.close(() => r())),
+    };
+  };
+
+  const json = (body: unknown, status = 200) =>
+    serve((_req, res) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    });
+
+  test("returns the binding exactly as served, 0x prefix included", async () => {
+    const hash = `0x${"ab".repeat(32)}`;
+    const s = await json({ chain_id: "tet-probe-1", genesis_hash: hash });
+    try {
+      // The prefix is part of the signed string. Stripping it would change the pre-image and produce
+      // signatures no node accepts — so this asserts the exact value, not a normalised one.
+      await expect(fetchChainBinding(s.url)).resolves.toEqual({
+        chainId: "tet-probe-1",
+        genesisHash: hash,
+      });
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("accepts the bare 64-hex form an operator can set via TET_GENESIS_HASH", async () => {
+    const s = await json({ chain_id: "c", genesis_hash: "cd".repeat(32) });
+    try {
+      await expect(fetchChainBinding(s.url)).resolves.toEqual({
+        chainId: "c",
+        genesisHash: "cd".repeat(32),
+      });
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("lower-cases, because the node does too", async () => {
+    const s = await json({ chain_id: "c", genesis_hash: `0x${"AB".repeat(32)}` });
+    try {
+      const b = await fetchChainBinding(s.url);
+      expect(b.genesisHash).toBe(`0x${"ab".repeat(32)}`);
+    } finally {
+      await s.close();
+    }
+  });
+
+  // A binding made of empty strings would sign happily and verify nowhere, so every malformed answer
+  // has to be an error rather than a default.
+  test.each([
+    ["an empty object", {}, /no chain_id/],
+    ["no genesis_hash", { chain_id: "c" }, /malformed genesis_hash/],
+    ["no chain_id", { genesis_hash: `0x${"ab".repeat(32)}` }, /no chain_id/],
+    ["a short hash", { chain_id: "c", genesis_hash: "0xabcd" }, /malformed genesis_hash/],
+    ["a non-hex hash", { chain_id: "c", genesis_hash: `0x${"zz".repeat(32)}` }, /malformed genesis_hash/],
+    ["a numeric chain_id", { chain_id: 7, genesis_hash: `0x${"ab".repeat(32)}` }, /no chain_id/],
+  ])("refuses %s", async (_what, body, pattern) => {
+    const s = await json(body);
+    try {
+      await expect(fetchChainBinding(s.url)).rejects.toThrow(pattern as RegExp);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("refuses a non-200", async () => {
+    const s = await json({ chain_id: "c", genesis_hash: `0x${"ab".repeat(32)}` }, 500);
+    try {
+      await expect(fetchChainBinding(s.url)).rejects.toThrow(/HTTP 500/);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("refuses a non-JSON body", async () => {
+    const s = await serve((_req, res) => {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html>not a node</html>");
+    });
+    try {
+      await expect(fetchChainBinding(s.url)).rejects.toThrow(/did not return JSON/);
+    } finally {
+      await s.close();
+    }
+  });
+
+  test("a discovered binding signs and verifies round-trip", async () => {
+    const s = await json({ chain_id: "tet-probe-1", genesis_hash: `0x${"ab".repeat(32)}` });
+    try {
+      const discovered = await fetchChainBinding(s.url);
+      const wallet = await loadHybridWalletFromMnemonic(fixture.cases[0]!.mnemonic);
+      const payload = new TextEncoder().encode("signed against a discovered binding");
+      const sig = await tetSign(wallet, "text/plain", payload, discovered);
+      await expect(tetVerify(sig, "text/plain", payload, discovered)).resolves.toBe(true);
+      // …and not under the fixture's chain, so the discovered value is what was bound.
+      await expect(tetVerify(sig, "text/plain", payload, chain)).resolves.toBe(false);
+    } finally {
+      await s.close();
+    }
   });
 });

@@ -122,6 +122,35 @@ fn build_network_stats(state: &RestState) -> NetworkStats {
     }
 }
 
+/// `GET /chain` — the two values every TET signature is bound to.
+///
+/// Read-only, unauthenticated, and both values are already public: `chain_id` is in the README and
+/// `genesis_hash` is derived from public genesis parameters and appears inside every signature
+/// pre-image on the network. Nothing here is a secret, and a node that would not tell you which chain
+/// it is on is not usable as a node.
+///
+/// WHY IT EXISTS. Agents sign `tet agent payload v1|chain_id|genesis_hash|…` (see
+/// `docs/AGENT_IDENTITY.md`). Until now an agent had to be *configured* with both, and the SDK
+/// deliberately refuses to guess, because `tet-core` derives the genesis hash from its treasury
+/// configuration and a second implementation of that derivation in TypeScript would be a second
+/// source of truth for a value that silently decides whether a signature is valid anywhere.
+///
+/// WHAT IT IS NOT. It is discovery, not authority. An agent that asks a hostile node and signs
+/// against the answer produces signatures bound to a chain nobody else recognises — useless rather
+/// than replayable, because the binding is what a real verifier recomputes locally. Still: for
+/// anything that matters, pin the values rather than fetching them, and fetch only to notice that
+/// your pin disagrees with the node in front of you.
+pub async fn get_chain(State(_state): State<RestState>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "chain_id": crate::genesis::chain_id_from_env(),
+            "genesis_hash": crate::genesis::expected_genesis_hash_from_env(),
+        })),
+    )
+        .into_response()
+}
+
 pub async fn get_network_stats(State(state): State<RestState>) -> impl IntoResponse {
     (StatusCode::OK, Json(build_network_stats(&state))).into_response()
 }

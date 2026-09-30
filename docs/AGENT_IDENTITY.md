@@ -234,10 +234,37 @@ Comparing bytes rather than "both verify" is possible only because the ML-DSA si
 `SHA256(label ‖ msg)`. It is also what makes the guard sharp: changing the encoding on either side —
 dropping the length prefixes, the domain tag or the chain fields — turns 12–13 tests red immediately.
 
-One real gap: **the node does not expose `chain_id` or `genesis_hash` over REST**, so an agent cannot
-discover its own chain binding and must be configured with both. The SDK refuses to guess — a wrong
-genesis hash produces signatures that verify nowhere while looking fine. Worth an endpoint before
-this has outside users.
+## Discovering the binding: `GET /chain`
+
+```
+GET /chain  ->  { "chain_id": "tet-local-dev", "genesis_hash": "0x1aebfb89…" }
+```
+
+Read-only, unauthenticated, exactly two fields. Both are public — `chain_id` is in the README and
+`genesis_hash` is derived from public genesis parameters and appears inside every signature pre-image
+on the network — and a node that would not say which chain it is on is not usable as a node.
+
+It exists because an agent **cannot derive** the genesis hash: `tet-core` computes it from its
+treasury configuration, and reimplementing that in TypeScript would be a second source of truth for a
+value that silently decides whether a signature is valid anywhere. So the SDK fetches it and refuses
+to guess.
+
+The format is `0x` + 64 lowercase hex, and **the prefix is part of the signed string**. A client that
+normalised it away would produce signatures no node accepts. The SDK asserts the exact value it was
+served (lower-cased only, matching `expected_genesis_hash_from_env`) and rejects a malformed answer
+rather than defaulting: a binding made of empty strings signs happily and verifies nowhere. A bare
+64-hex value is also accepted, because `TET_GENESIS_HASH` is taken verbatim when an operator sets it.
+
+**Discovery, not authority.** An agent that asks a hostile node and signs against the answer produces
+signatures bound to a chain nobody recognises — useless rather than replayable, because a real verifier
+recomputes the binding locally. For anything that matters, pin the values and use `GET /chain` to
+notice that your pin disagrees with the node in front of you.
+
+The end-to-end check is `tet-cli/scripts/agent_chain_discovery.sh`: a real node derives a hash, the
+SDK discovers it **with `TET_CHAIN_ID` and `TET_GENESIS_HASH` unset** — the signing step refuses to run
+if either is present, so "it worked" cannot mean "it was told" — signs, and `tet-core`'s verifier
+accepts it. It then starts a second node with a different treasury and requires a different hash,
+because a route returning a constant would pass everything else.
 
 ## Guards (Day 1)
 
@@ -273,6 +300,7 @@ Rust, in `tet-core/src/tests.rs`:
 | `agent_envelope_from_another_chain_is_refused` | the chain binding survives the envelope |
 | `agent_envelope_structure_is_checked_field_by_field` | version, `pae`, payload type, signature count and set, both keyids, payload, payload type |
 | `agent_envelope_carrying_a_chain_id_is_refused_not_ignored` | a smuggled chain identity is a parse error |
+| `chain_route_reports_the_binding_every_signature_uses` | `GET /chain` is public, exactly two fields, `0x`+64hex, and *derived* rather than constant |
 
 TypeScript, in `tet-agent-sdk/tests/agent_sign.test.ts` (27 assertions): fixture byte equality for
 every case, envelope rebuild equality, tampered payload, swapped `payload_type`, **`chain_id` and
@@ -280,16 +308,19 @@ every case, envelope rebuild equality, tampered payload, swapped `payload_type`,
 duplicated signature set, the separator-containing ambiguity cases, `chainBindingFromEnv` refusing to
 guess, and the inline headers.
 
+TypeScript also covers `GET /chain` validation: the exact value including the `0x` prefix, the bare
+64-hex form, lower-casing, six malformed answers, a non-200, a non-JSON body, and a discovered binding
+signing and verifying round-trip while failing under a different one.
+
 Shell, in `tet-cli/scripts/agent_cli_interop.sh`: five cases through the real binary, both signing
 directions, and `verify` exiting non-zero for another chain and for a payload that is not what was
-signed.
+signed. In `tet-cli/scripts/agent_chain_discovery.sh`: a live node, discovery with the environment
+unset, `tet-core` verifying, refusal on another chain, and the served hash proven derived.
 
 ## Still to do
 
 - **Day 3**: devlog signing in `~/site/tools/build.mjs`, the honest limit stated on the site, and a
   lazy-loaded browser verifier.
-- An endpoint exposing `chain_id` and `genesis_hash`, so an agent can discover its binding instead of
-  being handed it.
 - `tet-agent-sdk/tests/slashing_audit.test.ts` is skipped: `examples/attacker.ts` posts to
   `POST /ledger/faucet`, removed in the September clean-up. Reviving it means porting the example to
   the hybrid-signed `POST /ledger/initial_airdrop/claim`.
