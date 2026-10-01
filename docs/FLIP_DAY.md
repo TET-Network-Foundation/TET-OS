@@ -125,8 +125,11 @@ control that would have refused the original key commit outright, and because th
 
 Settings → Rules → Rulesets → New branch ruleset. Target `main`. Enable:
 
-- **Require a pull request before merging** (1 approval; self-approval is fine for a solo project —
-  the value is the diff review, not the second pair of eyes)
+- **Require a pull request before merging**, with **0 required approvals**. Not 1: on GitHub the
+  author of a pull request cannot approve it, so on a solo repository a required approval makes
+  `main` unmergeable by anyone, with no bypass actors. This was set to 1 on 2026-10-01 and found
+  when PR #1 sat at `REVIEW_REQUIRED` with every check green. The value of the PR is the diff and
+  the required checks, not a second pair of eyes; raise the count when there is a second maintainer
 - **Require status checks to pass**, selecting all five:
   - `rust (build, test, guards)`
   - `ui (next build)`

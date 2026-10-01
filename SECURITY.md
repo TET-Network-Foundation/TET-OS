@@ -71,6 +71,21 @@ and that variant does not exist yet, so an invalid receipt is rejected without p
 Win95 boot sequence are specified and not built. Their tests fail deliberately rather than being
 quietly skipped, so that nothing reads as shipped when it is not.
 
+## Branch protection
+
+`main` is protected by a repository ruleset that targets the default branch:
+
+- changes land only through a pull request;
+- five CI checks must pass, each pinned to GitHub Actions so nothing else can report them green:
+  `rust (build, test, guards)`, `ui (next build)`, `shell (shellcheck deploy scripts)`,
+  `wasm (tet-pqc-wasm → ui/public/pqc)`, `docker (images build)`;
+- force pushes and deletion of `main` are blocked;
+- nobody can bypass it.
+
+It requires **zero** approving reviews. This is a one-maintainer project, and GitHub does not let
+the author of a pull request approve it, so a required approval would mean nothing could be merged.
+Every change is still a reviewed diff with green CI; it is not a second person's review.
+
 ## Key material published in this repository's history
 
 Between 2026-05-10 and 2026-05-26 this repository tracked runtime artefacts that contained real key
