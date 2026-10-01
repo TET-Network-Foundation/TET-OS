@@ -14,44 +14,34 @@
 
 name: CI
 
-# Docs-only commits skip this workflow entirely. Nothing here can be broken by a
-# markdown edit: the rust, ui, wasm and docker jobs all build from source that
-# paths-ignore excludes. Measured over the 30 commits to 2026-09-28, 21 of them —
-# 70% — touched nothing but documentation, so this is the single largest saving
-# available without giving up any coverage.
+# Every push and every pull request runs this workflow. There are no path filters, and that is a
+# deliberate reversal of the earlier design.
 #
-# Deliberately workflow-level rather than per-job: a commit that only edits a .md
-# cannot break the UI build or the Dockerfile either, so skipping the rust job
-# alone would leave three jobs running for no reason.
+# `paths-ignore` saves minutes but reports NO STATUS when it skips — not success — so a required check
+# leaves docs-only PRs unmergeable. The previous answer was a second workflow declaring the same five
+# job names on the complementary paths. That answer was wrong: see the `gate` job below for what it
+# cost on 2026-10-01.
 #
-# NOTE for whoever turns on branch protection: a skipped workflow reports no
-# status, so if CI is made a required check, docs-only PRs will sit unmergeable
-# until you either mark the check non-required or add a no-op job that reports
-# success. Decide that when protection is enabled, not before.
+# Instead, one workflow always runs, the `gate` job decides whether the expensive work is needed, and
+# every named job STARTS either way so its check name is always reported. A docs-only commit costs
+# five runners at GitHub's one-minute minimum — about five billed minutes, which is what the no-op
+# mirror cost anyway — and buys back the ability to trust the checks.
 on:
   push:
     branches: [main]
-    paths-ignore: &docs_only
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE-APACHE'
-      - 'LICENSE-MIT'
-      - '.gitignore'
   pull_request:
-    paths-ignore: *docs_only
-  # Manual trigger, deliberately only here and not on the no-op mirror: a dispatch must run the REAL
-  # jobs, and two workflows reporting the same five check names for one event would be ambiguous for
-  # a required-checks ruleset.
-  #
-  # It also exists because `git commit --allow-empty` does NOT work as a way to re-run CI: a push
-  # with no changed files cannot match `paths-ignore`, so the workflow is skipped rather than run.
-  # When a green run is needed on demand — a flip gate, a re-check after a runner outage — this is
-  # the button.
+  # Manual trigger. `git commit --allow-empty` is not a substitute: a push with no changed files
+  # cannot match a path filter, and before this existed such a push was skipped rather than run. When
+  # a green run is needed on demand — a flip gate, a re-check after a runner outage — this is it.
   workflow_dispatch:
 
 # A second push to the same branch cancels the first — private-repo Actions minutes are billed.
+#
+# The group is a LITERAL, not `${{ github.workflow }}`. Two workflows that share a name share that
+# expression's value and therefore cancel each other; that is how the no-op mirror killed the real CI
+# run on 2026-10-01. Nothing else may use the group `ci-`.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -62,14 +52,106 @@ env:
   RISC0_SKIP_BUILD: "1"
 
 jobs:
+  # Which half of CI this commit needs.
+  #
+  # ONE workflow decides it. The previous design was two: ci.yml with `paths-ignore` and a no-op
+  # ci-noop.yml with `paths`, both named "CI", both declaring the same five job names, on the theory
+  # that complementary path sets are mutually exclusive. They are not. A single push can change files
+  # in BOTH sets, and then both workflows trigger.
+  #
+  # On 2026-10-01 that is exactly what happened: a push touching .github/** and docs/FLIP_DAY.md fired
+  # both. They shared `name: CI`, so `${{ github.workflow }}-${{ github.ref }}` resolved to the same
+  # concurrency group, and with cancel-in-progress the mirror killed the real run — run 36844275750
+  # ended `cancelled` with `started=never` on all five jobs while run 36844275776 reported all five
+  # names green. A required check satisfied by a workflow that did nothing. Even without the
+  # cancellation the hole remains: two check runs sharing a name means the later one wins, so a mirror
+  # can mask a real failure.
+  #
+  # FAIL-SAFE DIRECTION: anything this job cannot work out means code=true. "Docs only" is the guess
+  # that reports success without testing anything, so it is never the default.
+  gate:
+    name: gate (what changed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Needed to diff against the pushed-from commit; a shallow clone cannot.
+          fetch-depth: 0
+
+      - name: classify
+        id: classify
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          code=true
+          reason="fail-safe default"
+          base=""
+          case "$EVENT" in
+            push) base="$BEFORE" ;;
+            pull_request) base="$PR_BASE" ;;
+            *) reason="event '$EVENT' has no diff base — run everything" ;;
+          esac
+
+          if [ "$EVENT" = "push" ] || [ "$EVENT" = "pull_request" ]; then
+            if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+               || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              reason="no usable base ('$base') — run everything"
+            else
+              files="$(git diff --name-only "$base" "$HEAD_SHA")"
+              if [ -z "$files" ]; then
+                # An empty diff proves nothing about what changed, so it does not buy the cheap path.
+                reason="diff was empty — run everything rather than assume"
+              else
+                echo "changed files:"
+                printf '%s\n' "$files" | sed 's/^/  /'
+                # Identical to the paths-ignore list this replaces: **/*.md, docs/**, the two
+                # licences, .gitignore.
+                nondocs="$(printf '%s\n' "$files" \
+                  | grep -vE '\.md$|^docs/|^LICENSE-APACHE$|^LICENSE-MIT$|^\.gitignore$' || true)"
+                if [ -n "$nondocs" ]; then
+                  reason="non-documentation files changed"
+                  echo "non-documentation files:"
+                  printf '%s\n' "$nondocs" | sed 's/^/  /'
+                else
+                  code=false
+                  reason="documentation only"
+                fi
+              fi
+            fi
+          fi
+
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "EXPENSIVE_PATH=$code"
+          echo "::notice::expensive path: $code ($reason)"
+
   rust:
     name: rust (build, test, guards)
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      # This job ALWAYS starts, including for a docs-only commit, so its check name is
+      # always reported. A job skipped by a job-level `if:` reports "skipped", which a
+      # required-checks ruleset does not accept as a pass — the same trap as the no-op
+      # mirror this replaces. So the JOB runs and the WORK is conditional.
+      - name: Docs-only commit — skipping the work, not the check
+        if: needs.gate.outputs.code != 'true'
+        run: |
+          echo 'Only documentation changed; nothing in this job can be broken by it.'
+          echo "Reporting success so the required check 'rust (build, test, guards)' is satisfied."
 
-      - name: Install Rust
+      - if: needs.gate.outputs.code == 'true'
+        uses: actions/checkout@v4
+
+      - if: needs.gate.outputs.code == 'true'
+        name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -77,14 +159,16 @@ jobs:
       # `ubuntu-latest` ships ~14 GB free, and this workspace does not fit: the
       # first run died with "No space left on device" after Build and Test had
       # both already passed. Reclaiming the preinstalled SDKs buys ~25 GB.
-      - name: Free disk space
+      - if: needs.gate.outputs.code == 'true'
+        name: Free disk space
         run: |
           echo "before: $(df -h / --output=avail | tail -1)"
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost
           echo "after:  $(df -h / --output=avail | tail -1)"
 
-      - name: Cache cargo + target
+      - if: needs.gate.outputs.code == 'true'
+        name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
           key: rust-${{ hashFiles('**/Cargo.lock') }}
@@ -93,18 +177,21 @@ jobs:
       # `--workspace --release` compiled every crate a second time in a second
       # profile for no coverage the debug test build does not already give, and
       # the `docker` job release-builds this same binary inside the image.
-      - name: Build (release)
+      - if: needs.gate.outputs.code == 'true'
+        name: Build (release)
         run: cargo build --release -p tet-core --bin TET-Core
 
       # Debuginfo is the bulk of the debug target dir. Line tables keep test
       # backtraces readable without carrying full DWARF for every dependency.
-      - name: Test
+      - if: needs.gate.outputs.code == 'true'
+        name: Test
         env:
           CARGO_PROFILE_DEV_DEBUG: line-tables-only
           CARGO_PROFILE_TEST_DEBUG: line-tables-only
         run: cargo test --workspace
 
-      - name: Disk after build+test
+      - if: needs.gate.outputs.code == 'true'
+        name: Disk after build+test
         if: always()
         run: df -h / | tail -1
 
@@ -126,7 +213,8 @@ jobs:
       # exercises the *ledger method*, which is unrouted, so nothing would catch the routes being
       # re-added. Adding `removed_faucet_routes_are_not_reachable` alongside the /dex/* guard is
       # the obvious next commit; add its name below when it exists.
-      - name: Security regression guards + block-9828 pins
+      - if: needs.gate.outputs.code == 'true'
+        name: Security regression guards + block-9828 pins
         env:
           # Must match the Test step or cargo recompiles the whole test binary.
           CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -186,7 +274,8 @@ jobs:
       # redundant_closure, too_many_arguments, needless_return, doc_lazy_continuation ...).
       # Turning on `-D warnings` today would make CI red on arrival and teach everyone to ignore it.
       # Clean the 37, then delete `continue-on-error` and add `-- -D warnings` in the same commit.
-      - name: Clippy (non-blocking until the tree is clean)
+      - if: needs.gate.outputs.code == 'true'
+        name: Clippy (non-blocking until the tree is clean)
         continue-on-error: true
         run: |
           set -o pipefail
@@ -197,24 +286,39 @@ jobs:
 
   ui:
     name: ui (next build)
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
       run:
         working-directory: tet-network/ui
     steps:
-      - uses: actions/checkout@v4
+      # This job ALWAYS starts, including for a docs-only commit, so its check name is
+      # always reported. A job skipped by a job-level `if:` reports "skipped", which a
+      # required-checks ruleset does not accept as a pass — the same trap as the no-op
+      # mirror this replaces. So the JOB runs and the WORK is conditional.
+      - name: Docs-only commit — skipping the work, not the check
+        if: needs.gate.outputs.code != 'true'
+        run: |
+          echo 'Only documentation changed; nothing in this job can be broken by it.'
+          echo "Reporting success so the required check 'ui (next build)' is satisfied."
 
-      - name: Install Node
+      - if: needs.gate.outputs.code == 'true'
+        uses: actions/checkout@v4
+
+      - if: needs.gate.outputs.code == 'true'
+        name: Install Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: tet-network/ui/package-lock.json
 
-      - run: npm ci
+      - if: needs.gate.outputs.code == 'true'
+        run: npm ci
 
-      - run: npm run build
+      - if: needs.gate.outputs.code == 'true'
+        run: npm run build
 
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --
@@ -229,7 +333,8 @@ jobs:
       # while the node verifies ML-DSA-44, so an honest rebuild would have broken every
       # browser-signed request. A stale artifact can hide a broken source, so from now on
       # the artifact must be reproducible from the repo or CI fails.
-      - name: wallet-client bundle is reproducible from the pinned lockfile
+      - if: needs.gate.outputs.code == 'true'
+        name: wallet-client bundle is reproducible from the pinned lockfile
         working-directory: tet-core
         run: |
           set -euo pipefail
@@ -254,7 +359,8 @@ jobs:
       # implementation uses, so the same mnemonic produced two different wallets and nothing
       # rejected either -- both halves were self-consistent. The Rust side pins the fixture; this
       # pins the SDK CODE against it, which is what fails if the old derivation comes back.
-      - name: agent SDK derives the same hybrid identity as the node
+      - if: needs.gate.outputs.code == 'true'
+        name: agent SDK derives the same hybrid identity as the node
         working-directory: tet-agent-sdk
         run: |
           set -euo pipefail
@@ -271,10 +377,22 @@ jobs:
 
   shell:
     name: shell (shellcheck deploy scripts)
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      # This job ALWAYS starts, including for a docs-only commit, so its check name is
+      # always reported. A job skipped by a job-level `if:` reports "skipped", which a
+      # required-checks ruleset does not accept as a pass — the same trap as the no-op
+      # mirror this replaces. So the JOB runs and the WORK is conditional.
+      - name: Docs-only commit — skipping the work, not the check
+        if: needs.gate.outputs.code != 'true'
+        run: |
+          echo 'Only documentation changed; nothing in this job can be broken by it.'
+          echo "Reporting success so the required check 'shell (shellcheck deploy scripts)' is satisfied."
+
+      - if: needs.gate.outputs.code == 'true'
+        uses: actions/checkout@v4
 
       # deploy/ was untested by anything until 2026-09-29, and it is the code with the most
       # authority in the repository: it provisions the seed, deploys to it, and deletes its
@@ -284,7 +402,8 @@ jobs:
       # shellcheck will not catch a stale path. It does catch the class of mistake that makes a
       # destructive script dangerous rather than merely wrong: unquoted expansions, `rm -rf $VAR/`
       # where VAR can be empty, and `A && B || C` read as if-then-else.
-      - name: shellcheck
+      - if: needs.gate.outputs.code == 'true'
+        name: shellcheck
         run: |
           set -euo pipefail
           shellcheck --version
@@ -294,7 +413,8 @@ jobs:
 
       # The refusal paths are the whole safety property, so they are asserted rather than assumed.
       # None of these reaches ssh: each exits during argument validation.
-      - name: reset_db.sh refuses without an explicit, matching confirmation
+      - if: needs.gate.outputs.code == 'true'
+        name: reset_db.sh refuses without an explicit, matching confirmation
         run: |
           set -euo pipefail
           refuses() {
@@ -322,22 +442,37 @@ jobs:
 
   wasm:
     name: wasm (tet-pqc-wasm → ui/public/pqc)
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      # This job ALWAYS starts, including for a docs-only commit, so its check name is
+      # always reported. A job skipped by a job-level `if:` reports "skipped", which a
+      # required-checks ruleset does not accept as a pass — the same trap as the no-op
+      # mirror this replaces. So the JOB runs and the WORK is conditional.
+      - name: Docs-only commit — skipping the work, not the check
+        if: needs.gate.outputs.code != 'true'
+        run: |
+          echo 'Only documentation changed; nothing in this job can be broken by it.'
+          echo "Reporting success so the required check 'wasm (tet-pqc-wasm → ui/public/pqc)' is satisfied."
 
-      - name: Install Rust (wasm32 target)
+      - if: needs.gate.outputs.code == 'true'
+        uses: actions/checkout@v4
+
+      - if: needs.gate.outputs.code == 'true'
+        name: Install Rust (wasm32 target)
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
 
-      - name: Install Node
+      - if: needs.gate.outputs.code == 'true'
+        name: Install Node
         uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Cache cargo + target
+      - if: needs.gate.outputs.code == 'true'
+        name: Cache cargo + target
         uses: Swatinem/rust-cache@v2
         with:
           key: wasm-${{ hashFiles('**/Cargo.lock') }}
@@ -347,7 +482,8 @@ jobs:
       # bytes must match. On 2026-09-30 they did not: the agent-sdk copy was five months old and
       # nothing compared them, so a third ML-DSA-44 signer was shipping unchecked. It happened to
       # behave identically; that was luck, not a guarantee.
-      - name: The two committed copies of the signer are byte-identical
+      - if: needs.gate.outputs.code == 'true'
+        name: The two committed copies of the signer are byte-identical
         run: |
           set -euo pipefail
           for f in tet_pqc_wasm.js tet_pqc_wasm_bg.wasm; do
@@ -368,24 +504,28 @@ jobs:
       # against a fresh build would go red on every compiler bump and say nothing about the crypto.
       # What must hold is that each signer reproduces the fixture the NODE verifies in
       # `agent_sdk_signatures_verify_on_the_node`.
-      - name: Committed signers reproduce the interop fixture
+      - if: needs.gate.outputs.code == 'true'
+        name: Committed signers reproduce the interop fixture
         run: |
           node tet-agent-sdk/scripts/check_wasm_interop.mjs \
             tet-network/ui/public/pqc \
             tet-agent-sdk/vendor
 
-      - name: Install wasm-pack
+      - if: needs.gate.outputs.code == 'true'
+        name: Install wasm-pack
         run: cargo install wasm-pack --locked
 
       # Exactly the command docs/RUNNING_A_NODE.md tells an operator to run, except that it builds
       # to a scratch directory so the committed copies survive for the comparison below.
-      - name: Build tet-pqc-wasm
+      - if: needs.gate.outputs.code == 'true'
+        name: Build tet-pqc-wasm
         run: |
           wasm-pack build tet-pqc-wasm \
             --target web \
             --out-dir "$RUNNER_TEMP/pqc"
 
-      - name: Verify the four artifacts landed
+      - if: needs.gate.outputs.code == 'true'
+        name: Verify the four artifacts landed
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP/pqc"
@@ -400,13 +540,15 @@ jobs:
       # built signer must still reproduce the committed fixture that Rust verifies. Controlled on
       # 2026-09-30 by changing the signing-randomness label in tet-pqc-wasm/src/lib.rs and
       # rebuilding — all four signatures mismatched and this step exits 1.
-      - name: A freshly built signer reproduces the interop fixture
+      - if: needs.gate.outputs.code == 'true'
+        name: A freshly built signer reproduces the interop fixture
         run: node tet-agent-sdk/scripts/check_wasm_interop.mjs "$RUNNER_TEMP/pqc"
 
       # Informational only, for the reason in the step above: a byte difference here is expected
       # whenever rustc / wasm-bindgen / wasm-opt move, and is NOT a failure. Pinning those three
       # is the follow-up that would make a byte diff honest.
-      - name: Report byte drift between the fresh build and the committed copy
+      - if: needs.gate.outputs.code == 'true'
+        name: Report byte drift between the fresh build and the committed copy
         run: |
           set -euo pipefail
           for f in tet_pqc_wasm.js tet_pqc_wasm_bg.wasm; do
@@ -419,7 +561,8 @@ jobs:
             fi
           done
 
-      - name: Upload pqc artifacts
+      - if: needs.gate.outputs.code == 'true'
+        name: Upload pqc artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tet-pqc-wasm
@@ -428,12 +571,25 @@ jobs:
 
   docker:
     name: docker (images build)
+    needs: gate
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      # This job ALWAYS starts, including for a docs-only commit, so its check name is
+      # always reported. A job skipped by a job-level `if:` reports "skipped", which a
+      # required-checks ruleset does not accept as a pass — the same trap as the no-op
+      # mirror this replaces. So the JOB runs and the WORK is conditional.
+      - name: Docs-only commit — skipping the work, not the check
+        if: needs.gate.outputs.code != 'true'
+        run: |
+          echo 'Only documentation changed; nothing in this job can be broken by it.'
+          echo "Reporting success so the required check 'docker (images build)' is satisfied."
 
-      - uses: docker/setup-buildx-action@v3
+      - if: needs.gate.outputs.code == 'true'
+        uses: actions/checkout@v4
+
+      - if: needs.gate.outputs.code == 'true'
+        uses: docker/setup-buildx-action@v3
 
       # Build only — nothing is run or pushed. The point is that a broken
       # Dockerfile fails the PR instead of failing the next operator who types
@@ -443,7 +599,8 @@ jobs:
       # RISC0_SKIP_BUILD=1 here: the zk guests add tens of minutes and the
       # Dockerfile path that installs the risc0 toolchain is unchanged by any of
       # this. Compose still defaults to the full zk build for deployments.
-      - name: Build tet-core image
+      - if: needs.gate.outputs.code == 'true'
+        name: Build tet-core image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -457,7 +614,8 @@ jobs:
 
       # Context is the repo root, not tet-network/ui: stage 1 builds
       # tet-pqc-wasm from the Rust workspace and bakes it into public/pqc.
-      - name: Build ui image
+      - if: needs.gate.outputs.code == 'true'
+        name: Build ui image
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -470,5 +628,6 @@ jobs:
           cache-from: type=gha,scope=ui
           cache-to: type=gha,mode=max,scope=ui
 
-      - name: Validate docker-compose.yml
+      - if: needs.gate.outputs.code == 'true'
+        name: Validate docker-compose.yml
         run: docker compose config --quiet

@@ -83,6 +83,25 @@ can refuse it. With those cases the control fails as it must.
 The same shape applies wherever two independent checks guard one thing: break them one at a time, or
 you have measured their disjunction and learned nothing about either.
 
+**Never give two workflows the same name or concurrency group; a mirror that reports the same check
+names can mask the real run.** `${{ github.workflow }}` is the workflow's *name*, so two files sharing
+a name share any concurrency group built from it — and with `cancel-in-progress` one silently kills
+the other.
+
+This repository had `ci.yml` (`paths-ignore`) and a no-op `ci-noop.yml` (the complementary `paths`),
+both named `CI`, both declaring the same five job names, so that a required check would be reported
+whichever ran. Complementary path sets are **not** mutually exclusive: one push can change files in
+both, and then both fire. On 2026-10-01 a push touching `.github/**` and `docs/FLIP_DAY.md` did
+exactly that. The mirror cancelled the real run — `started=never` on all five jobs — and then
+reported all five names green. Required checks would have been satisfied by a workflow that did
+nothing. Even without the cancellation the hole remains, because two check runs sharing a name resolve
+to the most recent one.
+
+The fix is one workflow that always runs, a `gate` job that decides whether the expensive work is
+needed, and named jobs that **always start** so their check names are always reported — a job skipped
+by a job-level `if:` reports "skipped", which is not a pass. And the concurrency group is a literal,
+never `github.workflow`.
+
 ## In a must-be-refused assertion, never accept multiple reasons with `||`
 
 **Assert the specific error the test is named for.** If a cheaper check rejects first, construct the

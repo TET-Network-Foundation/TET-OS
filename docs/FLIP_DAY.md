@@ -55,9 +55,10 @@ gh run list --workflow=ci.yml --limit 3
 gh run view <id>          # all five jobs green: rust, ui, shell, wasm, docker
 ```
 
-Required: a green run **on `main`, on the current HEAD**. Not a green run from last week, and not a
-`ci-noop` run — the no-op mirror reports the same five check names by design, so read the workflow
-file that produced it, not just the check names.
+Required: a green run **on `main`, on the current HEAD**, from `ci.yml` — there is only one CI
+workflow now, and the no-op mirror that could report the same five names is gone (see step 4). Not a
+green run from last week, and check the `gate (what changed)` job said `expensive path: true`: five
+green jobs that took seconds each is the cheap path, which proves nothing about code.
 
 Also worth one look: the `zk-real` job has never run on GitHub. Trigger it once manually
 (`gh workflow run zk-real.yml`) and let it finish. It takes up to ~3 hours cold; start it early.
@@ -101,18 +102,27 @@ Settings → Rules → Rulesets → New branch ruleset. Target `main`. Enable:
   - `docker (images build)`
 - **Block force pushes**
 
-> **The path-filter interaction — read this before ticking "require status checks".**
+> **Read this before ticking "require status checks".**
 >
-> `ci.yml` skips itself on docs-only commits via `paths-ignore`, and a skipped workflow reports **no
-> status at all**, not success. Required checks would therefore leave every docs-only PR permanently
-> unmergeable.
+> There is **one** workflow, `ci.yml`, with no path filters. It always runs. A `gate` job decides
+> whether the expensive work is needed, and all five named jobs **start either way**, so the five
+> check names are always reported.
 >
-> `ci-noop.yml` exists precisely for this: same workflow name, same five job names, triggered on
-> exactly the paths `ci.yml` ignores. Whichever runs, the five names are reported.
+> That design replaced a two-workflow one on 2026-10-01, and the reason matters here: `ci.yml` used
+> `paths-ignore` and a no-op `ci-noop.yml` used the complementary `paths`, both named `CI`, both
+> declaring the same five job names. Complementary path sets are **not** mutually exclusive — one
+> push can change files in both — and when both fired they shared the concurrency group
+> `${{ github.workflow }}-${{ github.ref }}`, so the mirror **cancelled the real run** and then
+> reported all five names green with `started=never` on every real job. Had the ruleset been on at
+> that moment, that PR would have been mergeable on the strength of a workflow that did nothing.
 >
-> **So:** the two files must stay in lockstep. Change a job name or a path in one and docs-only PRs
-> quietly become unmergeable again. Both files carry that warning in their headers. After enabling
-> the ruleset, **test it**: open a docs-only PR and confirm it becomes mergeable.
+> Two consequences for this step:
+>
+> - Require the five names below and nothing else. `gate (what changed)` is **not** required: it is
+>   an input to the others, and requiring it adds nothing.
+> - After enabling the ruleset, **test both halves**: a docs-only PR must become mergeable (five
+>   green jobs that did the cheap path), and a code PR must show the jobs actually doing work. A
+>   green check whose job lasted three seconds is the failure mode to look for.
 
 Force-push protection matters here beyond hygiene: this repository was force-pushed three times in
 September, and the last of those was recovering from key material in history.
