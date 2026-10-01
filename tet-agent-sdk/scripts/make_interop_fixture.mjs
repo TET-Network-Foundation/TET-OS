@@ -2,9 +2,9 @@
  * Regenerate `tet-core/src/testdata/agent_sdk_hybrid_sigs.json`.
  *
  * Signatures are produced by the agent SDK's OWN code path: BIP39 Ed25519 from
- * `src/wallet_from_mnemonic.ts` and ML-DSA-44 from `vendor/tet_pqc_wasm_bg.wasm` — the third
- * committed copy of the signer, which until now had neither a reproducibility diff nor a
- * behaviour fixture. The node verifies the result in `tet-core/src/tests.rs`.
+ * `src/wallet_from_mnemonic.ts` and ML-DSA-44 from `vendor/tet_pqc_wasm_bg.wasm` — the only
+ * COMMITTED copy of the signer, which until now had neither a reproducibility diff nor a behaviour
+ * fixture. The node verifies the result in `tet-core/src/tests.rs`.
  *
  * Both halves are deterministic (Ed25519 by RFC 8032; ML-DSA-44 because TET derives the signing
  * randomness as SHA256("tet:mldsa44-signing-rnd:v1" ‖ msg)), so regenerating this file must
@@ -71,9 +71,10 @@ const doc = {
   _produced_by: "tet-agent-sdk/scripts/make_interop_fixture.mjs (npm run fixture)",
   _produced_on: "2026-09-30",
   _why:
-    "tet-agent-sdk/vendor/ is a THIRD committed copy of the ML-DSA-44 signer. CI rebuilt the " +
-    "wasm but never compared bytes, and the only interop fixture came from the UI's copy, so " +
-    "nothing tested this one. It also caught a real defect: the SDK derived Ed25519 with " +
+    "tet-agent-sdk/vendor/ is the ONLY committed copy of the ML-DSA-44 signer — " +
+    "tet-network/ui/public/pqc/ is a gitignored build output. CI rebuilt the wasm but never " +
+    "compared bytes, and the only interop fixture came from a local build, so nothing tested the " +
+    "committed one. It also caught a real defect: the SDK derived Ed25519 with " +
     "@polkadot/keyring (substrate mini-secret) instead of BIP39, so the same mnemonic produced " +
     "wallet id 9125f505... here and c5785e18... everywhere else in TET.",
   _mnemonics: "Standard BIP39 test vectors, public by design. No real funds.",

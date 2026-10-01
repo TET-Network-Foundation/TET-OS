@@ -10,9 +10,11 @@
  * (12/12). So a hash comparison against a fresh build would go red on any compiler bump while
  * telling us nothing about the crypto, and a guard people learn to ignore is worse than none.
  *
- * What IS pinned by hash is the pair of committed copies against each other: same artifact, one
- * source, so they must be byte-identical. They were not — `tet-agent-sdk/vendor/` was five months
- * behind `tet-network/ui/public/pqc/` — which is the drift this catches.
+ * Note what is NOT pinned by hash, and why the earlier version of this comment was wrong:
+ * `tet-network/ui/public/pqc/` is a BUILD OUTPUT, gitignored by its own `.gitignore` containing `*`.
+ * There is exactly ONE committed copy of the signer, `tet-agent-sdk/vendor/`, and it was five months
+ * behind what the source builds. CI now asserts that no second copy gets committed, and holds every
+ * signer — committed or freshly built — to the fixture below.
  *
  * Follow-up worth doing separately: pin rustc, wasm-bindgen and wasm-opt, and then a byte diff
  * against a fresh build becomes honest.

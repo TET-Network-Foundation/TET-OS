@@ -173,10 +173,22 @@ to ignore is worse than no guard. So the hash comparison is pinned where it is m
 the copies, which must be identical to each other — and the rebuild is held to the *fixture the
 consumer verifies*.
 
-**Count the copies.** The same signer was committed twice, and the second copy
-(`tet-agent-sdk/vendor/`) was five months behind the first, unreferenced by any guard, and still
-being shipped. It happened to behave identically; that was luck. An artifact committed in two places
-is one artifact with two chances to go stale, so either dedupe it or assert the copies match.
+**Count the copies — and check which ones are actually committed.** The ML-DSA signer
+(`tet-agent-sdk/vendor/`) was five months behind what its source builds, unreferenced by any guard,
+and still being shipped. It happened to behave identically to a fresh build; that was luck.
+
+The guard written for it then got the repository wrong, which is the more useful half of the story.
+It compared "the two committed copies" — `tet-agent-sdk/vendor/` against
+`tet-network/ui/public/pqc/` — and passed locally, because a developer's tree holds both. But
+`ui/public/pqc/` carries its own `.gitignore` containing `*`: it is a build output and is **not**
+committed. On the guard's first ever execution in CI (run 36846005558) it failed, comparing a
+committed file against one that does not exist in a clean checkout.
+
+Two lessons, and the second is the one that keeps costing: an artifact committed in two places is one
+artifact with two chances to go stale, so either dedupe it or assert the copies match — and **a guard
+that has never executed is a guess**. Run it where it will run, in a clean checkout, before believing
+it. `git ls-files <path>` answers "is this committed?"; the presence of the file on your disk does
+not.
 
 ## Design principle — check every new replicated field against it
 

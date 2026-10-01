@@ -492,39 +492,41 @@ jobs:
         with:
           key: wasm-${{ hashFiles('**/Cargo.lock') }}
 
-      # THE SIGNER IS COMMITTED TWICE. `tet-network/ui/public/pqc/` is what the Next.js UI loads;
-      # `tet-agent-sdk/vendor/` is what the agent SDK packs. Same source, same artifact, so the
-      # bytes must match. On 2026-09-30 they did not: the agent-sdk copy was five months old and
-      # nothing compared them, so a third ML-DSA-44 signer was shipping unchecked. It happened to
-      # behave identically; that was luck, not a guarantee.
+      # THERE MUST BE EXACTLY ONE COMMITTED COPY OF THE SIGNER.
+      #
+      # It is `tet-agent-sdk/vendor/`, which the SDK packs. `tet-network/ui/public/pqc/` is a BUILD
+      # OUTPUT — that directory carries its own `.gitignore` containing `*`, so a fresh clone has no
+      # copy there and the UI cannot sign until this job runs.
+      #
+      # The previous version of this step compared the two as "the two committed copies", and failed
+      # on its first ever execution (run 36846005558) because one of them does not exist in a clean
+      # checkout. It passed locally only because a developer's tree holds the gitignored build
+      # output. A guard that has never run is a guess, and this one was wrong about the repository.
+      #
+      # What is worth enforcing is the real intent: no SECOND committed copy, ever, because two
+      # committed copies are one artifact with two chances to go stale.
       - if: needs.gate.outputs.code == 'true'
-        name: The two committed copies of the signer are byte-identical
+        name: Exactly one committed copy of the signer
         run: |
           set -euo pipefail
+          tracked=$(git ls-files 'tet-network/ui/public/pqc' | wc -l | tr -d ' ')
+          if [ "$tracked" != "0" ]; then
+            echo "::error::tet-network/ui/public/pqc is a build output and must not be committed."
+            git ls-files 'tet-network/ui/public/pqc'
+            echo "Keep ONE committed copy (tet-agent-sdk/vendor/) so there is nothing to drift."
+            exit 1
+          fi
           for f in tet_pqc_wasm.js tet_pqc_wasm_bg.wasm; do
-            a=$(shasum -a 256 "tet-network/ui/public/pqc/$f" | cut -d' ' -f1)
-            b=$(shasum -a 256 "tet-agent-sdk/vendor/$f" | cut -d' ' -f1)
-            echo "$f  ui=${a:0:12}  agent-sdk=${b:0:12}"
-            if [ "$a" != "$b" ]; then
-              echo "::error::$f differs between tet-network/ui/public/pqc/ and tet-agent-sdk/vendor/."
-              echo "One source, one artifact: copy the UI's file into tet-agent-sdk/vendor/ and"
-              echo "regenerate the fixture (cd tet-agent-sdk && npm run build && npm run fixture)."
+            test -s "tet-agent-sdk/vendor/$f" || {
+              echo "::error::tet-agent-sdk/vendor/$f missing — the SDK cannot sign without it"
               exit 1
-            fi
+            }
+            echo "ok  tet-agent-sdk/vendor/$f  $(shasum -a 256 "tet-agent-sdk/vendor/$f" | cut -c1-12)"
           done
 
-      # Behaviour, not bytes. See the header of check_wasm_interop.mjs: wasm-pack output is NOT
-      # byte-reproducible across toolchains (measured — a fresh build matched neither committed
-      # copy while producing identical keys and signatures for all four vectors), so a hash diff
-      # against a fresh build would go red on every compiler bump and say nothing about the crypto.
-      # What must hold is that each signer reproduces the fixture the NODE verifies in
-      # `agent_sdk_signatures_verify_on_the_node`.
       - if: needs.gate.outputs.code == 'true'
-        name: Committed signers reproduce the interop fixture
-        run: |
-          node tet-agent-sdk/scripts/check_wasm_interop.mjs \
-            tet-network/ui/public/pqc \
-            tet-agent-sdk/vendor
+        name: The committed signer reproduces the interop fixture
+        run: node tet-agent-sdk/scripts/check_wasm_interop.mjs tet-agent-sdk/vendor
 
       - if: needs.gate.outputs.code == 'true'
         name: Install wasm-pack
@@ -559,20 +561,20 @@ jobs:
         name: A freshly built signer reproduces the interop fixture
         run: node tet-agent-sdk/scripts/check_wasm_interop.mjs "$RUNNER_TEMP/pqc"
 
-      # Informational only, for the reason in the step above: a byte difference here is expected
-      # whenever rustc / wasm-bindgen / wasm-opt move, and is NOT a failure. Pinning those three
-      # is the follow-up that would make a byte diff honest.
+      # Informational only, for the reason in the step above: a byte difference is expected whenever
+      # rustc / wasm-bindgen / wasm-opt move, and is NOT a failure. Pinning those three is the
+      # follow-up that would make a byte diff honest.
       - if: needs.gate.outputs.code == 'true'
-        name: Report byte drift between the fresh build and the committed copy
+        name: Report byte drift between the fresh build and the committed signer
         run: |
           set -euo pipefail
           for f in tet_pqc_wasm.js tet_pqc_wasm_bg.wasm; do
             a=$(shasum -a 256 "$RUNNER_TEMP/pqc/$f" | cut -d' ' -f1)
-            b=$(shasum -a 256 "tet-network/ui/public/pqc/$f" | cut -d' ' -f1)
+            b=$(shasum -a 256 "tet-agent-sdk/vendor/$f" | cut -d' ' -f1)
             if [ "$a" = "$b" ]; then
               echo "$f  identical (${a:0:12})"
             else
-              echo "::notice::$f differs from the committed copy (fresh ${a:0:12}, committed ${b:0:12}) — expected across toolchain versions; behaviour is asserted above"
+              echo "::notice::$f differs from the committed signer (fresh ${a:0:12}, committed ${b:0:12}) — expected across toolchain versions; behaviour is asserted above"
             fi
           done
 
