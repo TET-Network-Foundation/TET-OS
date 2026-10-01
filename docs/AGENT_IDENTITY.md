@@ -1,8 +1,8 @@
 # Agent identity (v0)
 
-Status: **Day 2 of 3, on branch `agent-identity`. Not merged, not shipped.** Day 1 was the
+Status: **Day 3 of 3 done, on branch `agent-identity`. Not merged yet.** Day 1 was the
 cryptography: the generic signer and the manifest. Day 2 is the SDK / CLI surface and the on-disk
-format. Day 3 is the first real user.
+format. Day 3 is the first real user: the devlog on stevenexus.org, live since 2026-10-02.
 
 An agent is an automated process — a bot, a script, a Claude Code session — that holds a TET key,
 signs what it emits, and can be checked by anyone. The key is vouched for by a human wallet. No
@@ -317,11 +317,78 @@ directions, and `verify` exiting non-zero for another chain and for a payload th
 signed. In `tet-cli/scripts/agent_chain_discovery.sh`: a live node, discovery with the environment
 unset, `tet-core` verifying, refusal on another chain, and the served hash proven derived.
 
+## The first user: the devlog (Day 3)
+
+Every entry on stevenexus.org is signed by a TET agent key, and the site checks them twice: the
+build refuses to run, and each post has a "verify" link that checks it in the reader's browser. The
+code is in the site repository (github.com/Nexus-Network-Foundation/site), not here.
+
+- **The signed bytes** are the entry itself: the UTF-8 JSON array
+  `["tet-devlog-entry-v1", date, project, title, body]`, payload type
+  `application/vnd.tet.devlog-entry.v1+json`. An array, so there is no key order to disagree about.
+- **The sidecar** is the Day 2 envelope, unchanged, at `sigs/<date>-<title-slug>.sig.json`.
+- **The signer** is this SDK (`signPayloadEnvelope`), not a copy, so the bytes are the ones tet-core
+  is tested to reproduce. `tools/sign.mjs` reads the agent mnemonic from the macOS Keychain inside the
+  signing process, so it is never in a file, an environment variable or shell history.
+- **The verifier** (`files/tet-verify/verify.mjs`) is one file that both the build (Node) and the browser
+  load. Ed25519 is WebCrypto; ML-DSA-44 is the same `tet-pqc-wasm` build the SDK signs with. In the
+  browser nothing loads until someone clicks "verify".
+
+It is stricter than `verifySigEnvelope`, because a detached signature answers only half the question:
+
+| Rule | Why |
+|---|---|
+| The key must be the **pinned** agent key (`pin.json`) | without a pin, any key verifies any text |
+| The chain binding is the pinned one, never the envelope's | as on Day 2: a file cannot name its own chain |
+| Unknown envelope fields are refused | matches `deny_unknown_fields` in Rust; the TS verifier ignores them |
+| The signed payload must equal the entry **as published** | the question a detached signature exists to answer |
+
+The pin is `chain_id = tet-local-dev`, `genesis_hash = 0x9d6ccb13…bb36`. That hash was derived by a
+tet-core node built from this branch, with the seed's chain id, treasury and founder read from the
+seed, and it equals the value in `RUNNING_A_NODE.md`. A new genesis changes it, and then every entry
+has to be re-signed.
+
+`tools/sign.mjs` never re-signs an entry whose signature has stopped verifying unless that entry is
+named with `--resign`. A tool that quietly re-signed whatever changed would turn "edited after
+signing" into "signed", which is the one thing the check exists to catch.
+
+**What the site says about the limit**, on every Log tab and next to every result: a pass means the
+pinned key signed exactly these bytes and nothing has changed since. It does not say who or what wrote
+the words; the key sits on the same laptop as the agent and the author. It does not protect against
+anyone who can change the site, because the pin is served from the site. A failed build does not stop
+GitHub Pages serving the edit either; it turns the build red and the verify link shows the failure.
+
+### Guards (Day 3)
+
+`tools/test-sigs.mjs` in the site repository, run in CI before the build: 20 cases, each breaking one
+thing with a signature that is valid for something else. Each check was removed on a copy and its
+test confirmed red:
+
+| Check removed | Red |
+|---|---|
+| payload compared to the published entry | 4: body, title, date, and the build |
+| key pin | 2: an unpinned key, and only the ML-DSA half from an unpinned key |
+| Ed25519 verification | 1: a valid Ed25519 signature over another entry |
+| ML-DSA-44 verification | 1: a valid ML-DSA signature over another entry |
+| chain binding is the pin | 5 |
+| genesis hash in the binding | 4 |
+| unknown fields refused | 1: a smuggled `tet.chain_id` |
+| the build stops on a problem | 3: tampered, unsigned, orphaned |
+| a missing sidecar is an error | 1 |
+| an orphaned sidecar is an error | 1 |
+
+"Read the chain from the envelope" did not work as a control: refusing unknown fields makes it
+unreachable, so it stays green by construction, and it is not counted.
+
+End to end, in headless Chrome against a local copy: nothing under `files/tet-verify/` loaded before
+the click, a genuine entry verified, and an entry changed in the page was refused with "the entry
+differs from what was signed".
+
 ## Still to do
 
-- **Day 3**: devlog signing in `~/site/tools/build.mjs`, the honest limit stated on the site, and a
-  lazy-loaded browser verifier.
 - `tet-agent-sdk/tests/slashing_audit.test.ts` is skipped: `examples/attacker.ts` posts to
   `POST /ledger/faucet`, removed in the September clean-up. Reviving it means porting the example to
   the hybrid-signed `POST /ledger/initial_airdrop/claim`.
-- Not before the flip, and not merged to `main` until all three days are done.
+- No owner manifest for the devlog key yet. The pin is the trust anchor; an `AgentManifestV1` signed by
+  the founder wallet would let a reader check that the key is vouched for by a wallet rather than by
+  a file on the same site.
