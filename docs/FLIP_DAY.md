@@ -60,8 +60,31 @@ workflow now, and the no-op mirror that could report the same five names is gone
 green run from last week, and check the `gate (what changed)` job said `expensive path: true`: five
 green jobs that took seconds each is the cheap path, which proves nothing about code.
 
-Also worth one look: the `zk-real` job has never run on GitHub. Trigger it once manually
-(`gh workflow run zk-real.yml`) and let it finish. It takes up to ~3 hours cold; start it early.
+**Worked example, 2026-10-01** — the gate run for this flip, and what "green" has to look like:
+
+| Run | Commit | Gate | Result |
+|---|---|---|---|
+| [36853887614](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36853887614) | `f0fe405` | `EXPENSIVE_PATH=true` | all six green; rust 13m18s, docker 13m17s, wasm 3m26s, ui 54s, shell 5s |
+
+The durations are the point. A green `rust` check that completed in seconds did the cheap path and
+proves nothing; thirteen minutes is a release build plus 287 tests. In the same run `wasm` printed
+`ok tet-agent-sdk/vendor — 4 vectors reproduced` for the committed signer *and* for a fresh build,
+and `shell` printed `4 workflow file(s) clean`. Read a log line, not just a tick.
+
+Two earlier attempts that morning are worth knowing about, because both looked like something else:
+
+- [36844275750](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36844275750) —
+  `cancelled`, `started=never` on all five jobs, while the no-op mirror
+  [36844275776](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36844275776) reported
+  all five names **green**. That is what prompted the single-workflow redesign in step 4.
+- [36845749022](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36845749022) —
+  `failure` with **zero jobs**, which is GitHub refusing the workflow file (two `if:` keys on one
+  step), not a test failing. `scripts/lint_workflows.py` now catches that class before a push.
+
+`zk-real` has now run on GitHub for the first time and passed:
+[36824180892](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36824180892) — 47
+minutes, guest ELF verified embedded, real-receipt tests with mocks disabled. Re-run it after any
+change under `methods/` or `prover/`; it takes up to ~3 hours cold, so start it early.
 
 ## 2. Flip to public
 
