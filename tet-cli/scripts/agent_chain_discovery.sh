@@ -15,7 +15,7 @@ CLI="${2:-target/debug/tet-cli}"
 WORK="$(mktemp -d)"
 NODE_PID=""
 cleanup() {
-  [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null || true
+  if [ -n "$NODE_PID" ]; then kill "$NODE_PID" 2>/dev/null || true; fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -62,7 +62,7 @@ start_node() {
 }
 
 stop_node() {
-  [ -n "$NODE_PID" ] && kill "$NODE_PID" 2>/dev/null || true
+  if [ -n "$NODE_PID" ]; then kill "$NODE_PID" 2>/dev/null || true; fi
   wait "$NODE_PID" 2>/dev/null || true
   NODE_PID=""
 }
