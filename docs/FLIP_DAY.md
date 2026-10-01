@@ -64,7 +64,8 @@ green jobs that took seconds each is the cheap path, which proves nothing about 
 
 | Run | Commit | Gate | Result |
 |---|---|---|---|
-| [36853887614](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36853887614) | `f0fe405` | `EXPENSIVE_PATH=true` | all six green; rust 13m18s, docker 13m17s, wasm 3m26s, ui 54s, shell 5s |
+| [36856650111](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36856650111) | `6589518` | `EXPENSIVE_PATH=true` | all six green; rust 8m11s, docker 18m43s, wasm 38s (warm caches), ui 52s, shell 7s |
+| [36853887614](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36853887614) | `f0fe405` | `EXPENSIVE_PATH=true` | all six green cold; rust 13m18s, docker 13m17s, wasm 3m26s, ui 54s, shell 5s |
 
 The durations are the point. A green `rust` check that completed in seconds did the cheap path and
 proves nothing; thirteen minutes is a release build plus 287 tests. In the same run `wasm` printed
@@ -80,6 +81,15 @@ Two earlier attempts that morning are worth knowing about, because both looked l
 - [36845749022](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36845749022) —
   `failure` with **zero jobs**, which is GitHub refusing the workflow file (two `if:` keys on one
   step), not a test failing. `scripts/lint_workflows.py` now catches that class before a push.
+
+**The cheap path is exercised too**, and it had to be: the gate's docs-only branch cannot be reached
+from a laptop. Run
+[36856444106](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36856444106) reported
+`EXPENSIVE_PATH=false` and four of the five named jobs green in 2–6 seconds — and `ui` **failed**,
+because the cheap-path step runs before the checkout it replaces and that job sets
+`defaults.run.working-directory: tet-network/ui`, so bash had nowhere to start. Fixed with an
+explicit `working-directory: .` on all five. Each half of the control found a different defect; the
+code half alone would have shipped a CI design that breaks on every docs-only commit.
 
 `zk-real` has now run on GitHub for the first time and passed:
 [36824180892](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36824180892) — 47
