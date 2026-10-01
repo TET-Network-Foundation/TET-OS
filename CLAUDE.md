@@ -230,7 +230,11 @@ At the end of every session where something shipped, was fixed, or was found:
 2. If a project's "Where it is now" / "What's live" list, or window.NOW, is now wrong, fix it in the same file.
 3. If there's a screenshot worth showing, save it to ~/site/images/<project>-<topic>.jpg
    (max 1100px wide) and put ![caption](images/<name>.jpg) in the body.
-4. cd ~/site && git add -A && git commit -m "log: <title>" && git push
+4. After writing an entry, run `cd ~/site && node tools/sign.mjs`. The build fails on unsigned entries.
+   The agent key comes from the macOS Keychain; nothing to pass. If you changed an entry that was
+   already signed, sign.mjs refuses and names it: re-sign that one with `--resign <id>`, and only if
+   the edit is meant.
+5. cd ~/site && git add -A && git commit -m "log: <title>" && git push
 Writing rules for the entry:
 - First person, plain, short sentences. Write what happened, with the real numbers.
 - Say what didn't work too. If an earlier post was wrong, say so in the new one.

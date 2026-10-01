@@ -71,6 +71,10 @@ and that variant does not exist yet, so an invalid receipt is rejected without p
 Win95 boot sequence are specified and not built. Their tests are marked #[ignore] on purpose and stay red until
 the Phase 1 genesis (AT-5(b), AT-7(b)), so a green suite cannot be read as Pin or escrow working.
 
+**The testnet runs on a development chain id.** The public testnet runs with chain_id tet-local-dev
+and a placeholder treasury address. Renaming the chain is a genesis change and lands at Phase 1;
+every signature, including the devlog's, is bound to the current id and will be re-signed then.
+
 ## Branch protection
 
 `main` is protected by a repository ruleset that targets the default branch:
