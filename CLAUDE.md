@@ -83,6 +83,25 @@ can refuse it. With those cases the control fails as it must.
 The same shape applies wherever two independent checks guard one thing: break them one at a time, or
 you have measured their disjunction and learned nothing about either.
 
+**Never give two workflows the same name or concurrency group; a mirror that reports the same check
+names can mask the real run.** `${{ github.workflow }}` is the workflow's *name*, so two files sharing
+a name share any concurrency group built from it — and with `cancel-in-progress` one silently kills
+the other.
+
+This repository had `ci.yml` (`paths-ignore`) and a no-op `ci-noop.yml` (the complementary `paths`),
+both named `CI`, both declaring the same five job names, so that a required check would be reported
+whichever ran. Complementary path sets are **not** mutually exclusive: one push can change files in
+both, and then both fire. On 2026-10-01 a push touching `.github/**` and `docs/FLIP_DAY.md` did
+exactly that. The mirror cancelled the real run — `started=never` on all five jobs — and then
+reported all five names green. Required checks would have been satisfied by a workflow that did
+nothing. Even without the cancellation the hole remains, because two check runs sharing a name resolve
+to the most recent one.
+
+The fix is one workflow that always runs, a `gate` job that decides whether the expensive work is
+needed, and named jobs that **always start** so their check names are always reported — a job skipped
+by a job-level `if:` reports "skipped", which is not a pass. And the concurrency group is a literal,
+never `github.workflow`.
+
 ## In a must-be-refused assertion, never accept multiple reasons with `||`
 
 **Assert the specific error the test is named for.** If a cheaper check rejects first, construct the
@@ -154,10 +173,22 @@ to ignore is worse than no guard. So the hash comparison is pinned where it is m
 the copies, which must be identical to each other — and the rebuild is held to the *fixture the
 consumer verifies*.
 
-**Count the copies.** The same signer was committed twice, and the second copy
-(`tet-agent-sdk/vendor/`) was five months behind the first, unreferenced by any guard, and still
-being shipped. It happened to behave identically; that was luck. An artifact committed in two places
-is one artifact with two chances to go stale, so either dedupe it or assert the copies match.
+**Count the copies — and check which ones are actually committed.** The ML-DSA signer
+(`tet-agent-sdk/vendor/`) was five months behind what its source builds, unreferenced by any guard,
+and still being shipped. It happened to behave identically to a fresh build; that was luck.
+
+The guard written for it then got the repository wrong, which is the more useful half of the story.
+It compared "the two committed copies" — `tet-agent-sdk/vendor/` against
+`tet-network/ui/public/pqc/` — and passed locally, because a developer's tree holds both. But
+`ui/public/pqc/` carries its own `.gitignore` containing `*`: it is a build output and is **not**
+committed. On the guard's first ever execution in CI (run 36846005558) it failed, comparing a
+committed file against one that does not exist in a clean checkout.
+
+Two lessons, and the second is the one that keeps costing: an artifact committed in two places is one
+artifact with two chances to go stale, so either dedupe it or assert the copies match — and **a guard
+that has never executed is a guess**. Run it where it will run, in a clean checkout, before believing
+it. `git ls-files <path>` answers "is this committed?"; the presence of the file on your disk does
+not.
 
 ## Design principle — check every new replicated field against it
 

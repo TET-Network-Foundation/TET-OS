@@ -10,12 +10,13 @@ and the ruleset the repository is public and unprotected.
 
 ## 0. Blockers — none of this runs until these are true
 
-| Blocker | Why it blocks | Status 2026-09-29 |
+| Blocker | Why it blocks | Status 2026-09-30 22:15 UTC |
 |---|---|---|
-| **GitHub Actions billing** | Nothing has been CI-verified since `36147565171`. Flipping public with a red CI badge and no passing run is worse than waiting. Public repos get free minutes, so this may self-resolve at the Oct 1 reset — verify, don't assume | ❌ blocked, resets Oct 1 |
+| **GitHub Actions billing** | Nothing has been CI-verified since `36147565171`. Flipping public with a red CI badge and no passing run is worse than waiting. Public repos get free minutes, so this may self-resolve at the Oct 1 reset — verify, don't assume | ❌ **still blocked.** The reset is on the 1st **UTC**, and it is 2026-09-30 22:15 UTC. Local calendars showing October 1 are ahead of the billing period. Run `36783502739`: all five no-op jobs failed in 2 s with no logs, which is a spending block, not a failure |
 | ~~**The public seed is down**~~ | **Retracted 2026-09-29 — it was never down.** The laptop's network blocked 22/8002/ICMP; healthchecks.io showed the seed pinging every minute throughout. See ["I can't reach the seed" is not "the seed is down"](#i-cant-reach-the-seed-is-not-the-seed-is-down) below | ✅ seed healthy |
-| **SSH reachable from wherever you are flipping** | The flip itself needs no SSH, but step 7's devlog and any incident response do. Outbound 22 is blocked on at least one network Steve uses | ⚠️ sshd on 443 pending (see `RUNNING_A_NODE.md`) |
-| **Seed running the current binary** | The mempool-persistence fix (`2efe104`) is not deployed. Not release-blocking, but the redeploy should happen while nobody is watching, not during a launch | ⚠️ pending, needs the host back |
+| ~~**SSH reachable from wherever you are flipping**~~ | Resolved 2026-09-29: `sshd` listens on 443 as well as 22 on **both** seeds, via an `ssh.socket` drop-in listing both address families. `ufw` allows 443 | ✅ `ssh -p 443` verified on both |
+| ~~**Seed running the current binary**~~ | Resolved 2026-09-29: Helsinki redeployed, kernel updated, rebooted, and mempool persistence verified live — a tx submitted before a container restart was still mined after it, with a follower watching | ✅ deployed and verified |
+| **A second node exists now** | Not a blocker, but it changes what step 7b checks. Nuremberg (`46.224.223.54`) is a full node and bootnode, **not** a second producer. Block production still depends on Helsinki alone | ⚠️ spec risk R10 still open |
 
 If the seed cannot be restored, **do not flip**. A single-seed network with the seed down is not a
 testnet, and SECURITY.md already names the single seed as the top limitation. Publishing while it is
@@ -51,15 +52,49 @@ If `github.com:22` is also filtered, stop diagnosing the seed. Nothing about it 
 
 ```bash
 gh run list --workflow=ci.yml --limit 3
-gh run view <id>          # all four jobs green: rust, ui, shell, wasm, docker
+gh run view <id>          # all five jobs green: rust, ui, shell, wasm, docker
 ```
 
-Required: a green run **on `main`, on the current HEAD**. Not a green run from last week, and not a
-`ci-noop` run — the no-op mirror reports the same four check names by design, so read the workflow
-file that produced it, not just the check names.
+Required: a green run **on `main`, on the current HEAD**, from `ci.yml` — there is only one CI
+workflow now, and the no-op mirror that could report the same five names is gone (see step 4). Not a
+green run from last week, and check the `gate (what changed)` job said `expensive path: true`: five
+green jobs that took seconds each is the cheap path, which proves nothing about code.
 
-Also worth one look: the `zk-real` job has never run on GitHub. Trigger it once manually
-(`gh workflow run zk-real.yml`) and let it finish. It takes up to ~3 hours cold; start it early.
+**Worked example, 2026-10-01** — the gate run for this flip, and what "green" has to look like:
+
+| Run | Commit | Gate | Result |
+|---|---|---|---|
+| [36856650111](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36856650111) | `6589518` | `EXPENSIVE_PATH=true` | all six green; rust 8m11s, docker 18m43s, wasm 38s (warm caches), ui 52s, shell 7s |
+| [36853887614](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36853887614) | `f0fe405` | `EXPENSIVE_PATH=true` | all six green cold; rust 13m18s, docker 13m17s, wasm 3m26s, ui 54s, shell 5s |
+
+The durations are the point. A green `rust` check that completed in seconds did the cheap path and
+proves nothing; thirteen minutes is a release build plus 287 tests. In the same run `wasm` printed
+`ok tet-agent-sdk/vendor — 4 vectors reproduced` for the committed signer *and* for a fresh build,
+and `shell` printed `4 workflow file(s) clean`. Read a log line, not just a tick.
+
+Two earlier attempts that morning are worth knowing about, because both looked like something else:
+
+- [36844275750](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36844275750) —
+  `cancelled`, `started=never` on all five jobs, while the no-op mirror
+  [36844275776](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36844275776) reported
+  all five names **green**. That is what prompted the single-workflow redesign in step 4.
+- [36845749022](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36845749022) —
+  `failure` with **zero jobs**, which is GitHub refusing the workflow file (two `if:` keys on one
+  step), not a test failing. `scripts/lint_workflows.py` now catches that class before a push.
+
+**The cheap path is exercised too**, and it had to be: the gate's docs-only branch cannot be reached
+from a laptop. Run
+[36856444106](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36856444106) reported
+`EXPENSIVE_PATH=false` and four of the five named jobs green in 2–6 seconds — and `ui` **failed**,
+because the cheap-path step runs before the checkout it replaces and that job sets
+`defaults.run.working-directory: tet-network/ui`, so bash had nowhere to start. Fixed with an
+explicit `working-directory: .` on all five. Each half of the control found a different defect; the
+code half alone would have shipped a CI design that breaks on every docs-only commit.
+
+`zk-real` has now run on GitHub for the first time and passed:
+[36824180892](https://github.com/TET-Network-Foundation/TET-OS/actions/runs/36824180892) — 47
+minutes, guest ELF verified embedded, real-receipt tests with mocks disabled. Re-run it after any
+change under `methods/` or `prover/`; it takes up to ~3 hours cold, so start it early.
 
 ## 2. Flip to public
 
@@ -90,8 +125,11 @@ control that would have refused the original key commit outright, and because th
 
 Settings → Rules → Rulesets → New branch ruleset. Target `main`. Enable:
 
-- **Require a pull request before merging** (1 approval; self-approval is fine for a solo project —
-  the value is the diff review, not the second pair of eyes)
+- **Require a pull request before merging**, with **0 required approvals**. Not 1: on GitHub the
+  author of a pull request cannot approve it, so on a solo repository a required approval makes
+  `main` unmergeable by anyone, with no bypass actors. This was set to 1 on 2026-10-01 and found
+  when PR #1 sat at `REVIEW_REQUIRED` with every check green. The value of the PR is the diff and
+  the required checks, not a second pair of eyes; raise the count when there is a second maintainer
 - **Require status checks to pass**, selecting all five:
   - `rust (build, test, guards)`
   - `ui (next build)`
@@ -100,18 +138,27 @@ Settings → Rules → Rulesets → New branch ruleset. Target `main`. Enable:
   - `docker (images build)`
 - **Block force pushes**
 
-> **The path-filter interaction — read this before ticking "require status checks".**
+> **Read this before ticking "require status checks".**
 >
-> `ci.yml` skips itself on docs-only commits via `paths-ignore`, and a skipped workflow reports **no
-> status at all**, not success. Required checks would therefore leave every docs-only PR permanently
-> unmergeable.
+> There is **one** workflow, `ci.yml`, with no path filters. It always runs. A `gate` job decides
+> whether the expensive work is needed, and all five named jobs **start either way**, so the five
+> check names are always reported.
 >
-> `ci-noop.yml` exists precisely for this: same workflow name, same five job names, triggered on
-> exactly the paths `ci.yml` ignores. Whichever runs, the five names are reported.
+> That design replaced a two-workflow one on 2026-10-01, and the reason matters here: `ci.yml` used
+> `paths-ignore` and a no-op `ci-noop.yml` used the complementary `paths`, both named `CI`, both
+> declaring the same five job names. Complementary path sets are **not** mutually exclusive — one
+> push can change files in both — and when both fired they shared the concurrency group
+> `${{ github.workflow }}-${{ github.ref }}`, so the mirror **cancelled the real run** and then
+> reported all five names green with `started=never` on every real job. Had the ruleset been on at
+> that moment, that PR would have been mergeable on the strength of a workflow that did nothing.
 >
-> **So:** the two files must stay in lockstep. Change a job name or a path in one and docs-only PRs
-> quietly become unmergeable again. Both files carry that warning in their headers. After enabling
-> the ruleset, **test it**: open a docs-only PR and confirm it becomes mergeable.
+> Two consequences for this step:
+>
+> - Require the five names below and nothing else. `gate (what changed)` is **not** required: it is
+>   an input to the others, and requiring it adds nothing.
+> - After enabling the ruleset, **test both halves**: a docs-only PR must become mergeable (five
+>   green jobs that did the cheap path), and a code PR must show the jobs actually doing work. A
+>   green check whose job lasted three seconds is the failure mode to look for.
 
 Force-push protection matters here beyond hygiene: this repository was force-pushed three times in
 September, and the last of those was recovering from key material in history.

@@ -2,7 +2,7 @@
   "_what": "Hybrid signatures produced by tet-agent-sdk — BIP39 Ed25519 plus the SDK's own vendored tet-pqc-wasm copy — verified here by the node's own verifiers.",
   "_produced_by": "tet-agent-sdk/scripts/make_interop_fixture.mjs (npm run fixture)",
   "_produced_on": "2026-09-30",
-  "_why": "tet-agent-sdk/vendor/ is a THIRD committed copy of the ML-DSA-44 signer. CI rebuilt the wasm but never compared bytes, and the only interop fixture came from the UI's copy, so nothing tested this one. It also caught a real defect: the SDK derived Ed25519 with @polkadot/keyring (substrate mini-secret) instead of BIP39, so the same mnemonic produced wallet id 9125f505... here and c5785e18... everywhere else in TET.",
+  "_why": "tet-agent-sdk/vendor/ is the ONLY committed copy of the ML-DSA-44 signer — tet-network/ui/public/pqc/ is a gitignored build output. CI rebuilt the wasm but never compared bytes, and the only interop fixture came from a local build, so nothing tested the committed one. It also caught a real defect: the SDK derived Ed25519 with @polkadot/keyring (substrate mini-secret) instead of BIP39, so the same mnemonic produced wallet id 9125f505... here and c5785e18... everywhere else in TET.",
   "_mnemonics": "Standard BIP39 test vectors, public by design. No real funds.",
   "_level": "ML-DSA-44: 1312-byte public key, 2420-byte signature. Pinned, not inferred.",
   "cases": [
