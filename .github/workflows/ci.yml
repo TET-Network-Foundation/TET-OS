@@ -190,9 +190,12 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: line-tables-only
         run: cargo test --workspace
 
-      - if: needs.gate.outputs.code == 'true'
+      # `always()` so disk usage is reported even when the build above failed — that is when it
+      # matters. Combined with the gate rather than written as a second `if:`, because two `if:`
+      # keys on one step are duplicate YAML keys: GitHub refuses the whole workflow file, while
+      # PyYAML accepts it last-wins. That is how run 36845749022 ended with zero jobs.
+      - if: always() && needs.gate.outputs.code == 'true'
         name: Disk after build+test
-        if: always()
         run: df -h / | tail -1
 
       # The suite above already ran these. This step re-runs them BY NAME so the workflow fails
@@ -402,6 +405,18 @@ jobs:
       # shellcheck will not catch a stale path. It does catch the class of mistake that makes a
       # destructive script dangerous rather than merely wrong: unquoted expansions, `rm -rf $VAR/`
       # where VAR can be empty, and `A && B || C` read as if-then-else.
+      # In this job because it is the static-analysis job, and because its NAME is a required check
+      # name that must not change — "shellcheck deploy scripts" is a literal string in the ruleset.
+      # Renaming it to mention YAML would quietly un-require it.
+      #
+      # It exists because the local check that passed before run 36845749022 was not checking what
+      # GitHub checks: PyYAML accepts duplicate keys last-wins, GitHub refuses the file and reports a
+      # run with zero jobs. It also refuses a concurrency group built from `github.workflow`, which
+      # is how a same-named workflow cancelled the real CI run and reported its check names green.
+      - if: needs.gate.outputs.code == 'true'
+        name: workflow files are what GitHub will accept
+        run: python3 scripts/lint_workflows.py
+
       - if: needs.gate.outputs.code == 'true'
         name: shellcheck
         run: |

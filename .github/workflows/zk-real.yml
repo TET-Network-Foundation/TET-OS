@@ -45,8 +45,11 @@ on:
 permissions:
   contents: read
 
+# A literal, not `${{ github.workflow }}`. Nothing else is named "zk real prover" today, so this was
+# harmless — but it is the same latent trap that let a same-named no-op workflow cancel the real CI
+# run on 2026-10-01, and `scripts/lint_workflows.py` now refuses the pattern outright.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: zk-real-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
