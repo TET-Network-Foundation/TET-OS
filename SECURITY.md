@@ -52,6 +52,9 @@ is enough for a new node to join and sync. Only Helsinki produces blocks, so liv
 machine: if it is down, the network stops making blocks. It is also a single point of censorship and a
 single operator's machine. There is no committee and no failover.
 
+**Blocks are authenticated by the producer's PeerId, not yet by a producer signature.** Followers pin
+the producer's PeerId by default; the full producer signature lands at Phase 1.
+
 **Anonymity is weak today, by construction.** An anonymous sender is anonymous among the
 registrations *their node has seen*. On today's testnet that set is small, so the anonymity set is
 small. Registration is free, so there is no sybil resistance until the Phase 1 escrow. This is
