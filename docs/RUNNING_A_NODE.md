@@ -133,7 +133,7 @@ The script:
 Common settings used by the script:
 
 ```bash
-export TET_VALIDATOR_IDS=alice      # default if unset: TET_WALLET_ID
+export TET_GENESIS_VALIDATORS=/tmp/tet-phasec-genesis/validators.json  # written by the script
 export TET_AUTO_MINE=1
 export TET_BLOCK_TIME_SEC=5         # script default; code default is 10 if unset
 export TET_WALLET_ID=alice
@@ -561,7 +561,9 @@ single-node quickstart above ships with P2P **off**, because there is no seed to
 
 | Variable | Default (code) | Purpose |
 |----------|----------------|---------|
-| `TET_VALIDATOR_IDS` | `TET_WALLET_ID` (single id) | Comma-separated validator identities for leader election / block production. **All nodes in a testnet must use the same set** (or compatible superset). |
+| `TET_GENESIS_VALIDATORS` | *(empty set; required on mainnet)* | **Phase 1.** Path to the genesis validator set, a JSON list of `{producer_id, ed25519_pk_hex, mldsa44_pk_b64}`. It is in the genesis hash, so every node must use the same file, and changing it is a new chain. A node accepts a block only from a listed producer whose hybrid signature over the V3 `block_id` verifies. Empty on a dev chain: the node mines alone and accepts no peer blocks. Get a node's entry with `TET-Core --producer-key`. Replaces `TET_VALIDATOR_IDS`. |
+| `TET_GENESIS_TIME_MS` | `0` *(required on mainnet)* | **Phase 1.** Genesis instant, Unix ms. In the genesis hash. Block 1 must be later; the founder unlock is this plus `TET_FOUNDER_CLIFF_MS`. |
+| `TET_FOUNDER_CLIFF_MS` | 365 days | **Phase 1:** a genesis parameter, in the genesis hash. Before Phase 1 it was added to each node's own first-boot time. |
 | `TET_BOOTNODES` | *(empty)* | Comma-separated libp2p multiaddrs with `/p2p/<PeerId>`. Alias: `BOOTNODES`. |
 | `TET_P2P_LISTEN` | `/ip4/0.0.0.0/tcp/0` | **Block-plane** swarm listen multiaddr (`p2p.rs`). Production: set explicit host/port. |
 | `TET_HELLO_TIMEOUT_SEC` | **10** | Bootnode hello deadline before marking dead (`p2p.rs`). |
@@ -766,7 +768,7 @@ Admin / faucet routes may require `TET_ADMIN_API_KEY` (see `tet-core/.env.exampl
 
 1. **Bootnode reachable?** `curl` REST on bootnode; check `[P2P-block] listening on` in its logs.
 2. **`TET_BOOTNODES`** includes full `/p2p/PeerId` suffix matching bootnode’s `libp2p_keypair.bin`.
-3. **`TET_VALIDATOR_IDS`** matches across validators (leader checks reject unknown producers).
+3. **`TET_GENESIS_VALIDATORS`** is the same file on every node and lists the producer with the key it signs with (`[P2P] ❌ GOSSIP BLOCK REFUSED … producer signature` or `not in the genesis validator set` otherwise).
 4. **Firewall / loopback:** local testnet uses `127.0.0.1`; Docker uses service DNS names.
 5. **`sync.lag_blocks` > 0`** — wait for catch-up; inspect `[P2P-block] catch-up` log lines.
 

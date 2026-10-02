@@ -22,11 +22,22 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 export RISC0_SKIP_BUILD=1
-export TET_VALIDATOR_IDS="${TET_VALIDATOR_IDS:-alice}"
 export TET_AUTO_MINE=1
 export TET_BLOCK_TIME_SEC="${TET_BLOCK_TIME_SEC:-5}"
 
-rm -rf /tmp/tet-phasec-n1.db /tmp/tet-phasec-n2.db /tmp/tet-phasec-n3.db
+rm -rf /tmp/tet-phasec-n1.db /tmp/tet-phasec-n2.db /tmp/tet-phasec-n3.db /tmp/tet-phasec-genesis
+mkdir -p /tmp/tet-phasec-n1.db /tmp/tet-phasec-n2.db /tmp/tet-phasec-n3.db /tmp/tet-phasec-genesis
+
+# Phase 1: the validator set is a genesis parameter, with each producer's public key. All three
+# nodes produce as "alice", so they share one producer key: create it in node 1's dir, list it in
+# the genesis file, and copy its two seeds to nodes 2 and 3.
+ENTRY=$(TET_DB_DIR=/tmp/tet-phasec-n1.db TET_WALLET_ID=alice "$BIN" --producer-key)
+printf '[%s]\n' "$ENTRY" > /tmp/tet-phasec-genesis/validators.json
+for n in 2 3; do
+  cp /tmp/tet-phasec-n1.db/producer_ed25519_seed.raw /tmp/tet-phasec-n1.db/producer_mldsa44_seed.raw \
+    "/tmp/tet-phasec-n$n.db/"
+done
+export TET_GENESIS_VALIDATORS=/tmp/tet-phasec-genesis/validators.json
 
 echo "=== Node 1 (bootstrap) port 5010 p2p 16011 ==="
 unset TET_BOOTNODES

@@ -47,6 +47,7 @@ Listed so they are decided rather than forgotten. All `autonomous: no`; a design
 | CAAC server-measured latency | §2.3 | changes what consensus weights mean |
 | Per-block `state_root` checkpoints | §2 table | changes what nodes exchange |
 | Genesis-bridge apply arm | §2.5 | the variant is signable but has no apply arm |
+| **Validator-set rotation** (Phase 1.1) | §1 design 5, D4 | the set is in the genesis hash, so today any change is a new genesis; rotation needs a signed, consensus-applied set change and a rule for which set signs the block that changes it |
 
 ## Decisions
 
@@ -64,6 +65,12 @@ Recorded 2026-10-02. These bind every item above; an item that seems to need oth
   about, and it would let a guard pass without exercising the code it names. After §1 the only
   production reader of that clock is the future-bound check in block validation; anything else that
   reads it on the apply path is a regression.
+
+- **D4 — The producer key (2026-10-03).** Option 1 of the item 1 PR: a dedicated hybrid
+  Ed25519 + ML-DSA-44 producer keypair in the node keystore, never the wallet key. The genesis
+  validator set is a list of `(producer_id, ed25519_pk, mldsa44_pk)` in the genesis hash, so a set
+  change is a new genesis until rotation lands in Phase 1.1. The signature is over the V3 `block_id`
+  and is verified at every acceptance site; the PeerId pin stays as an optional second layer.
 
 ## Done
 
