@@ -23,9 +23,7 @@ use crate::{
     },
 };
 
-use sha2::Digest as _;
 
-use crate::models::NetworkEvent;
 
 fn faucet_bypass_limits() -> bool {
     matches!(
@@ -462,19 +460,7 @@ async fn post_genesis_bridge_enveloped_impl(
         .map(|net| (net, 0u64))
     {
         Ok((net, fee)) => {
-            if let Some(tx) = state.gossip_tx.clone() {
-                let tx_hash = format!("0x{}", hex::encode(sha2::Sha256::digest(&_tx_bytes)));
-                let event = NetworkEvent::TransferExecuted {
-                    tx_hash,
-                    from_wallet: founder_wallet.clone(),
-                    to_wallet: to_wallet.clone(),
-                    amount_micro,
-                    fee_bps: 50,
-                };
-                if let Ok(json) = serde_json::to_string(&event) {
-                    let _ = tx.send(json).await;
-                }
-            }
+            // No gossip announcement: peers refuse balance events that are not in a block.
             (
                 StatusCode::OK,
                 Json(serde_json::json!({"net_micro": net, "fee_micro": fee})),

@@ -1577,6 +1577,18 @@ fn network_event_topics(
     }
 }
 
+/// Gossip validation verdict for a decoded event. Legacy balance events carry no signature and
+/// are never applied, so they are rejected: the mesh stops forwarding them and the publisher's
+/// peer score drops. Everything else is accepted here and checked by its own handler.
+pub(crate) fn gossip_event_acceptance(event: &NetworkEvent) -> gossipsub::MessageAcceptance {
+    match event {
+        NetworkEvent::TransferExecuted { .. } | NetworkEvent::FaucetExecuted { .. } => {
+            gossipsub::MessageAcceptance::Reject
+        }
+        _ => gossipsub::MessageAcceptance::Accept,
+    }
+}
+
 /// Offload a heavy, read-only [`build_chain_hello`] (full O(N) balance scan for the state root) onto a
 /// blocking thread so it never stalls the swarm event loop (root cause of the 2026-06 wedges).
 async fn build_chain_hello_offloaded(
@@ -3194,7 +3206,7 @@ async fn run_mdns_ping_swarm(
                             let _ = swarm.behaviour_mut().gossipsub.report_message_validation_result(
                                 &message_id,
                                 source,
-                                gossipsub::MessageAcceptance::Accept,
+                                gossip_event_acceptance(&event),
                             );
                         }
                         match &event {
@@ -3524,17 +3536,10 @@ async fn run_mdns_ping_swarm(
                                     }
                                 }
                             }
-                            other => match ledger.apply_remote_event(&other) {
-                                Ok(true) => {
-                                    println!("[P2P] ✅ REMOTE EVENT APPLIED to local ledger");
-                                }
-                                Ok(false) => {
-                                    println!("[P2P] ⏭️ REMOTE EVENT ALREADY APPLIED (idempotent)");
-                                }
-                                Err(e) => {
-                                    println!("[P2P] ❌ REMOTE EVENT APPLY FAILED: {}", e);
-                                }
-                            },
+                            NetworkEvent::TransferExecuted { .. } | NetworkEvent::FaucetExecuted { .. } => {
+                                // Rejected above, so the mesh stops forwarding it; never applied.
+                                println!("[P2P] ❌ GOSSIP BALANCE EVENT REFUSED: balances change only through block apply");
+                            }
                         }
                     }
                     Err(e) => {

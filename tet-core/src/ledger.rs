@@ -554,6 +554,10 @@ fn plaintext_is_material_balance_amount_micro(pt: &[u8]) -> bool {
     amt >= 1
 }
 
+/// Reason returned when a gossip event would move a balance outside block apply.
+pub const REFUSED_GOSSIP_BALANCE_EVENT: &str =
+    "refused: balances change only through block apply, never from a gossip event";
+
 fn ledger_now_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -2120,67 +2124,25 @@ impl Ledger {
         k
     }
 
-    /// Apply a network-synced event from libp2p gossipsub to the local ledger.
+    /// Handle a network event from libp2p gossipsub against the local ledger.
     ///
-    /// CRITICAL: This must **not** re-broadcast the event. It only mutates the DB.
+    /// **No gossip event changes a balance.** Balances change only through block apply
+    /// (`apply_consensus_block_batch`), where every transaction carries its sender's hybrid
+    /// signature and every node computes the same root. `BlockMined` is applied by
+    /// `consensus::apply_remote_block_from_gossip`, never here. `TransferExecuted` and
+    /// `FaucetExecuted` are legacy events that carry no signature, so they are refused.
+    ///
+    /// CRITICAL: This must **not** re-broadcast the event.
     pub fn apply_remote_event(
         &self,
         event: &crate::models::NetworkEvent,
     ) -> Result<bool, LedgerError> {
         match event {
-            crate::models::NetworkEvent::BlockMined {
-                block_height: _,
-                block_id: _,
-                parent_block_id: _,
-                producer_id: _,
-                base_reward_micro: _,
-                compute_reward_micro: _,
-                total_reward_micro: _,
-                state_root: _,
-                txs,
-            } => {
-                let mut any = false;
-                for env in txs {
-                    match &env.tx {
-                        crate::protocol::TxV1::Transfer {
-                            from_wallet,
-                            to_wallet,
-                            amount_micro,
-                            fee_bps,
-                        } => {
-                            let tx_bytes = serde_json::to_vec(&env.tx)
-                                .map_err(|e| LedgerError::Invalid(e.to_string()))?;
-                            let tx_hash =
-                                format!("0x{}", hex::encode(sha2::Sha256::digest(&tx_bytes)));
-                            if self.apply_remote_transfer(
-                                &tx_hash,
-                                from_wallet,
-                                to_wallet,
-                                *amount_micro,
-                                *fee_bps,
-                            )? {
-                                any = true;
-                            }
-                        }
-                        _ => continue,
-                    }
-                }
-                Ok(any)
-            }
-            crate::models::NetworkEvent::TransferExecuted {
-                tx_hash,
-                from_wallet,
-                to_wallet,
-                amount_micro,
-                fee_bps,
-            } => {
-                self.apply_remote_transfer(tx_hash, from_wallet, to_wallet, *amount_micro, *fee_bps)
-            }
-            crate::models::NetworkEvent::FaucetExecuted {
-                event_id,
-                to_wallet,
-                amount_micro,
-            } => self.apply_remote_faucet(event_id, to_wallet, *amount_micro),
+            crate::models::NetworkEvent::BlockMined { .. }
+            | crate::models::NetworkEvent::TransferExecuted { .. }
+            | crate::models::NetworkEvent::FaucetExecuted { .. } => Err(LedgerError::Invalid(
+                REFUSED_GOSSIP_BALANCE_EVENT.into(),
+            )),
             // Mempool-only broadcast: enqueued by the P2P layer, never applied to the
             // ledger here. Returning `Ok(false)` keeps `apply_remote_event` idempotent.
             crate::models::NetworkEvent::TxBroadcast { .. } => Ok(false),
@@ -2199,6 +2161,8 @@ impl Ledger {
         }
     }
 
+    /// Test-only: a direct balance write, used to build divergent state in reorg tests.
+    #[cfg(test)]
     pub(crate) fn apply_remote_transfer(
         &self,
         tx_hash: &str,
@@ -2361,7 +2325,9 @@ impl Ledger {
         Ok(applied)
     }
 
-    fn apply_remote_faucet(
+    /// Test-only: a direct balance write, used to build divergent state in reorg tests.
+    #[cfg(test)]
+    pub(crate) fn apply_remote_faucet(
         &self,
         event_id: &str,
         to_wallet: &str,
