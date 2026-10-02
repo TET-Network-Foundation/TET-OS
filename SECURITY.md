@@ -47,8 +47,10 @@ small crate that has not itself been audited, and it carries every signature in 
 is Kyber Round-3, not the final FIPS-203 ML-KEM; migrating is a Phase 1 item because it invalidates
 every existing messaging identity.
 
-**One seed node.** The network has a single well-known seed. It is a single point of failure, a
-single point of censorship, and a single operator's machine. There is no committee and no failover.
+**Two seeds, one block producer.** There are two public seeds, in Helsinki and Nuremberg, and either
+is enough for a new node to join and sync. Only Helsinki produces blocks, so liveness depends on one
+machine: if it is down, the network stops making blocks. It is also a single point of censorship and a
+single operator's machine. There is no committee and no failover.
 
 **Anonymity is weak today, by construction.** An anonymous sender is anonymous among the
 registrations *their node has seen*. On today's testnet that set is small, so the anonymity set is
