@@ -1040,13 +1040,11 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     };
     assert!(!audit_hash_hex.is_empty());
 
-    // [B] Apply faucet event (simulate gossip delivery).
-    let faucet_ev = crate::models::NetworkEvent::FaucetExecuted {
-        event_id: audit_hash_hex,
-        to_wallet: sender_wallet_id.clone(),
-        amount_micro: 1000u64 * crate::ledger::STEVEMON,
-    };
-    assert!(ledger_b.apply_remote_event(&faucet_ev).unwrap());
+    // [B] Fund the same wallet directly. Gossip no longer moves balances (see
+    // `gossip_balance_events_are_refused_and_change_nothing`), so this uses the test-only writer.
+    assert!(ledger_b
+        .apply_remote_faucet(&audit_hash_hex, &sender_wallet_id, 1000u64 * crate::ledger::STEVEMON)
+        .unwrap());
 
     // [A] Submit transfer: must be 202 Accepted, DB unchanged, mempool len=1.
     let amount_micro = crate::ledger::STEVEMON;
@@ -11683,4 +11681,90 @@ async fn chain_route_reports_the_binding_every_signature_uses() {
         hash_a, hash_b,
         "two different treasuries produced the same genesis_hash — /chain is not derived"
     );
+}
+
+
+/// **SECURITY REGRESSION GUARD: no gossip event moves a balance.**
+///
+/// `TransferExecuted` and `FaucetExecuted` carry no signature. Until 2026-10-02 the block-plane gossip
+/// handler passed them to `apply_remote_event`, which applied them. Balances must change only through
+/// block apply, where every transaction is signed by its sender and every node computes the same root.
+///
+/// Both events are built so the old code would have APPLIED them: the source is the worker pool,
+/// which genesis funds and nothing locks. So the only thing that can make this pass is the refusal.
+#[test]
+fn gossip_balance_events_are_refused_and_change_nothing() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+
+    let pool = crate::ledger::WALLET_SYSTEM_WORKER_POOL;
+    let target = "b".repeat(64);
+    let amount = crate::ledger::STEVEMON;
+    let pool_before = ledger.balance_micro(pool).unwrap();
+    assert!(pool_before >= 2 * amount, "the pool must be able to fund both events, or the test proves nothing");
+    let target_before = ledger.balance_micro(&target).unwrap();
+    let root_before = ledger.compute_state_root().unwrap();
+
+    let events = [
+        crate::models::NetworkEvent::TransferExecuted {
+            tx_hash: "0xguard-transfer".into(),
+            from_wallet: pool.into(),
+            to_wallet: target.clone(),
+            amount_micro: amount,
+            fee_bps: 0,
+        },
+        crate::models::NetworkEvent::FaucetExecuted {
+            event_id: "guard-faucet".into(),
+            to_wallet: target.clone(),
+            amount_micro: amount,
+        },
+    ];
+    for ev in &events {
+        let err = ledger.apply_remote_event(ev).expect_err("a gossip balance event must be refused");
+        assert!(
+            err.to_string().contains(crate::ledger::REFUSED_GOSSIP_BALANCE_EVENT),
+            "refused for the wrong reason: {err}"
+        );
+    }
+    assert_eq!(ledger.balance_micro(pool).unwrap(), pool_before, "pool balance moved");
+    assert_eq!(ledger.balance_micro(&target).unwrap(), target_before, "target balance moved");
+    assert_eq!(ledger.compute_state_root().unwrap(), root_before, "state root moved");
+}
+
+/// **SECURITY REGRESSION GUARD: legacy balance events are rejected by the mesh, not forwarded.**
+///
+/// Rejecting at gossip validation stops old peers' copies spreading and lowers the publisher's peer
+/// score. Other event types must still be accepted, so a verdict of "reject everything" fails too.
+#[test]
+fn legacy_balance_gossip_is_rejected_and_other_events_are_not() {
+    use libp2p::gossipsub::MessageAcceptance;
+    let transfer = crate::models::NetworkEvent::TransferExecuted {
+        tx_hash: "0x00".into(),
+        from_wallet: "a".repeat(64),
+        to_wallet: "b".repeat(64),
+        amount_micro: 1,
+        fee_bps: 0,
+    };
+    let faucet = crate::models::NetworkEvent::FaucetExecuted {
+        event_id: "e".into(),
+        to_wallet: "b".repeat(64),
+        amount_micro: 1,
+    };
+    let block = crate::models::NetworkEvent::BlockMined {
+        block_height: 1,
+        block_id: "0x00".into(),
+        parent_block_id: None,
+        producer_id: "p".into(),
+        base_reward_micro: 0,
+        compute_reward_micro: 0,
+        total_reward_micro: 0,
+        state_root: "0x00".into(),
+        txs: vec![],
+    };
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&transfer), MessageAcceptance::Reject));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&faucet), MessageAcceptance::Reject));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&block), MessageAcceptance::Accept));
 }

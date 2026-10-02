@@ -22,9 +22,9 @@ pub enum NetworkEvent {
         txs: Vec<SignedTxEnvelopeV1>,
     },
 
-    /// A ledger transfer that has been executed on a remote node.
-    ///
-    /// Receiver nodes should apply it **idempotently** (keyed by `tx_hash`) without re-broadcast.
+    /// Legacy: a transfer executed on another node. It carries no signature, so receivers
+    /// **refuse** it (`Ledger::apply_remote_event`) and gossip rejects it. Balances change only
+    /// through block apply. Kept so old peers' messages still parse and can be rejected by type.
     TransferExecuted {
         tx_hash: String,
         from_wallet: String,
@@ -33,10 +33,8 @@ pub enum NetworkEvent {
         fee_bps: u64,
     },
 
-    /// Admin faucet credit observed on another node (pool → user).
-    ///
-    /// Remote receivers debit [`crate::ledger::WALLET_SYSTEM_WORKER_POOL`] and credit `to_wallet`,
-    /// keyed by `event_id` for idempotency (typically the originating node's audit hash hex).
+    /// Legacy: a faucet credit observed on another node. Unsigned, so refused and rejected like
+    /// [`NetworkEvent::TransferExecuted`].
     FaucetExecuted {
         event_id: String,
         to_wallet: String,
