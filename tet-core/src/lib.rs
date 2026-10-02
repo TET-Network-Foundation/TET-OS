@@ -10,6 +10,7 @@ pub mod genesis;
 pub mod metrics;
 pub mod models;
 pub mod pqc_keystore;
+pub mod producer_key;
 pub mod protocol;
 pub mod quantum_shield;
 pub mod test_env;

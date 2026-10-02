@@ -23,6 +23,7 @@ mod oracle;
 mod p2p;
 mod p2p_keystore;
 mod p2p_network;
+mod producer_key;
 mod protocol;
 mod quantum_shield;
 mod render_farm;
