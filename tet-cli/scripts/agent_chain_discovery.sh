@@ -15,7 +15,9 @@ CLI="${2:-target/debug/tet-cli}"
 WORK="$(mktemp -d)"
 NODE_PID=""
 cleanup() {
-  if [ -n "$NODE_PID" ]; then kill "$NODE_PID" 2>/dev/null || true; fi
+  # Wait for the node to exit before deleting its directory: killed but still flushing, it can
+  # recreate files under $WORK while rm runs ("Directory not empty", PR #9's first CI run).
+  if [ -n "$NODE_PID" ]; then kill "$NODE_PID" 2>/dev/null || true; wait "$NODE_PID" 2>/dev/null || true; fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT
