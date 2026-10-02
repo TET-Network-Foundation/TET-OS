@@ -62,15 +62,15 @@ Revisit the quarter if §1's design lands materially early or late. Move it in p
 
 ### The defect
 
-`apply_consensus_block_batch` (`ledger.rs:1678`) and `compute_state_root_after_remote_block`
-(`ledger.rs:1432`) both call:
+`apply_consensus_block_batch` (`ledger.rs:1640`) and `compute_state_root_after_remote_block`
+(`ledger.rs:1398`) both call:
 
 ```rust
 let locked_sum = self.locked_balance_micro(&from, ledger_now_ms())?;
 ```
 
 `ledger_now_ms()` reads `SystemTime::now()` — the **node's own wall clock**. `locked_balance_micro`
-(`ledger.rs:4730-4755`) is explicitly time-gated:
+(`ledger.rs:4639-4664`) is explicitly time-gated:
 
 ```rust
 if row.wallet == peer && row.unlock_at_ms > now_ms { sum += row.amount_micro }   // vest locks
@@ -112,30 +112,130 @@ not when the block was produced, and it is outside `block_id` exactly as §1 des
 consensus rule that reads it is reading a different value on every node, which is the mechanism
 this section exists to remove.
 
-### The fix
+### Inventory (2026-10-02, `main` at `4502580`)
 
-1. Add a `timestamp_ms` field to the block record, set by the producer and covered by `block_id`
-   (it already hashes `height ‖ parent ‖ state_root ‖ tx_hashes ‖ producer_id` — extend it).
-2. Thread it through `apply_consensus_block_batch` and
-   `compute_state_root_after_remote_block` as an explicit parameter.
-3. Replace every `ledger_now_ms()` call on an apply/preview path with that parameter.
-4. Validate it at apply time: monotonic vs the parent, and within a bounded drift of the receiving
-   node's clock — otherwise a producer can mint or freeze funds by lying about time.
+Every clock read reachable from the two entry points, found by reading each callee rather than by
+grep. Line numbers drift; the function names are the stable part.
+
+| Site | Path | Decides | Consensus? |
+|---|---|---|---|
+| `ledger.rs:1449` | preview, `Transfer` arm | `locked_balance_micro(from, now)` → applies or `InsufficientFunds` | **yes**, balance root |
+| `ledger.rs:1695` | apply, `Transfer` arm | the same | **yes** |
+| `ledger.rs:1567` | preview (`:1487`) **and** apply (`:1821`), via `apply_file_fee_to_balance_map` | the file-fee payer's spendable balance | **yes** — a second site, missed by the first version of this section |
+| `ledger.rs:1750` | apply, `VerifyZkProof` | `ts_ms` in the `zk_verified` meta record | no — read only by `audit_events_recent` (REST); differs per node |
+| `ledger.rs:1770` | apply, `VerifyZkProof` | `task.processed_at_ms` | no — read by nothing in consensus |
+| `ledger.rs:3217` | apply, `WorkerRegister`, via `apply_worker_register` | `registered_at_ms` on the worker record | no — a sort key for the REST worker list |
+
+The comparison itself is `locked_balance_micro`: vest rows `unlock_at_ms > now` (`:4647`) and the
+founder cliff `now < unlock_at` (`:4660`).
+
+**The other half of the defect: what the time is compared *against* is per-node too.**
+
+- **Founder unlock.** `apply_genesis_allocation` (`ledger.rs:4389-4390`) stores
+  `unlock_at = ledger_now_ms() + founder_genesis_cliff_ms()`, and `founder_genesis_cliff_ms` reads
+  `TET_FOUNDER_CLIFF_MS` from the environment (`:564`). Every node runs it at its own first boot
+  (`main.rs:395`), so every node holds a different founder unlock time — apart by however far apart
+  the nodes were first started — and the environment can differ too. The genesis hash covers
+  neither.
+- **Worker reward vest locks** take `unlock_at` from the minting node's clock plus
+  `TET_WORKER_VEST_MS`. The mint is one of the §2.5 paths, so the rows exist only on that node anyway;
+  it becomes this section's problem when the mint is consensus-routed.
+
+**Adjacent, not clock reads:** the stored block `ts_ms` is each node's own receive time
+(`consensus.rs:909`), and `RemoteBlockGossip` (`consensus.rs:72`) carries no timestamp at all — the
+wire format changes, not only `block_id`. `TET_CONSENSUS_LEADER_MODE` (`consensus.rs:297`) is a
+per-node environment value that decides the expected leader during validation (`:1544`): the same
+class with a different input, and it belongs in genesis. `TET_SNAPSHOT_EVERY_BLOCKS` is operational
+only.
+
+### The design
+
+1. **Header.** Add `ts_ms: u64`, set by the producer, covered by a V3 `block_id` with its own domain
+   tag (`TET_BLOCK_ID_V3|…|ts=`), and carried on gossip and catch-up. Rename the node-local field to
+   `received_at_ms` so nothing reads it by mistake.
+2. **Apply takes it as a parameter.** `apply_consensus_block_batch` and
+   `compute_state_root_after_remote_block` gain `block_ts_ms` and thread it to all six sites above,
+   through `apply_file_fee_to_balance_map` and `apply_worker_register`. After this, `ledger_now_ms()`
+   is unreachable from either function.
+3. **Genesis gets a clock.** `genesis_time_ms` and the cliff length go into the genesis hash payload.
+   The founder unlock is `genesis_time_ms + cliff`, identical everywhere. `TET_FOUNDER_CLIFF_MS`
+   stops being a consensus input; a dev chain that wants cliff 0 says so in its genesis and so gets a
+   different hash. Worker vest becomes `block_ts_ms + protocol constant` when that mint is routed.
+4. **Validation.**
+   - `ts_ms > parent.ts_ms` — deterministic, evaluated identically everywhere.
+   - `ts_ms ≤ local_now + 60 s` — a block further ahead is **held and retried, not rejected**.
+     Rejecting it would make validity depend on when a node looked, which is a new way to fork. Held,
+     it becomes valid as the local clock passes it.
+   - **No lower bound against local time.** Catch-up replays blocks whose time is long past; any
+     "too old" rule breaks sync.
+
+**Why 60 s.** The shortest time-gated window anywhere is the planned anonymous escrow's 24 h;
+60 s of early release is 0.07 % of it, and negligible against a 90-day vest or a 365-day cliff.
+NTP-synced hosts agree to well under a second, so 60 s also absorbs a badly-synced laptop. Too small
+costs a skewed follower a held block that heals itself; too large costs early release of that size.
+Bitcoin's 2 h is no template — it is sized for 10-minute blocks.
+
+**What a producer can do by lying about time:**
+
+- **Release funds early:** by at most 60 s — the future bound, and monotonicity keeps it there.
+- **Freeze funds by holding time back:** not prevented by these rules. Monotonicity lets time crawl.
+  With a single producer (risk R10) this is the same power as declining to include a transaction,
+  which that producer already has; a median-time-past rule only helps once several producers
+  alternate. Stated here so the bound above is not read as covering it.
+
+### Migration — this is a new genesis
+
+- **State:** nothing carries over (Strategy C). Balances, vest locks, the worker registry and the
+  Tmail key directory start empty. Mnemonics still derive the same wallets; balances do not survive.
+- **Signatures:** a new `chain_id` and a `genesis_hash` that now includes `genesis_time_ms` and the
+  cliff invalidate everything bound to the chain: transaction envelopes, Tmail key registrations,
+  anonymous registrations, agent payloads and manifests — including the devlog's (`tools/pin.mjs`
+  with the new values, then `tools/sign.mjs --resign-all --previous-pin <old>`). Agent keys do not
+  change. Update the published hash in `RUNNING_A_NODE.md`, the UI's `verify-genesis-hash.mjs`, and
+  the SECURITY.md `tet-local-dev` limitation.
+- **Ceremony order:**
+  1. Freeze a tag with the batch merged: full CI, a fresh `zk-real`, every negative control.
+  2. Fix the genesis parameters — chain id, `genesis_time_ms` (a published future instant), the real
+     treasury, founder schedule, reserve, denomination, leader mode — and compute the hash **with
+     tet-core**, never by hand.
+  3. Publish the hash and genesis time, and new seed multiaddrs if per-plane keys change PeerIds.
+  4. Archive the old chain's data; wipe the seeds.
+  5. Start Helsinki — no block can exist before `genesis_time + 60 s` by the future bound — then
+     Nuremberg; check heights and roots agree.
+  6. Re-sign everything chain-bound (devlog; users re-register Tmail keys, which FIPS-203 forces anyway).
+  7. Docs: SECURITY.md, `RUNNING_A_NODE.md`, the red-by-design tests turning green, a devlog entry.
+
+### Guards
+
+**Replace `wallclock_time_changes_spendability_for_the_same_block`, do not flip it.** It calls
+`locked_balance_micro(t)` with two injected times, and that function *should* depend on time — locks
+expire. `assert_ne!` → `assert_eq!` there would demand locks that never unlock. The invariant is that
+the **applying node's clock** no longer matters; the **block's** time does.
+
+- `same_block_applies_identically_at_any_node_clock`: one state with a vest lock unlocking at U; one
+  block, `ts_ms = U − 1`, holding a `Transfer` **and** a `FileFee` that need the locked funds; apply on
+  two copies with the node clock forced to U − 1 and to U + 1 year. Roots equal; both refuse.
+- Its companion: the same transactions in a block with `ts_ms = U + 1` apply on both — so "always
+  refuse" cannot pass the first.
+- Negative controls, one site at a time: restore `ledger_now_ms()` at the preview `Transfer` site, the
+  apply `Transfer` site, and `FileFee` → each turns the primary guard red. A `Transfer`-only guard would
+  leave `FileFee` unguarded.
+- Founder schedule: two nodes applying genesis at different forced clocks, one with
+  `TET_FOUNDER_CLIFF_MS` set → identical unlock time and root. Control: restore `now + cliff`.
+- Validation: `ts ≤ parent` refused; `> now + 60 s` held then accepted once the clock passes it; an
+  old block during catch-up accepted; `ts` altered after the fact breaks `block_id`. Controls: drop
+  each bound, and drop `ts` from `block_id`.
+
+All of these need a test seam for the node clock. After the fix, the only legitimate reader of it is
+the future-bound check.
 
 **Consensus-breaking on two counts** — the block schema changes and apply outcomes change. It
 cannot be shipped to a running chain. It is free at a genesis ceremony.
 
-### Test that inverts here
+### Order of the §2 batch
 
-[`tet-core/src/tests.rs`](../tet-core/src/tests.rs) →
-`wallclock_time_changes_spendability_for_the_same_block`
-
-It currently asserts the **broken** behaviour: the same wallet, the same stored state, two injected
-timestamps, and a spendability gate that flips — rejected during the vest, accepted after. It is
-green today and carries `TODO(9828)`.
-
-**When this fix lands, invert it:** the two evaluations must become identical, so `assert_ne!`
-becomes `assert_eq!`. If the test still passes unchanged after the fix, the fix did not work.
+`docs/QUEUE.md` holds the batch in implementation order, marking which items can be built
+unattended on a branch and which need a design decision first.
 
 ---
 
