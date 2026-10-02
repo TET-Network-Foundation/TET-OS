@@ -44,7 +44,7 @@ const b64 = (u8) => Buffer.from(u8).toString("base64");
 const unb64 = (s) => new Uint8Array(Buffer.from(s, "base64"));
 const hex = (u8) => Buffer.from(u8).toString("hex");
 
-// --- chain_binding.ts replica (buildGenesisPayloadV1 / deterministicGenesisHashHex) ---
+// --- chain_binding.ts replica (buildGenesisPayloadV2 / deterministicGenesisHashHex) ---
 const STEVEMON = 1_000_000n;
 const MAX_SUPPLY_MICRO = 10_000_000_000n * STEVEMON;
 const FOUNDER_MICRO = 2_500_000_000n * STEVEMON;
@@ -54,9 +54,18 @@ const RESERVE_MICRO = 0n;
 const WALLET_WORKER_POOL = "0000000000000000000000000000000000000000000000000000000000000001";
 const WALLET_PROTOCOL_RESERVE = "0000000000000000000000000000000000000000000000000000000000000003";
 
-function buildGenesisPayloadV1(chainId, founder, treasury) {
+// v2 (Phase 1): genesis time, founder cliff and the validator-set digest are in the hash. Set them
+// to what the node runs with; the defaults match a dev node that sets none of them.
+const GENESIS_TIME_MS = process.env.TET_GENESIS_TIME_MS || "0";
+const FOUNDER_CLIFF_MS = process.env.TET_FOUNDER_CLIFF_MS || String(365 * 86_400_000);
+// tet-core `genesis::validators_digest_hex([])` = SHA-256("tet-validators-v1"): no validators.
+const GENESIS_VALIDATORS_DIGEST =
+  process.env.TET_GENESIS_VALIDATORS_DIGEST ||
+  "48026ca38ababf8c4f25aa286b5fafa47914cabd5026b7ea9c4fba9ee3b9dd38";
+
+function buildGenesisPayloadV2(chainId, founder, treasury) {
   return (
-    `tet-genesis-v1|chain_id=${chainId}` +
+    `tet-genesis-v2|chain_id=${chainId}` +
     `|founder=${founder.toLowerCase()}` +
     `|founder_micro=${FOUNDER_MICRO}` +
     `|worker_pool=${WALLET_WORKER_POOL}` +
@@ -65,7 +74,10 @@ function buildGenesisPayloadV1(chainId, founder, treasury) {
     `|treasury_micro=${TREASURY_MICRO}` +
     `|reserve=${WALLET_PROTOCOL_RESERVE}` +
     `|reserve_micro=${RESERVE_MICRO}` +
-    `|max_supply_micro=${MAX_SUPPLY_MICRO}`
+    `|max_supply_micro=${MAX_SUPPLY_MICRO}` +
+    `|genesis_time_ms=${GENESIS_TIME_MS}` +
+    `|founder_cliff_ms=${FOUNDER_CLIFF_MS}` +
+    `|validators=${GENESIS_VALIDATORS_DIGEST}`
   );
 }
 
@@ -78,7 +90,7 @@ async function chainBinding(baseUrl) {
     if (typeof d.founder_wallet_id === "string") founder = d.founder_wallet_id;
   } catch {}
   if (!founder) throw new Error(`could not read founder_wallet_id from ${baseUrl}/status`);
-  const payload = buildGenesisPayloadV1(CHAIN_ID, founder, TREASURY);
+  const payload = buildGenesisPayloadV2(CHAIN_ID, founder, TREASURY);
   const genesisHash = "0x" + hex(sha256(enc(payload)));
   return { chainId: CHAIN_ID, genesisHash, founder };
 }

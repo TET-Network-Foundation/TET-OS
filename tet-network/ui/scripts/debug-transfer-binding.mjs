@@ -42,11 +42,15 @@ const MAX_SUPPLY_MICRO = 10_000_000_000n * STEVEMON;
 
 function buildGenesisPayload(chainId, founder, treasury) {
   return (
-    `tet-genesis-v1|chain_id=${chainId}|founder=${founder}|founder_micro=${GENESIS_FOUNDER_SHARE_MICRO}` +
+    `tet-genesis-v2|chain_id=${chainId}|founder=${founder}|founder_micro=${GENESIS_FOUNDER_SHARE_MICRO}` +
     `|worker_pool=0000000000000000000000000000000000000000000000000000000000000001` +
     `|worker_pool_micro=${GENESIS_WORKER_POOL_SHARE_MICRO}|treasury=${treasury}` +
     `|treasury_micro=${GENESIS_TREASURY_SHARE_MICRO}|reserve=0000000000000000000000000000000000000000000000000000000000000003` +
-    `|reserve_micro=0|max_supply_micro=${MAX_SUPPLY_MICRO}`
+    `|reserve_micro=0|max_supply_micro=${MAX_SUPPLY_MICRO}` +
+    // v2 (Phase 1). Defaults match a dev node that sets none of these.
+    `|genesis_time_ms=${process.env.TET_GENESIS_TIME_MS || "0"}` +
+    `|founder_cliff_ms=${process.env.TET_FOUNDER_CLIFF_MS || String(365 * 86_400_000)}` +
+    `|validators=${process.env.TET_GENESIS_VALIDATORS_DIGEST || "48026ca38ababf8c4f25aa286b5fafa47914cabd5026b7ea9c4fba9ee3b9dd38"}`
   );
 }
 

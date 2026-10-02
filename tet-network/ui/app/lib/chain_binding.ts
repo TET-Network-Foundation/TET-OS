@@ -1,6 +1,6 @@
 /**
  * Chain binding for hybrid-signed REST messages.
- * Genesis hash MUST match tet-core `ledger::deterministic_genesis_hash` (SHA-256 over UTF-8 payload).
+ * Genesis hash MUST match tet-core `genesis::GenesisParams::hash` (SHA-256 over the UTF-8 v2 payload).
  */
 /** 1 TET = 1_000_000 Stevemon (6 decimals); max supply 10B TET. */
 const STEVEMON = 1_000_000n;
@@ -38,6 +38,9 @@ function envText(name: string): string {
     NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID: process.env.NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID,
     NEXT_PUBLIC_TET_FOUNDER_WALLET: process.env.NEXT_PUBLIC_TET_FOUNDER_WALLET,
     NEXT_PUBLIC_TET_TREASURY_ADDRESS: process.env.NEXT_PUBLIC_TET_TREASURY_ADDRESS,
+    NEXT_PUBLIC_TET_GENESIS_TIME_MS: process.env.NEXT_PUBLIC_TET_GENESIS_TIME_MS,
+    NEXT_PUBLIC_TET_FOUNDER_CLIFF_MS: process.env.NEXT_PUBLIC_TET_FOUNDER_CLIFF_MS,
+    NEXT_PUBLIC_TET_GENESIS_VALIDATORS_DIGEST: process.env.NEXT_PUBLIC_TET_GENESIS_VALIDATORS_DIGEST,
   };
   return map[name]?.trim() ?? "";
 }
@@ -83,21 +86,69 @@ export function expectedTreasuryWalletId(): string {
   );
 }
 
+/** `validators_digest_hex([])` in tet-core: SHA-256("tet-validators-v1"), a genesis with no validators. */
+export const EMPTY_GENESIS_VALIDATORS_DIGEST =
+  "48026ca38ababf8c4f25aa286b5fafa47914cabd5026b7ea9c4fba9ee3b9dd38";
+
+/** Mirrors tet-core `genesis::founder_cliff_ms_from_env` (default 365 days). */
+const DEFAULT_FOUNDER_CLIFF_MS = 365n * 86_400_000n;
+
+function envU64(name: string, fallback: bigint): bigint {
+  const v = envText(name);
+  if (!v) return fallback;
+  if (!/^[0-9]+$/.test(v)) throw new Error(`${name} must be a non-negative integer`);
+  return BigInt(v);
+}
+
+/** Mirrors tet-core `genesis::genesis_time_ms_from_env` (dev default 0; required on mainnet). */
+export function publicGenesisTimeMs(): bigint {
+  if (truthyEnv("NEXT_PUBLIC_TET_MAINNET") && !envText("NEXT_PUBLIC_TET_GENESIS_TIME_MS")) {
+    throw new Error("NEXT_PUBLIC_TET_GENESIS_TIME_MS is required on mainnet");
+  }
+  return envU64("NEXT_PUBLIC_TET_GENESIS_TIME_MS", 0n);
+}
+
+export function publicFounderCliffMs(): bigint {
+  return envU64("NEXT_PUBLIC_TET_FOUNDER_CLIFF_MS", DEFAULT_FOUNDER_CLIFF_MS);
+}
+
+/**
+ * The genesis validator-set digest, as published with the genesis (tet-core
+ * `genesis::validators_digest_hex`). The UI takes the digest, not the set: it only needs to name the
+ * chain. Dev default: the empty set.
+ */
+export function publicGenesisValidatorsDigest(): string {
+  const v = envText("NEXT_PUBLIC_TET_GENESIS_VALIDATORS_DIGEST").toLowerCase();
+  if (!v) {
+    if (truthyEnv("NEXT_PUBLIC_TET_MAINNET")) {
+      throw new Error("NEXT_PUBLIC_TET_GENESIS_VALIDATORS_DIGEST is required on mainnet");
+    }
+    return EMPTY_GENESIS_VALIDATORS_DIGEST;
+  }
+  if (v.length !== 64 || !/^[0-9a-f]+$/.test(v)) {
+    throw new Error("NEXT_PUBLIC_TET_GENESIS_VALIDATORS_DIGEST must be 64 hex chars");
+  }
+  return v;
+}
+
 export type GenesisBindingInputs = {
   chainId: string;
   founderWalletId: string;
   treasuryWalletId: string;
+  genesisTimeMs: bigint;
+  founderCliffMs: bigint;
+  validatorsDigest: string;
 };
 
 /**
- * Byte-for-byte payload string from tet-core `deterministic_genesis_hash` (ledger.rs).
+ * Byte-for-byte payload string from tet-core `genesis::GenesisParams::payload` (v2, Phase 1).
  * Field order and `|` separators are normative.
  */
-export function buildGenesisPayloadV1(inputs: GenesisBindingInputs): string {
+export function buildGenesisPayloadV2(inputs: GenesisBindingInputs): string {
   const founder = inputs.founderWalletId.trim().toLowerCase();
   const treasury = inputs.treasuryWalletId.trim().toLowerCase();
   return (
-    `tet-genesis-v1|chain_id=${inputs.chainId}` +
+    `tet-genesis-v2|chain_id=${inputs.chainId}` +
     `|founder=${founder}` +
     `|founder_micro=${GENESIS_FOUNDER_SHARE_MICRO}` +
     `|worker_pool=${WALLET_WORKER_POOL}` +
@@ -106,14 +157,17 @@ export function buildGenesisPayloadV1(inputs: GenesisBindingInputs): string {
     `|treasury_micro=${GENESIS_TREASURY_SHARE_MICRO}` +
     `|reserve=${WALLET_PROTOCOL_RESERVE}` +
     `|reserve_micro=${GENESIS_PROTOCOL_RESERVE_SHARE_MICRO}` +
-    `|max_supply_micro=${MAX_SUPPLY_MICRO}`
+    `|max_supply_micro=${MAX_SUPPLY_MICRO}` +
+    `|genesis_time_ms=${inputs.genesisTimeMs}` +
+    `|founder_cliff_ms=${inputs.founderCliffMs}` +
+    `|validators=${inputs.validatorsDigest}`
   );
 }
 
 export async function deterministicGenesisHashHex(
   inputs: GenesisBindingInputs,
 ): Promise<string> {
-  const payload = buildGenesisPayloadV1(inputs);
+  const payload = buildGenesisPayloadV2(inputs);
   return `0x${await sha256HexUtf8(payload)}`;
 }
 
@@ -149,6 +203,9 @@ export async function expectedChainBinding(baseUrl?: string): Promise<{
     chainId,
     founderWalletId: founder,
     treasuryWalletId: treasury,
+    genesisTimeMs: publicGenesisTimeMs(),
+    founderCliffMs: publicFounderCliffMs(),
+    validatorsDigest: publicGenesisValidatorsDigest(),
   });
   return { chainId, genesisHash };
 }
