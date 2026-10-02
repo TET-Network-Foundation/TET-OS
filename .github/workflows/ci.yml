@@ -198,6 +198,40 @@ jobs:
           CARGO_PROFILE_TEST_DEBUG: line-tables-only
         run: cargo test --workspace
 
+      # A CLI is a surface no cargo test touches, and `verify` returning 0 on a bad signature is
+      # exactly the defect a unit test cannot see. The script asserts both directions: the SDK's
+      # envelopes verify, tet-cli's own signing reproduces them byte for byte, and verify EXITS
+      # NON-ZERO for another chain and for a payload that is not what was signed.
+      - if: needs.gate.outputs.code == 'true'
+        name: agent identity — tet-cli verifies what the SDK signed
+        run: |
+          set -euo pipefail
+          cargo build -p tet-cli
+          tet-cli/scripts/agent_cli_interop.sh target/debug/tet-cli
+
+      # Node lives in this job rather than a new one: the end-to-end check below needs BOTH the Rust
+      # binaries and the SDK, and installing Node here is far cheaper than installing Rust in the ui
+      # job. No new job, so the five required check names stay exactly as the ruleset lists them.
+      - if: needs.gate.outputs.code == 'true'
+        name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The whole point of GET /chain: an agent cannot DERIVE the genesis hash, because tet-core
+      # computes it from treasury configuration. This starts a real node, lets the SDK discover the
+      # binding with TET_CHAIN_ID and TET_GENESIS_HASH UNSET — the signing step refuses to run if
+      # either is set, so "it worked" cannot mean "it was told" — signs, and has tet-core's verifier
+      # accept it. Then it checks the served hash is derived rather than constant by starting a second
+      # node with a different treasury.
+      - if: needs.gate.outputs.code == 'true'
+        name: agent identity — GET /chain discovery, end to end
+        run: |
+          set -euo pipefail
+          (cd tet-agent-sdk && npm ci --silent && npm run build --silent)
+          cargo build -p tet-core --bin TET-Core
+          tet-cli/scripts/agent_chain_discovery.sh target/debug/TET-Core target/debug/tet-cli
+
       # `always()` so disk usage is reported even when the build above failed — that is when it
       # matters. Combined with the gate rather than written as a second `if:`, because two `if:`
       # keys on one step are duplicate YAML keys: GitHub refuses the whole workflow file, while
@@ -379,18 +413,19 @@ jobs:
       # rejected either -- both halves were self-consistent. The Rust side pins the fixture; this
       # pins the SDK CODE against it, which is what fails if the old derivation comes back.
       - if: needs.gate.outputs.code == 'true'
-        name: agent SDK derives the same hybrid identity as the node
+        name: agent SDK — derivation and cross-language agent signing
         working-directory: tet-agent-sdk
         run: |
           set -euo pipefail
           npm ci --silent
           npm run build --silent
-          out=$(node --experimental-vm-modules ./node_modules/jest/bin/jest.js \
-            --runInBand tests/derivation.test.ts 2>&1)
+          out=$(npm test --silent 2>&1)
           echo "$out"
-          # jest exits 0 when a path filter matches nothing, so assert the count.
-          echo "$out" | grep -qE 'Tests:[[:space:]]+10 passed, 10 total' || {
-            echo "::error::the derivation guard did not run its 10 assertions"
+          # jest exits 0 when a filter matches nothing, so the counts are asserted rather than the
+          # exit code. The skipped suite is tests/slashing_audit.test.ts, which posts to a route the
+          # September clean-up removed; the reason is recorded in the file.
+          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 49 passed, 50 total' || {
+            echo "::error::the agent SDK guards did not run — expected 49 passed and 1 skipped"
             exit 1
           }
 
@@ -446,9 +481,9 @@ jobs:
         run: |
           set -euo pipefail
           shellcheck --version
-          # Every script, and the run fails on ANY finding. The four are clean as of this commit,
-          # so there is no backlog to normalise and a new finding is always new.
-          shellcheck deploy/*.sh
+          # Every script, and the run fails on ANY finding. All are clean as of this commit, so
+          # there is no backlog to normalise and a new finding is always new.
+          shellcheck deploy/*.sh tet-cli/scripts/*.sh
 
       # The refusal paths are the whole safety property, so they are asserted rather than assumed.
       # None of these reaches ssh: each exits during argument validation.

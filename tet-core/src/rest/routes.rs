@@ -62,6 +62,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::pages::get_status),
         )
         .route(
+            "/chain",
+            axum::routing::get(super::handlers::network::get_chain),
+        )
+        .route(
             "/logout",
             axum::routing::post(super::handlers::pages::post_logout),
         )

@@ -29,7 +29,21 @@ async function waitForHttpOk(url: string, timeoutMs: number): Promise<void> {
   }
 }
 
-describe("ZK-Court slashing audit", () => {
+// SKIPPED, with the cause named rather than left as a mystery.
+//
+// `examples/attacker.ts` posts to `POST /ledger/faucet`, which this node answers with 404: the route
+// was removed in the September clean-up that deleted the unsigned money-moving endpoints. The
+// replacement is the hybrid-signed `POST /ledger/initial_airdrop/claim`, so reviving this test means
+// porting the example to that path — a piece of work with its own verification, not a line to slip
+// into an unrelated commit.
+//
+// Two things were fixed on the way to finding that out (2026-09-30): the spawn had no
+// TET_TREASURY_ADDRESS, so the node died at startup with "[FATAL] invalid: TET_TREASURY_ADDRESS is
+// required" and the test reported only a 60-second HTTP timeout — a symptom that says nothing about
+// the cause. With the address supplied the node starts in ~3 s and the real failure is visible.
+//
+// Deliberately not in CI either way: it spawns a real tet-core and belongs in a job of its own.
+describe.skip("ZK-Court slashing audit", () => {
   test("burns exactly 1000 TET bond and increments total_burned by 1000 TET", async () => {
     const port = 5510 + Math.floor(Math.random() * 1000);
     const baseUrl = `http://127.0.0.1:${port}`;
@@ -55,6 +69,14 @@ describe("ZK-Court slashing audit", () => {
           RISC0_SKIP_BUILD: "1",
           TET_ADMIN_API_KEY: adminKey,
           TET_MLDSA_SECURITY_LEVEL: "44",
+          // The node refuses to start without a treasury address — genesis derives its hash from
+          // it. Same value as `set_test_env_base()` in tet-core's suite, so this node's genesis
+          // matches the one those tests assume. Without it the spawn died with
+          // "[FATAL] invalid: TET_TREASURY_ADDRESS is required" and the test only reported a
+          // 60-second HTTP timeout, which says nothing about the cause.
+          TET_TREASURY_ADDRESS:
+            "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321",
+          TET_FOUNDER_CLIFF_MS: "0",
         },
         stdio: "pipe",
       },

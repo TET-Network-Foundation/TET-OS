@@ -23,7 +23,8 @@
     "ignite:tsx": "npm run build && tsx examples/ignition.ts",
     "attack": "ts-node --esm --project examples/tsconfig.json examples/attacker.ts",
     "test": "node --experimental-vm-modules ./node_modules/jest/bin/jest.js --runInBand",
-    "fixture": "node scripts/make_interop_fixture.mjs"
+    "fixture": "node scripts/make_interop_fixture.mjs",
+    "fixture:agent": "node scripts/make_agent_payload_fixture.mjs"
   },
   "dependencies": {
     "@noble/ed25519": "2.3.0",

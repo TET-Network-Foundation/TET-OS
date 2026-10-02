@@ -7,6 +7,7 @@ type PqcGlue = {
   initSync: (module: WebAssembly.Module | BufferSource) => unknown;
   mldsa44_keypair_from_mnemonic_b64: (mnemonic12: string) => { pubkey_b64: string; keypair_b64: string };
   mldsa44_sign_deterministic_b64: (keypair_b64: string, msgBytes: Uint8Array) => string;
+  mldsa44_verify_b64: (pubkey_b64: string, sig_b64: string, msgBytes: Uint8Array) => boolean;
 };
 
 let glue: PqcGlue | null = null;

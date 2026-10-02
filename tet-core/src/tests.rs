@@ -10737,3 +10737,950 @@ async fn replayed_nullifier_over_a_swarm_is_refused_and_the_node_keeps_serving()
     assert!(matches!(v1_again, crate::tmail::store::AnonVerdict::Verified { .. }),
         "re-verifying the same message must stay Verified, got {v1_again:?}");
 }
+
+// ---------------------------------------------------------------------------
+// Agent identity, Day 1: the generic PAE signer and AgentManifestV1.
+//
+// The dangerous part of this feature is the GENERIC signer. Everything else here
+// signs one purpose-built pre-image per operation; an agent signs arbitrary
+// bytes, and a generic signer without domain separation is a signing oracle that
+// turns an agent key into a spending key. Most of what follows is about that.
+// ---------------------------------------------------------------------------
+
+use crate::agent::{
+    AGENT_MANIFEST_KIND, AGENT_MANIFEST_MAX_CAPABILITIES, AGENT_MANIFEST_PAYLOAD_TYPE,
+    AGENT_MLDSA44_PUBKEY_BYTES, AGENT_PAYLOAD_DOMAIN_V1, AgentError, AgentManifestV1,
+    agent_manifest_auth_message_bytes, agent_payload_auth_message_bytes, sign_agent_manifest,
+    sign_agent_payload, verify_agent_manifest_v1, verify_agent_payload,
+};
+
+const AGENT_NOW_MS: u64 = 1_800_000_000_000;
+
+struct TestWallet {
+    mnemonic: String,
+    wallet_id: String,
+    mldsa44_pubkey_b64: String,
+}
+
+fn agent_test_wallet() -> TestWallet {
+    use base64::Engine as _;
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let mnemonic = w.mnemonic_12.clone().unwrap();
+    let kp = crate::wallet::mldsa44_keypair_from_mnemonic(&mnemonic).unwrap();
+    TestWallet {
+        wallet_id: w.address_hex.to_ascii_lowercase(),
+        mldsa44_pubkey_b64: base64::engine::general_purpose::STANDARD.encode(kp.public_key()),
+        mnemonic,
+    }
+}
+
+/// A 1952-byte ML-DSA-**65** public key plus a valid 65 signature over `msg`.
+///
+/// Deliberately *valid*: the point of the level guards is that a consistent 65/65 pair is refused,
+/// not that a broken signature is. A broken signature would be refused by any verifier.
+fn mldsa65_pair(mnemonic: &str, msg: &[u8]) -> (String, String) {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let seed =
+        crate::wallet::mldsa_seed32_from_mnemonic_for_mode(mnemonic, dilithium::ML_DSA_65).unwrap();
+    let kp = dilithium::MlDsaKeyPair::generate_deterministic(dilithium::ML_DSA_65, &seed);
+    let sig = crate::wallet::mldsa_sign_deterministic(&kp, msg).unwrap();
+    (b64.encode(kp.public_key()), b64.encode(sig))
+}
+
+fn agent_manifest_for_tests(owner: &TestWallet, agent: &TestWallet) -> AgentManifestV1 {
+    let mut m = AgentManifestV1 {
+        v: 1,
+        kind: AGENT_MANIFEST_KIND.to_string(),
+        agent_id: "claude-code-devlog".to_string(),
+        agent_ed25519_pubkey_hex: agent.wallet_id.clone(),
+        agent_mldsa44_pubkey_b64: agent.mldsa44_pubkey_b64.clone(),
+        owner_wallet_id: owner.wallet_id.clone(),
+        created_at_ms: AGENT_NOW_MS - 1000,
+        expires_at_ms: AGENT_NOW_MS + 86_400_000,
+        declared_automated: true,
+        capabilities: vec!["devlog.sign".to_string(), "tmail.send".to_string()],
+        hybrid_sig: crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: String::new(),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: String::new(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    sign_agent_manifest(&owner.mnemonic, &mut m).unwrap();
+    m
+}
+
+/// The floor: an owner-signed manifest verifies, and its ML-DSA halves really are level 44.
+#[test]
+fn agent_manifest_signed_by_the_owner_verifies() {
+    use base64::Engine as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+    let m = agent_manifest_for_tests(&owner, &agent);
+
+    verify_agent_manifest_v1(&m, AGENT_NOW_MS).expect("owner-signed manifest must verify");
+
+    let b64 = base64::engine::general_purpose::STANDARD;
+    assert_eq!(
+        b64.decode(&m.agent_mldsa44_pubkey_b64).unwrap().len(),
+        AGENT_MLDSA44_PUBKEY_BYTES
+    );
+    assert_eq!(
+        b64.decode(&m.hybrid_sig.mldsa_pubkey_b64).unwrap().len(),
+        AGENT_MLDSA44_PUBKEY_BYTES
+    );
+    assert_eq!(
+        b64.decode(&m.hybrid_sig.mldsa_sig_b64).unwrap().len(),
+        dilithium::ML_DSA_44.signature_bytes()
+    );
+}
+
+// ── Control 5: the generic signer must not be able to impersonate another pre-image ──────────────
+
+/// **CONTROL 5.** The agent encoding cannot produce the bytes of any other TET pre-image.
+///
+/// The attack: ask the generic signer to sign a payload that *is* a transfer pre-image, and see
+/// whether the resulting signature is a valid transfer authorisation. Two things stop it — the
+/// domain tag in front, and the length prefixes — and both are asserted, because a single assertion
+/// could not tell which one was load-bearing. (That is the `chain_id` / `genesis_hash` lesson:
+/// redundant defences hide which one is actually holding.)
+#[test]
+fn agent_payload_bytes_can_never_equal_another_tet_preimage() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    // A real transfer pre-image, built by the code that authorises spending.
+    let to_wallet = "ab".repeat(32);
+    let transfer = crate::wallet::transfer_hybrid_auth_message_bytes(&to_wallet, 1234, 7, "PK");
+
+    // Hand exactly those bytes to the generic signer, as content and as the type label.
+    let as_payload = agent_payload_auth_message_bytes("whatever", &transfer);
+    let as_type = agent_payload_auth_message_bytes(
+        std::str::from_utf8(&transfer).unwrap(),
+        b"",
+    );
+
+    assert_ne!(as_payload, transfer, "agent payload collided with a transfer pre-image");
+    assert_ne!(as_type, transfer, "agent payload_type collided with a transfer pre-image");
+
+    // Defence 1: the domain tag is a prefix no other pre-image has.
+    for bytes in [&as_payload, &as_type] as [&Vec<u8>; 2] {
+        assert!(
+            bytes.starts_with(AGENT_PAYLOAD_DOMAIN_V1.as_bytes()),
+            "agent-signed bytes must start with the domain tag"
+        );
+    }
+    // …and no pre-image this repository signs elsewhere starts with it.
+    let others: [Vec<u8>; 4] = [
+        crate::wallet::transfer_hybrid_auth_message_bytes(&to_wallet, 1, 1, "PK"),
+        crate::wallet::worker_bond_stake_hybrid_auth_message_bytes(&to_wallet, 1, 1, "PK"),
+        crate::wallet::initial_airdrop_claim_hybrid_auth_message_bytes(&to_wallet, "PK"),
+        crate::tmail::anon::tmail_anon_registration_auth_message_bytes(
+            &crate::tmail::anon::TmailAnonRegistrationV1 {
+                v: 1,
+                kind: crate::tmail::anon::TMAIL_ANON_REGISTRATION_KIND.to_string(),
+                wallet_id: to_wallet.clone(),
+                commitment_hex: "cd".repeat(32),
+                registered_at_ms: 1,
+                hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+                    ed25519_pubkey_hex: String::new(),
+                    ed25519_sig_b64: String::new(),
+                    mldsa_pubkey_b64: String::new(),
+                    mldsa_sig_b64: String::new(),
+                },
+            },
+            "PK",
+        ),
+    ];
+    for other in others {
+        assert!(
+            !other.starts_with(AGENT_PAYLOAD_DOMAIN_V1.as_bytes()),
+            "another pre-image starts with the agent domain tag — domain separation is gone"
+        );
+    }
+
+    // Defence 2: the chain is bound in, as two separately-present fields. Asserted on the bytes
+    // rather than inferred, because chain_id and genesis_hash are redundant (the hash is derived
+    // from the id), so dropping either one alone leaves a signature-level test green.
+    let chain_id = crate::genesis::chain_id_from_env();
+    let genesis_hash = crate::genesis::expected_genesis_hash_from_env();
+    assert!(!chain_id.is_empty() && !genesis_hash.is_empty());
+    let field = |s: &str| format!("{} {} ", s.len(), s).into_bytes();
+    assert!(
+        contains_subslice(&as_payload, &field(&chain_id)),
+        "chain_id is not a field of the agent pre-image"
+    );
+    assert!(
+        contains_subslice(&as_payload, &field(&genesis_hash)),
+        "genesis_hash is not a field of the agent pre-image"
+    );
+}
+
+fn contains_subslice(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+/// **CONTROL 5, second half.** No two distinct field lists encode to the same bytes.
+///
+/// This is what the length prefixes buy and what a `|`-joined format cannot give: `wallet.rs`'s
+/// builders escape nothing, so a field containing the delimiter is re-parseable as two fields.
+/// Here, shifting one byte from the type to the payload must change the encoding.
+#[test]
+fn agent_payload_encoding_is_unambiguous() {
+    let _g = env_lock();
+    set_test_env_base();
+
+    // The cases that matter contain the SEPARATOR, because that is where a length-free encoding
+    // actually collides. Written this way after the negative control: with the length prefixes
+    // removed, `("a","bc")` vs `("ab","c")` still differed — the space between fields happened to
+    // land in a different place, so the guard passed with the protection gone and was measuring the
+    // separator rather than the lengths.
+    assert_ne!(
+        agent_payload_auth_message_bytes("a", b"b c"),
+        agent_payload_auth_message_bytes("a b", b"c"),
+        "a field boundary can be moved across a space without changing the signed bytes"
+    );
+    assert_ne!(
+        agent_payload_auth_message_bytes("one two", b"three"),
+        agent_payload_auth_message_bytes("one", b"two three"),
+    );
+    // A payload that imitates the encoding itself must not be confusable with real fields.
+    assert_ne!(
+        agent_payload_auth_message_bytes("t", b"3 abc "),
+        agent_payload_auth_message_bytes("t", b"4 abc "),
+    );
+    assert_ne!(
+        agent_payload_auth_message_bytes("1 t", b"abc"),
+        agent_payload_auth_message_bytes("1", b"t abc"),
+    );
+    // Cheap cases too, though on their own they prove less than they look like they do.
+    assert_ne!(
+        agent_payload_auth_message_bytes("a", b"bc"),
+        agent_payload_auth_message_bytes("ab", b"c"),
+    );
+    assert_ne!(
+        agent_payload_auth_message_bytes("x", b"y|z"),
+        agent_payload_auth_message_bytes("x|y", b"z"),
+    );
+    // And an empty payload is distinguishable from an empty type.
+    assert_ne!(
+        agent_payload_auth_message_bytes("", b"q"),
+        agent_payload_auth_message_bytes("q", b""),
+    );
+}
+
+/// A signature over one `payload_type` is not a signature over another, for identical bytes.
+#[test]
+fn agent_payload_signature_does_not_transfer_between_payload_types() {
+    let _g = env_lock();
+    set_test_env_base();
+    let agent = agent_test_wallet();
+    let payload = b"same bytes, different meaning";
+
+    let sig = sign_agent_payload(&agent.mnemonic, "text/plain", payload).unwrap();
+    verify_agent_payload(&agent.wallet_id, &sig, "text/plain", payload)
+        .expect("must verify under the type it was signed for");
+
+    match verify_agent_payload(&agent.wallet_id, &sig, "application/json", payload) {
+        Err(AgentError::Ed25519(_)) => {}
+        other => panic!("expected Ed25519 failure on a payload_type swap, got {other:?}"),
+    }
+    match verify_agent_payload(&agent.wallet_id, &sig, "text/plain", b"tampered") {
+        Err(AgentError::Ed25519(_)) => {}
+        other => panic!("expected Ed25519 failure on a tampered payload, got {other:?}"),
+    }
+}
+
+/// A payload signature bound to one chain must not verify on another.
+#[test]
+fn agent_payload_signature_is_bound_to_the_chain() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let agent = agent_test_wallet();
+    let payload = b"devlog entry 2026-09-30";
+
+    let _chain_a = EnvVarGuard::set("TET_CHAIN_ID", "tet-chain-a");
+    let sig = sign_agent_payload(&agent.mnemonic, "text/plain", payload).unwrap();
+    verify_agent_payload(&agent.wallet_id, &sig, "text/plain", payload)
+        .expect("must verify on the chain it was signed for");
+
+    let _chain_b = EnvVarGuard::set("TET_CHAIN_ID", "tet-chain-b");
+    match verify_agent_payload(&agent.wallet_id, &sig, "text/plain", payload) {
+        Err(AgentError::Ed25519(_)) => {}
+        other => panic!("a signature bound to chain a verified on chain b: {other:?}"),
+    }
+}
+
+// ── Control 2: the real forgery is a correctly signed one ────────────────────────────────────────
+
+/// **CONTROL 2.** A manifest that names somebody else as owner, signed correctly by its author.
+///
+/// This is the M1 mistake stated as a test: mutating a signed field produces an invalid signature,
+/// so the *signature* refuses it and the binding check never runs. The real forgery is A signing,
+/// with A's own key, a pre-image that names B — every earlier check passes, the signature is
+/// genuinely valid, and only `signer == owner_wallet_id` can refuse it. Asserted as exactly that
+/// error: no `||`.
+#[test]
+fn agent_manifest_naming_another_owner_is_refused_even_when_correctly_signed() {
+    let _g = env_lock();
+    set_test_env_base();
+    let attacker = agent_test_wallet();
+    let victim = agent_test_wallet();
+    let agent = agent_test_wallet();
+
+    let mut m = agent_manifest_for_tests(&attacker, &agent);
+    m.owner_wallet_id = victim.wallet_id.clone();
+    // Re-sign with the ATTACKER's key over the pre-image that now names the victim, so the
+    // signature is valid and every cheaper check is satisfied.
+    sign_agent_manifest(&attacker.mnemonic, &mut m).unwrap();
+
+    crate::quantum_shield::verify_ed25519(
+        &attacker.wallet_id,
+        &m.hybrid_sig.ed25519_sig_b64,
+        &agent_manifest_auth_message_bytes(&m, &m.hybrid_sig.mldsa_pubkey_b64),
+    )
+    .expect("the forgery must carry a genuinely valid signature, or this guard is vacuous");
+
+    match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+        Err(AgentError::SignerMismatch) => {}
+        other => panic!("expected SignerMismatch, got {other:?}"),
+    }
+
+    // And the attacker cannot satisfy the binding check by lying about who signed: setting
+    // `ed25519_pubkey_hex` to the victim makes `signer == owner_wallet_id` true, so the equality
+    // check passes and the SIGNATURE has to refuse it. That only works because verification uses
+    // `owner_wallet_id` rather than the pubkey the message hands it — the "verified against the key
+    // in the envelope" mistake, asserted rather than assumed.
+    let mut lying = m.clone();
+    lying.hybrid_sig.ed25519_pubkey_hex = victim.wallet_id.clone();
+    match verify_agent_manifest_v1(&lying, AGENT_NOW_MS) {
+        Err(AgentError::Ed25519(_)) => {}
+        other => panic!("expected Ed25519 failure when the signer field lies, got {other:?}"),
+    }
+}
+
+// ── Control 3: every field the manifest claims must actually be signed ───────────────────────────
+
+/// **CONTROL 3.** Each signed field, mutated after signing, must break the signature.
+///
+/// The threat is not the owner re-signing a different key — the owner may vouch for whatever they
+/// like. It is a third party taking the owner's valid manifest and editing a field that turns out
+/// not to be in the pre-image. Every field is checked individually; a single combined assertion
+/// could pass while one field was unsigned.
+#[test]
+fn every_manifest_field_is_covered_by_the_signature() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+    let other_agent = agent_test_wallet();
+    let good = agent_manifest_for_tests(&owner, &agent);
+
+    let mutations: Vec<(&str, Box<dyn Fn(&mut AgentManifestV1)>)> = vec![
+        ("agent_id", Box::new(|m: &mut AgentManifestV1| m.agent_id = "other-agent".into())),
+        (
+            "agent_ed25519_pubkey_hex",
+            Box::new({
+                let k = other_agent.wallet_id.clone();
+                move |m: &mut AgentManifestV1| m.agent_ed25519_pubkey_hex = k.clone()
+            }),
+        ),
+        (
+            "agent_mldsa44_pubkey_b64",
+            Box::new({
+                let k = other_agent.mldsa44_pubkey_b64.clone();
+                move |m: &mut AgentManifestV1| m.agent_mldsa44_pubkey_b64 = k.clone()
+            }),
+        ),
+        ("created_at_ms", Box::new(|m: &mut AgentManifestV1| m.created_at_ms -= 1)),
+        (
+            "expires_at_ms",
+            Box::new(|m: &mut AgentManifestV1| m.expires_at_ms += 31_536_000_000),
+        ),
+        (
+            "declared_automated",
+            Box::new(|m: &mut AgentManifestV1| m.declared_automated = !m.declared_automated),
+        ),
+        (
+            "capabilities (added)",
+            Box::new(|m: &mut AgentManifestV1| m.capabilities.push("ledger.transfer".into())),
+        ),
+        (
+            "capabilities (edited)",
+            Box::new(|m: &mut AgentManifestV1| m.capabilities[0] = "ledger.transfer".into()),
+        ),
+        (
+            "capabilities (reordered)",
+            Box::new(|m: &mut AgentManifestV1| m.capabilities.swap(0, 1)),
+        ),
+    ];
+
+    for (field, mutate) in mutations {
+        let mut m = good.clone();
+        mutate(&mut m);
+        match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+            Err(AgentError::Ed25519(_)) => {}
+            other => panic!("editing {field} after signing was not refused by the signature: {other:?}"),
+        }
+    }
+}
+
+// ── Control 4: the ML-DSA level is enforced, not described ───────────────────────────────────────
+
+/// **CONTROL 4a.** An ML-DSA-65 agent key is refused, however valid it is.
+#[test]
+fn agent_manifest_with_a_65_agent_key_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+
+    let (pk65, _) = mldsa65_pair(&agent.mnemonic, b"unused");
+    let mut m = agent_manifest_for_tests(&owner, &agent);
+    m.agent_mldsa44_pubkey_b64 = pk65;
+    // Re-sign, so the manifest is internally consistent and only the level can refuse it.
+    sign_agent_manifest(&owner.mnemonic, &mut m).unwrap();
+
+    match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+        Err(AgentError::AgentKeyLevel { got, expected }) => {
+            assert_eq!(expected, AGENT_MLDSA44_PUBKEY_BYTES);
+            assert_eq!(got, dilithium::ML_DSA_65.public_key_bytes());
+        }
+        other => panic!("expected AgentKeyLevel, got {other:?}"),
+    }
+}
+
+/// **CONTROL 4b.** An owner signing at ML-DSA-65 is refused — the case a level-inferring verifier
+/// would wave through.
+///
+/// Built by hand rather than through `sign_agent_manifest`, because the whole point is a pair the
+/// inferring verifier would accept: a 1952-byte key with a matching 3309-byte signature over the
+/// real pre-image. `verify_mldsa_b64` verifies that pair happily. `verify_mldsa44_b64` does not, and
+/// the structural size check refuses it before either runs.
+#[test]
+fn agent_manifest_signed_with_a_valid_65_owner_key_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+    let mut m = agent_manifest_for_tests(&owner, &agent);
+
+    let (pk65, _) = mldsa65_pair(&owner.mnemonic, b"placeholder");
+    // The owner's ML-DSA key is inside the pre-image, so the bytes must be rebuilt against pk65
+    // before signing — otherwise this tests a wrong pre-image rather than a wrong level.
+    let msg = agent_manifest_auth_message_bytes(&m, &pk65);
+    let (_, sig65) = mldsa65_pair(&owner.mnemonic, &msg);
+    m.hybrid_sig.mldsa_pubkey_b64 = pk65.clone();
+    m.hybrid_sig.mldsa_sig_b64 = sig65.clone();
+    // Keep the Ed25519 half genuinely valid over the same bytes.
+    m.hybrid_sig = crate::protocol::HybridSigV1 {
+        mldsa_pubkey_b64: pk65.clone(),
+        mldsa_sig_b64: sig65.clone(),
+        ..crate::agent::sign_agent_message_bytes(&owner.mnemonic, &msg).unwrap()
+    };
+
+    // The pair really is one a level-inferring verifier accepts. If this ever fails, the guard
+    // below is measuring a broken signature instead of a wrong level.
+    crate::wallet::verify_mldsa_b64(&pk65, &sig65, &msg)
+        .expect("the 65 pair must be valid, or CONTROL 4b is vacuous");
+    assert!(
+        crate::wallet::verify_mldsa44_b64(&pk65, &sig65, &msg).is_err(),
+        "the level-pinned verifier must reject a 65 pair"
+    );
+
+    match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+        Err(AgentError::OwnerKeyLevel { got, expected }) => {
+            assert_eq!(expected, AGENT_MLDSA44_PUBKEY_BYTES);
+            assert_eq!(got, dilithium::ML_DSA_65.public_key_bytes());
+        }
+        other => panic!("expected OwnerKeyLevel, got {other:?}"),
+    }
+}
+
+// ── Control 6: expiry is the only revocation v0 has, so it has to work ───────────────────────────
+
+/// **CONTROL 6.** An expired manifest is refused, and the refusal reports the clock it used.
+///
+/// There is no cache and no default in this path — `now_ms` is a parameter, so nothing can answer
+/// on the check's behalf. That is deliberate: wall-clock time read inside verification is what
+/// split two nodes at block 9828.
+#[test]
+fn expired_agent_manifest_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+    let m = agent_manifest_for_tests(&owner, &agent);
+
+    verify_agent_manifest_v1(&m, m.expires_at_ms).expect("valid up to and including expiry");
+
+    match verify_agent_manifest_v1(&m, m.expires_at_ms + 1) {
+        Err(AgentError::Expired { expires_at_ms, now_ms }) => {
+            assert_eq!(expires_at_ms, m.expires_at_ms);
+            assert_eq!(now_ms, m.expires_at_ms + 1);
+        }
+        other => panic!("expected Expired, got {other:?}"),
+    }
+}
+
+/// A manifest that expires before it was created is incoherent, not merely expired.
+#[test]
+fn agent_manifest_with_an_impossible_schedule_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+    let mut m = agent_manifest_for_tests(&owner, &agent);
+    m.expires_at_ms = m.created_at_ms;
+    sign_agent_manifest(&owner.mnemonic, &mut m).unwrap();
+
+    match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+        Err(AgentError::Schedule { created_at_ms, expires_at_ms }) => {
+            assert_eq!(created_at_ms, expires_at_ms);
+        }
+        other => panic!("expected Schedule, got {other:?}"),
+    }
+}
+
+// ── Bounds, and the degenerate key ───────────────────────────────────────────────────────────────
+
+/// The capability list is input-driven, so it needs an explicit bound whose value is *observable*
+/// in the refusal rather than silently truncated.
+#[test]
+fn agent_manifest_capability_bound_is_enforced_and_named() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+    let mut m = agent_manifest_for_tests(&owner, &agent);
+    m.capabilities = (0..AGENT_MANIFEST_MAX_CAPABILITIES + 1)
+        .map(|i| format!("cap.{i}"))
+        .collect();
+    sign_agent_manifest(&owner.mnemonic, &mut m).unwrap();
+
+    let err = verify_agent_manifest_v1(&m, AGENT_NOW_MS).expect_err("over the bound");
+    match &err {
+        AgentError::TooManyCapabilities { got, max } => {
+            assert_eq!(*got, AGENT_MANIFEST_MAX_CAPABILITIES + 1);
+            assert_eq!(*max, AGENT_MANIFEST_MAX_CAPABILITIES);
+        }
+        other => panic!("expected TooManyCapabilities, got {other:?}"),
+    }
+    assert!(
+        err.to_string().contains(&AGENT_MANIFEST_MAX_CAPABILITIES.to_string()),
+        "the refusal must name the effective bound, not just refuse: {err}"
+    );
+
+    // Exactly at the bound is fine — an off-by-one here would silently cap every agent at 31.
+    m.capabilities = (0..AGENT_MANIFEST_MAX_CAPABILITIES)
+        .map(|i| format!("cap.{i}"))
+        .collect();
+    sign_agent_manifest(&owner.mnemonic, &mut m).unwrap();
+    verify_agent_manifest_v1(&m, AGENT_NOW_MS).expect("the bound itself must be allowed");
+}
+
+/// An "agent" holding the owner's own key is the owner's spending key in an automated process.
+#[test]
+fn agent_manifest_naming_the_owners_own_key_as_the_agent_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let mut m = agent_manifest_for_tests(&owner, &owner);
+    m.agent_ed25519_pubkey_hex = owner.wallet_id.clone();
+    sign_agent_manifest(&owner.mnemonic, &mut m).unwrap();
+
+    match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+        Err(AgentError::AgentKeyIsOwnerKey) => {}
+        other => panic!("expected AgentKeyIsOwnerKey, got {other:?}"),
+    }
+}
+
+/// Version and kind discriminators, so a future v2 cannot be read as a v1.
+#[test]
+fn agent_manifest_version_and_kind_are_checked() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+
+    let mut m = agent_manifest_for_tests(&owner, &agent);
+    m.v = 2;
+    match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+        Err(AgentError::UnsupportedVersion(2)) => {}
+        other => panic!("expected UnsupportedVersion(2), got {other:?}"),
+    }
+
+    let mut m = agent_manifest_for_tests(&owner, &agent);
+    m.kind = "tet_agent_manifest_v2".to_string();
+    match verify_agent_manifest_v1(&m, AGENT_NOW_MS) {
+        Err(AgentError::Kind(k)) => assert_eq!(k, "tet_agent_manifest_v2"),
+        other => panic!("expected Kind, got {other:?}"),
+    }
+}
+
+/// The manifest pre-image is the generic payload encoding under its own `payload_type`, so a
+/// manifest can never be replayed as agent-signed content and vice versa.
+#[test]
+fn agent_manifest_preimage_is_typed_as_a_manifest() {
+    let _g = env_lock();
+    set_test_env_base();
+    let owner = agent_test_wallet();
+    let agent = agent_test_wallet();
+    let m = agent_manifest_for_tests(&owner, &agent);
+    let bytes = agent_manifest_auth_message_bytes(&m, &m.hybrid_sig.mldsa_pubkey_b64);
+
+    assert!(bytes.starts_with(AGENT_PAYLOAD_DOMAIN_V1.as_bytes()));
+    assert!(
+        contains_subslice(
+            &bytes,
+            format!(
+                "{} {} ",
+                AGENT_MANIFEST_PAYLOAD_TYPE.len(),
+                AGENT_MANIFEST_PAYLOAD_TYPE
+            )
+            .as_bytes()
+        ),
+        "the manifest payload_type is not a field of its own pre-image"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Day 2: cross-language agent payloads and the detached envelope.
+//
+// The fixture is produced by tet-agent-sdk and compared BYTE FOR BYTE, not
+// merely "both verify". That is possible only because ML-DSA signing randomness
+// here is SHA256(label || msg) rather than random — the property that caught the
+// ML-DSA-65/44 divergence, and the reason docs/AGENT_IDENTITY.md says not to
+// randomise it.
+// ---------------------------------------------------------------------------
+
+const AGENT_PAYLOAD_ENVELOPES: &str = include_str!("testdata/agent_payload_envelopes.json");
+
+struct AgentFixtureChain {
+    _chain: EnvVarGuard,
+    _genesis: EnvVarGuard,
+    _mainnet: EnvVarGuard,
+}
+
+/// Bind the process to the fixture's chain for the duration of a test.
+fn agent_fixture_chain(doc: &serde_json::Value) -> AgentFixtureChain {
+    AgentFixtureChain {
+        _chain: EnvVarGuard::set("TET_CHAIN_ID", doc["chain"]["chain_id"].as_str().unwrap()),
+        _genesis: EnvVarGuard::set(
+            "TET_GENESIS_HASH",
+            doc["chain"]["genesis_hash"].as_str().unwrap(),
+        ),
+        _mainnet: EnvVarGuard::unset("TET_MAINNET"),
+    }
+}
+
+fn agent_fixture_doc() -> serde_json::Value {
+    let doc: serde_json::Value =
+        serde_json::from_str(AGENT_PAYLOAD_ENVELOPES).expect("fixture JSON must parse");
+    assert!(
+        !doc["cases"].as_array().unwrap().is_empty(),
+        "fixtures must not be empty — an empty array passes vacuously"
+    );
+    doc
+}
+
+/// **The SDK and the node produce the same bytes.** Not "both verify" — the same bytes.
+#[test]
+fn sdk_agent_payload_signatures_are_byte_identical_in_rust() {
+    use base64::Engine as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let _bound = agent_fixture_chain(&doc);
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    for (i, c) in doc["cases"].as_array().unwrap().iter().enumerate() {
+        let mnemonic = c["mnemonic"].as_str().unwrap();
+        let payload_type = c["payload_type"].as_str().unwrap();
+        let payload = b64.decode(c["payload_b64"].as_str().unwrap()).unwrap();
+
+        let sig = crate::agent::sign_agent_payload(mnemonic, payload_type, &payload)
+            .unwrap_or_else(|e| panic!("case {i}: rust could not sign: {e}"));
+
+        assert_eq!(
+            sig.ed25519_pubkey_hex,
+            c["agent_wallet_id"].as_str().unwrap(),
+            "case {i}: wallet id disagrees between the SDK and the node"
+        );
+        assert_eq!(
+            sig.ed25519_sig_b64,
+            c["ed25519_sig_b64"].as_str().unwrap(),
+            "case {i}: Ed25519 signature bytes differ between the SDK and the node"
+        );
+        assert_eq!(
+            sig.mldsa_sig_b64,
+            c["mldsa_sig_b64"].as_str().unwrap(),
+            "case {i}: ML-DSA-44 signature bytes differ between the SDK and the node"
+        );
+
+        // And the node's verifier accepts the SDK's signature, not merely its own.
+        let sdk_sig = crate::protocol::HybridSigV1 {
+            ed25519_pubkey_hex: c["agent_wallet_id"].as_str().unwrap().to_string(),
+            ed25519_sig_b64: c["ed25519_sig_b64"].as_str().unwrap().to_string(),
+            mldsa_pubkey_b64: c["envelope"]["tet"]["agent_mldsa44_pubkey_b64"]
+                .as_str()
+                .unwrap()
+                .to_string(),
+            mldsa_sig_b64: c["mldsa_sig_b64"].as_str().unwrap().to_string(),
+        };
+        crate::agent::verify_agent_payload(
+            c["agent_wallet_id"].as_str().unwrap(),
+            &sdk_sig,
+            payload_type,
+            &payload,
+        )
+        .unwrap_or_else(|e| panic!("case {i}: node rejected the SDK's signature: {e}"));
+    }
+}
+
+/// The detached envelopes the SDK writes verify here, including the every-byte-value payload.
+#[test]
+fn sdk_agent_envelopes_verify_in_rust() {
+    use base64::Engine as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let _bound = agent_fixture_chain(&doc);
+    let b64 = base64::engine::general_purpose::STANDARD;
+
+    for (i, c) in doc["cases"].as_array().unwrap().iter().enumerate() {
+        let env: crate::agent::AgentSigEnvelopeV1 =
+            serde_json::from_value(c["envelope"].clone())
+                .unwrap_or_else(|e| panic!("case {i}: envelope does not parse: {e}"));
+        env.verify()
+            .unwrap_or_else(|e| panic!("case {i}: envelope rejected: {e}"));
+        assert_eq!(
+            env.payload_bytes().unwrap(),
+            b64.decode(c["payload_b64"].as_str().unwrap()).unwrap(),
+            "case {i}: envelope payload is not the payload that was signed"
+        );
+        // Round-trip: Rust re-signing the same payload rebuilds the same envelope.
+        let mine = crate::agent::sign_agent_payload_envelope(
+            c["mnemonic"].as_str().unwrap(),
+            c["payload_type"].as_str().unwrap(),
+            &env.payload_bytes().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(mine, env, "case {i}: rust rebuilt a different envelope");
+    }
+}
+
+/// An envelope signed for one chain must not verify on another.
+#[test]
+fn agent_envelope_from_another_chain_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let env: crate::agent::AgentSigEnvelopeV1 =
+        serde_json::from_value(doc["cases"][0]["envelope"].clone()).unwrap();
+
+    {
+        let _bound = agent_fixture_chain(&doc);
+        env.verify().expect("verifies on the chain it was signed for");
+    }
+
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let _chain = EnvVarGuard::set("TET_CHAIN_ID", "tet-some-other-chain");
+    let _genesis = EnvVarGuard::set(
+        "TET_GENESIS_HASH",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    );
+    match env.verify() {
+        Err(crate::agent::AgentEnvelopeError::Agent(crate::agent::AgentError::Ed25519(_))) => {}
+        other => panic!("an envelope from another chain verified: {other:?}"),
+    }
+}
+
+/// Every structural claim in the envelope is checked, each with its own error.
+#[test]
+fn agent_envelope_structure_is_checked_field_by_field() {
+    use crate::agent::{AgentEnvelopeError, AgentSigEnvelopeV1, DsseSignature};
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+    let _bound = agent_fixture_chain(&doc);
+    let good: AgentSigEnvelopeV1 = serde_json::from_value(doc["cases"][0]["envelope"].clone()).unwrap();
+    good.verify().expect("baseline must verify");
+
+    let mut e = good.clone();
+    e.tet.v = 2;
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::UnsupportedVersion(2)));
+
+    // A genuine DSSE envelope, or a future encoding, must be refused rather than verified against
+    // this one's rules.
+    let mut e = good.clone();
+    e.tet.pae = "DSSEv1".to_string();
+    match e.verify() {
+        Err(AgentEnvelopeError::UnknownPae { got, .. }) => assert_eq!(got, "DSSEv1"),
+        other => panic!("expected UnknownPae, got {other:?}"),
+    }
+
+    let mut e = good.clone();
+    e.payload_type = "   ".to_string();
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::PayloadType));
+
+    let mut e = good.clone();
+    e.signatures.push(e.signatures[0].clone());
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::SignatureCount(3)));
+
+    // Two ed25519 entries and no ML-DSA one: the count is right and the SET is wrong. The
+    // duplicate is caught on the ed25519 lookup, which runs first — asserted as the error that
+    // actually fires rather than the one that reads better.
+    let mut e = good.clone();
+    e.signatures[1] = e.signatures[0].clone();
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::SignatureSet("ed25519")));
+
+    // The mirror case: two ML-DSA entries, no ed25519 one.
+    let mut e = good.clone();
+    e.signatures[0] = e.signatures[1].clone();
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::SignatureSet("ed25519")));
+
+    // A keyid that names a different key than the one carried.
+    let mut e = good.clone();
+    e.signatures[0] = DsseSignature {
+        keyid: format!("{}{}", crate::agent::AGENT_KEYID_ED25519_PREFIX, "ab".repeat(32)),
+        sig: e.signatures[0].sig.clone(),
+    };
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::KeyIdMismatch("ed25519")));
+
+    let mut e = good.clone();
+    e.signatures[1] = DsseSignature {
+        keyid: format!("{}{}", crate::agent::AGENT_KEYID_MLDSA44_PREFIX, "cd".repeat(32)),
+        sig: e.signatures[1].sig.clone(),
+    };
+    assert_eq!(e.verify(), Err(AgentEnvelopeError::KeyIdMismatch("ml-dsa-44")));
+
+    // The payload is what is signed, so swapping it must break the signature.
+    let mut e = good.clone();
+    e.payload = base64::engine::general_purpose::STANDARD.encode(b"a different payload");
+    match e.verify() {
+        Err(AgentEnvelopeError::Agent(crate::agent::AgentError::Ed25519(_))) => {}
+        other => panic!("a swapped payload was accepted: {other:?}"),
+    }
+
+    // …and so must swapping only the payload_type, even with identical bytes.
+    let mut e = good.clone();
+    e.payload_type = "application/json".to_string();
+    match e.verify() {
+        Err(AgentEnvelopeError::Agent(crate::agent::AgentError::Ed25519(_))) => {}
+        other => panic!("a swapped payload_type was accepted: {other:?}"),
+    }
+}
+
+/// **An envelope may not carry its own chain identity.** Refused at parse, not ignored.
+///
+/// A verifier that read `chain_id` out of the file it is checking would verify every file against
+/// whatever chain that file names, which is not a check. Ignoring such a field would work today and
+/// be one patch away from being read, so `deny_unknown_fields` refuses it outright.
+#[test]
+fn agent_envelope_carrying_a_chain_id_is_refused_not_ignored() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_fixture_doc();
+
+    for (where_, mutate) in [
+        ("top level", 0usize),
+        ("tet block", 1usize),
+    ] {
+        let mut raw = doc["cases"][0]["envelope"].clone();
+        let smuggled = serde_json::json!("tet-attacker-chain");
+        if mutate == 0 {
+            raw.as_object_mut().unwrap().insert("chain_id".into(), smuggled);
+        } else {
+            raw["tet"].as_object_mut().unwrap().insert("chain_id".into(), smuggled);
+        }
+        let parsed: Result<crate::agent::AgentSigEnvelopeV1, _> = serde_json::from_value(raw);
+        assert!(
+            parsed.is_err(),
+            "a chain_id smuggled into the {where_} was accepted by the parser"
+        );
+    }
+}
+
+/// `GET /chain` must report exactly the two values every signature is bound to — and nothing else.
+///
+/// Both are public: `chain_id` is in the README and `genesis_hash` is derived from public genesis
+/// parameters and appears inside every pre-image on the network. The route exists because an agent
+/// cannot DERIVE the genesis hash — `tet-core` computes it from treasury configuration — so before it
+/// existed an agent had to be configured with a value it could not check.
+///
+/// Asserted against `genesis::*` rather than a literal, and then asserted again with a different
+/// treasury, because a route returning a constant would satisfy the first assertion alone.
+#[tokio::test]
+async fn chain_route_reports_the_binding_every_signature_uses() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let _no_override = EnvVarGuard::unset("TET_GENESIS_HASH");
+    let _chain = EnvVarGuard::set("TET_CHAIN_ID", "tet-chain-route-probe");
+
+    let fetch = || async {
+        let ledger = std::sync::Arc::new(open_temp_ledger());
+        let state = rest_state_for_tests(ledger);
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/chain")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = crate::rest::routes::build_router(state).oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "/chain must be public and read-only");
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        serde_json::from_slice::<serde_json::Value>(&bytes).expect("JSON body")
+    };
+
+    let treasury_a = "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
+    let treasury_b = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    let json = {
+        let _t = EnvVarGuard::set("TET_TREASURY_ADDRESS", treasury_a);
+        let json = fetch().await;
+        assert_eq!(
+            json["chain_id"].as_str().unwrap(),
+            crate::genesis::chain_id_from_env()
+        );
+        assert_eq!(
+            json["genesis_hash"].as_str().unwrap(),
+            crate::genesis::expected_genesis_hash_from_env()
+        );
+        json
+    };
+
+    // The shape the SDK validates: `0x` + 64 lowercase hex. The prefix is part of the signed string,
+    // so a client that stripped it would produce signatures no node accepts.
+    let hash_a = json["genesis_hash"].as_str().unwrap().to_string();
+    assert!(
+        hash_a.starts_with("0x") && hash_a.len() == 66,
+        "genesis_hash must be 0x + 64 hex, got {hash_a:?}"
+    );
+    assert!(hash_a[2..].chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+
+    // Nothing else is exposed. A route that grew a field would be a new public surface on a node
+    // whose REST API is otherwise not internet-facing.
+    let obj = json.as_object().unwrap();
+    assert_eq!(
+        obj.len(),
+        2,
+        "/chain must expose exactly chain_id and genesis_hash, got {:?}",
+        obj.keys().collect::<Vec<_>>()
+    );
+
+    // Derived, not constant.
+    let hash_b = {
+        let _t = EnvVarGuard::set("TET_TREASURY_ADDRESS", treasury_b);
+        fetch().await["genesis_hash"].as_str().unwrap().to_string()
+    };
+    assert_ne!(
+        hash_a, hash_b,
+        "two different treasuries produced the same genesis_hash — /chain is not derived"
+    );
+}
