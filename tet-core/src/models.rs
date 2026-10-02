@@ -20,6 +20,10 @@ pub enum NetworkEvent {
         total_reward_micro: u64,
         state_root: String,
         txs: Vec<SignedTxEnvelopeV1>,
+        /// Block time set by the producer (V3; inside `block_id`).
+        ts_ms: u64,
+        /// Producer signature over `block_id` (V3). No default: a block without one does not parse.
+        producer_sig: crate::producer_key::BlockSignature,
     },
 
     /// Legacy: a transfer executed on another node. It carries no signature, so receivers

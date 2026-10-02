@@ -79,6 +79,8 @@ pub struct RestState {
     pub genesis_1k_lock: Arc<tokio::sync::Mutex<()>>,
     pub log_tx: broadcast::Sender<String>,
     pub log_sse_connections: Arc<AtomicUsize>,
+    /// Block-producer key (Phase 1). `None`: this node follows but cannot produce.
+    pub producer_key: Option<Arc<crate::producer_key::ProducerKeypair>>,
 }
 
 #[derive(Debug, Clone)]

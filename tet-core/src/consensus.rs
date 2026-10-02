@@ -66,6 +66,9 @@ pub enum RemoteBlockApplyOutcome {
 pub enum RemoteBlockApplyError {
     Rejected(String),
     Ledger(String),
+    /// Valid so far, but `ts_ms` is too far ahead of this node's clock. Not the sender's fault:
+    /// do not blacklist, retry later (spec §1).
+    Held(String),
 }
 
 #[derive(Debug, Clone)]
@@ -79,12 +82,156 @@ pub struct RemoteBlockGossip {
     pub total_reward_micro: u64,
     pub state_root: String,
     pub txs: Vec<SignedTxEnvelopeV1>,
+    /// Block time set by the producer; in the V3 `block_id` (spec §1).
+    pub ts_ms: u64,
+    /// Producer signature over `block_id`, checked by [`verify_block_producer`].
+    pub producer_sig: crate::producer_key::BlockSignature,
+}
+
+/// A block whose producer signature has been checked against the genesis validator set.
+///
+/// The only constructor is [`verify_block_producer`], and both acceptance functions
+/// ([`apply_remote_block_from_gossip`], [`validate_and_record_backfill_candidate`]) take this type,
+/// so every site that brings a block in — gossip, height-range catch-up, by-id backfill — has to
+/// verify it first. A new sync path cannot forget: it does not compile.
+#[derive(Debug, Clone)]
+pub struct ProducerVerifiedBlock(RemoteBlockGossip);
+
+impl ProducerVerifiedBlock {
+    pub fn block(&self) -> &RemoteBlockGossip {
+        &self.0
+    }
+}
+
+/// Check that `block.producer_id` is in the genesis validator set and that `block.producer_sig`
+/// verifies, both halves, over `block.block_id` under that validator's key.
+///
+/// This checks the signature over the block id the block **claims**. Acceptance then recomputes
+/// the V3 id from the block's contents, `ts_ms` included, and refuses a mismatch, so a field changed
+/// after signing breaks one check or the other.
+pub fn verify_block_producer(
+    block: RemoteBlockGossip,
+) -> Result<ProducerVerifiedBlock, RemoteBlockApplyError> {
+    let validators =
+        crate::genesis::genesis_validators_from_env().map_err(RemoteBlockApplyError::Rejected)?;
+    let producer = block.producer_id.trim().to_ascii_lowercase();
+    let entry = validators
+        .iter()
+        .find(|v| v.producer_id == producer)
+        .ok_or_else(|| {
+            RemoteBlockApplyError::Rejected(format!(
+                "producer_id is not in the genesis validator set: {producer}"
+            ))
+        })?;
+    crate::producer_key::verify_block_signature(&entry.key, &block.block_id, &block.producer_sig)
+        .map_err(|e| {
+            RemoteBlockApplyError::Rejected(format!(
+                "{e} (producer_id={producer} height={} block_id={})",
+                block.block_height, block.block_id
+            ))
+        })?;
+    Ok(ProducerVerifiedBlock(block))
+}
+
+/// How far ahead of this node's clock a block's `ts_ms` may be before it is **held** (spec §1).
+pub const MAX_BLOCK_FUTURE_MS: u64 = 60_000;
+
+/// The time a block at `block_height` must exceed: its parent's `ts_ms`, or `genesis_time_ms` for
+/// height 1.
+fn parent_ts_ms(
+    ledger: &Ledger,
+    block_height: u64,
+    parent_block_id: Option<&str>,
+) -> Result<Option<u64>, String> {
+    let parent = parent_block_id
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != GENESIS_ZERO_PARENT_BLOCK_ID);
+    match parent {
+        None if block_height <= 1 => crate::genesis::genesis_time_ms_from_env().map(Some),
+        None => Ok(None),
+        Some(id) => Ok(ledger
+            .block_record_by_id(id)
+            .map_err(|e| e.to_string())?
+            .map(|b| b.ts_ms)),
+    }
+}
+
+/// Block-time validation (spec §1, design 4).
+///
+/// - `ts_ms > parent.ts_ms`: deterministic, the same everywhere. Refused.
+/// - `ts_ms <= local_now + 60 s`: a block further ahead is **held**, not refused, because refusing
+///   would make validity depend on when a node looked. It becomes valid as the clock passes it.
+/// - No lower bound against local time: catch-up replays blocks whose time is long past.
+///
+/// The future bound is the one production read of the node clock on the acceptance side (D3).
+fn check_block_time(
+    ledger: &Ledger,
+    block_height: u64,
+    parent_block_id: Option<&str>,
+    ts_ms: u64,
+) -> Result<(), RemoteBlockApplyError> {
+    if let Some(parent_ts) =
+        parent_ts_ms(ledger, block_height, parent_block_id).map_err(RemoteBlockApplyError::Ledger)?
+        && ts_ms <= parent_ts
+    {
+        return Err(RemoteBlockApplyError::Rejected(format!(
+            "block ts_ms={ts_ms} is not after its parent's ts_ms={parent_ts} (height={block_height})"
+        )));
+    }
+    let now = ledger.clock_now_ms();
+    if ts_ms > now.saturating_add(MAX_BLOCK_FUTURE_MS) {
+        return Err(RemoteBlockApplyError::Held(format!(
+            "block ts_ms={ts_ms} is more than {MAX_BLOCK_FUTURE_MS} ms ahead of local clock {now} \
+             (height={block_height}); held until the clock passes it"
+        )));
+    }
+    Ok(())
+}
+
+/// The time a block at `block_height` on the canonical chain must exceed (its parent's `ts_ms`,
+/// or the genesis time at height 1).
+pub fn parent_ts_for_height(ledger: &Ledger, block_height: u64) -> Result<Option<u64>, String> {
+    let parent = parent_block_id_for_height(ledger, block_height)?;
+    parent_ts_ms(ledger, block_height, parent.as_deref())
+}
+
+/// `ts_ms` for a block this node produces: its clock, but never at or below the parent's time.
+fn next_block_ts_ms(ledger: &Ledger, block_height: u64, parent_block_id: Option<&str>) -> Result<u64, String> {
+    let floor = parent_ts_ms(ledger, block_height, parent_block_id)?
+        .map(|t| t.saturating_add(1))
+        .unwrap_or(0);
+    Ok(ledger.clock_now_ms().max(floor))
+}
+
+/// Refuse to mine when the genesis set lists validators but not this producer under this key: the
+/// block would be refused by every peer. An empty set (dev chain) does not constrain local mining.
+fn producer_key_for_mining(
+    state: &RestState,
+    producer_id: &str,
+) -> Result<Arc<crate::producer_key::ProducerKeypair>, MineError> {
+    let key = state.producer_key.clone().ok_or_else(|| {
+        MineError::Unauthorized("this node has no producer key; it cannot sign blocks".into())
+    })?;
+    let validators =
+        crate::genesis::genesis_validators_from_env().map_err(MineError::BadRequest)?;
+    if !validators.is_empty() {
+        let pk = key.public_key();
+        if !validators
+            .iter()
+            .any(|v| v.producer_id == producer_id && v.key == pk)
+        {
+            return Err(MineError::Unauthorized(format!(
+                "producer_id={producer_id} with this node's producer key is not in the genesis validator set"
+            )));
+        }
+    }
+    Ok(key)
 }
 
 impl RemoteBlockApplyError {
     pub fn message(&self) -> &str {
         match self {
-            Self::Rejected(msg) | Self::Ledger(msg) => msg,
+            Self::Rejected(msg) | Self::Ledger(msg) | Self::Held(msg) => msg,
         }
     }
 }
@@ -121,19 +268,22 @@ impl ValidatorSet {
         Self { validators }
     }
 
-    pub fn from_env_or_single(local_node_id: &str) -> Self {
-        let ids = std::env::var("TET_VALIDATOR_IDS")
-            .ok()
-            .map(|v| {
-                v.split(',')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .filter(|ids| !ids.is_empty())
-            .unwrap_or_else(|| vec![local_node_id.to_string()]);
-        Self::new(ids)
+    /// The validator set is the genesis validator set (Phase 1); `TET_VALIDATOR_IDS` is gone.
+    pub fn from_genesis(validators: &[crate::genesis::GenesisValidator]) -> Self {
+        Self::new(validators.iter().map(|v| v.producer_id.clone()))
+    }
+
+    /// For the local auto-miner only: the genesis set, or this node alone on a dev chain whose
+    /// genesis lists no validators (what a single dev node did before). Acceptance never uses this.
+    pub fn for_local_mining(
+        validators: &[crate::genesis::GenesisValidator],
+        local_node_id: &str,
+    ) -> Self {
+        if validators.is_empty() {
+            Self::new([local_node_id.to_string()])
+        } else {
+            Self::from_genesis(validators)
+        }
     }
 
     pub fn validators(&self) -> &[ConsensusIdentity] {
@@ -372,19 +522,20 @@ pub fn block_id_for_hashes(tx_hashes: &[String]) -> String {
 pub const GENESIS_ZERO_PARENT_BLOCK_ID: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000000";
 
-/// Compute the consensus block id (V2 schema, Phase 0 testnet hard fork).
+/// Compute the consensus block id (V3 schema, Phase 1 genesis).
 ///
-/// `block_id = SHA256("TET_BLOCK_ID_V2|" || height || parent || state_root || tx_hashes || producer)`
+/// `block_id = SHA256("TET_BLOCK_ID_V3|" || height || parent || state_root || tx_hashes || producer || ts)`
 ///
-/// The `TET_BLOCK_ID_V2|` domain-separation prefix guarantees no collision with
-/// the legacy V1 schema and leaves room for a future V3. Empty/blank
-/// `parent_block_id` is normalized to the zero parent hash (genesis).
+/// V3 adds the producer's `ts_ms`, so the block time every consensus rule reads is fixed by the
+/// id and covered by the producer signature over it. The `TET_BLOCK_ID_V3|` prefix keeps it apart
+/// from V1/V2. Empty/blank `parent_block_id` is normalized to the zero parent hash (genesis).
 pub fn block_id_for_block(
     block_height: u64,
     parent_block_id: &str,
     state_root: &str,
     tx_hashes: &[String],
     producer_id: &str,
+    ts_ms: u64,
 ) -> String {
     let parent = if parent_block_id.trim().is_empty() {
         GENESIS_ZERO_PARENT_BLOCK_ID
@@ -392,7 +543,7 @@ pub fn block_id_for_block(
         parent_block_id
     };
     let mut hasher = sha2::Sha256::new();
-    hasher.update(b"TET_BLOCK_ID_V2|");
+    hasher.update(b"TET_BLOCK_ID_V3|");
     hasher.update(block_height.to_le_bytes());
     hasher.update(b"|parent=");
     hasher.update(parent.as_bytes());
@@ -402,6 +553,8 @@ pub fn block_id_for_block(
     hasher.update(tx_hashes.join(",").as_bytes());
     hasher.update(b"|producer=");
     hasher.update(producer_id.as_bytes());
+    hasher.update(b"|ts=");
+    hasher.update(ts_ms.to_le_bytes());
     format!("0x{}", hex::encode(hasher.finalize()))
 }
 
@@ -879,6 +1032,8 @@ struct RecordBlockArgs<'a> {
     state_root: &'a str,
     reward: BlockRewardBreakdown,
     canonical: bool,
+    ts_ms: u64,
+    producer_sig: &'a crate::producer_key::BlockSignature,
 }
 
 fn record_block_record(ledger: &Ledger, args: RecordBlockArgs<'_>) -> Result<(), String> {
@@ -890,7 +1045,7 @@ fn record_block_record(ledger: &Ledger, args: RecordBlockArgs<'_>) -> Result<(),
     let cumulative_weight =
         cumulative_weight_for_block(ledger, parent_block_id.as_deref(), caac_weight)?;
     let row = BlockRecordV1 {
-        v: 1,
+        v: 3,
         height: args.block_height,
         block_id: args.block_id.to_string(),
         parent_block_id,
@@ -906,17 +1061,16 @@ fn record_block_record(ledger: &Ledger, args: RecordBlockArgs<'_>) -> Result<(),
         caac_weight,
         cumulative_weight,
         canonical: args.canonical,
-        ts_ms: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis(),
+        ts_ms: args.ts_ms,
+        producer_sig: args.producer_sig.clone(),
+        received_at_ms: u128::from(ledger.clock_now_ms()),
     };
     ledger.record_block_record(&row).map_err(|e| e.to_string())
 }
 
 pub fn validate_and_record_backfill_candidate(
     ledger: &Ledger,
-    block: RemoteBlockGossip,
+    block: ProducerVerifiedBlock,
 ) -> Result<BlockRecordV1, RemoteBlockApplyError> {
     let RemoteBlockGossip {
         block_height,
@@ -928,11 +1082,14 @@ pub fn validate_and_record_backfill_candidate(
         total_reward_micro,
         state_root,
         txs,
-    } = block;
+        ts_ms,
+        producer_sig,
+    } = block.0;
     let producer_id = ConsensusIdentity::new(producer_id)
         .ok_or_else(|| RemoteBlockApplyError::Rejected("producer_id required".to_string()))?;
-    let local_node_id = local_node_id_from_env();
-    let validator_set = ValidatorSet::from_env_or_single(&local_node_id);
+    let validator_set = ValidatorSet::from_genesis(
+        &crate::genesis::genesis_validators_from_env().map_err(RemoteBlockApplyError::Rejected)?,
+    );
     if !validator_set.contains(producer_id.as_str()) {
         return Err(RemoteBlockApplyError::Rejected(format!(
             "producer_id is not in validator set: {}",
@@ -973,12 +1130,16 @@ pub fn validate_and_record_backfill_candidate(
         &state_root,
         &tx_hashes,
         producer_id.as_str(),
+        ts_ms,
     );
     if expected_block_id != block_id {
         return Err(RemoteBlockApplyError::Rejected(format!(
             "block_id mismatch expected={expected_block_id} received={block_id}"
         )));
     }
+    // The parent may not be here yet (that is why this is a backfill candidate); its time is then
+    // checked when the branch is applied (`reorg_to_branch`).
+    check_block_time(ledger, block_height, parent_block_id.as_deref(), ts_ms)?;
     if block_contains_ai_workload(&txs)
         && !producer_can_mine_ai_workload(ledger, producer_id.as_str())
     {
@@ -1016,6 +1177,8 @@ pub fn validate_and_record_backfill_candidate(
             state_root: &state_root,
             reward,
             canonical: false,
+            ts_ms,
+            producer_sig: &producer_sig,
         },
     )
     .map_err(RemoteBlockApplyError::Ledger)?;
@@ -1115,6 +1278,7 @@ fn apply_block_record_forward(ledger: &Ledger, block: &BlockRecordV1) -> Result<
             &block.tx_hashes,
             &block.producer_id,
             reward.total_reward_micro,
+            block.ts_ms,
         )
         .map_err(|e| e.to_string())?;
     if actual_root != block.state_root {
@@ -1129,6 +1293,7 @@ fn apply_block_record_forward(ledger: &Ledger, block: &BlockRecordV1) -> Result<
             &block.block_id,
             &block.state_root,
             block.txs.len() as u64,
+            block.ts_ms,
         )
         .map_err(|e| e.to_string())?;
     let mut canonical = block.clone();
@@ -1156,6 +1321,34 @@ pub fn reorg_to_branch(ledger: &Ledger, new_tip_id: &str) -> Result<bool, String
     let ancestor = find_common_ancestor(ledger, &new_tip.block_id)?
         .ok_or_else(|| "no common ancestor found".to_string())?;
     let branch = branch_from_ancestor_to_tip(ledger, &ancestor, &new_tip.block_id)?;
+
+    // Check block time along the whole branch BEFORE unwinding anything: a backfilled candidate
+    // was stored before its parent was known, so this is the first point its parent's time is. A
+    // failure after the unwind would leave the node on neither branch.
+    {
+        let mut prev_ts = ledger
+            .block_record_by_id(&ancestor)
+            .map_err(|e| e.to_string())?
+            .map(|b| b.ts_ms);
+        let now = ledger.clock_now_ms();
+        for b in &branch {
+            if let Some(p) = prev_ts
+                && b.ts_ms <= p
+            {
+                return Err(format!(
+                    "reorg refused: block {} ts_ms={} is not after its parent's ts_ms={p}",
+                    b.block_id, b.ts_ms
+                ));
+            }
+            if b.ts_ms > now.saturating_add(MAX_BLOCK_FUTURE_MS) {
+                return Err(format!(
+                    "reorg held: block {} ts_ms={} is more than {MAX_BLOCK_FUTURE_MS} ms ahead of local clock {now}",
+                    b.block_id, b.ts_ms
+                ));
+            }
+            prev_ts = Some(b.ts_ms);
+        }
+    }
 
     let mut cur = Some(current_tip.block_id.clone());
     while let Some(id) = cur {
@@ -1220,18 +1413,22 @@ async fn mine_coinbase_only_block_as(
     let producer_id = ConsensusIdentity::new(producer_id)
         .map(|id| id.as_str().to_string())
         .unwrap_or_else(local_node_id_from_env);
+    let producer_key = producer_key_for_mining(&state, &producer_id)?;
     let txs: Vec<SignedTxEnvelopeV1> = Vec::new();
     let tx_hashes: Vec<String> = Vec::new();
     let next_height = state.ledger.block_height().unwrap_or(0).saturating_add(1);
     let parent_block_id = parent_block_id_for_height(&state.ledger, next_height)
         .map_err(|e| MineError::BadRequest(e))?;
     let reward = reward_for_block(&txs).map_err(MineError::Unauthorized)?;
-    // block_id (V2) commits to the post-block state_root, so it must be computed
+    // The block's time: every time-gated rule in preview and apply reads this, never the clock.
+    let ts_ms = next_block_ts_ms(&state.ledger, next_height, parent_block_id.as_deref())
+        .map_err(MineError::BadRequest)?;
+    // block_id (V3) commits to the post-block state_root, so it must be computed
     // before the block is applied. Preview the state_root non-destructively; the
     // value returned by apply_consensus_block_batch below is identical.
     let preview_state_root = state
         .ledger
-        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro)
+        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro, ts_ms)
         .map_err(|e| MineError::BadRequest(e.to_string()))?;
     let block_id = block_id_for_block(
         next_height,
@@ -1239,7 +1436,11 @@ async fn mine_coinbase_only_block_as(
         &preview_state_root,
         &tx_hashes,
         &producer_id,
+        ts_ms,
     );
+    let producer_sig = producer_key
+        .sign_block_id(&block_id)
+        .map_err(MineError::BadRequest)?;
     let undo = state
         .ledger
         .prepare_block_undo(
@@ -1264,11 +1465,12 @@ async fn mine_coinbase_only_block_as(
             &tx_hashes,
             &producer_id,
             reward.total_reward_micro,
+            ts_ms,
         )
         .map_err(|e| MineError::BadRequest(e.to_string()))?;
     let _ = state
         .ledger
-        .record_block_summary(block_height, &block_id, &state_root, 0);
+        .record_block_summary(block_height, &block_id, &state_root, 0, ts_ms);
     let _ = record_block_record(
         &state.ledger,
         RecordBlockArgs {
@@ -1281,6 +1483,8 @@ async fn mine_coinbase_only_block_as(
             state_root: &state_root,
             reward,
             canonical: true,
+            ts_ms,
+            producer_sig: &producer_sig,
         },
     );
     schedule_history_prune(state.ledger.clone(), block_height);
@@ -1296,6 +1500,8 @@ async fn mine_coinbase_only_block_as(
             total_reward_micro: reward.total_reward_micro,
             state_root: state_root.clone(),
             txs,
+            ts_ms,
+            producer_sig: producer_sig.clone(),
         };
         if let Ok(json) = serde_json::to_string(&ev) {
             let _ = tx.send(json).await;
@@ -1321,6 +1527,8 @@ pub async fn mine_pending_block_as(
     let producer_id = ConsensusIdentity::new(producer_id)
         .map(|id| id.as_str().to_string())
         .unwrap_or_else(local_node_id_from_env);
+    // Before the mempool is drained: a node that cannot sign must not take transactions out.
+    let producer_key = producer_key_for_mining(&state, &producer_id)?;
     let txs = {
         let mut mp = state.mempool.lock().await;
         if block_contains_ai_workload(&mp)
@@ -1370,12 +1578,15 @@ pub async fn mine_pending_block_as(
         .map_err(|e| MineError::BadRequest(e))?;
     validate_zk_task_claims(&state.ledger, &txs).map_err(MineError::Unauthorized)?;
     let reward = reward_for_block(&txs).map_err(MineError::Unauthorized)?;
-    // block_id (V2) commits to the post-block state_root, so it must be computed
+    // The block's time: every time-gated rule in preview and apply reads this, never the clock.
+    let ts_ms = next_block_ts_ms(&state.ledger, next_height, parent_block_id.as_deref())
+        .map_err(MineError::BadRequest)?;
+    // block_id (V3) commits to the post-block state_root, so it must be computed
     // before the block is applied. Preview the state_root non-destructively; the
     // value returned by apply_consensus_block_batch below is identical.
     let preview_state_root = state
         .ledger
-        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro)
+        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro, ts_ms)
         .map_err(|e| MineError::BadRequest(e.to_string()))?;
     let block_id = block_id_for_block(
         next_height,
@@ -1383,7 +1594,11 @@ pub async fn mine_pending_block_as(
         &preview_state_root,
         &tx_hashes,
         &producer_id,
+        ts_ms,
     );
+    let producer_sig = producer_key
+        .sign_block_id(&block_id)
+        .map_err(MineError::BadRequest)?;
     let undo = state
         .ledger
         .prepare_block_undo(
@@ -1409,13 +1624,14 @@ pub async fn mine_pending_block_as(
             &tx_hashes,
             &producer_id,
             reward.total_reward_micro,
+            ts_ms,
         )
         .map_err(|e| MineError::BadRequest(e.to_string()))?;
 
     let _ =
         state
             .ledger
-            .record_block_summary(block_height, &block_id, &state_root, txs.len() as u64);
+            .record_block_summary(block_height, &block_id, &state_root, txs.len() as u64, ts_ms);
     let _ = record_block_record(
         &state.ledger,
         RecordBlockArgs {
@@ -1428,6 +1644,8 @@ pub async fn mine_pending_block_as(
             state_root: &state_root,
             reward,
             canonical: true,
+            ts_ms,
+            producer_sig: &producer_sig,
         },
     );
     let _ = state
@@ -1446,6 +1664,8 @@ pub async fn mine_pending_block_as(
             total_reward_micro: reward.total_reward_micro,
             state_root: state_root.clone(),
             txs: txs.clone(),
+            ts_ms,
+            producer_sig: producer_sig.clone(),
         };
         if let Ok(json) = serde_json::to_string(&ev) {
             let _ = tx.send(json).await;
@@ -1488,7 +1708,7 @@ enum RemoteBlockSyncOutcome {
 /// to the async wrapper, preserving their original relative order.
 fn apply_remote_block_from_gossip_sync(
     ledger: &Arc<Ledger>,
-    block: RemoteBlockGossip,
+    block: ProducerVerifiedBlock,
 ) -> Result<RemoteBlockSyncOutcome, RemoteBlockApplyError> {
     // Both production call sites (gossip handler + catch-up driver) live on the single swarm
     // event loop and `await` each apply, so applications were always serialized. This guard
@@ -1510,7 +1730,9 @@ fn apply_remote_block_from_gossip_sync(
         total_reward_micro,
         state_root,
         txs,
-    } = block;
+        ts_ms,
+        producer_sig,
+    } = block.0;
     let local_height = ledger
         .block_height()
         .map_err(|e| RemoteBlockApplyError::Ledger(e.to_string()))?;
@@ -1533,8 +1755,9 @@ fn apply_remote_block_from_gossip_sync(
     }
     let producer_id = ConsensusIdentity::new(producer_id)
         .ok_or_else(|| RemoteBlockApplyError::Rejected("producer_id required".to_string()))?;
-    let local_node_id = local_node_id_from_env();
-    let validator_set = ValidatorSet::from_env_or_single(&local_node_id);
+    let validator_set = ValidatorSet::from_genesis(
+        &crate::genesis::genesis_validators_from_env().map_err(RemoteBlockApplyError::Rejected)?,
+    );
     if !validator_set.contains(producer_id.as_str()) {
         return Err(RemoteBlockApplyError::Rejected(format!(
             "producer_id is not in validator set: {}",
@@ -1586,12 +1809,14 @@ fn apply_remote_block_from_gossip_sync(
         &state_root,
         &tx_hashes,
         producer_id.as_str(),
+        ts_ms,
     );
     if expected_block_id != block_id {
         return Err(RemoteBlockApplyError::Rejected(format!(
             "block_id mismatch expected={expected_block_id} received={block_id}"
         )));
     }
+    check_block_time(ledger, block_height, parent_block_id.as_deref(), ts_ms)?;
 
     if block_contains_ai_workload(&txs)
         && !producer_can_mine_ai_workload(ledger, producer_id.as_str())
@@ -1637,6 +1862,8 @@ fn apply_remote_block_from_gossip_sync(
                         state_root: &state_root,
                         reward,
                         canonical: false,
+                        ts_ms,
+                        producer_sig: &producer_sig,
                     },
                 );
                 match reorg_to_branch(ledger, &block_id) {
@@ -1685,6 +1912,7 @@ fn apply_remote_block_from_gossip_sync(
             &txs,
             producer_id.as_str(),
             reward.total_reward_micro,
+            ts_ms,
         )
         .map_err(|e| RemoteBlockApplyError::Rejected(e.to_string()))?;
     if expected_state_root != state_root {
@@ -1713,6 +1941,7 @@ fn apply_remote_block_from_gossip_sync(
             &tx_hashes,
             producer_id.as_str(),
             reward.total_reward_micro,
+            ts_ms,
         )
         .map_err(|e| RemoteBlockApplyError::Ledger(e.to_string()))?;
     if actual_state_root != state_root {
@@ -1721,7 +1950,7 @@ fn apply_remote_block_from_gossip_sync(
         )));
     }
     ledger
-        .record_block_summary(block_height, &block_id, &state_root, txs.len() as u64)
+        .record_block_summary(block_height, &block_id, &state_root, txs.len() as u64, ts_ms)
         .map_err(|e| RemoteBlockApplyError::Ledger(e.to_string()))?;
     record_block_record(
         ledger,
@@ -1735,6 +1964,8 @@ fn apply_remote_block_from_gossip_sync(
             state_root: &state_root,
             reward,
             canonical: true,
+            ts_ms,
+            producer_sig: &producer_sig,
         },
     )
     .map_err(RemoteBlockApplyError::Ledger)?;
@@ -1753,7 +1984,7 @@ fn apply_remote_block_from_gossip_sync(
 pub async fn apply_remote_block_from_gossip(
     ledger: Arc<Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
-    block: RemoteBlockGossip,
+    block: ProducerVerifiedBlock,
 ) -> Result<RemoteBlockApplyOutcome, RemoteBlockApplyError> {
     // Offload the 2×O(N) validation + consensus mutation to the blocking pool so the swarm
     // event loop / async runtime stays responsive during block application (the last hot path

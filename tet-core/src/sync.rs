@@ -276,6 +276,8 @@ pub fn block_record_to_remote_gossip(block: &BlockRecordV1) -> RemoteBlockGossip
         total_reward_micro: block.reward.total_reward_micro,
         state_root: block.state_root.clone(),
         txs: block.txs.clone(),
+        ts_ms: block.ts_ms,
+        producer_sig: block.producer_sig.clone(),
     }
 }
 
@@ -316,6 +318,9 @@ pub enum CatchUpDriverEvent {
         peer_id: String,
         applied: usize,
         failed: bool,
+        /// The batch stopped at a block whose `ts_ms` is too far ahead of this node's clock. Not
+        /// the peer's fault: go idle without blacklisting, and the 1 s catch-up tick retries.
+        held: bool,
     },
 }
 
@@ -426,6 +431,7 @@ impl CatchUpDriver {
                 peer_id,
                 applied,
                 failed,
+                held,
             } => {
                 if !matches!(
                     &self.phase,
@@ -434,6 +440,9 @@ impl CatchUpDriver {
                     return CatchUpAction::None;
                 }
                 self.phase = CatchUpPhase::Idle;
+                if held && !failed {
+                    return CatchUpAction::None;
+                }
                 if failed || applied == 0 {
                     self.blacklist.insert(peer_id, now_ms());
                     return self.try_continue(registry, local_height);
@@ -940,6 +949,11 @@ mod tests {
             cumulative_weight: height as u128,
             canonical: true,
             ts_ms: 1_700_000_000_000,
+            producer_sig: crate::producer_key::BlockSignature {
+                ed25519_sig_hex: String::new(),
+                mldsa44_sig_b64: String::new(),
+            },
+            received_at_ms: 0,
         }
     }
 
@@ -1144,6 +1158,7 @@ mod tests {
                 peer_id: "peer-a".into(),
                 applied: 2,
                 failed: false,
+                held: false,
             },
             &reg,
             2,
@@ -1184,6 +1199,7 @@ mod tests {
                 peer_id: "bad".into(),
                 applied: 0,
                 failed: true,
+                held: false,
             },
             &reg,
             0,

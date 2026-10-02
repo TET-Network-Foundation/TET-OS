@@ -79,7 +79,8 @@ fn set_test_env_base() {
         // Avoid cross-test leakage (parallel default + snapshot test overrides).
         std::env::remove_var("TET_LEDGER_JSON_PATH");
         std::env::remove_var("TET_LEDGER_TMP_PATH");
-        std::env::remove_var("TET_VALIDATOR_IDS");
+        std::env::remove_var("TET_GENESIS_VALIDATORS");
+        std::env::remove_var("TET_GENESIS_TIME_MS");
         std::env::remove_var("TET_WALLET_ID");
         std::env::remove_var("TET_PEER_ID");
         std::env::remove_var("TET_BLOCK_TIME_SEC");
@@ -98,6 +99,71 @@ fn open_temp_ledger() -> crate::ledger::Ledger {
     // Keep tempdir alive by leaking it for test lifetime (small, per-test).
     std::mem::forget(dir);
     crate::ledger::Ledger::open(db.to_str().unwrap()).unwrap()
+}
+
+/// Deterministic producer key for a test producer id. Seeds are derived from the id, so every
+/// node in a test that produces as `alice` holds the same key, and the genesis set written by
+/// [`set_test_genesis_validators`] lists exactly that key.
+pub(crate) fn test_producer_key(producer_id: &str) -> crate::producer_key::ProducerKeypair {
+    use sha2::Digest as _;
+    let id = producer_id.trim().to_ascii_lowercase();
+    let ed: [u8; 32] = sha2::Sha256::digest(format!("tet-test-producer-ed25519:{id}")).into();
+    let ml: [u8; 32] = sha2::Sha256::digest(format!("tet-test-producer-mldsa44:{id}")).into();
+    crate::producer_key::ProducerKeypair::from_seeds(&ed, &ml)
+}
+
+/// Write a genesis validator set listing `ids` under their [`test_producer_key`] and point
+/// `TET_GENESIS_VALIDATORS` at it. Callers hold `env_lock()`.
+pub(crate) fn set_test_genesis_validators(ids: &[&str]) {
+    let entries: Vec<crate::genesis::GenesisValidator> = ids
+        .iter()
+        .map(|id| crate::genesis::GenesisValidator {
+            producer_id: id.to_string(),
+            key: test_producer_key(id).public_key(),
+        })
+        .collect();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("validators.json");
+    std::mem::forget(dir);
+    std::fs::write(&path, serde_json::to_vec(&entries).unwrap()).unwrap();
+    unsafe { std::env::set_var("TET_GENESIS_VALIDATORS", &path) };
+}
+
+/// A placeholder signature, replaced by [`sign_as_producer`] (or deliberately left in place by a
+/// test about unsigned blocks).
+pub(crate) fn unsigned_block_sig() -> crate::producer_key::BlockSignature {
+    crate::producer_key::BlockSignature {
+        ed25519_sig_hex: String::new(),
+        mldsa44_sig_b64: String::new(),
+    }
+}
+
+/// Sign `block` with its producer's test key and pass it through the real producer check.
+pub(crate) fn sign_as_producer(
+    mut block: crate::consensus::RemoteBlockGossip,
+) -> crate::consensus::ProducerVerifiedBlock {
+    block.producer_sig = test_producer_key(&block.producer_id)
+        .sign_block_id(&block.block_id)
+        .unwrap();
+    crate::consensus::verify_block_producer(block).expect("test block must pass the producer check")
+}
+
+/// A block time for a remote block built against `ledger`: the tip's `ts_ms` (or the genesis time)
+/// plus one second. Deterministic, so the preview, the `block_id` and the gossip
+/// literal all see the same value, and within the 60 s future bound of the system clock.
+pub(crate) fn test_block_ts(ledger: &crate::ledger::Ledger) -> u64 {
+    let next = ledger.block_height().unwrap().saturating_add(1);
+    crate::consensus::parent_ts_for_height(ledger, next)
+        .unwrap()
+        .unwrap_or(0)
+        .saturating_add(1_000)
+}
+
+/// `state` producing as `producer_id`, with that id's test key.
+pub(crate) fn with_producer(state: &crate::rest::RestState, producer_id: &str) -> crate::rest::RestState {
+    let mut s = state.clone();
+    s.producer_key = Some(std::sync::Arc::new(test_producer_key(producer_id)));
+    s
 }
 
 fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate::rest::RestState {
@@ -133,6 +199,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         e2ee_jobs: std::sync::Arc::new(std::sync::Mutex::new(crate::rest::E2eeJobQueue::default())),
         genesis_1k_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         log_tx,
+        producer_key: Some(std::sync::Arc::new(test_producer_key("alice"))),
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     }
 }
@@ -496,7 +563,7 @@ async fn remote_block_rejects_non_leader_producer() {
     set_test_env_base();
     use crate::consensus::LeaderElection as _;
     unsafe {
-        std::env::set_var("TET_VALIDATOR_IDS", "alice,bob");
+        set_test_genesis_validators(&["alice", "bob"]);
         std::env::set_var("TET_WALLET_ID", "alice");
     }
 
@@ -529,11 +596,13 @@ async fn remote_block_rejects_non_leader_producer() {
     );
     let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
     let reward = crate::consensus::reward_for_block(std::slice::from_ref(&env)).unwrap();
+    let ts_ms = test_block_ts(&ledger);
     let state_root = ledger
         .compute_state_root_after_remote_block(
             std::slice::from_ref(&env),
             "alice",
             reward.total_reward_micro,
+            ts_ms,
         )
         .unwrap();
 
@@ -550,12 +619,13 @@ async fn remote_block_rejects_non_leader_producer() {
         &state_root,
         std::slice::from_ref(&tx_hash),
         &non_leader,
+        ts_ms,
     );
 
     let res = crate::consensus::apply_remote_block_from_gossip(
         ledger,
         state.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height: 1,
             block_id,
             parent_block_id: None,
@@ -565,7 +635,9 @@ async fn remote_block_rejects_non_leader_producer() {
             total_reward_micro: reward.total_reward_micro,
             state_root,
             txs: vec![env],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await;
     assert!(matches!(
@@ -803,7 +875,7 @@ async fn remote_ai_workload_rejects_non_poc_producer() {
     let _g = env_lock();
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        set_test_genesis_validators(&["alice"]);
         std::env::set_var("TET_WALLET_ID", "alice");
     }
 
@@ -836,11 +908,13 @@ async fn remote_ai_workload_rejects_non_poc_producer() {
     );
     let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
     let reward = crate::consensus::reward_for_block(std::slice::from_ref(&env)).unwrap();
+    let ts_ms = test_block_ts(&ledger);
     let state_root = ledger
         .compute_state_root_after_remote_block(
             std::slice::from_ref(&env),
             "alice",
             reward.total_reward_micro,
+            ts_ms,
         )
         .unwrap();
     let block_id = crate::consensus::block_id_for_block(
@@ -849,12 +923,13 @@ async fn remote_ai_workload_rejects_non_poc_producer() {
         &state_root,
         std::slice::from_ref(&tx_hash),
         "alice",
+        ts_ms,
     );
 
     let res = crate::consensus::apply_remote_block_from_gossip(
         ledger,
         state.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height: 1,
             block_id,
             parent_block_id: None,
@@ -864,7 +939,9 @@ async fn remote_ai_workload_rejects_non_poc_producer() {
             total_reward_micro: reward.total_reward_micro,
             state_root,
             txs: vec![env],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await;
     assert!(matches!(
@@ -928,7 +1005,7 @@ async fn same_height_fork_choice_reports_remote_winner_without_reorg() {
     let _g = env_lock();
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        set_test_genesis_validators(&["alice"]);
         std::env::set_var("TET_WALLET_ID", "alice");
     }
 
@@ -961,22 +1038,24 @@ async fn same_height_fork_choice_reports_remote_winner_without_reorg() {
     );
     let reward = crate::consensus::reward_for_block(std::slice::from_ref(&env)).unwrap();
     let tx_hash = crate::consensus::tx_hash_for_env(&env).unwrap();
+    let ts_ms = test_block_ts(&ledger);
     let remote_block_id = crate::consensus::block_id_for_block(
         1,
         "",
         "0xnot-checked-for-same-height",
         std::slice::from_ref(&tx_hash),
         "alice",
+        ts_ms,
     );
     ledger.set_block_height_if_newer(1).unwrap();
     ledger
-        .record_block_summary(1, "zzzz-local-block", "0xlocal", 1)
+        .record_block_summary(1, "zzzz-local-block", "0xlocal", 1, 1)
         .unwrap();
 
     let res = crate::consensus::apply_remote_block_from_gossip(
         ledger,
         state.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height: 1,
             block_id: remote_block_id,
             parent_block_id: None,
@@ -986,7 +1065,9 @@ async fn same_height_fork_choice_reports_remote_winner_without_reorg() {
             total_reward_micro: reward.total_reward_micro,
             state_root: "0xnot-checked-for-same-height".to_string(),
             txs: vec![env],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await
     .unwrap();
@@ -1010,7 +1091,8 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     ledger_b.init_genesis_founder_premine_from_env().unwrap();
     ledger_b.apply_genesis_allocation("founder").unwrap();
 
-    let state_a = rest_state_for_tests(ledger_a.clone());
+    set_test_genesis_validators(&["local-wallet"]);
+    let state_a = with_producer(&rest_state_for_tests(ledger_a.clone()), "local-wallet");
     let state_b = rest_state_for_tests(ledger_b.clone());
 
     // Sender/recipient wallets (real keys for envelope verification).
@@ -1118,6 +1200,8 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     assert!(!block_id.is_empty());
     assert!(!state_root.is_empty());
     assert_eq!(state_a.mempool.lock().await.len(), 0);
+    // The block time is in the V3 block_id; take it from the producer's own record.
+    let ts_ms = ledger_a.block_record_by_id(&block_id).unwrap().unwrap().ts_ms;
     assert!(ledger_a.balance_micro(&sender_wallet_id).unwrap() < bal_before);
 
     // [B] Reject bad state_root before mutating local state.
@@ -1125,7 +1209,7 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     let bad = crate::consensus::apply_remote_block_from_gossip(
         ledger_b.clone(),
         state_b.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height,
             block_id: block_id.clone(),
             parent_block_id: None,
@@ -1135,7 +1219,9 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
             total_reward_micro,
             state_root: "0xbad-root".to_string(),
             txs: vec![env.clone()],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await;
     assert!(matches!(
@@ -1153,7 +1239,7 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     let applied = crate::consensus::apply_remote_block_from_gossip(
         ledger_b.clone(),
         state_b.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height,
             block_id: block_id.clone(),
             parent_block_id: None,
@@ -1163,7 +1249,9 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
             total_reward_micro,
             state_root: state_root.clone(),
             txs: vec![env.clone()],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await
     .unwrap();
@@ -1199,7 +1287,7 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     let skipped = crate::consensus::apply_remote_block_from_gossip(
         ledger_b.clone(),
         state_b.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height,
             block_id,
             parent_block_id: None,
@@ -1209,7 +1297,9 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
             total_reward_micro,
             state_root,
             txs: vec![env],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await
     .unwrap();
@@ -1219,14 +1309,15 @@ async fn phase2_mempool_mine_and_apply_block_to_peer() {
     ));
 }
 
-/// Build a valid single-transfer remote block gossip at `height` from the producer ledger's
-/// *current* state (single-validator "local-wallet" mode, per `set_test_env_base`).
+/// Build a valid, producer-signed single-transfer remote block at `height` from the producer
+/// ledger's *current* state. Produced by "local-wallet", which [`two_synced_nodes_with_funded_sender`]
+/// puts in the genesis validator set.
 fn build_remote_block_for_tests(
     producer_ledger: &crate::ledger::Ledger,
     height: u64,
     parent_block_id: Option<String>,
     env: crate::protocol::SignedTxEnvelopeV1,
-) -> crate::consensus::RemoteBlockGossip {
+) -> crate::consensus::ProducerVerifiedBlock {
     let producer_id = "local-wallet".to_string();
     let txs = vec![env];
     let tx_hashes: Vec<String> = txs
@@ -1234,8 +1325,9 @@ fn build_remote_block_for_tests(
         .map(|e| crate::consensus::tx_hash_for_env(e).unwrap())
         .collect();
     let reward = crate::consensus::reward_for_block(&txs).unwrap();
+    let ts_ms = test_block_ts(producer_ledger);
     let state_root = producer_ledger
-        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro)
+        .compute_state_root_after_remote_block(&txs, &producer_id, reward.total_reward_micro, ts_ms)
         .unwrap();
     let block_id = crate::consensus::block_id_for_block(
         height,
@@ -1243,8 +1335,9 @@ fn build_remote_block_for_tests(
         &state_root,
         &tx_hashes,
         &producer_id,
+        ts_ms,
     );
-    crate::consensus::RemoteBlockGossip {
+    sign_as_producer(crate::consensus::RemoteBlockGossip {
         block_height: height,
         block_id,
         parent_block_id,
@@ -1254,7 +1347,9 @@ fn build_remote_block_for_tests(
         total_reward_micro: reward.total_reward_micro,
         state_root,
         txs,
-    }
+        ts_ms,
+        producer_sig: unsigned_block_sig(),
+    })
 }
 
 /// Two identically-seeded nodes paired as producer/receiver: open temp ledgers, apply genesis,
@@ -1268,13 +1363,15 @@ fn two_synced_nodes_with_funded_sender() -> (
     String,
     String,
 ) {
+    set_test_genesis_validators(&["local-wallet"]);
     let ledger_a = std::sync::Arc::new(open_temp_ledger());
     ledger_a.init_genesis_founder_premine_from_env().unwrap();
     ledger_a.apply_genesis_allocation("founder").unwrap();
     let ledger_b = std::sync::Arc::new(open_temp_ledger());
     ledger_b.init_genesis_founder_premine_from_env().unwrap();
     ledger_b.apply_genesis_allocation("founder").unwrap();
-    let state_a = rest_state_for_tests(ledger_a.clone());
+    set_test_genesis_validators(&["local-wallet"]);
+    let state_a = with_producer(&rest_state_for_tests(ledger_a.clone()), "local-wallet");
     let state_b = rest_state_for_tests(ledger_b.clone());
 
     let sender = crate::wallet::generate_mnemonic_12().unwrap();
@@ -1343,7 +1440,7 @@ async fn remote_block_apply_offloaded_sequence_keeps_state_roots_identical() {
                     ..
                 } => {
                     assert_eq!(block_height, height);
-                    assert_eq!(state_root, gossip.state_root);
+                    assert_eq!(state_root, gossip.block().state_root);
                 }
                 other => panic!("expected Applied at height {height}, got {other:?}"),
             }
@@ -1352,8 +1449,8 @@ async fn remote_block_apply_offloaded_sequence_keeps_state_roots_identical() {
         assert_eq!(ledger_a.block_height().unwrap(), height);
         assert_eq!(ledger_b.block_height().unwrap(), height);
         assert_eq!(ledger_a.compute_state_root().unwrap(), ledger_b.compute_state_root().unwrap());
-        assert_eq!(ledger_a.compute_state_root().unwrap(), gossip.state_root);
-        parent_block_id = Some(gossip.block_id.clone());
+        assert_eq!(ledger_a.compute_state_root().unwrap(), gossip.block().state_root);
+        parent_block_id = Some(gossip.block().block_id.clone());
     }
 }
 
@@ -1587,7 +1684,7 @@ async fn file_fee_remote_block_apply_keeps_state_roots_identical() {
         .unwrap();
         match outcome {
             crate::consensus::RemoteBlockApplyOutcome::Applied { state_root, .. } => {
-                assert_eq!(state_root, gossip.state_root);
+                assert_eq!(state_root, gossip.block().state_root);
             }
             other => panic!("expected Applied, got {other:?}"),
         }
@@ -1772,7 +1869,7 @@ async fn remote_block_apply_concurrent_duplicate_delivery_is_fork_safe() {
             } => {
                 applied += 1;
                 assert_eq!(block_height, 1);
-                assert_eq!(state_root, gossip1.state_root);
+                assert_eq!(state_root, gossip1.block().state_root);
             }
             crate::consensus::RemoteBlockApplyOutcome::Skipped { .. } => skipped += 1,
             other => panic!("unexpected outcome under concurrent delivery: {other:?}"),
@@ -1781,7 +1878,7 @@ async fn remote_block_apply_concurrent_duplicate_delivery_is_fork_safe() {
     assert_eq!(applied, 1, "block must be applied exactly once");
     assert_eq!(skipped, 3);
     assert_eq!(ledger_b.block_height().unwrap(), 1);
-    assert_eq!(ledger_b.compute_state_root().unwrap(), gossip1.state_root);
+    assert_eq!(ledger_b.compute_state_root().unwrap(), gossip1.block().state_root);
 
     // Receiver keeps extending: mirror block 1 on the producer view, then deliver block 2.
     let _ = crate::consensus::apply_remote_block_from_gossip(
@@ -1798,7 +1895,7 @@ async fn remote_block_apply_concurrent_duplicate_delivery_is_fork_safe() {
         2 * crate::ledger::STEVEMON,
     );
     let gossip2 =
-        build_remote_block_for_tests(&ledger_a, 2, Some(gossip1.block_id.clone()), env2);
+        build_remote_block_for_tests(&ledger_a, 2, Some(gossip1.block().block_id.clone()), env2);
     let outcome = crate::consensus::apply_remote_block_from_gossip(
         ledger_b.clone(),
         state_b.mempool.clone(),
@@ -1810,7 +1907,7 @@ async fn remote_block_apply_concurrent_duplicate_delivery_is_fork_safe() {
         outcome,
         crate::consensus::RemoteBlockApplyOutcome::Applied { block_height: 2, .. }
     ));
-    assert_eq!(ledger_b.compute_state_root().unwrap(), gossip2.state_root);
+    assert_eq!(ledger_b.compute_state_root().unwrap(), gossip2.block().state_root);
 }
 
 /// Liveness: with the consensus mutation offloaded to the blocking pool, the (single-threaded)
@@ -1941,13 +2038,13 @@ async fn mined_block_record_parent_block_id_chains_to_previous() {
     set_test_env_base();
     unsafe {
         std::env::set_var("TET_WALLET_ID", "local-wallet");
-        std::env::set_var("TET_VALIDATOR_IDS", "local-wallet");
+        set_test_genesis_validators(&["local-wallet"]);
     }
 
     let ledger = std::sync::Arc::new(open_temp_ledger());
     ledger.init_genesis_founder_premine_from_env().unwrap();
     ledger.apply_genesis_allocation("founder").unwrap();
-    let state = rest_state_for_tests(ledger.clone());
+    let state = with_producer(&rest_state_for_tests(ledger.clone()), "local-wallet");
 
     let b1 = crate::consensus::mine_pending_block_as(state.clone(), "local-wallet".to_string())
         .await
@@ -1973,7 +2070,7 @@ async fn gossip_applied_block_parent_block_id_chains_to_previous() {
     let _g = env_lock();
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        set_test_genesis_validators(&["alice"]);
         std::env::set_var("TET_WALLET_ID", "alice");
     }
 
@@ -1990,16 +2087,17 @@ async fn gossip_applied_block_parent_block_id_chains_to_previous() {
     let txs: Vec<crate::protocol::SignedTxEnvelopeV1> = Vec::new();
     let reward = crate::consensus::reward_for_block(&txs).unwrap();
     let tx_hashes: Vec<String> = Vec::new();
+    let ts_ms = test_block_ts(&ledger);
     let state_root = ledger
-        .compute_state_root_after_remote_block(&txs, "alice", reward.total_reward_micro)
+        .compute_state_root_after_remote_block(&txs, "alice", reward.total_reward_micro, ts_ms)
         .unwrap();
     let block_id =
-        crate::consensus::block_id_for_block(2, &b1.block_id, &state_root, &tx_hashes, "alice");
+        crate::consensus::block_id_for_block(2, &b1.block_id, &state_root, &tx_hashes, "alice", ts_ms);
 
     let applied = crate::consensus::apply_remote_block_from_gossip(
         ledger.clone(),
         state.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height: 2,
             block_id: block_id.clone(),
             parent_block_id: None,
@@ -2009,7 +2107,9 @@ async fn gossip_applied_block_parent_block_id_chains_to_previous() {
             total_reward_micro: reward.total_reward_micro,
             state_root,
             txs,
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await
     .unwrap();
@@ -2034,7 +2134,7 @@ async fn remote_coinbase_only_block_applies_and_advances_height() {
     let _g = env_lock();
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        set_test_genesis_validators(&["alice"]);
         std::env::set_var("TET_WALLET_ID", "alice");
         std::env::set_var("TET_BASE_BLOCK_REWARD", "0.1");
     }
@@ -2046,10 +2146,11 @@ async fn remote_coinbase_only_block_applies_and_advances_height() {
 
     let txs = Vec::new();
     let reward = crate::consensus::reward_for_block(&txs).unwrap();
+    let ts_ms = test_block_ts(&ledger);
     let state_root = ledger
-        .compute_state_root_after_remote_block(&txs, "alice", reward.total_reward_micro)
+        .compute_state_root_after_remote_block(&txs, "alice", reward.total_reward_micro, ts_ms)
         .unwrap();
-    let block_id = crate::consensus::block_id_for_block(1, "", &state_root, &[], "alice");
+    let block_id = crate::consensus::block_id_for_block(1, "", &state_root, &[], "alice", ts_ms);
     let pool_before = ledger
         .balance_micro(crate::ledger::WALLET_SYSTEM_WORKER_POOL)
         .unwrap();
@@ -2059,7 +2160,7 @@ async fn remote_coinbase_only_block_applies_and_advances_height() {
     let applied = crate::consensus::apply_remote_block_from_gossip(
         ledger.clone(),
         state.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height: 1,
             block_id,
             parent_block_id: None,
@@ -2069,7 +2170,9 @@ async fn remote_coinbase_only_block_applies_and_advances_height() {
             total_reward_micro: reward.total_reward_micro,
             state_root: state_root.clone(),
             txs,
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await
     .unwrap();
@@ -2408,7 +2511,7 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
     let _g = env_lock();
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        set_test_genesis_validators(&["alice"]);
         std::env::set_var("TET_WALLET_ID", "alice");
         std::env::set_var("TET_BASE_BLOCK_REWARD", "0.1");
         std::env::set_var("TET_JOULES_PER_FLOP", "0.000001");
@@ -2460,11 +2563,13 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
         .unwrap();
     let state = rest_state_for_tests(ledger.clone());
     let reward = crate::consensus::reward_for_block(std::slice::from_ref(&env)).unwrap();
+    let ts_ms = test_block_ts(&ledger);
     let state_root = ledger
         .compute_state_root_after_remote_block(
             std::slice::from_ref(&env),
             "alice",
             reward.total_reward_micro,
+            ts_ms,
         )
         .unwrap();
     let block_id = crate::consensus::block_id_for_block(
@@ -2473,12 +2578,13 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
         &state_root,
         std::slice::from_ref(&tx_hash),
         "alice",
+        ts_ms,
     );
 
     let tampered = crate::consensus::apply_remote_block_from_gossip(
         ledger.clone(),
         state.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height: 1,
             block_id: block_id.clone(),
             parent_block_id: None,
@@ -2488,7 +2594,9 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
             total_reward_micro: reward.total_reward_micro + 1,
             state_root: state_root.clone(),
             txs: vec![env.clone()],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await;
     assert!(matches!(
@@ -2512,11 +2620,12 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
         &state_root,
         std::slice::from_ref(&mismatch_hash),
         "alice",
+        ts_ms,
     );
     let mismatch = crate::consensus::apply_remote_block_from_gossip(
         ledger,
         state.mempool.clone(),
-        crate::consensus::RemoteBlockGossip {
+        sign_as_producer(crate::consensus::RemoteBlockGossip {
             block_height: 1,
             block_id: mismatch_block_id,
             parent_block_id: None,
@@ -2526,7 +2635,9 @@ async fn remote_block_rejects_journal_mismatch_and_compute_reward_tamper() {
             total_reward_micro: reward.total_reward_micro,
             state_root,
             txs: vec![mismatch_env],
-        },
+            ts_ms,
+            producer_sig: unsigned_block_sig(),
+        }),
     )
     .await;
     assert!(matches!(
@@ -2697,6 +2808,7 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
         &branch_root,
         std::slice::from_ref(&branch_hash),
         "producer-b",
+        1_000,
     );
 
     ledger
@@ -2717,7 +2829,9 @@ async fn reorg_to_heavier_fork_unwinds_transfer_and_replays_new_branch() {
             caac_weight: 1_000,
             cumulative_weight: 1_000,
             canonical: false,
-            ts_ms: 1,
+            ts_ms: 1_000,
+            producer_sig: unsigned_block_sig(),
+            received_at_ms: 0,
         })
         .unwrap();
 
@@ -2748,6 +2862,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         std::env::set_var("TET_BASE_BLOCK_REWARD", "0.1");
         std::env::set_var("TET_WALLET_ID", "local-wallet");
     }
+    set_test_genesis_validators(&["local-wallet"]);
 
     let wallet_a = crate::wallet::generate_mnemonic_12().unwrap();
     let words_a = wallet_a.mnemonic_12.clone().unwrap();
@@ -2766,12 +2881,15 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
     let canonical_tx = signed_transfer_env_for_tests(&words_a, &a, &b, 1_000);
     let state = rest_state_for_tests(ledger.clone());
     state.mempool.lock().await.push(canonical_tx);
-    let canonical = crate::consensus::mine_pending_block_as(state, "local-wallet".to_string())
+    let canonical = crate::consensus::mine_pending_block_as(with_producer(&state, "local-wallet"), "local-wallet".to_string())
         .await
         .unwrap();
     assert!(canonical.mined);
     assert_eq!(ledger.block_height().unwrap(), 1);
 
+    // The branch's times: after genesis (0), parent before child, both long past.
+    const PARENT_TS: u64 = 1_000;
+    const CHILD_TS: u64 = 2_000;
     let branch_tx = signed_transfer_env_for_tests(&words_a, &a, &c, 2_000);
     let branch_hash = crate::consensus::tx_hash_for_env(&branch_tx).unwrap();
     let parent_reward =
@@ -2799,6 +2917,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         &parent_state_root,
         std::slice::from_ref(&branch_hash),
         "local-wallet",
+        PARENT_TS,
     );
     branch_ledger
         .apply_block_reward("local-wallet", child_reward.total_reward_micro, 2)
@@ -2810,9 +2929,10 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         &child_state_root,
         &[],
         "local-wallet",
+        CHILD_TS,
     );
 
-    let child = crate::consensus::RemoteBlockGossip {
+    let child = sign_as_producer(crate::consensus::RemoteBlockGossip {
         block_height: 2,
         block_id: child_block_id.clone(),
         parent_block_id: Some(parent_block_id.clone()),
@@ -2822,7 +2942,9 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         total_reward_micro: child_reward.total_reward_micro,
         state_root: child_state_root.clone(),
         txs: Vec::new(),
-    };
+        ts_ms: CHILD_TS,
+        producer_sig: unsigned_block_sig(),
+    });
     crate::consensus::validate_and_record_backfill_candidate(&ledger, child).unwrap();
     assert_eq!(ledger.block_height().unwrap(), 1);
     assert_eq!(
@@ -2830,7 +2952,7 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         canonical.block_id
     );
 
-    let parent = crate::consensus::RemoteBlockGossip {
+    let parent = sign_as_producer(crate::consensus::RemoteBlockGossip {
         block_height: 1,
         block_id: parent_block_id.clone(),
         parent_block_id: None,
@@ -2840,7 +2962,9 @@ async fn backfilled_child_first_branch_reorgs_after_parent_arrives() {
         total_reward_micro: parent_reward.total_reward_micro,
         state_root: parent_state_root,
         txs: vec![branch_tx],
-    };
+        ts_ms: PARENT_TS,
+        producer_sig: unsigned_block_sig(),
+    });
     crate::consensus::validate_and_record_backfill_candidate(&ledger, parent).unwrap();
     let changed = crate::consensus::try_reorg_backfilled_branch(&ledger, &child_block_id).unwrap();
     assert!(changed);
@@ -3504,6 +3628,9 @@ fn mainnet_rejects_legacy_tx_signature_without_chain_binding() {
         "TET_GENESIS_FOUNDER_WALLET_ID",
         crate::ledger::GENESIS_FOUNDER_DEV_PUBLIC_HEX,
     );
+    // Mainnet has no genesis defaults (Phase 1): it must name its start time and validators.
+    let _genesis_time = EnvVarGuard::set("TET_GENESIS_TIME_MS", "1");
+    set_test_genesis_validators(&["mainnet-producer"]);
 
     let wi = crate::wallet::generate_mnemonic_12().unwrap();
     let phrase = wi.mnemonic_12.as_deref().unwrap_or_default();
@@ -3916,11 +4043,13 @@ fn welcome_airdrop_consensus_tx_predicts_same_root_on_all_nodes() {
     let env = signed_env_for_tests(tx, &words, &wallet_id);
 
     // Same tx previewed as a block on both nodes => same predicted root, distinct from genesis.
+    let ts_ms = test_block_ts(&n1);
     let r1 = n1
-        .compute_state_root_after_remote_block(std::slice::from_ref(&env), "", 0)
+        .compute_state_root_after_remote_block(std::slice::from_ref(&env), "", 0, ts_ms)
         .unwrap();
+    let ts_ms = test_block_ts(&n2);
     let r2 = n2
-        .compute_state_root_after_remote_block(std::slice::from_ref(&env), "", 0)
+        .compute_state_root_after_remote_block(std::slice::from_ref(&env), "", 0, ts_ms)
         .unwrap();
     assert_eq!(r1, r2, "consensus airdrop must predict identically on all nodes");
     assert_ne!(r1, genesis_root, "consensus airdrop must actually credit the wallet");
@@ -4039,7 +4168,7 @@ mod block_sync {
         set_test_env_base();
         unsafe {
             std::env::set_var("TET_CHAIN_ID", "phase-c-block-sync");
-            std::env::set_var("TET_VALIDATOR_IDS", "alice");
+            super::set_test_genesis_validators(&["alice"]);
             std::env::set_var("TET_GOSSIP_MESH_N", "2");
             std::env::set_var("TET_GOSSIP_MESH_N_LOW", "2");
             std::env::set_var("TET_GOSSIP_MESH_N_HIGH", "4");
@@ -4609,6 +4738,69 @@ mod block_sync {
     }
 
     /// A.5 — after burst mine on Node1, all nodes share identical tip block_id + state_root.
+    /// **SECURITY REGRESSION GUARD (D2), gossip site: a gossiped block is held to the producer
+    /// signature.** A peer gossips block 3 with honest contents on the shared tip, naming `alice`
+    /// but signed by `mallory`'s key, which is outside the genesis set. The producer then mines the
+    /// real block 3. The follower must end on the real one. Had it applied the forged block, the
+    /// real one would lose fork choice at equal height and the follower would stay forked.
+    ///
+    /// The forged block exists only on the wire: no ledger holds it, so catch-up cannot deliver
+    /// it, and the gossip handler is the only path it can arrive by. Negative control: skip
+    /// `verify_block_producer` in the gossip `BlockMined` handler (the follower then stays on the
+    /// forged block 3).
+    #[tokio::test]
+    async fn gossip_refuses_a_block_without_a_valid_producer_signature() {
+        let _g = env_lock();
+        block_sync_env();
+
+        let n1 = spawn_node(None, true).await;
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        let ledgers = vec![n1.ledger.clone(), n2.ledger.clone()];
+        mine_n(&n1.state, 2).await;
+        wait_height_convergence(&ledgers, 0, Duration::from_secs(45)).await;
+        assert_eq!(n2.ledger.block_height().unwrap(), 2);
+
+        let tip = n1.ledger.canonical_block_id_at_height(2).unwrap().unwrap();
+        let parent_ts = n1.ledger.block_record_by_id(&tip).unwrap().unwrap().ts_ms;
+        let forged = super::signed_with(super::coinbase_block_on(&n1.ledger, parent_ts + 1), "mallory");
+        let ev = crate::models::NetworkEvent::BlockMined {
+            block_height: forged.block_height,
+            block_id: forged.block_id.clone(),
+            parent_block_id: forged.parent_block_id.clone(),
+            producer_id: forged.producer_id.clone(),
+            base_reward_micro: forged.base_reward_micro,
+            compute_reward_micro: forged.compute_reward_micro,
+            total_reward_micro: forged.total_reward_micro,
+            state_root: forged.state_root.clone(),
+            txs: vec![],
+            ts_ms: forged.ts_ms,
+            producer_sig: forged.producer_sig.clone(),
+        };
+        n1.state
+            .gossip_tx
+            .clone()
+            .expect("gossip channel")
+            .send(serde_json::to_string(&ev).unwrap())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let honest = crate::consensus::mine_pending_block_as(n1.state.clone(), "alice".to_string())
+            .await
+            .unwrap();
+        assert_eq!(honest.block_height, 3);
+        assert_ne!(honest.block_id, forged.block_id);
+        wait_height_convergence(&ledgers, 0, Duration::from_secs(30)).await;
+        assert_eq!(
+            n2.ledger.canonical_block_id_at_height(3).unwrap().as_deref(),
+            Some(honest.block_id.as_str()),
+            "the follower must be on the producer's block 3, not the forged one"
+        );
+
+        stop(&[n1, n2]);
+    }
+
     #[tokio::test]
     async fn tip_state_root_strict_match_after_mine() {
         let _g = env_lock();
@@ -5478,73 +5670,497 @@ fn file_announce_network_event_roundtrips_json() {
 // the bug is pinned; each carries a TODO naming the fix that will invert its assertion.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/// **BUG (rank 2): wall-clock time is a consensus input.**
+/// **FIXED (was rank 2, spec §1): the node's clock is no longer a consensus input; the block's is.**
 ///
-/// `apply_consensus_block_batch` (`ledger.rs:1678`) and `compute_state_root_after_remote_block`
-/// (`ledger.rs:1432`) both call `locked_balance_micro(.., ledger_now_ms())`. That value gates the
-/// spendability check which decides whether a transfer applies or returns `InsufficientFunds`.
+/// This replaces `wallclock_time_changes_spendability_for_the_same_block`, which pinned the bug by
+/// showing `locked_balance_micro` gives different answers at two times. That function *should* depend
+/// on time: locks expire. The invariant is that the **applying node's** clock no longer matters, so
+/// the guard varies the node clock and holds the block time fixed.
 ///
-/// Two nodes applying the *same block* at different wall-clock moments therefore reach different
-/// state whenever a vest-lock boundary falls between them. On 2026-05-30 the VPS mined block 9828
-/// at ~02:30 UTC and the Mac replayed it ~17 hours later.
-///
-/// TODO(9828): consensus must read the *block's* timestamp, not the node's clock. Once
-/// `apply_consensus_block_batch` takes `block_time_ms` and threads it into
-/// `locked_balance_micro`, flip the `assert_ne!` below to `assert_eq!` — the whole point of the
-/// fix is that the two evaluations become identical.
+/// One vest lock unlocking at `U`; two ledgers, byte-identical state, opened on clocks that are then
+/// stepped to `U - 1` and to `U + 1 year`. A block with `ts_ms = U - 1` must be refused by both, and
+/// identically. The spec's sketch puts the `Transfer` and the `FileFee` in one block. That would
+/// measure the disjunction of the two sites: with either one reading the clock again, the other
+/// still refuses the block (C4). So they go in separate blocks, each through the preview and through
+/// apply. The four (site × path) refusals are the four things a negative control can break.
+/// [`block_time_after_unlock_applies_identically_at_any_node_clock`] is the companion that stops
+/// "always refuse" from passing.
 #[test]
-fn wallclock_time_changes_spendability_for_the_same_block() {
+fn same_block_applies_identically_at_any_node_clock() {
     let _g = env_lock();
     set_test_env_base();
-    let ledger = open_temp_ledger();
+    let v = VestedPair::new();
 
-    // A worker reward creates a 90-day vest lock (WORKER_REWARD_VEST_MS_DEFAULT).
-    // It debits WALLET_SYSTEM_WORKER_POOL, so genesis must fund the pool first.
-    ledger.init_genesis_founder_premine_from_env().unwrap();
-    ledger.apply_genesis_allocation("founder").unwrap();
-    let worker = "w".repeat(64);
-    let gross = 10_000_000u64;
-    let (_g0, worker_net, _tax, _proof) = ledger
-        .mint_worker_network_reward(&worker, "vault", gross, b"energy:9828", None)
-        .expect("mint seeds the vest lock");
-    assert!(worker_net > 0, "worker must receive a vested amount");
+    let during = v.unlock_at_ms - 1;
+    let transfer = v.transfer_env();
+    let file_fee = v.file_fee_env();
+    for (name, env) in [("Transfer", &transfer), ("FileFee", &file_fee)] {
+        let txs = std::slice::from_ref(env);
+        let hashes = [crate::consensus::tx_hash_for_env(env).unwrap()];
+        for (node, ledger) in v.nodes() {
+            let preview = ledger.compute_state_root_after_remote_block(txs, "", 0, during);
+            assert!(
+                matches!(preview, Err(crate::ledger::LedgerError::InsufficientFunds)),
+                "{name} preview on the node whose clock is {node}: block time is before the unlock, \
+                 so the locked funds are not spendable whatever this node's clock says; got {preview:?}"
+            );
+            let applied = ledger.apply_consensus_block_batch(1, txs, &hashes, "", 0, during);
+            assert!(
+                matches!(applied, Err(crate::ledger::LedgerError::InsufficientFunds)),
+                "{name} apply on the node whose clock is {node}; got {applied:?}"
+            );
+        }
+        assert_eq!(
+            v.a.compute_state_root().unwrap(),
+            v.b.compute_state_root().unwrap(),
+            "{name}: roots still agree"
+        );
+    }
+}
 
-    // Fixed constants, NOT SystemTime::now(). A test whose whole subject is "wall-clock time
-    // leaks into consensus" must not itself read the wall clock: `mint_worker_network_reward`
-    // derives `unlock_at_ms` from the real clock internally, so a now()-derived `t_during` made
-    // the assertions depend on when the suite happened to run. These two values bracket any
-    // possible unlock_at: 1 ms after the epoch is before every lock, 2100-01-01 is after every
-    // lock, so the outcome is identical on every machine and every day.
-    const T_DURING_VEST: u128 = 1;
-    const T_AFTER_VEST: u128 = 4_102_444_800_000; // 2100-01-01T00:00:00Z
-    let (t_during, t_after) = (T_DURING_VEST, T_AFTER_VEST);
+/// Companion to [`same_block_applies_identically_at_any_node_clock`]: the same transactions in a
+/// block whose `ts_ms` is after the unlock apply on both nodes, including the one whose clock is
+/// still before it, and the roots agree.
+#[test]
+fn block_time_after_unlock_applies_identically_at_any_node_clock() {
+    let _g = env_lock();
+    set_test_env_base();
+    let v = VestedPair::new();
 
-    let locked_during = ledger.locked_balance_micro(&worker, t_during).unwrap();
-    let locked_after = ledger.locked_balance_micro(&worker, t_after).unwrap();
+    let after = v.unlock_at_ms + 1;
+    for (height, env) in [(1u64, v.transfer_env()), (2u64, v.file_fee_env())] {
+        let txs = std::slice::from_ref(&env);
+        let hashes = [crate::consensus::tx_hash_for_env(&env).unwrap()];
+        let previews: Vec<String> = v
+            .nodes()
+            .map(|(node, l)| {
+                l.compute_state_root_after_remote_block(txs, "", 0, after)
+                    .unwrap_or_else(|e| panic!("preview at node clock {node}: {e:?}"))
+            })
+            .collect();
+        let applied: Vec<String> = v
+            .nodes()
+            .map(|(node, l)| {
+                l.apply_consensus_block_batch(height, txs, &hashes, "", 0, after)
+                    .unwrap_or_else(|e| panic!("apply at node clock {node}: {e:?}"))
+            })
+            .collect();
+        assert_eq!(previews[0], previews[1]);
+        assert_eq!(applied[0], applied[1]);
+        assert_eq!(previews[0], applied[0], "preview and apply agree");
+    }
+}
 
-    // The injected timestamp is the ONLY difference. Stored state is byte-identical.
-    assert_ne!(
-        locked_during, locked_after,
-        "BUG: locked balance depends on wall-clock time, and the apply path feeds it \
-         ledger_now_ms(). Same block + same state + different clock = different outcome."
+/// **FIXED (spec §1, design 3): the founder unlock is a genesis parameter, not a first-boot time.**
+///
+/// Before, `apply_genesis_allocation` stored `now + TET_FOUNDER_CLIFF_MS` and every node ran it at
+/// its own first boot, so every node held a different unlock. Two nodes applying genesis on clocks a
+/// year apart must now hold the same unlock, `genesis_time_ms + cliff`, and the same root.
+#[test]
+fn founder_unlock_is_identical_whenever_a_node_first_boots() {
+    let _g = env_lock();
+    set_test_env_base();
+    const GENESIS_TIME_MS: u64 = 1_900_000_000_000;
+    const CLIFF_MS: u64 = 365 * 86_400_000;
+    let _t = EnvVarGuard::set("TET_GENESIS_TIME_MS", &GENESIS_TIME_MS.to_string());
+    let _c = EnvVarGuard::set("TET_FOUNDER_CLIFF_MS", &CLIFF_MS.to_string());
+
+    let boot = |clock_ms: u64| {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db");
+        std::mem::forget(dir);
+        let l = crate::ledger::Ledger::open_with_clock(
+            db.to_str().unwrap(),
+            crate::ledger::LedgerClock::fixed(u128::from(clock_ms)),
+        )
+        .unwrap();
+        l.init_genesis_founder_premine_from_env().unwrap();
+        l.apply_genesis_allocation("founder").unwrap();
+        l
+    };
+    let early = boot(GENESIS_TIME_MS + 1);
+    let late = boot(GENESIS_TIME_MS + 365 * 86_400_000 + 17 * 3_600_000);
+    let want = u128::from(GENESIS_TIME_MS + CLIFF_MS);
+    assert_eq!(early.founder_genesis_unlock_at_ms().unwrap(), want);
+    assert_eq!(late.founder_genesis_unlock_at_ms().unwrap(), want);
+    assert_eq!(early.compute_state_root().unwrap(), late.compute_state_root().unwrap());
+
+    // The cliff is in the genesis hash: a node configured with another cliff is on another chain,
+    // visibly, instead of silently holding another unlock time.
+    let h = crate::genesis::GenesisParams::from_env().unwrap().hash();
+    let _c2 = EnvVarGuard::set("TET_FOUNDER_CLIFF_MS", "0");
+    assert_ne!(crate::genesis::GenesisParams::from_env().unwrap().hash(), h);
+}
+
+/// A follower ledger on a stepped clock, with `alice` as the only genesis validator.
+struct Follower {
+    ledger: std::sync::Arc<crate::ledger::Ledger>,
+    now: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    mempool: std::sync::Arc<tokio::sync::Mutex<Vec<crate::protocol::SignedTxEnvelopeV1>>>,
+}
+
+impl Follower {
+    /// The follower's clock at start: 2030-03-17. Block times in these tests are relative to it.
+    const NOW: u64 = 1_900_000_000_000;
+
+    fn new() -> Self {
+        set_test_genesis_validators(&["alice"]);
+        let now = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(Self::NOW));
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("db");
+        std::mem::forget(dir);
+        let ledger = crate::ledger::Ledger::open_with_clock(
+            db.to_str().unwrap(),
+            crate::ledger::LedgerClock::stepped(now.clone()),
+        )
+        .unwrap();
+        ledger.init_genesis_founder_premine_from_env().unwrap();
+        ledger.apply_genesis_allocation("founder").unwrap();
+        Self {
+            ledger: std::sync::Arc::new(ledger),
+            now,
+            mempool: std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        }
+    }
+
+    fn set_clock(&self, ms: u64) {
+        self.now.store(ms, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// An honest coinbase-only block by `alice` at the next height with `ts_ms`. Unsigned.
+    fn next_block(&self, ts_ms: u64) -> crate::consensus::RemoteBlockGossip {
+        coinbase_block_on(&self.ledger, ts_ms)
+    }
+
+    async fn apply(
+        &self,
+        block: crate::consensus::RemoteBlockGossip,
+    ) -> Result<crate::consensus::RemoteBlockApplyOutcome, crate::consensus::RemoteBlockApplyError> {
+        crate::consensus::apply_remote_block_from_gossip(
+            self.ledger.clone(),
+            self.mempool.clone(),
+            sign_as_producer(block),
+        )
+        .await
+    }
+}
+
+/// An honest coinbase-only block by `alice` on `ledger`'s canonical tip, with `ts_ms`. Unsigned.
+pub(crate) fn coinbase_block_on(
+    ledger: &crate::ledger::Ledger,
+    ts_ms: u64,
+) -> crate::consensus::RemoteBlockGossip {
+    let height = ledger.block_height().unwrap() + 1;
+    let parent = if height == 1 {
+        None
+    } else {
+        ledger.canonical_block_id_at_height(height - 1).unwrap()
+    };
+    let reward = crate::consensus::reward_for_block(&[]).unwrap();
+    let state_root = ledger
+        .compute_state_root_after_remote_block(&[], "alice", reward.total_reward_micro, ts_ms)
+        .unwrap();
+    let block_id = crate::consensus::block_id_for_block(
+        height,
+        parent.as_deref().unwrap_or(""),
+        &state_root,
+        &[],
+        "alice",
+        ts_ms,
     );
-    assert_eq!(locked_during, worker_net, "fully locked during the vest");
-    assert_eq!(locked_after, 0, "unlocked after the vest");
+    crate::consensus::RemoteBlockGossip {
+        block_height: height,
+        block_id,
+        parent_block_id: parent,
+        producer_id: "alice".into(),
+        base_reward_micro: reward.base_reward_micro,
+        compute_reward_micro: reward.compute_reward_micro,
+        total_reward_micro: reward.total_reward_micro,
+        state_root,
+        txs: vec![],
+        ts_ms,
+        producer_sig: unsigned_block_sig(),
+    }
+}
 
-    // The consensus-relevant consequence: the spendability gate flips.
-    let balance = ledger.balance_micro(&worker).unwrap();
-    let amount = worker_net / 2;
-    let spendable_during = balance.saturating_sub(locked_during);
-    let spendable_after = balance.saturating_sub(locked_after);
+/// `block` signed with `signer`'s test key, whatever producer it names.
+pub(crate) fn signed_with(
+    mut block: crate::consensus::RemoteBlockGossip,
+    signer: &str,
+) -> crate::consensus::RemoteBlockGossip {
+    block.producer_sig = test_producer_key(signer).sign_block_id(&block.block_id).unwrap();
+    block
+}
 
+/// The stored-record form a catch-up range response carries.
+fn record_of(b: &crate::consensus::RemoteBlockGossip) -> crate::ledger::BlockRecordV1 {
+    crate::ledger::BlockRecordV1 {
+        v: 3,
+        height: b.block_height,
+        block_id: b.block_id.clone(),
+        parent_block_id: b.parent_block_id.clone(),
+        producer_id: b.producer_id.clone(),
+        tx_hashes: vec![],
+        txs: b.txs.clone(),
+        state_root: b.state_root.clone(),
+        reward: crate::ledger::BlockRewardRecordV1 {
+            base_reward_micro: b.base_reward_micro,
+            compute_reward_micro: b.compute_reward_micro,
+            total_reward_micro: b.total_reward_micro,
+        },
+        caac_weight: 1,
+        cumulative_weight: 1,
+        canonical: true,
+        ts_ms: b.ts_ms,
+        producer_sig: b.producer_sig.clone(),
+        received_at_ms: 0,
+    }
+}
+
+fn rejected_with(r: Result<impl std::fmt::Debug, crate::consensus::RemoteBlockApplyError>, needle: &str) {
+    match r {
+        Err(crate::consensus::RemoteBlockApplyError::Rejected(m)) => {
+            assert!(m.contains(needle), "refused for the wrong reason: want {needle:?}, got {m:?}")
+        }
+        other => panic!("want Rejected({needle:?}), got {other:?}"),
+    }
+}
+
+/// **SECURITY REGRESSION GUARD (spec §1, design 4): block time only moves forward.**
+/// Equal to the parent is refused as well as earlier. The companion `+1` keeps "refuse every
+/// second block" from passing.
+#[tokio::test]
+async fn block_time_not_after_parent_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    let t1 = Follower::NOW - 10_000;
+    f.apply(f.next_block(t1)).await.unwrap();
+
+    for ts in [t1, t1 - 1] {
+        rejected_with(f.apply(f.next_block(ts)).await, "is not after its parent");
+    }
+    assert_eq!(f.ledger.block_height().unwrap(), 1);
+    assert!(matches!(
+        f.apply(f.next_block(t1 + 1)).await.unwrap(),
+        crate::consensus::RemoteBlockApplyOutcome::Applied { block_height: 2, .. }
+    ));
+}
+
+/// **SECURITY REGRESSION GUARD (spec §1, design 4): a block more than 60 s ahead is HELD, not
+/// refused, and applies once the clock passes it.** Refusing would make validity depend on when a
+/// node looked. Exactly `now + 60 s` is inside the bound.
+#[tokio::test]
+async fn block_ahead_of_the_clock_is_held_then_accepted() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    let bound = crate::consensus::MAX_BLOCK_FUTURE_MS;
+    let ts = Follower::NOW + bound + 1;
+
+    let held = f.apply(f.next_block(ts)).await;
     assert!(
-        spendable_during < amount,
-        "a node applying during the vest rejects the transfer (InsufficientFunds)"
+        matches!(held, Err(crate::consensus::RemoteBlockApplyError::Held(_))),
+        "a block 60 s + 1 ms ahead must be held, got {held:?}"
     );
-    assert!(
-        spendable_after >= amount,
-        "a node applying after the vest accepts the same transfer"
+    assert_eq!(f.ledger.block_height().unwrap(), 0, "a held block changes nothing");
+
+    f.set_clock(Follower::NOW + 1); // now ts == clock + 60 s exactly
+    assert!(matches!(
+        f.apply(f.next_block(ts)).await.unwrap(),
+        crate::consensus::RemoteBlockApplyOutcome::Applied { block_height: 1, .. }
+    ));
+}
+
+/// **No lower bound against local time (spec §1, design 4):** catch-up replays blocks whose time
+/// is long past. A 1970 block on a 2030 clock applies through the catch-up site.
+#[tokio::test]
+async fn old_block_is_accepted_during_catch_up() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    let old = signed_with(f.next_block(1_000), "alice");
+    let (applied, failed, held) =
+        crate::p2p::apply_catch_up_blocks(f.ledger.clone(), f.mempool.clone(), vec![record_of(&old)])
+            .await;
+    assert_eq!((applied, failed, held), (1, false, false));
+    assert_eq!(f.ledger.block_height().unwrap(), 1);
+}
+
+/// **SECURITY REGRESSION GUARD: `ts_ms` is inside the V3 `block_id`.** The signature here is valid
+/// for the block id the block claims, so only the id recomputation can refuse a changed `ts_ms`.
+/// Negative control: drop `ts` from `block_id_for_block`.
+#[tokio::test]
+async fn ts_altered_after_signing_breaks_block_id() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    let mut b = signed_with(f.next_block(Follower::NOW - 5_000), "alice");
+    b.ts_ms += 1;
+    let verified = crate::consensus::verify_block_producer(b).expect("signature over the claimed id is valid");
+    rejected_with(
+        crate::consensus::apply_remote_block_from_gossip(f.ledger.clone(), f.mempool.clone(), verified).await,
+        "block_id mismatch",
     );
+    assert_eq!(f.ledger.block_height().unwrap(), 0);
+}
+
+fn producer_refusal(b: crate::consensus::RemoteBlockGossip) -> String {
+    match crate::consensus::verify_block_producer(b) {
+        Err(crate::consensus::RemoteBlockApplyError::Rejected(m)) => m,
+        other => panic!("producer check must refuse, got {other:?}"),
+    }
+}
+
+/// **SECURITY REGRESSION GUARD (D2): an unsigned block is refused by the producer check.**
+#[test]
+fn unsigned_block_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    let m = producer_refusal(f.next_block(Follower::NOW - 5_000));
+    assert!(m.contains("producer signature: ed25519 half refused"), "{m}");
+}
+
+/// **SECURITY REGRESSION GUARD (D2): a block signed by a key that is not the producer's genesis
+/// key is refused**, both when it names a listed producer and when it names an unlisted one.
+#[test]
+fn block_signed_by_a_key_outside_the_genesis_set_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    // Names alice, signed by mallory's (valid, unlisted) key.
+    let m = producer_refusal(signed_with(f.next_block(Follower::NOW - 5_000), "mallory"));
+    // Both halves are wrong here; Ed25519 is checked first. Each half alone is guarded by
+    // `producer_signature_refuses_each_half_independently`.
+    assert!(m.contains("producer signature: ed25519 half refused"), "{m}");
+    // Names mallory, correctly signed by mallory's key: mallory is not a validator.
+    let mut b = f.next_block(Follower::NOW - 5_000);
+    b.producer_id = "mallory".into();
+    let m = producer_refusal(signed_with(b, "mallory"));
+    assert!(m.contains("not in the genesis validator set"), "{m}");
+}
+
+/// **SECURITY REGRESSION GUARD (D2): a valid signature over the original block does not cover a
+/// changed `ts_ms`.** The attacker recomputes the V3 id for the new time, so the id check passes,
+/// and keeps alice's signature, which is genuine but over the old id. Only the signature can refuse.
+#[test]
+fn valid_signature_over_a_tampered_ts_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    let honest = signed_with(f.next_block(Follower::NOW - 5_000), "alice");
+    crate::consensus::verify_block_producer(honest.clone()).expect("the honest block verifies");
+    let mut forged = f.next_block(Follower::NOW - 4_000); // same block, other time, recomputed id
+    forged.producer_sig = honest.producer_sig.clone();
+    assert_ne!(forged.block_id, honest.block_id);
+    let m = producer_refusal(forged);
+    // Both halves are wrong here; Ed25519 is checked first. Each half alone is guarded by
+    // `producer_signature_refuses_each_half_independently`.
+    assert!(m.contains("producer signature: ed25519 half refused"), "{m}");
+}
+
+/// **SECURITY REGRESSION GUARD (D2), catch-up site: a height-range batch is held to the producer
+/// signature like gossip is.** A forged record (valid in every other respect, signed by a key
+/// outside the genesis set) is refused and nothing applies; the honest record then applies, so the
+/// refusal is not "catch-up applies nothing". Negative control: skip `verify_block_producer` in
+/// `p2p::apply_catch_up_blocks`.
+#[tokio::test]
+async fn catch_up_refuses_a_block_without_a_valid_producer_signature() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = Follower::new();
+    let block = f.next_block(Follower::NOW - 5_000);
+    let forged = record_of(&signed_with(block.clone(), "mallory"));
+    let honest = record_of(&signed_with(block, "alice"));
+
+    let r = crate::p2p::apply_catch_up_blocks(f.ledger.clone(), f.mempool.clone(), vec![forged]).await;
+    assert_eq!(r, (0, true, false), "forged catch-up block must be refused as the peer's fault");
+    assert_eq!(f.ledger.block_height().unwrap(), 0);
+
+    let r = crate::p2p::apply_catch_up_blocks(f.ledger.clone(), f.mempool.clone(), vec![honest]).await;
+    assert_eq!(r, (1, false, false));
+    assert_eq!(f.ledger.block_height().unwrap(), 1);
+}
+
+/// Two ledgers holding the same vest lock, each on its own stepped clock. Built at the same instant
+/// `T0` so their state is byte-identical, then stepped apart: node `a` to just before the unlock,
+/// node `b` to a year after it.
+struct VestedPair {
+    a: crate::ledger::Ledger,
+    b: crate::ledger::Ledger,
+    clock_a: u64,
+    clock_b: u64,
+    worker_words: String,
+    worker: String,
+    worker_net: u64,
+    unlock_at_ms: u64,
+}
+
+impl VestedPair {
+    const T0: u64 = 1_800_000_000_000;
+
+    fn new() -> Self {
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let worker_words = w.mnemonic_12.clone().unwrap();
+        let worker = w.address_hex.to_ascii_lowercase();
+        let open = |worker: &str| {
+            let now = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(Self::T0));
+            let dir = tempfile::tempdir().unwrap();
+            let db = dir.path().join("db");
+            std::mem::forget(dir);
+            let ledger = crate::ledger::Ledger::open_with_clock(
+                db.to_str().unwrap(),
+                crate::ledger::LedgerClock::stepped(now.clone()),
+            )
+            .unwrap();
+            ledger.init_genesis_founder_premine_from_env().unwrap();
+            ledger.apply_genesis_allocation("founder").unwrap();
+            // The mint stamps unlock_at = clock + vest, so both are minted at T0.
+            let (_g, net, _tax, _proof) = ledger
+                .mint_worker_network_reward(worker, "vault", 10_000_000, b"energy:9828", None)
+                .unwrap();
+            (ledger, now, net)
+        };
+        let (a, now_a, net_a) = open(&worker);
+        let (b, now_b, net_b) = open(&worker);
+        assert_eq!(net_a, net_b);
+        assert_eq!(a.compute_state_root().unwrap(), b.compute_state_root().unwrap());
+        let unlock_at_ms = Self::T0
+            + u64::try_from(crate::ledger::worker_reward_vest_duration_ms()).unwrap();
+        // Precondition: everything the worker holds is locked until U, and nothing else.
+        assert_eq!(a.balance_micro(&worker).unwrap(), net_a);
+        assert_eq!(a.locked_balance_micro(&worker, u128::from(unlock_at_ms - 1)).unwrap(), net_a);
+        assert_eq!(a.locked_balance_micro(&worker, u128::from(unlock_at_ms)).unwrap(), 0);
+        assert!(net_a / 2 + crate::files::FILE_FEE_MICRO <= net_a);
+
+        let clock_a = unlock_at_ms - 1;
+        let clock_b = unlock_at_ms + 365 * 86_400_000;
+        now_a.store(clock_a, std::sync::atomic::Ordering::SeqCst);
+        now_b.store(clock_b, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            a,
+            b,
+            clock_a,
+            clock_b,
+            worker_words,
+            worker,
+            worker_net: net_a,
+            unlock_at_ms,
+        }
+    }
+
+    fn nodes(&self) -> impl Iterator<Item = (u64, &crate::ledger::Ledger)> {
+        [(self.clock_a, &self.a), (self.clock_b, &self.b)].into_iter()
+    }
+
+    fn transfer_env(&self) -> crate::protocol::SignedTxEnvelopeV1 {
+        signed_transfer_env_for_tests(&self.worker_words, &self.worker, &"b".repeat(64), self.worker_net / 2)
+    }
+
+    fn file_fee_env(&self) -> crate::protocol::SignedTxEnvelopeV1 {
+        signed_file_fee_env_for_tests(&self.worker_words, &self.worker, "", "file-9828")
+    }
 }
 
 /// **FIXED (was rank 3): the two root computations now agree on unreadable rows.**
@@ -5577,8 +6193,9 @@ fn state_root_paths_agree_on_unreadable_rows() {
 
     // Healthy DB: both paths succeed and agree.
     let live_ok = ledger.compute_state_root().expect("healthy live root");
+    let ts_ms = test_block_ts(&ledger);
     let preview_ok = ledger
-        .compute_state_root_after_remote_block(&[], "", 0)
+        .compute_state_root_after_remote_block(&[], "", 0, ts_ms)
         .expect("healthy preview root");
     assert_eq!(live_ok, preview_ok, "healthy DB: both paths agree");
 
@@ -5590,7 +6207,8 @@ fn state_root_paths_agree_on_unreadable_rows() {
         .expect("raw insert simulates a partial write");
 
     let live = ledger.compute_state_root();
-    let preview = ledger.compute_state_root_after_remote_block(&[], "", 0);
+    let ts_ms = test_block_ts(&ledger);
+    let preview = ledger.compute_state_root_after_remote_block(&[], "", 0, ts_ms);
 
     assert!(
         live.is_err(),
@@ -5654,10 +6272,10 @@ fn consensus_faucet_path_keeps_nodes_in_agreement() {
 
     // APPLY it on both nodes (the sibling test covers the preview arm; this covers apply).
     let a1 = n1
-        .apply_consensus_block_batch(1, std::slice::from_ref(&env), &[h.clone()], "producer-x", 0)
+        .apply_consensus_block_batch(1, std::slice::from_ref(&env), &[h.clone()], "producer-x", 0, 1)
         .unwrap();
     let a2 = n2
-        .apply_consensus_block_batch(1, std::slice::from_ref(&env), &[h], "producer-x", 0)
+        .apply_consensus_block_batch(1, std::slice::from_ref(&env), &[h], "producer-x", 0, 1)
         .unwrap();
 
     assert_eq!(
@@ -11741,6 +12359,8 @@ fn gossip_balance_events_are_refused_and_change_nothing() {
 #[test]
 fn legacy_balance_gossip_is_rejected_and_other_events_are_not() {
     use libp2p::gossipsub::MessageAcceptance;
+    let _g = env_lock();
+    set_test_env_base();
     let transfer = crate::models::NetworkEvent::TransferExecuted {
         tx_hash: "0x00".into(),
         from_wallet: "a".repeat(64),
@@ -11753,20 +12373,30 @@ fn legacy_balance_gossip_is_rejected_and_other_events_are_not() {
         to_wallet: "b".repeat(64),
         amount_micro: 1,
     };
-    let block = crate::models::NetworkEvent::BlockMined {
+    let block = signed_block_event_for_tests("p");
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&transfer, None, &Default::default()), MessageAcceptance::Reject));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&faucet, None, &Default::default()), MessageAcceptance::Reject));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&block, None, &Default::default()), MessageAcceptance::Accept));
+}
+
+/// A `BlockMined` event whose producer signature verifies: `producer` is put in the genesis set and
+/// signs the claimed `block_id`. The mesh verdict checks only the signature and the PeerId pin, so
+/// the rest of the block can stay a placeholder.
+fn signed_block_event_for_tests(producer: &str) -> crate::models::NetworkEvent {
+    set_test_genesis_validators(&[producer]);
+    crate::models::NetworkEvent::BlockMined {
         block_height: 1,
         block_id: "0x00".into(),
         parent_block_id: None,
-        producer_id: "p".into(),
+        producer_id: producer.into(),
         base_reward_micro: 0,
         compute_reward_micro: 0,
         total_reward_micro: 0,
         state_root: "0x00".into(),
         txs: vec![],
-    };
-    assert!(matches!(crate::p2p::gossip_event_acceptance(&transfer, None, &Default::default()), MessageAcceptance::Reject));
-    assert!(matches!(crate::p2p::gossip_event_acceptance(&faucet, None, &Default::default()), MessageAcceptance::Reject));
-    assert!(matches!(crate::p2p::gossip_event_acceptance(&block, None, &Default::default()), MessageAcceptance::Accept));
+        ts_ms: 1,
+        producer_sig: test_producer_key(producer).sign_block_id("0x00").unwrap(),
+    }
 }
 
 fn random_peer_id() -> libp2p::PeerId {
@@ -11821,20 +12451,13 @@ fn producer_peer_map_rejects_malformed_config() {
 #[test]
 fn gossip_block_from_wrong_publisher_is_rejected_by_the_mesh() {
     use libp2p::gossipsub::MessageAcceptance;
+    let _g = env_lock();
+    set_test_env_base();
     let producer = random_peer_id();
     let other = random_peer_id();
     let peers = crate::p2p::ProducerPeers::parse(&format!("helsinki={producer}")).unwrap();
-    let block = crate::models::NetworkEvent::BlockMined {
-        block_height: 1,
-        block_id: "0x00".into(),
-        parent_block_id: None,
-        producer_id: "helsinki".into(),
-        base_reward_micro: 0,
-        compute_reward_micro: 0,
-        total_reward_micro: 0,
-        state_root: "0x00".into(),
-        txs: vec![],
-    };
+    // Correctly signed, so the PeerId pin is the only thing that can refuse it.
+    let block = signed_block_event_for_tests("helsinki");
     assert!(matches!(crate::p2p::gossip_event_acceptance(&block, Some(&producer), &peers), MessageAcceptance::Accept));
     assert!(matches!(crate::p2p::gossip_event_acceptance(&block, Some(&other), &peers), MessageAcceptance::Reject));
 }

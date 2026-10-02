@@ -76,7 +76,8 @@ fn seed_paths(dir: &Path) -> (PathBuf, PathBuf) {
 }
 
 fn read_seed(path: &Path) -> Result<Zeroizing<[u8; 32]>, String> {
-    let bytes = Zeroizing::new(std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?);
+    let bytes =
+        Zeroizing::new(std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?);
     let arr: [u8; 32] = bytes
         .as_slice()
         .try_into()
@@ -119,7 +120,10 @@ impl ProducerKeypair {
         std::fs::create_dir_all(db_dir).map_err(|e| e.to_string())?;
         let (ed_path, ml_path) = seed_paths(db_dir);
         match (ed_path.is_file(), ml_path.is_file()) {
-            (true, true) => Ok(Self::from_seeds(&*read_seed(&ed_path)?, &*read_seed(&ml_path)?)),
+            (true, true) => Ok(Self::from_seeds(
+                &*read_seed(&ed_path)?,
+                &*read_seed(&ml_path)?,
+            )),
             (false, false) => {
                 let mut ed = Zeroizing::new([0u8; 32]);
                 let mut ml = Zeroizing::new([0u8; 32]);
