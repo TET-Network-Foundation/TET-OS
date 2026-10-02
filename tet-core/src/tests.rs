@@ -11838,3 +11838,70 @@ fn gossip_block_from_wrong_publisher_is_rejected_by_the_mesh() {
     assert!(matches!(crate::p2p::gossip_event_acceptance(&block, Some(&producer), &peers), MessageAcceptance::Accept));
     assert!(matches!(crate::p2p::gossip_event_acceptance(&block, Some(&other), &peers), MessageAcceptance::Reject));
 }
+
+/// The follower default shipped in `docker-compose.yml`, i.e. what `TET_PRODUCER_PEERS` resolves to
+/// on a fresh compose follower that sets nothing.
+fn compose_producer_peers_default() -> String {
+    let compose = include_str!("../../docker-compose.yml");
+    let line = compose
+        .lines()
+        .find(|l| l.trim_start().starts_with("TET_PRODUCER_PEERS:"))
+        .expect("docker-compose.yml must set TET_PRODUCER_PEERS for followers");
+    let start = line
+        .find("${TET_PRODUCER_PEERS-")
+        .expect("the default must be `${TET_PRODUCER_PEERS-…}`: with `:-` an empty value could not turn it off")
+        + "${TET_PRODUCER_PEERS-".len();
+    let end = line[start..].find('}').expect("closing brace") + start;
+    line[start..end].to_string()
+}
+
+/// **SECURITY REGRESSION GUARD: a fresh compose follower refuses a block from an unlisted peer.**
+///
+/// Followers pin the producer's PeerId by default. This reads the committed compose file rather than
+/// a copy of its value, so changing the default — to empty, to another PeerId, or to `:-` — is what
+/// fails. The pinned PeerId must be the first bootnode's (Helsinki, the producer), so the two cannot
+/// drift apart.
+#[test]
+fn fresh_compose_follower_refuses_a_block_from_an_unlisted_peer() {
+    let default = compose_producer_peers_default();
+    let peers = crate::p2p::ProducerPeers::parse(&default).expect("the compose default must parse");
+
+    let compose = include_str!("../../docker-compose.yml");
+    let bootnodes = compose
+        .lines()
+        .find(|l| l.trim_start().starts_with("TET_BOOTNODES:"))
+        .expect("TET_BOOTNODES default");
+    let helsinki: libp2p::PeerId = bootnodes
+        .split("/p2p/")
+        .nth(1)
+        .and_then(|rest| rest.split(|c: char| c == ',' || c == '}').next())
+        .expect("first bootnode PeerId")
+        .parse()
+        .expect("valid PeerId");
+
+    assert!(peers.check_block_source("local-wallet", Some(&helsinki)).is_ok(), "the producer's own blocks");
+    assert!(peers.check_block_source("local-wallet", Some(&random_peer_id())).is_err(), "an unlisted peer");
+    assert!(peers.check_block_source("local-wallet", None).is_err(), "no source");
+}
+
+/// The other places that state the follower default must say the same thing as compose, and a
+/// producer provisioned by `provision-seed.sh` must write it empty.
+#[test]
+fn follower_producer_pin_is_stated_consistently() {
+    let default = compose_producer_peers_default();
+    let readme = include_str!("../../README.md");
+    assert!(
+        readme.contains(&format!("TET_PRODUCER_PEERS={default}\n")),
+        "README quickstart must write the compose default"
+    );
+    let provision = include_str!("../../deploy/provision-seed.sh");
+    assert!(
+        provision.contains(&format!("PRODUCER_PEERS=\"${{TET_PRODUCER_PEERS:-{default}}}\"")),
+        "provision-seed.sh must give followers the compose default"
+    );
+    assert!(
+        provision.contains("if [ \"$AUTO_MINE\" = 1 ]; then\n  PRODUCER_PEERS=\"\""),
+        "provision-seed.sh must write it empty for the producer"
+    );
+    assert!(provision.contains("TET_PRODUCER_PEERS=$PRODUCER_PEERS"), "and must write the line at all");
+}

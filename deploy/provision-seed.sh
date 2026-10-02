@@ -88,6 +88,14 @@ if [ -n "$BOOTNODES" ]; then
 else
   AUTO_MINE="${TET_AUTO_MINE:-1}"
 fi
+# A follower pins the producer's PeerId (Helsinki's, as producer "local-wallet") so it accepts gossiped
+# blocks only from it. The producer writes the variable EMPTY: docker-compose.yml would otherwise fill
+# in the follower default.
+if [ "$AUTO_MINE" = 1 ]; then
+  PRODUCER_PEERS=""
+else
+  PRODUCER_PEERS="${TET_PRODUCER_PEERS:-local-wallet=12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC}"
+fi
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 ok()   { printf '    \033[32mok\033[0m %s\n' "$*"; }
@@ -241,6 +249,7 @@ TET_P2P_LISTEN=/ip4/0.0.0.0/tcp/$P2P_PORT
 TET_AUTO_MINE=$AUTO_MINE
 TET_BLOCK_TIME_SEC=12
 ${BOOTNODES:+TET_BOOTNODES=$BOOTNODES}
+TET_PRODUCER_PEERS=$PRODUCER_PEERS
 RUST_LOG=info
 
 # --- build profile ($PROFILE) -----------------------------------------------

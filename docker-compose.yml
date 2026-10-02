@@ -55,6 +55,11 @@ x-tet-core-common: &tet-core-common
     # Inert while TET_ENABLE_P2P=0. Comma-separated; first reachable one wins.
     TET_BOOTNODES: "${TET_BOOTNODES:-/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM}"
     TET_P2P_LISTEN: "${TET_P2P_LISTEN:-/ip4/0.0.0.0/tcp/8002}"
+    # Followers accept a gossiped block only from the producer's libp2p PeerId: Helsinki's, pinned to
+    # the producer id "local-wallet". Inert while TET_ENABLE_P2P=0. A producer sets it EMPTY
+    # (TET_PRODUCER_PEERS= in .env) — note `-` not `:-`, so an empty value means off rather than
+    # falling back to this default. On a network whose producer is not Helsinki, set your own.
+    TET_PRODUCER_PEERS: "${TET_PRODUCER_PEERS-local-wallet=12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC}"
     RUST_LOG: "${RUST_LOG:-info}"
   ports:
     - "${PORT:-5010}:5010"
