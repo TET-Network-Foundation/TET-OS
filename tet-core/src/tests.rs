@@ -11764,7 +11764,77 @@ fn legacy_balance_gossip_is_rejected_and_other_events_are_not() {
         state_root: "0x00".into(),
         txs: vec![],
     };
-    assert!(matches!(crate::p2p::gossip_event_acceptance(&transfer), MessageAcceptance::Reject));
-    assert!(matches!(crate::p2p::gossip_event_acceptance(&faucet), MessageAcceptance::Reject));
-    assert!(matches!(crate::p2p::gossip_event_acceptance(&block), MessageAcceptance::Accept));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&transfer, None, &Default::default()), MessageAcceptance::Reject));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&faucet, None, &Default::default()), MessageAcceptance::Reject));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&block, None, &Default::default()), MessageAcceptance::Accept));
+}
+
+fn random_peer_id() -> libp2p::PeerId {
+    libp2p::identity::Keypair::generate_ed25519().public().to_peer_id()
+}
+
+/// **SECURITY REGRESSION GUARD: with a producer→PeerId map, only the producer's PeerId may publish
+/// its blocks.** Blocks carry no producer signature until the Phase 1 header change; gossipsub does
+/// authenticate the message author, and this pins blocks to it. Every refusal case changes one thing.
+#[test]
+fn producer_peer_map_refuses_blocks_from_any_other_publisher() {
+    let producer = random_peer_id();
+    let other = random_peer_id();
+    let peers = crate::p2p::ProducerPeers::parse(&format!("helsinki={producer}")).unwrap();
+
+    assert!(peers.check_block_source("helsinki", Some(&producer)).is_ok(), "the producer's own block");
+    assert!(peers.check_block_source("  HELSINKI ", Some(&producer)).is_ok(), "ids normalise like ConsensusIdentity");
+
+    let e = peers.check_block_source("helsinki", Some(&other)).unwrap_err();
+    assert!(e.contains("published by") && e.contains(&other.to_string()), "another publisher: {e}");
+    let e = peers.check_block_source("helsinki", None).unwrap_err();
+    assert!(e.contains("no gossip source"), "no source: {e}");
+    let e = peers.check_block_source("nuremberg", Some(&producer)).unwrap_err();
+    assert!(e.contains("no configured PeerId"), "an unmapped producer, even from a mapped PeerId: {e}");
+}
+
+/// Unset means unchanged: a node that does not configure the map accepts blocks exactly as before.
+/// Without this, turning the check on by default would stall every follower on the first update.
+#[test]
+fn producer_peer_map_unset_changes_nothing() {
+    let peers = crate::p2p::ProducerPeers::parse("").unwrap();
+    assert!(peers.check_block_source("helsinki", Some(&random_peer_id())).is_ok());
+    assert!(peers.check_block_source("helsinki", None).is_ok());
+}
+
+/// A malformed map is an error, never a silently empty (= disabled) map.
+#[test]
+fn producer_peer_map_rejects_malformed_config() {
+    let p = random_peer_id();
+    for (raw, want) in [
+        (format!("helsinki {p}"), "is not <producer_id>=<PeerId>"),
+        ("helsinki=not-a-peer-id".to_string(), "bad PeerId"),
+        (format!("={p}"), "empty producer_id"),
+        (format!("helsinki={p},HELSINKI={p}"), "twice"),
+    ] {
+        let e = crate::p2p::ProducerPeers::parse(&raw).unwrap_err();
+        assert!(e.contains(want), "{raw:?} -> {e}");
+    }
+}
+
+/// The mesh verdict uses the same check, so a block from the wrong publisher is not forwarded.
+#[test]
+fn gossip_block_from_wrong_publisher_is_rejected_by_the_mesh() {
+    use libp2p::gossipsub::MessageAcceptance;
+    let producer = random_peer_id();
+    let other = random_peer_id();
+    let peers = crate::p2p::ProducerPeers::parse(&format!("helsinki={producer}")).unwrap();
+    let block = crate::models::NetworkEvent::BlockMined {
+        block_height: 1,
+        block_id: "0x00".into(),
+        parent_block_id: None,
+        producer_id: "helsinki".into(),
+        base_reward_micro: 0,
+        compute_reward_micro: 0,
+        total_reward_micro: 0,
+        state_root: "0x00".into(),
+        txs: vec![],
+    };
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&block, Some(&producer), &peers), MessageAcceptance::Accept));
+    assert!(matches!(crate::p2p::gossip_event_acceptance(&block, Some(&other), &peers), MessageAcceptance::Reject));
 }

@@ -1577,12 +1577,75 @@ fn network_event_topics(
     }
 }
 
+/// Node-local map from block `producer_id` to the libp2p `PeerId` allowed to publish its blocks,
+/// from `TET_PRODUCER_PEERS="<producer_id>=<PeerId>,…"`. Empty when unset: no check, as before.
+///
+/// This is a mitigation, not a signature. Blocks carry no producer signature yet (that is the Phase 1
+/// header change); what gossipsub does authenticate, in `ValidationMode::Strict`, is the message
+/// author. Relays forward the author's signed message unchanged, so a block relayed by another seed
+/// still names the producer's PeerId as its source.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ProducerPeers(std::collections::HashMap<String, PeerId>);
+
+impl ProducerPeers {
+    pub(crate) fn parse(raw: &str) -> Result<Self, String> {
+        let mut map = std::collections::HashMap::new();
+        for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let (id, peer) = entry
+                .split_once('=')
+                .ok_or_else(|| format!("TET_PRODUCER_PEERS entry {entry:?} is not <producer_id>=<PeerId>"))?;
+            let id = id.trim().to_ascii_lowercase();
+            if id.is_empty() {
+                return Err(format!("TET_PRODUCER_PEERS entry {entry:?} has an empty producer_id"));
+            }
+            let peer: PeerId = peer
+                .trim()
+                .parse()
+                .map_err(|e| format!("TET_PRODUCER_PEERS entry {entry:?}: bad PeerId: {e}"))?;
+            if map.insert(id.clone(), peer).is_some() {
+                return Err(format!("TET_PRODUCER_PEERS names producer {id:?} twice"));
+            }
+        }
+        Ok(Self(map))
+    }
+
+    pub(crate) fn from_env() -> Result<Self, String> {
+        Self::parse(&std::env::var("TET_PRODUCER_PEERS").unwrap_or_default())
+    }
+
+    /// May this gossip `source` publish a block naming `producer_id`? `Ok` when no map is configured.
+    /// Once one is, an unmapped producer, a missing source or a different source are all refused.
+    pub(crate) fn check_block_source(&self, producer_id: &str, source: Option<&PeerId>) -> Result<(), String> {
+        if self.0.is_empty() {
+            return Ok(());
+        }
+        let id = producer_id.trim().to_ascii_lowercase();
+        let Some(expected) = self.0.get(&id) else {
+            return Err(format!("producer {id:?} has no configured PeerId"));
+        };
+        match source {
+            Some(src) if src == expected => Ok(()),
+            Some(src) => Err(format!("block for producer {id:?} published by {src}, expected {expected}")),
+            None => Err(format!("block for producer {id:?} has no gossip source")),
+        }
+    }
+}
+
 /// Gossip validation verdict for a decoded event. Legacy balance events carry no signature and
 /// are never applied, so they are rejected: the mesh stops forwarding them and the publisher's
 /// peer score drops. Everything else is accepted here and checked by its own handler.
-pub(crate) fn gossip_event_acceptance(event: &NetworkEvent) -> gossipsub::MessageAcceptance {
+pub(crate) fn gossip_event_acceptance(
+    event: &NetworkEvent,
+    source: Option<&PeerId>,
+    producer_peers: &ProducerPeers,
+) -> gossipsub::MessageAcceptance {
     match event {
         NetworkEvent::TransferExecuted { .. } | NetworkEvent::FaucetExecuted { .. } => {
+            gossipsub::MessageAcceptance::Reject
+        }
+        NetworkEvent::BlockMined { producer_id, .. }
+            if producer_peers.check_block_source(producer_id, source).is_err() =>
+        {
             gossipsub::MessageAcceptance::Reject
         }
         _ => gossipsub::MessageAcceptance::Accept,
@@ -1756,6 +1819,11 @@ async fn run_mdns_ping_swarm(
     );
 
     let max_gossip_bytes = global_gossip_max_msg_bytes();
+    // A malformed map is a startup error rather than a silently disabled check.
+    let producer_peers = ProducerPeers::from_env().unwrap_or_else(|e| panic!("[p2p] FATAL: {e}"));
+    if !producer_peers.0.is_empty() {
+        println!("[P2P] block source check ON for {} producer(s)", producer_peers.0.len());
+    }
     let (mesh_n, mesh_n_low, mesh_n_high) = gossip_mesh_params_from_env();
     let mesh_outbound_min = (mesh_n / 2).max(1).min(mesh_n_low);
     let gossipsub_config = gossipsub::ConfigBuilder::default()
@@ -3206,7 +3274,7 @@ async fn run_mdns_ping_swarm(
                             let _ = swarm.behaviour_mut().gossipsub.report_message_validation_result(
                                 &message_id,
                                 source,
-                                gossip_event_acceptance(&event),
+                                gossip_event_acceptance(&event, Some(source), &producer_peers),
                             );
                         }
                         match &event {
@@ -3245,6 +3313,10 @@ async fn run_mdns_ping_swarm(
                                 state_root,
                                 txs,
                             } => {
+                                if let Err(why) = producer_peers.check_block_source(&producer_id, source_peer.as_ref()) {
+                                    println!("[P2P] ❌ GOSSIP BLOCK REFUSED height={block_height}: {why}");
+                                    continue;
+                                }
                                 let local_h = ledger.block_height().unwrap_or(0);
                                 if let Some(source) = source_peer {
                                     let peer_s = source.to_string();
