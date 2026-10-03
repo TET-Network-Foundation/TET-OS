@@ -522,13 +522,20 @@ pub fn block_id_for_hashes(tx_hashes: &[String]) -> String {
 pub const GENESIS_ZERO_PARENT_BLOCK_ID: &str =
     "0x0000000000000000000000000000000000000000000000000000000000000000";
 
+/// PAE domain of the V3 block id. The V1/V2 ids used `TET_BLOCK_ID_V1|`-style tags, so no V3
+/// pre-image can equal an older one.
+pub const BLOCK_ID_DOMAIN_V3: &str = "tet block id v3";
+
 /// Compute the consensus block id (V3 schema, Phase 1 genesis).
 ///
-/// `block_id = SHA256("TET_BLOCK_ID_V3|" || height || parent || state_root || tx_hashes || producer || ts)`
+/// `block_id = SHA256(PAE("tet block id v3", [height_le, parent, state_root, PAE_fields(tx_hashes), producer, ts_le]))`
 ///
+/// The same length-prefixed encoding as agent payloads (`agent::pae`). Every field, and every tx
+/// hash inside the nested tx list, carries its length, so no choice of contents can shift bytes
+/// from one field into another: a `,` in a tx hash, a `|state=` in a parent, `[]` against `[""]`.
 /// V3 adds the producer's `ts_ms`, so the block time every consensus rule reads is fixed by the
-/// id and covered by the producer signature over it. The `TET_BLOCK_ID_V3|` prefix keeps it apart
-/// from V1/V2. Empty/blank `parent_block_id` is normalized to the zero parent hash (genesis).
+/// id and covered by the producer signature over it. Empty/blank `parent_block_id` is normalized
+/// to the zero parent hash (genesis).
 pub fn block_id_for_block(
     block_height: u64,
     parent_block_id: &str,
@@ -542,20 +549,19 @@ pub fn block_id_for_block(
     } else {
         parent_block_id
     };
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(b"TET_BLOCK_ID_V3|");
-    hasher.update(block_height.to_le_bytes());
-    hasher.update(b"|parent=");
-    hasher.update(parent.as_bytes());
-    hasher.update(b"|state=");
-    hasher.update(state_root.as_bytes());
-    hasher.update(b"|txs=");
-    hasher.update(tx_hashes.join(",").as_bytes());
-    hasher.update(b"|producer=");
-    hasher.update(producer_id.as_bytes());
-    hasher.update(b"|ts=");
-    hasher.update(ts_ms.to_le_bytes());
-    format!("0x{}", hex::encode(hasher.finalize()))
+    let txs: Vec<&[u8]> = tx_hashes.iter().map(|h| h.as_bytes()).collect();
+    let preimage = crate::agent::pae(
+        BLOCK_ID_DOMAIN_V3,
+        &[
+            &block_height.to_le_bytes(),
+            parent.as_bytes(),
+            state_root.as_bytes(),
+            &crate::agent::pae_fields(&txs),
+            producer_id.as_bytes(),
+            &ts_ms.to_le_bytes(),
+        ],
+    );
+    format!("0x{}", hex::encode(sha2::Sha256::digest(&preimage)))
 }
 
 pub fn block_contains_ai_workload(txs: &[SignedTxEnvelopeV1]) -> bool {

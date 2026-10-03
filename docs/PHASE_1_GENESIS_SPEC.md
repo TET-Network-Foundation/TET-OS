@@ -151,7 +151,7 @@ only.
 ### The design
 
 1. **Header.** Add `ts_ms: u64`, set by the producer, covered by a V3 `block_id` with its own domain
-   tag (`TET_BLOCK_ID_V3|…|ts=`), and carried on gossip and catch-up. Rename the node-local field to
+   (PAE domain `tet block id v3`, see "As built"), and carried on gossip and catch-up. Rename the node-local field to
    `received_at_ms` so nothing reads it by mistake.
 2. **Apply takes it as a parameter.** `apply_consensus_block_batch` and
    `compute_state_root_after_remote_block` gain `block_ts_ms` and thread it to all six sites above,
@@ -219,13 +219,15 @@ Where the implementation differs from the text above, or the text left a choice 
 - **Local bookkeeping still uses the node clock:** `received_at_ms`, undo and tx-index timestamps,
   audit rows. None of it is in the state root or read by consensus.
 - **The CHF AML day bucket** reads the injected clock. It is off the apply path.
+- **The V3 `block_id` pre-image is length-prefixed**, not tag-separated: `SHA256(PAE("tet block id
+  v3", [height_le, parent, state_root, PAE_fields(tx_hashes), producer, ts_le]))`, the agent-payload
+  convention (`agent::pae`). The tag-separated draft let a `,` in a tx hash, `[]` against `[""]`, or
+  bytes moved across a `|field=` tag give two headers one id.
+  `block_id_has_no_field_boundary_collision` holds four such pairs, and
+  `block_id_v3_golden_vector` pins the encoding.
 
 **Open, for whoever reviews this:**
 
-- **`block_id` V3 fields are tag-separated, not length-prefixed.** They are joined as
-  `|parent=…|state=…|txs=…|producer=…|ts=`. Each one is either checked against a recomputation or
-  constrained by the genesis set, so no collision is known. But this is the one header change, and
-  length-prefixing would be free now and a new genesis later.
 - **The by-id backfill site has no network-level guard.** The type-state covers it, but it lacks a
   two-swarm test like gossip's.
 - **Leader mode is still a per-node setting** (item 6).

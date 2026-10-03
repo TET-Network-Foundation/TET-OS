@@ -284,6 +284,8 @@ jobs:
             catch_up_refuses_a_block_without_a_valid_producer_signature
             block_sync::gossip_refuses_a_block_without_a_valid_producer_signature
             ts_altered_after_signing_breaks_block_id
+            block_id_has_no_field_boundary_collision
+            block_id_v3_golden_vector
             block_time_not_after_parent_is_refused
             block_ahead_of_the_clock_is_held_then_accepted
           )

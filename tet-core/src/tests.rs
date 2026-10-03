@@ -6005,6 +6005,41 @@ async fn ts_altered_after_signing_breaks_block_id() {
     assert_eq!(f.ledger.block_height().unwrap(), 0);
 }
 
+/// **SECURITY REGRESSION GUARD: V3 `block_id` fields are length-prefixed.** Each pair below is two
+/// different headers that the tag-separated pre-image (`|parent=…|state=…|txs=a,b|…`) hashed to
+/// the same id, so one producer signature covered both. Negative control: restore the
+/// tag-separated pre-image → every pair collides.
+#[test]
+fn block_id_has_no_field_boundary_collision() {
+    use crate::consensus::block_id_for_block as id;
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let p = "0xparent";
+    let pairs = [
+        // A `,` inside one tx hash against two tx hashes.
+        (id(2, p, "r", &s(&["a,b"]), "alice", 7), id(2, p, "r", &s(&["a", "b"]), "alice", 7), "tx list split"),
+        // An empty list against one empty hash.
+        (id(2, p, "r", &[], "alice", 7), id(2, p, "r", &s(&[""]), "alice", 7), "[] vs [\"\"]"),
+        // Bytes moved from the parent into the state root across the tag.
+        (id(2, "0xp|state=r", "", &[], "alice", 7), id(2, "0xp", "r|state=", &[], "alice", 7), "parent/state shift"),
+        // Bytes moved from the tx list into the producer across the tag.
+        (id(2, p, "r", &s(&["a|producer=b"]), "", 7), id(2, p, "r", &s(&["a"]), "b|producer=", 7), "txs/producer shift"),
+    ];
+    for (a, b, what) in pairs {
+        assert_ne!(a, b, "{what}: two different headers share a block_id");
+    }
+}
+
+/// Pins the V3 `block_id` encoding. A change here is a new genesis: every block id and every
+/// producer signature over one changes with it.
+#[test]
+fn block_id_v3_golden_vector() {
+    let txs = vec!["0xaa".to_string(), "0xbb".to_string()];
+    assert_eq!(
+        crate::consensus::block_id_for_block(2, "", "0xstate", &txs, "alice", 1_700_000_000_000),
+        "0x5694826587a0b44f7078b402808f9e9c4d22aa76f9ca50aad180d2f8ac69725c"
+    );
+}
+
 fn producer_refusal(b: crate::consensus::RemoteBlockGossip) -> String {
     match crate::consensus::verify_block_producer(b) {
         Err(crate::consensus::RemoteBlockApplyError::Rejected(m)) => m,

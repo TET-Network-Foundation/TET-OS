@@ -118,7 +118,7 @@ pub enum AgentError {
 ///
 /// The length prefix is the whole point: `["a", "bc"]` and `["ab", "c"]` encode differently, so no
 /// choice of field contents can make two distinct lists collide.
-fn pae_fields(fields: &[&[u8]]) -> Vec<u8> {
+pub(crate) fn pae_fields(fields: &[&[u8]]) -> Vec<u8> {
     let mut out = Vec::new();
     for f in fields {
         out.extend_from_slice(f.len().to_string().as_bytes());
@@ -129,8 +129,8 @@ fn pae_fields(fields: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// `domain SP <pae_fields>`.
-fn pae(domain: &str, fields: &[&[u8]]) -> Vec<u8> {
+/// `domain SP <pae_fields>`. Also the V3 `block_id` pre-image (`consensus::block_id_for_block`).
+pub(crate) fn pae(domain: &str, fields: &[&[u8]]) -> Vec<u8> {
     let mut out = Vec::with_capacity(domain.len() + 1);
     out.extend_from_slice(domain.as_bytes());
     out.push(b' ');
