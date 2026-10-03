@@ -45,7 +45,6 @@ export TET_THERMO_STEVEMON_MICRO_SCALE=1
 # Use the same wallet in the UI and node. Copy both from the UI Wallet dialog after unlock/import.
 export TET_WORKER_MNEMONIC="paste the 12-word UI wallet mnemonic here"
 export TET_WALLET_ID="paste the 64-hex UI Wallet ID here"
-export TET_VALIDATOR_IDS="$TET_WALLET_ID"
 export TET_DEV_FAUCET_MICRO=1000000000
 
 RISC0_SKIP_BUILD=1 cargo run --bin TET-Core

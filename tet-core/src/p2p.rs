@@ -1158,20 +1158,34 @@ async fn try_start_catch_up(
     .await;
 }
 
-async fn apply_catch_up_blocks(
+/// Apply a height-range catch-up batch in order. Returns `(applied, failed, held)`: `failed` when
+/// a block was refused (the peer is at fault), `held` when one was valid but too far in the future
+/// for this node's clock (it is not; retry later). Every block is producer-verified first: catch-up
+/// is an acceptance site like gossip, and a block it carries in is held to the same signature.
+pub(crate) async fn apply_catch_up_blocks(
     ledger: Arc<crate::ledger::Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
     blocks: Vec<crate::ledger::BlockRecordV1>,
-) -> (usize, bool) {
+) -> (usize, bool, bool) {
     let mut applied = 0usize;
     for block in blocks {
         let height = block.height;
         let block_id = block.block_id.clone();
-        let gossip = block_record_to_remote_gossip(&block);
+        let verified =
+            match crate::consensus::verify_block_producer(block_record_to_remote_gossip(&block)) {
+                Ok(v) => v,
+                Err(e) => {
+                    println!(
+                        "[P2P-block] ❌ catch-up block refused height={height} block_id={block_id}: {}",
+                        e.message()
+                    );
+                    return (applied, true, false);
+                }
+            };
         match crate::consensus::apply_remote_block_from_gossip(
             ledger.clone(),
             mempool.clone(),
-            gossip,
+            verified,
         )
         .await
         {
@@ -1187,7 +1201,7 @@ async fn apply_catch_up_blocks(
                     println!(
                         "[P2P-block] ❌ catch-up apply gap height={height} block_id={block_id}: {reason}"
                     );
-                    return (applied, true);
+                    return (applied, true, false);
                 }
                 println!(
                     "[P2P-block] ⏭️ catch-up apply skipped height={height} block_id={block_id}: {reason}"
@@ -1198,16 +1212,22 @@ async fn apply_catch_up_blocks(
                     "[P2P-block] ⚠️ catch-up apply outcome height={height} block_id={block_id}: {other:?}"
                 );
             }
+            Err(crate::consensus::RemoteBlockApplyError::Held(reason)) => {
+                println!(
+                    "[P2P-block] ⏸️ catch-up block held height={height} block_id={block_id}: {reason}"
+                );
+                return (applied, false, true);
+            }
             Err(e) => {
                 println!(
                     "[P2P-block] ❌ catch-up apply rejected height={height} block_id={block_id}: {}",
                     e.message()
                 );
-                return (applied, true);
+                return (applied, true, false);
             }
         }
     }
-    (applied, false)
+    (applied, false, false)
 }
 
 async fn on_catch_up_range_response(
@@ -1255,7 +1275,8 @@ async fn on_catch_up_range_response(
         return;
     }
 
-    let (applied, failed) = apply_catch_up_blocks(ledger.clone(), mempool, response.blocks).await;
+    let (applied, failed, held) =
+        apply_catch_up_blocks(ledger.clone(), mempool, response.blocks).await;
     set_in_progress_range(block_sync_board, None).await;
     let local_height = ledger.block_height().unwrap_or(0);
     let action = {
@@ -1266,6 +1287,7 @@ async fn on_catch_up_range_response(
                 peer_id: peer_s,
                 applied,
                 failed,
+                held,
             },
             &reg,
             local_height,
@@ -1580,10 +1602,11 @@ fn network_event_topics(
 /// Node-local map from block `producer_id` to the libp2p `PeerId` allowed to publish its blocks,
 /// from `TET_PRODUCER_PEERS="<producer_id>=<PeerId>,…"`. Empty when unset: no check, as before.
 ///
-/// This is a mitigation, not a signature. Blocks carry no producer signature yet (that is the Phase 1
-/// header change); what gossipsub does authenticate, in `ValidationMode::Strict`, is the message
-/// author. Relays forward the author's signed message unchanged, so a block relayed by another seed
-/// still names the producer's PeerId as its source.
+/// An optional **second** layer since Phase 1. The primary check is the producer signature over
+/// the V3 `block_id` ([`crate::consensus::verify_block_producer`]), which holds on every path,
+/// catch-up included. This one pins the gossip transport: gossipsub, in `ValidationMode::Strict`,
+/// authenticates the message author, and relays forward the author's signed message unchanged, so a
+/// block relayed by another seed still names the producer's PeerId as its source.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ProducerPeers(std::collections::HashMap<String, PeerId>);
 
@@ -1648,7 +1671,50 @@ pub(crate) fn gossip_event_acceptance(
         {
             gossipsub::MessageAcceptance::Reject
         }
+        // Do not forward a block whose producer signature fails: the mesh stops relaying it and
+        // the publisher's score drops. The handler verifies again before applying anything.
+        NetworkEvent::BlockMined { .. }
+            if block_mined_to_remote(event)
+                .map(crate::consensus::verify_block_producer)
+                .is_some_and(|r| r.is_err()) =>
+        {
+            gossipsub::MessageAcceptance::Reject
+        }
         _ => gossipsub::MessageAcceptance::Accept,
+    }
+}
+
+/// The gossip `BlockMined` event as the acceptance input. `None` for any other event.
+pub(crate) fn block_mined_to_remote(
+    event: &NetworkEvent,
+) -> Option<crate::consensus::RemoteBlockGossip> {
+    match event {
+        NetworkEvent::BlockMined {
+            block_height,
+            block_id,
+            parent_block_id,
+            producer_id,
+            base_reward_micro,
+            compute_reward_micro,
+            total_reward_micro,
+            state_root,
+            txs,
+            ts_ms,
+            producer_sig,
+        } => Some(crate::consensus::RemoteBlockGossip {
+            block_height: *block_height,
+            block_id: block_id.clone(),
+            parent_block_id: parent_block_id.clone(),
+            producer_id: producer_id.clone(),
+            base_reward_micro: *base_reward_micro,
+            compute_reward_micro: *compute_reward_micro,
+            total_reward_micro: *total_reward_micro,
+            state_root: state_root.clone(),
+            txs: txs.clone(),
+            ts_ms: *ts_ms,
+            producer_sig: producer_sig.clone(),
+        }),
+        _ => None,
     }
 }
 
@@ -3003,22 +3069,24 @@ async fn run_mdns_ping_swarm(
                             );
                             continue;
                         };
-                        let gossip = crate::consensus::RemoteBlockGossip {
-                            block_height: block.height,
-                            block_id: block.block_id.clone(),
-                            parent_block_id: block.parent_block_id.clone(),
-                            producer_id: block.producer_id.clone(),
-                            base_reward_micro: block.reward.base_reward_micro,
-                            compute_reward_micro: block.reward.compute_reward_micro,
-                            total_reward_micro: block.reward.total_reward_micro,
-                            state_root: block.state_root.clone(),
-                            txs: block.txs.clone(),
-                        };
-                        let stored = match crate::consensus::validate_and_record_backfill_candidate(
-                            ledger.as_ref(),
-                            gossip,
-                        ) {
+                        // By-id backfill is an acceptance site too: same producer check.
+                        let stored = match crate::consensus::verify_block_producer(
+                            block_record_to_remote_gossip(&block),
+                        )
+                        .and_then(|verified| {
+                            crate::consensus::validate_and_record_backfill_candidate(
+                                ledger.as_ref(),
+                                verified,
+                            )
+                        }) {
                             Ok(stored) => stored,
+                            Err(crate::consensus::RemoteBlockApplyError::Held(reason)) => {
+                                println!(
+                                    "[P2P] ⏸️ BACKFILLED BLOCK HELD peer={peer} block={}: {reason}",
+                                    response.block_id
+                                );
+                                continue;
+                            }
                             Err(e) => {
                                 blacklisted_peers.insert(peer, now_ms());
                                 println!(
@@ -3086,7 +3154,11 @@ async fn run_mdns_ping_swarm(
                                     );
                                 }
                                 Err(e) => {
-                                    blacklisted_peers.insert(peer, now_ms());
+                                    // A held branch (block time ahead of our clock) is not the
+                                    // peer's fault; anything else is.
+                                    if !e.starts_with("reorg held") {
+                                        blacklisted_peers.insert(peer, now_ms());
+                                    }
                                     println!(
                                         "[P2P] ❌ BACKFILLED REORG FAILED tip={} err={}",
                                         candidate.block_id, e
@@ -3312,6 +3384,8 @@ async fn run_mdns_ping_swarm(
                                 total_reward_micro,
                                 state_root,
                                 txs,
+                                ts_ms,
+                                producer_sig,
                             } => {
                                 if let Err(why) = producer_peers.check_block_source(&producer_id, source_peer.as_ref()) {
                                     println!("[P2P] ❌ GOSSIP BLOCK REFUSED height={block_height}: {why}");
@@ -3340,16 +3414,31 @@ async fn run_mdns_ping_swarm(
                                         .await;
                                     }
                                 }
-                                let gossip = crate::consensus::RemoteBlockGossip {
-                                    block_height,
-                                    block_id: block_id.clone(),
-                                    parent_block_id: parent_block_id.clone(),
-                                    producer_id: producer_id.clone(),
-                                    base_reward_micro,
-                                    compute_reward_micro,
-                                    total_reward_micro,
-                                    state_root: state_root.clone(),
-                                    txs: txs.clone(),
+                                // Primary check, before the block can reach the orphan buffer or
+                                // apply. The PeerId pin above is the optional second layer.
+                                let gossip = match crate::consensus::verify_block_producer(
+                                    crate::consensus::RemoteBlockGossip {
+                                        block_height,
+                                        block_id: block_id.clone(),
+                                        parent_block_id: parent_block_id.clone(),
+                                        producer_id: producer_id.clone(),
+                                        base_reward_micro,
+                                        compute_reward_micro,
+                                        total_reward_micro,
+                                        state_root: state_root.clone(),
+                                        txs: txs.clone(),
+                                        ts_ms,
+                                        producer_sig,
+                                    },
+                                ) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        println!(
+                                            "[P2P] ❌ GOSSIP BLOCK REFUSED height={block_height}: {}",
+                                            e.message()
+                                        );
+                                        continue;
+                                    }
                                 };
                                 if let Some(parent_id) = parent_block_id.as_deref()
                                     && ledger
@@ -3401,7 +3490,11 @@ async fn run_mdns_ping_swarm(
                                             }
                                         }
                                         Err(e) => {
-                                            if let Some(peer) = source_peer {
+                                            // Held (block time ahead of our clock) is not the
+                                            // sender's fault; catch-up retries it.
+                                            if let Some(peer) = source_peer
+                                                && !matches!(e, crate::consensus::RemoteBlockApplyError::Held(_))
+                                            {
                                                 blacklisted_peers.insert(peer, now_ms());
                                             }
                                             println!(
@@ -3953,6 +4046,11 @@ pub(crate) mod tests {
             cumulative_weight: 1,
             canonical: false,
             ts_ms: 1,
+            producer_sig: crate::producer_key::BlockSignature {
+                ed25519_sig_hex: String::new(),
+                mldsa44_sig_b64: String::new(),
+            },
+            received_at_ms: 0,
         };
 
         buffer.insert(mk("a", "p"), None, 0, 1);

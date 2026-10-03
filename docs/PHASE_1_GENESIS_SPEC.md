@@ -151,7 +151,7 @@ only.
 ### The design
 
 1. **Header.** Add `ts_ms: u64`, set by the producer, covered by a V3 `block_id` with its own domain
-   tag (`TET_BLOCK_ID_V3|…|ts=`), and carried on gossip and catch-up. Rename the node-local field to
+   (PAE domain `tet block id v3`, see "As built"), and carried on gossip and catch-up. Rename the node-local field to
    `received_at_ms` so nothing reads it by mistake.
 2. **Apply takes it as a parameter.** `apply_consensus_block_batch` and
    `compute_state_root_after_remote_block` gain `block_ts_ms` and thread it to all six sites above,
@@ -182,6 +182,55 @@ Bitcoin's 2 h is no template — it is sized for 10-minute blocks.
   With a single producer (risk R10) this is the same power as declining to include a transaction,
   which that producer already has; a median-time-past rule only helps once several producers
   alternate. Stated here so the bound above is not read as covering it.
+
+5. **Producer signature (D2; decided 2026-10-03, option 1).** Blocks carry a hybrid signature over the
+   V3 `block_id`, which already commits to `ts_ms`, parent, txs and `state_root`.
+   - **Key.** A dedicated Ed25519 + ML-DSA-44 keypair in the node's db dir
+     (`producer_ed25519_seed.raw`, `producer_mldsa44_seed.raw`). It is never the wallet key, so a
+     producing node holds no spending secret. `TET-Core --producer-key` prints the node's entry.
+   - **Pre-image.** `TET_BLOCK_SIG_V1|` followed by `block_id`. ML-DSA uses the deterministic `rnd`
+     every TET signature uses.
+   - **Validator set in genesis.** `TET_GENESIS_VALIDATORS` names a JSON list of
+     `(producer_id, ed25519_pk_hex, mldsa44_pk_b64)`. It goes into the genesis hash as a
+     length-prefixed digest, so changing the set is a new genesis. Phase 1 accepts that;
+     rotation is Phase 1.1 (`QUEUE.md`). It replaces `TET_VALIDATOR_IDS`.
+   - **Where it is checked.** Every acceptance site: gossip, height-range catch-up, by-id backfill.
+     Both acceptance functions take a `ProducerVerifiedBlock`, and only `verify_block_producer` can
+     construct one, so a sync path that skips the check does not compile. The gossip mesh verdict
+     also refuses a bad signature, so a forged block is not forwarded. The `TET_PRODUCER_PEERS`
+     PeerId pin remains as an optional second layer.
+   - **Held blocks.** A block more than 60 s ahead returns `Held`. Nobody is blacklisted for it.
+     The catch-up driver goes idle, and its 1 s tick re-requests the block.
+
+### As built (2026-10-03, branch `phase1-block-time`)
+
+Where the implementation differs from the text above, or the text left a choice open:
+
+- **The spendability guard uses separate blocks for `Transfer` and `FileFee`, not one block with
+  both.** With both in one block, restoring the node clock at either site leaves the other site
+  still refusing the block, so the guard measures their disjunction (C4).
+- **Founder guard.** Nodes that boot at different clocks hold the same unlock. A node that sets a
+  different `TET_FOUNDER_CLIFF_MS` gets a **different genesis hash**, not the same unlock, because
+  design 3 puts the cliff in the hash. The guard sketch's "one with `TET_FOUNDER_CLIFF_MS` set →
+  identical unlock" would contradict that, so the guard asserts the hash differs.
+- **The producer also reads the clock.** It stamps `ts_ms = max(clock, parent.ts_ms + 1)`. So the
+  clock has two production readers, the stamp and the future bound, and neither is on the apply
+  path. D3's "only reader" means only reader on the acceptance side.
+- **Local bookkeeping still uses the node clock:** `received_at_ms`, undo and tx-index timestamps,
+  audit rows. None of it is in the state root or read by consensus.
+- **The CHF AML day bucket** reads the injected clock. It is off the apply path.
+- **The V3 `block_id` pre-image is length-prefixed**, not tag-separated: `SHA256(PAE("tet block id
+  v3", [height_le, parent, state_root, PAE_fields(tx_hashes), producer, ts_le]))`, the agent-payload
+  convention (`agent::pae`). The tag-separated draft let a `,` in a tx hash, `[]` against `[""]`, or
+  bytes moved across a `|field=` tag give two headers one id.
+  `block_id_has_no_field_boundary_collision` holds four such pairs, and
+  `block_id_v3_golden_vector` pins the encoding.
+
+**Open, for whoever reviews this:**
+
+- **The by-id backfill site has no network-level guard.** The type-state covers it, but it lacks a
+  two-swarm test like gossip's.
+- **Leader mode is still a per-node setting** (item 6).
 
 ### Migration — this is a new genesis
 

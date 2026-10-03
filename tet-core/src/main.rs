@@ -23,6 +23,7 @@ mod oracle;
 mod p2p;
 mod p2p_keystore;
 mod p2p_network;
+mod producer_key;
 mod protocol;
 mod quantum_shield;
 mod render_farm;
@@ -194,6 +195,24 @@ fn fatal_db_lock_help(db_dir: &str, port: u16, e: &dyn std::error::Error) -> ! {
 
 #[tokio::main]
 async fn main() -> Result<(), AnyErr> {
+    // Phase 1: print this node's genesis validator entry (producer id + producer public key), for
+    // the genesis validator set. Creates the producer key under TET_DB_DIR if it does not exist.
+    // Usage: `TET_DB_DIR=… TET_WALLET_ID=… TET-Core --producer-key`
+    if std::env::args().any(|a| a == "--producer-key") {
+        // Before tracing starts: stdout must carry only the JSON entry, since scripts capture it.
+        let config = StartupConfig::from_env();
+        let key = crate::producer_key::ProducerKeypair::load_or_create(std::path::Path::new(
+            &config.db_dir,
+        ))
+        .map_err(|e| format!("producer key: {e}"))?;
+        let entry = crate::genesis::GenesisValidator {
+            producer_id: config.initial_wallet.trim().to_ascii_lowercase(),
+            key: key.public_key(),
+        };
+        println!("{}", serde_json::to_string(&entry)?);
+        return Ok(());
+    }
+
     init_tracing();
 
     // Phase 2.5: Node Operator Defense (default SAFE MODE).
@@ -275,6 +294,23 @@ async fn main() -> Result<(), AnyErr> {
 
     // --- Step 1: env / config ---
     let config = StartupConfig::from_env();
+
+    // The genesis parameters are read on every signature check; refuse to start on a chain this
+    // node cannot name, rather than panic on the first request.
+    match crate::genesis::GenesisParams::from_env() {
+        Ok(g) => log::info!(
+            "[startup] genesis {} chain_id={} genesis_time_ms={} founder_cliff_ms={} validators={}",
+            g.hash(),
+            g.chain_id,
+            g.genesis_time_ms,
+            g.founder_cliff_ms,
+            g.validators.len()
+        ),
+        Err(e) => {
+            eprintln!("[startup] FATAL: invalid genesis configuration: {e}");
+            std::process::exit(2);
+        }
+    }
     log::info!(
         "[startup] config loaded port={} db_dir={} enable_p2p={} rest_bind={}",
         config.port,
@@ -348,6 +384,23 @@ async fn main() -> Result<(), AnyErr> {
         log::info!("[startup] keystore skipped (TET_ENABLE_P2P=0)");
         None
     };
+
+    // Block-producer key (hybrid Ed25519 + ML-DSA-44). Not the wallet key: this node holds no
+    // spending secret. Without it the node can follow but not produce.
+    let producer_key =
+        match crate::producer_key::ProducerKeypair::load_or_create(std::path::Path::new(&config.db_dir)) {
+            Ok(k) => {
+                log::info!(
+                    "[startup] producer key ready ed25519={}",
+                    k.public_key().ed25519_pk_hex
+                );
+                Some(Arc::new(k))
+            }
+            Err(e) => {
+                log::warn!("[startup] producer key unavailable, this node will not produce: {e}");
+                None
+            }
+        };
 
     if let Err(e) =
         tet_core::pqc_keystore::ensure_node_mldsa_keystore(std::path::Path::new(&config.db_dir))
@@ -685,6 +738,7 @@ async fn main() -> Result<(), AnyErr> {
         genesis_1k_lock: Arc::new(tokio::sync::Mutex::new(())),
         log_tx,
         log_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        producer_key,
     };
 
     // Pending txs this node admitted over REST are re-published on a timer until they are mined.
@@ -727,7 +781,12 @@ async fn main() -> Result<(), AnyErr> {
     // --- Step 7: auto-miner (sync gate may defer first mine until caught up) ---
     if crate::consensus::auto_mine_enabled_from_env() {
         let consensus_node_id = config.initial_wallet.trim().to_ascii_lowercase();
-        let validator_set = crate::consensus::ValidatorSet::from_env_or_single(&consensus_node_id);
+        let genesis_validators = crate::genesis::genesis_validators_from_env()?;
+        if genesis_validators.is_empty() {
+            log::info!("[startup] genesis lists no validators: dev chain, this node mines alone and accepts no peer blocks");
+        }
+        let validator_set =
+            crate::consensus::ValidatorSet::for_local_mining(&genesis_validators, &consensus_node_id);
         let _auto_miner = crate::consensus::spawn_auto_miner(
             state.clone(),
             block_sync_board.clone(),

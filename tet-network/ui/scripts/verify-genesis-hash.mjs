@@ -20,11 +20,23 @@ const GENESIS_FOUNDER_DEV_PUBLIC_HEX =
 const TREASURY_DEV =
   "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
 
-function buildGenesisPayloadV1({ chainId, founderWalletId, treasuryWalletId }) {
+// tet-core `genesis::validators_digest_hex([])`: SHA-256("tet-validators-v1").
+const EMPTY_GENESIS_VALIDATORS_DIGEST = createHash("sha256")
+  .update("tet-validators-v1", "utf8")
+  .digest("hex");
+
+function buildGenesisPayloadV2({
+  chainId,
+  founderWalletId,
+  treasuryWalletId,
+  genesisTimeMs,
+  founderCliffMs,
+  validatorsDigest,
+}) {
   const founder = founderWalletId.trim().toLowerCase();
   const treasury = treasuryWalletId.trim().toLowerCase();
   return (
-    `tet-genesis-v1|chain_id=${chainId}` +
+    `tet-genesis-v2|chain_id=${chainId}` +
     `|founder=${founder}` +
     `|founder_micro=${GENESIS_FOUNDER_SHARE_MICRO}` +
     `|worker_pool=${WALLET_WORKER_POOL}` +
@@ -33,12 +45,15 @@ function buildGenesisPayloadV1({ chainId, founderWalletId, treasuryWalletId }) {
     `|treasury_micro=${GENESIS_TREASURY_SHARE_MICRO}` +
     `|reserve=${WALLET_PROTOCOL_RESERVE}` +
     `|reserve_micro=${GENESIS_PROTOCOL_RESERVE_SHARE_MICRO}` +
-    `|max_supply_micro=${MAX_SUPPLY_MICRO}`
+    `|max_supply_micro=${MAX_SUPPLY_MICRO}` +
+    `|genesis_time_ms=${genesisTimeMs}` +
+    `|founder_cliff_ms=${founderCliffMs}` +
+    `|validators=${validatorsDigest}`
   );
 }
 
 function deterministicGenesisHashHex(inputs) {
-  const payload = buildGenesisPayloadV1(inputs);
+  const payload = buildGenesisPayloadV2(inputs);
   const hex = createHash("sha256").update(payload, "utf8").digest("hex");
   return { payload, hash: `0x${hex}` };
 }
@@ -47,12 +62,15 @@ const inputs = {
   chainId: "tet-local-dev",
   founderWalletId: GENESIS_FOUNDER_DEV_PUBLIC_HEX,
   treasuryWalletId: TREASURY_DEV,
+  genesisTimeMs: 0n,
+  founderCliffMs: 365n * 86_400_000n,
+  validatorsDigest: EMPTY_GENESIS_VALIDATORS_DIGEST,
 };
 
 const { payload, hash } = deterministicGenesisHashHex(inputs);
 
 console.log("=== Genesis binding verify (dev defaults) ===\n");
-console.log("inputs:", JSON.stringify(inputs, null, 2));
+console.log("inputs:", JSON.stringify(inputs, (_k, v) => (typeof v === "bigint" ? v.toString() : v), 2));
 console.log("\n--- payload (UTF-8, must match tet-core format!()) ---\n");
 console.log(payload);
 console.log("\n--- SHA-256 → genesis_hash ---\n");
@@ -66,8 +84,8 @@ console.log(
     "  # genesis_hash is NOT in /ledger/me — see docs/RUNNING_A_NODE.md § UI\n",
 );
 
-// Golden vector: run `cd tet-core && cargo test genesis_hash_vector -- --exact` if added later.
-const EXPECTED_PAYLOAD_PREFIX = "tet-genesis-v1|chain_id=tet-local-dev|founder=";
+// Golden vector: the same value is asserted by tet-core `genesis::tests::genesis_hash_v2_dev_golden_vector`.
+const EXPECTED_PAYLOAD_PREFIX = "tet-genesis-v2|chain_id=tet-local-dev|founder=";
 if (!payload.startsWith(EXPECTED_PAYLOAD_PREFIX)) {
   console.error("FAIL: unexpected payload prefix");
   process.exit(1);
@@ -77,7 +95,7 @@ if (!payload.includes("|treasury=") || payload.includes("|ecosystem=")) {
   process.exit(1);
 }
 const GOLDEN_DEV =
-  "0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36";
+  "0xf73ff1043163a2d5237d38dc708807a440705e4e29f7d603cc5217921b764de7";
 if (hash !== GOLDEN_DEV) {
   console.error(`FAIL: hash ${hash} !== golden ${GOLDEN_DEV}`);
   process.exit(1);

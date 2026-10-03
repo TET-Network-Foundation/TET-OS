@@ -288,14 +288,6 @@ pub enum InitialAirdropClaimOutcome {
     PoolInsufficient,
 }
 
-fn day_since_epoch() -> u64 {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    secs / 86_400
-}
-
 #[derive(Clone)]
 pub struct Ledger {
     #[allow(dead_code)]
@@ -343,6 +335,8 @@ pub struct Ledger {
     zkcourt_bonds: sled::Tree,
     enc_key: Option<EncKey>,
     snapshot_dir: std::path::PathBuf,
+    /// See [`LedgerClock`]. Read only through [`Ledger::now_ms`].
+    clock: LedgerClock,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -351,6 +345,7 @@ pub struct BlockSummary {
     pub block_id: String,
     pub state_root: String,
     pub tx_count: u64,
+    /// The block's own time (V3 header `ts_ms`), not when this node stored it.
     pub ts_ms: u128,
 }
 
@@ -375,7 +370,14 @@ pub struct BlockRecordV1 {
     pub caac_weight: u64,
     pub cumulative_weight: u128,
     pub canonical: bool,
-    pub ts_ms: u128,
+    /// Block time set by the producer: in the V3 `block_id`, identical on every node, and the only
+    /// time any consensus rule reads (spec §1).
+    pub ts_ms: u64,
+    /// Producer signature over `block_id` (V3). Required: a record without one does not
+    /// deserialize, so no sync path can carry an unsigned block in.
+    pub producer_sig: crate::producer_key::BlockSignature,
+    /// When **this node** stored the record. Node-local; never read by consensus.
+    pub received_at_ms: u128,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -558,18 +560,47 @@ fn plaintext_is_material_balance_amount_micro(pt: &[u8]) -> bool {
 pub const REFUSED_GOSSIP_BALANCE_EVENT: &str =
     "refused: balances change only through block apply, never from a gossip event";
 
-fn ledger_now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
+/// The ledger's source of "now", in Unix milliseconds, fixed at construction (Phase 1 D3).
+///
+/// Production uses [`LedgerClock::system`]; a test passes a fixed or stepped clock to
+/// [`Ledger::open_with_clock`]. There is no global and no environment override: the clock a
+/// ledger reads is the one it was built with, so a guard that forces a time exercises the same
+/// code the node runs.
+#[derive(Clone)]
+pub struct LedgerClock(std::sync::Arc<dyn Fn() -> u128 + Send + Sync>);
+
+impl LedgerClock {
+    /// The host's wall clock.
+    pub fn system() -> Self {
+        Self(std::sync::Arc::new(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        }))
+    }
+
+    /// Always `now_ms`.
+    pub fn fixed(now_ms: u128) -> Self {
+        Self(std::sync::Arc::new(move || now_ms))
+    }
+
+    /// Reads `now_ms` on every call, so a test can step time without reopening the ledger.
+    pub fn stepped(now_ms: std::sync::Arc<std::sync::atomic::AtomicU64>) -> Self {
+        Self(std::sync::Arc::new(move || {
+            u128::from(now_ms.load(std::sync::atomic::Ordering::SeqCst))
+        }))
+    }
+
+    pub fn now_ms(&self) -> u128 {
+        (self.0)()
+    }
 }
 
-fn founder_genesis_cliff_ms() -> u128 {
-    std::env::var("TET_FOUNDER_CLIFF_MS")
-        .ok()
-        .and_then(|v| v.parse::<u128>().ok())
-        .unwrap_or(365u128 * 86_400_000u128)
+impl std::fmt::Debug for LedgerClock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("LedgerClock")
+    }
 }
 
 /// Lock duration for worker AI rewards; override with `TET_WORKER_VEST_MS` (milliseconds) for tests.
@@ -589,6 +620,18 @@ struct VestLockV1 {
 }
 
 impl Ledger {
+    /// The ledger's current time, from the clock it was opened with.
+    fn now_ms(&self) -> u128 {
+        self.clock.now_ms()
+    }
+
+    /// The node clock, for the two places outside the ledger that need it: the producer stamping
+    /// a new block's `ts_ms`, and the future bound in block validation (spec §1, D3). Nothing on
+    /// the apply path may call this.
+    pub fn clock_now_ms(&self) -> u64 {
+        u64::try_from(self.clock.now_ms()).unwrap_or(u64::MAX)
+    }
+
     const CHAIN_TIP_CANONICAL_KEY: &'static [u8] = b"canonical";
 
     fn blocks_key_be(height: u64) -> [u8; 8] {
@@ -760,7 +803,7 @@ impl Ledger {
             )?,
             blocks: Self::undo_kvs(&self.blocks, vec![Self::blocks_key_be(height).to_vec()])?,
             workers_registry: Self::undo_kvs(&self.workers_registry, workers_registry_keys)?,
-            created_at_ms: ledger_now_ms(),
+            created_at_ms: self.now_ms(),
         })
     }
 
@@ -849,13 +892,14 @@ impl Ledger {
         block_id: &str,
         state_root: &str,
         tx_count: u64,
+        block_ts_ms: u64,
     ) -> Result<(), LedgerError> {
         let row = BlockSummary {
             height,
             block_id: block_id.to_string(),
             state_root: state_root.to_string(),
             tx_count,
-            ts_ms: ledger_now_ms(),
+            ts_ms: u128::from(block_ts_ms),
         };
         let bytes = serde_json::to_vec(&row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
         self.blocks
@@ -908,7 +952,7 @@ impl Ledger {
                 block_id,
                 cumulative_weight: row.cumulative_weight,
                 state_root: row.state_root.clone(),
-                updated_at_ms: ledger_now_ms(),
+                updated_at_ms: self.now_ms(),
             };
             let tip_bytes =
                 serde_json::to_vec(&tip).map_err(|e| LedgerError::Invalid(e.to_string()))?;
@@ -973,7 +1017,7 @@ impl Ledger {
             signer_wallet: tx.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase(),
             canonical,
             tx: tx.clone(),
-            indexed_at_ms: ledger_now_ms(),
+            indexed_at_ms: self.now_ms(),
         };
         let bytes = serde_json::to_vec(&row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
         self.tx_index
@@ -1004,7 +1048,7 @@ impl Ledger {
                 signer_wallet: tx.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase(),
                 canonical,
                 tx: tx.clone(),
-                indexed_at_ms: ledger_now_ms(),
+                indexed_at_ms: self.now_ms(),
             };
             let bytes =
                 serde_json::to_vec(&row).map_err(|e| LedgerError::Invalid(e.to_string()))?;
@@ -1133,7 +1177,7 @@ impl Ledger {
         if applied {
             let audit = serde_json::json!({
                 "v": 1,
-                "ts_ms": ledger_now_ms(),
+                "ts_ms": self.now_ms(),
                 "action": "enterprise_inference_demand_record_v1",
                 "tx_hash": tx_hash,
                 "enterprise_wallet_id": task.enterprise_wallet_id,
@@ -1259,7 +1303,7 @@ impl Ledger {
             task.processed = true;
             task.processed_by = Some(worker.clone());
             task.processed_receipt_hash_hex = Some(receipt_hash.clone());
-            task.processed_at_ms = Some(ledger_now_ms());
+            task.processed_at_ms = Some(self.now_ms());
             let bytes = serde_json::to_vec(&task).map_err(|e| {
                 ConflictableTransactionError::Abort(sled::Error::Unsupported(format!(
                     "ai_workload_json:{e}"
@@ -1274,7 +1318,7 @@ impl Ledger {
         if applied {
             let audit = serde_json::json!({
                 "v": 1,
-                "ts_ms": ledger_now_ms(),
+                "ts_ms": self.now_ms(),
                 "action": "enterprise_inference_processed_v1",
                 "tx_hash": tx_hash,
                 "processed_by": worker,
@@ -1308,7 +1352,7 @@ impl Ledger {
                 "image_id": image_id,
                 "receipt_hash_hex": receipt_hash_hex,
                 "journal_hash_hex": hex::encode(journal_hash),
-                "ts_ms": ledger_now_ms(),
+                "ts_ms": self.now_ms(),
             }))
             .map_err(|e| {
                 ConflictableTransactionError::Abort(sled::Error::Unsupported(format!(
@@ -1324,7 +1368,7 @@ impl Ledger {
         if applied {
             let audit = serde_json::json!({
                 "v": 1,
-                "ts_ms": ledger_now_ms(),
+                "ts_ms": self.now_ms(),
                 "action": "zk_verify_record_v1",
                 "receipt_hash_hex": receipt_hash_hex,
                 "journal_hash_hex": hex::encode(journal_hash),
@@ -1389,21 +1433,15 @@ impl Ledger {
         format!("0x{}", hex::encode(h.finalize()))
     }
 
-    /// Preview the post-block balance root without mutating sled.
-    ///
-    /// This lets P2P receivers reject a bad `state_root` before applying the remote block.
-    pub fn compute_state_root_after_remote_txs(
-        &self,
-        txs: &[crate::protocol::SignedTxEnvelopeV1],
-    ) -> Result<String, LedgerError> {
-        self.compute_state_root_after_remote_block(txs, "", 0)
-    }
-
+    /// Preview the post-block balance root without mutating sled, so a P2P receiver can reject a
+    /// bad `state_root` before applying the remote block. `block_ts_ms` is the block's own time
+    /// (V3 header); every time-gated rule in the preview reads it, never the node clock.
     pub fn compute_state_root_after_remote_block(
         &self,
         txs: &[crate::protocol::SignedTxEnvelopeV1],
         producer_id: &str,
         reward_micro: u64,
+        block_ts_ms: u64,
     ) -> Result<String, LedgerError> {
         let mut balances = BTreeMap::<Vec<u8>, u64>::new();
         for it in self.balances.iter() {
@@ -1450,7 +1488,7 @@ impl Ledger {
                     let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
 
                     let fb = balances.get(&from_k).copied().unwrap_or(0);
-                    let locked_sum = self.locked_balance_micro(&from, ledger_now_ms())?;
+                    let locked_sum = self.locked_balance_micro(&from, u128::from(block_ts_ms))?;
                     if fb.saturating_sub(locked_sum) < *amount_micro {
                         return Err(LedgerError::InsufficientFunds);
                     }
@@ -1493,6 +1531,7 @@ impl Ledger {
                         from_wallet,
                         storage_wallet,
                         *fee_micro,
+                        block_ts_ms,
                     )?;
                 }
                 crate::protocol::TxV1::WorkerRegister { wallet_id, .. } => {
@@ -1548,6 +1587,7 @@ impl Ledger {
         from_wallet: &str,
         storage_wallet: &str,
         fee_micro: u64,
+        block_ts_ms: u64,
     ) -> Result<FileFeeEffect, LedgerError> {
         if fee_micro != crate::files::FILE_FEE_MICRO {
             return Err(LedgerError::Invalid(format!(
@@ -1568,7 +1608,7 @@ impl Ledger {
 
         let from_k = from.into_bytes();
         let fb = balances.get(&from_k).copied().unwrap_or(0);
-        let locked_sum = self.locked_balance_micro(from_wallet.trim(), ledger_now_ms())?;
+        let locked_sum = self.locked_balance_micro(from_wallet.trim(), u128::from(block_ts_ms))?;
         if fb.saturating_sub(locked_sum) < fee_micro {
             return Err(LedgerError::InsufficientFunds);
         }
@@ -1648,6 +1688,7 @@ impl Ledger {
         tx_hashes: &[String],
         producer_id: &str,
         reward_micro: u64,
+        block_ts_ms: u64,
     ) -> Result<String, LedgerError> {
         if txs.len() != tx_hashes.len() {
             return Err(LedgerError::Invalid("txs/tx_hashes length mismatch".into()));
@@ -1696,7 +1737,7 @@ impl Ledger {
                     let to = to_wallet.trim().to_ascii_lowercase();
                     let from_k = from.as_bytes().to_vec();
                     let to_k = to.as_bytes().to_vec();
-                    let locked_sum = self.locked_balance_micro(&from, ledger_now_ms())?;
+                    let locked_sum = self.locked_balance_micro(&from, u128::from(block_ts_ms))?;
                     let fb = balances.get(&from_k).copied().unwrap_or(0);
                     let spendable = fb.saturating_sub(locked_sum);
                     if spendable < *amount_micro {
@@ -1751,7 +1792,7 @@ impl Ledger {
                             "image_id": image_id,
                             "receipt_hash_hex": receipt_hash_hex,
                             "journal_hash_hex": hex::encode(journal_hash),
-                            "ts_ms": ledger_now_ms(),
+                            "ts_ms": block_ts_ms,
                         }))
                         .map_err(|e| LedgerError::Invalid(format!("zk_verified_json:{e}")))?;
                         meta_batch.insert(zk_key, self.encrypt_value(&v)?);
@@ -1771,7 +1812,7 @@ impl Ledger {
                             task.processed_by =
                                 Some(env.sig.ed25519_pubkey_hex.trim().to_ascii_lowercase());
                             task.processed_receipt_hash_hex = Some(receipt_hash_hex);
-                            task.processed_at_ms = Some(ledger_now_ms());
+                            task.processed_at_ms = Some(u128::from(block_ts_ms));
                             let bytes = serde_json::to_vec(&task).map_err(|e| {
                                 LedgerError::Invalid(format!("ai_workload_json:{e}"))
                             })?;
@@ -1827,6 +1868,7 @@ impl Ledger {
                         from_wallet,
                         storage_wallet,
                         *fee_micro,
+                        block_ts_ms,
                     )?;
                     dirty_balances.insert(effect.from_key);
                     dirty_balances.insert(effect.treasury_key);
@@ -1854,6 +1896,7 @@ impl Ledger {
                         capabilities,
                         *tflops_declared,
                         block_height,
+                        block_ts_ms,
                         &mut workers_registry_batch,
                     )?;
                     workers_registry_dirty = true;
@@ -2042,7 +2085,7 @@ impl Ledger {
         let treasury_wallet = treasury_wallet.unwrap_or_default();
         let audit = serde_json::json!({
             "v": 1,
-            "ts_ms": ledger_now_ms(),
+            "ts_ms": self.now_ms(),
             "action": "block_reward_v1",
             "block_height": block_height,
             "producer_id": producer,
@@ -2195,7 +2238,7 @@ impl Ledger {
 
         let applied_k = Self::remote_tx_applied_meta_key(tx_hash);
 
-        let now_ms = ledger_now_ms();
+        let now_ms = self.now_ms();
         let locked_sum = self.locked_balance_micro(&from, now_ms)?;
         let res: Result<bool, TransactionError<sled::Error>> = (&self.meta, &self.balances)
             .transaction(|(m, b)| {
@@ -2308,7 +2351,7 @@ impl Ledger {
         if applied {
             let audit = serde_json::json!({
                 "v": 1,
-                "ts_ms": ledger_now_ms(),
+                "ts_ms": self.now_ms(),
                 "action": "remote_transfer_apply_v1",
                 "tx_hash": tx_hash,
                 "from_wallet": from,
@@ -2420,7 +2463,7 @@ impl Ledger {
         if applied {
             let audit = serde_json::json!({
                 "v": 1,
-                "ts_ms": ledger_now_ms(),
+                "ts_ms": self.now_ms(),
                 "action": "remote_faucet_apply_v1",
                 "event_id": event_id,
                 "to_wallet": w,
@@ -2592,7 +2635,7 @@ impl Ledger {
         if granted {
             let audit = serde_json::json!({
                 "v": 1,
-                "ts_ms": ledger_now_ms(),
+                "ts_ms": self.now_ms(),
                 "action": "genesis_guardian_grant_v1",
                 "wallet": w,
                 "amount_micro": GENESIS_GUARDIAN_GRANT_MICRO,
@@ -2784,7 +2827,7 @@ impl Ledger {
         }
         let w_k = w.as_bytes().to_vec();
         let stake_k = Self::wallet_stake_meta_key(&w);
-        let now_ms = ledger_now_ms();
+        let now_ms = self.now_ms();
         // Existing vest locks still apply to the liquid balance.
         let locked_sum = self.locked_balance_micro(&w, now_ms)?;
         let nonce_key = Self::wallet_nonce_meta_key(&w);
@@ -2891,7 +2934,7 @@ impl Ledger {
             return Err(LedgerError::Invalid("amount must be > 0".into()));
         }
         let w_k = w.as_bytes().to_vec();
-        let now_ms = ledger_now_ms();
+        let now_ms = self.now_ms();
         let locked_sum = self.locked_balance_micro(&w, now_ms)?;
         let nonce_key = Self::wallet_nonce_meta_key(&w);
         let res: Result<(), TransactionError<sled::Error>> =
@@ -3148,6 +3191,7 @@ impl Ledger {
         capabilities: &[String],
         tflops_declared: f64,
         block_height: u64,
+        block_ts_ms: u64,
         batch: &mut sled::Batch,
     ) -> Result<(), LedgerError> {
         crate::workers::validate_worker_register_fields(
@@ -3180,7 +3224,7 @@ impl Ledger {
                 caps,
                 tflops_declared,
                 block_height,
-                ledger_now_ms(),
+                u128::from(block_ts_ms),
             )
         };
         let bytes = serde_json::to_vec(&rec)
@@ -3588,7 +3632,13 @@ impl Ledger {
         self.db.clone()
     }
 
+    /// Opens the ledger on the host's wall clock.
     pub fn open(path: &str) -> Result<Self, LedgerError> {
+        Self::open_with_clock(path, LedgerClock::system())
+    }
+
+    /// Opens the ledger reading time from `clock`. See [`LedgerClock`].
+    pub fn open_with_clock(path: &str, clock: LedgerClock) -> Result<Self, LedgerError> {
         let db = sled::open(path)?;
         // Keep the JSON snapshot *inside* the DB dir (TET_DB_DIR) so that deleting
         // the DB also removes the snapshot (clean-restart correctness). sled opens
@@ -3677,6 +3727,7 @@ impl Ledger {
             db,
             enc_key,
             snapshot_dir,
+            clock,
         };
         ledger.ensure_db_magic(strict)?;
         ledger.maybe_migrate_stevemon_scale()?;
@@ -4010,7 +4061,7 @@ impl Ledger {
                 .unwrap_or(0);
             // Ensure we always have ts_ms for UI sorting/labeling (even legacy events).
             if ts_ms == 0 {
-                let now = ledger_now_ms();
+                let now = self.now_ms();
                 if let Some(obj) = record.as_object_mut() {
                     obj.insert("ts_ms".to_string(), serde_json::json!(now));
                 }
@@ -4352,9 +4403,12 @@ impl Ledger {
         let pool_key = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
         let treasury_key = treasury_wallet_id.as_bytes().to_vec();
         let reserve_key = WALLET_PROTOCOL_RESERVE.as_bytes().to_vec();
-        let now_ms = ledger_now_ms();
-        let unlock_at_ms = now_ms.saturating_add(founder_genesis_cliff_ms());
-        let genesis_hash = deterministic_genesis_hash(&founder, &treasury_wallet_id);
+        // Spec §1, design 3: the unlock is a genesis parameter, `genesis_time_ms + cliff`, so every
+        // node holds the same value whenever it first booted. The node clock plays no part.
+        let genesis = crate::genesis::GenesisParams::from_env_with(&founder, &treasury_wallet_id)
+            .map_err(LedgerError::Invalid)?;
+        let unlock_at_ms = u128::from(genesis.founder_unlock_at_ms());
+        let genesis_hash = genesis.hash();
 
         let res: Result<GenesisAllocationSummary, TransactionError<sled::Error>> =
             (&self.meta, &self.balances).transaction(|(m, b)| {
@@ -4456,7 +4510,7 @@ impl Ledger {
 
         let audit = serde_json::json!({
             "v": 1,
-            "ts_ms": ledger_now_ms(),
+            "ts_ms": self.now_ms(),
             "action": "genesis_allocation",
             "genesis_hash": deterministic_genesis_hash(&summary.founder_wallet_id, &treasury_wallet_id),
             "genesis_tokenomics": "fixed_supply_25_founder_50_worker_pool_25_treasury",
@@ -4657,7 +4711,7 @@ impl Ledger {
     }
 
     pub fn locked_balance_micro_now(&self, peer: &str) -> Result<u64, LedgerError> {
-        self.locked_balance_micro(peer, ledger_now_ms())
+        self.locked_balance_micro(peer, self.now_ms())
     }
 
     /// Balance that may be debited by transfers (including DEX escrow locks).
@@ -4668,7 +4722,7 @@ impl Ledger {
     }
 
     pub fn spendable_balance_micro_now(&self, peer: &str) -> Result<u64, LedgerError> {
-        self.spendable_balance_micro(peer, ledger_now_ms())
+        self.spendable_balance_micro(peer, self.now_ms())
     }
 
     pub fn fee_total_micro(&self) -> Result<u64, LedgerError> {
@@ -4758,7 +4812,7 @@ impl Ledger {
         if last == 0 {
             return 0;
         }
-        let now = ledger_now_ms() as u64;
+        let now = self.now_ms() as u64;
         let elapsed = now.saturating_sub(last);
         TARGET_BLOCK_TIME_MS.saturating_sub(elapsed)
     }
@@ -4979,7 +5033,7 @@ impl Ledger {
             Ok(out) => {
                 let audit = serde_json::json!({
                     "v": 1,
-                    "ts_ms": ledger_now_ms(),
+                    "ts_ms": self.now_ms(),
                     "action": "initial_faucet_airdrop_v1",
                     "wallet": w,
                     "credited_micro": amt,
@@ -5105,7 +5159,7 @@ impl Ledger {
                 Ok(()) => {
                     let audit = serde_json::json!({
                         "v": 1,
-                        "ts_ms": ledger_now_ms(),
+                        "ts_ms": self.now_ms(),
                         "action": "admin_rest_faucet_v1",
                         "wallet": w,
                         "credited_micro": amount_micro,
@@ -5144,7 +5198,7 @@ impl Ledger {
                         ));
                     }
 
-                    let now_ms = ledger_now_ms() as u64;
+                    let now_ms = self.now_ms() as u64;
                     let mut ip_row = FaucetIpRlV1 {
                         v: 1,
                         grant_ts_ms: vec![],
@@ -5214,7 +5268,7 @@ impl Ledger {
                 let credited_micro = amount_micro;
                 let audit = serde_json::json!({
                     "v": 1,
-                    "ts_ms": ledger_now_ms(),
+                    "ts_ms": self.now_ms(),
                     "action": "admin_rest_faucet_v1",
                     "wallet": w,
                     "credited_micro": credited_micro,
@@ -5521,7 +5575,7 @@ impl Ledger {
         let w_key = worker_wallet.trim().as_bytes().to_vec();
         let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
 
-        let now_ms = ledger_now_ms();
+        let now_ms = self.now_ms();
         let unlock_at_ms = now_ms.saturating_add(worker_reward_vest_duration_ms());
 
         let res: Result<u64, TransactionError<sled::Error>> =
@@ -5948,7 +6002,7 @@ impl Ledger {
                     META_INFERENCE_BLOCK_HEIGHT,
                     self.encrypt_value(&u64_to_bytes(next_infer_h))?,
                 )?;
-                let wall_now = u64::try_from(ledger_now_ms()).unwrap_or(u64::MAX);
+                let wall_now = u64::try_from(self.now_ms()).unwrap_or(u64::MAX);
                 m.insert(
                     META_INFER_CONSENSUS_LAST_MS,
                     self.encrypt_value(&u64_to_bytes(wall_now))?,
@@ -5999,7 +6053,7 @@ impl Ledger {
                 "payer wallet must be 64 hex chars".into(),
             ));
         }
-        let ts_ms = u64::try_from(ledger_now_ms()).unwrap_or(u64::MAX);
+        let ts_ms = u64::try_from(self.now_ms()).unwrap_or(u64::MAX);
         let row = AiInferHistoryRowV1 {
             v: 1,
             payer_wallet: w.clone(),
@@ -6092,7 +6146,7 @@ impl Ledger {
             return Err(LedgerError::Invalid("zero CHF amount".into()));
         }
         // AML circuit breaker: max 1,000 CHF per wallet per 24h.
-        let day = day_since_epoch();
+        let day = u64::try_from(self.now_ms() / 86_400_000).unwrap_or(u64::MAX);
         let mut aml_k = META_AML_CHF_PREFIX.to_vec();
         aml_k.extend_from_slice(wallet.trim().as_bytes());
         aml_k.extend_from_slice(b":");
@@ -6235,7 +6289,7 @@ impl Ledger {
         let from_k = from.as_bytes().to_vec();
         let to_k = to.as_bytes().to_vec();
 
-        let now_ms = ledger_now_ms();
+        let now_ms = self.now_ms();
         let locked_sum = self.locked_balance_micro(from, now_ms)?;
         let locked_until = self.presale_locked_until_ms(from).unwrap_or(0);
         if locked_until > 0 && now_ms < locked_until {
@@ -6380,7 +6434,7 @@ impl Ledger {
         let to_k = to.as_bytes().to_vec();
         let pool_k = WALLET_SYSTEM_WORKER_POOL.as_bytes().to_vec();
 
-        let now_ms = ledger_now_ms();
+        let now_ms = self.now_ms();
         // `TransactionalTree` has no `.iter()` — read vest locks on the real tree before txn.
         let locked_sum = self.locked_balance_micro(from, now_ms)?;
         // Pre-sale transfer lock: allow burn-only while locked (spend but not sell).
@@ -6529,7 +6583,7 @@ impl Ledger {
         })?;
         let audit = serde_json::json!({
             "v": 1,
-            "ts_ms": ledger_now_ms(),
+            "ts_ms": self.now_ms(),
             "action": "transfer",
             "from_wallet": from,
             "to_wallet": to,

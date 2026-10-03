@@ -28,6 +28,9 @@ trap cleanup EXIT
 
 CHAIN_ID="tet-discovery-probe-1"
 TREASURY="fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321"
+# A genesis parameter since Phase 1: it is in the genesis hash, so the verifier in steps 3-4 must use
+# the same value as the node, or it derives a different chain and refuses the signature.
+CLIFF_MS=0
 TREASURY_B="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 start_node() {
@@ -45,7 +48,7 @@ start_node() {
     RISC0_SKIP_BUILD=1 \
     TET_CHAIN_ID="$CHAIN_ID" \
     TET_TREASURY_ADDRESS="$treasury" \
-    TET_FOUNDER_CLIFF_MS=0 \
+    TET_FOUNDER_CLIFF_MS="$CLIFF_MS" \
     TET_ADMIN_API_KEY=probe-admin-key \
     "$CORE" >"$dbdir/node.log" 2>&1 &
   NODE_PID=$!
@@ -93,11 +96,11 @@ DISCOVERED_HASH=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))
 
 # 3. tet-core's verifier accepts it, with the node's own configuration
 env -u TET_GENESIS_HASH TET_CHAIN_ID="$CHAIN_ID" TET_TREASURY_ADDRESS="$TREASURY" \
-  "$CLI" agent verify --sig "$WORK/signed/payload.bin.sig.json" --payload "$WORK/signed/payload.bin"
+  TET_FOUNDER_CLIFF_MS="$CLIFF_MS" "$CLI" agent verify --sig "$WORK/signed/payload.bin.sig.json" --payload "$WORK/signed/payload.bin"
 
 # 4. and refuses on a different chain id — otherwise step 3 proves nothing about the binding
 if env -u TET_GENESIS_HASH TET_CHAIN_ID="tet-some-other-chain" TET_TREASURY_ADDRESS="$TREASURY" \
-     "$CLI" agent verify --sig "$WORK/signed/payload.bin.sig.json" >/dev/null 2>&1; then
+     TET_FOUNDER_CLIFF_MS="$CLIFF_MS" "$CLI" agent verify --sig "$WORK/signed/payload.bin.sig.json" >/dev/null 2>&1; then
   echo "verify returned 0 under a different chain id" >&2
   exit 1
 fi

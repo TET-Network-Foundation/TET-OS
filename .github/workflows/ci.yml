@@ -278,9 +278,23 @@ jobs:
             caac_complete_without_signature_is_rejected_and_writes_no_record
             bare_json_signed_envelope_is_rejected_off_mainnet
             envelope_signed_against_a_different_genesis_hash_is_rejected
+            unsigned_block_is_refused
+            block_signed_by_a_key_outside_the_genesis_set_is_refused
+            valid_signature_over_a_tampered_ts_is_refused
+            catch_up_refuses_a_block_without_a_valid_producer_signature
+            block_sync::gossip_refuses_a_block_without_a_valid_producer_signature
+            ts_altered_after_signing_breaks_block_id
+            block_id_has_no_field_boundary_collision
+            block_id_v3_golden_vector
+            block_time_not_after_parent_is_refused
+            block_ahead_of_the_clock_is_held_then_accepted
           )
+          # Phase 1 §1 replaced the wall-clock pin (`wallclock_time_changes_spendability_for_the_same_block`)
+          # with the fix's guards: the block's time decides, the node's clock does not.
           pins=(
-            wallclock_time_changes_spendability_for_the_same_block
+            same_block_applies_identically_at_any_node_clock
+            block_time_after_unlock_applies_identically_at_any_node_clock
+            founder_unlock_is_identical_whenever_a_node_first_boots
             state_root_paths_agree_on_unreadable_rows
             consensus_faucet_path_keeps_nodes_in_agreement
             ai_infer_settlement_direct_write_forks_state_root
@@ -369,6 +383,14 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         run: npm ci
+
+      # The UI derives the genesis hash itself (app/lib/chain_binding.ts), byte for byte from
+      # tet-core's payload. This checks the JS mirror against the dev golden vector that
+      # tet-core asserts too (genesis::tests::genesis_hash_v2_dev_golden_vector), so the two
+      # cannot drift apart silently. It had never run in CI before Phase 1 moved the payload to v2.
+      - if: needs.gate.outputs.code == 'true'
+        name: Genesis hash mirror matches tet-core's golden vector
+        run: node scripts/verify-genesis-hash.mjs
 
       - if: needs.gate.outputs.code == 'true'
         run: npm run build
