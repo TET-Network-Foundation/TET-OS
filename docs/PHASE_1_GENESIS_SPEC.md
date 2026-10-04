@@ -428,11 +428,15 @@ to generate, distribute or back up, and identities remain stable across restarts
 
 #### Two costs, both found by reading the code
 
-1. **`FileAnnounce.storage_node` must remain the block-plane `PeerId`.** It is a `PeerId` string
-   that `files_fetch` resolves on the block plane, and it is **bound into the signed envelope
-   pre-image** (`files/mod.rs:134-144`). Deriving it from the wrong plane does not fail loudly —
-   it invalidates envelopes at signature-verification time, far from the cause. Whatever populates
-   that field must be pinned to the block-plane identity explicitly, with a test.
+1. **`FileAnnounce.storage_node` is an opaque hint, not a `PeerId`** (decided 2026-10-04, option A
+   of [`PHASE1_ITEM4_STORAGE_NODE.md`](./PHASE1_ITEM4_STORAGE_NODE.md)). This cost first assumed
+   the field carries the block-plane `PeerId`. It never has: every client signs the literal
+   `"local"`, the node does not check its form, and `files_fetch` falls back to the first
+   connected block-plane peer. The field stays in the signed envelope pre-image
+   (`files/mod.rs:134-144`) as an unverified hint, and nothing pins it to a plane, so the
+   per-plane split cannot break it. Do not wire it to a `PeerId`. The envelope is gossiped and
+   already names `sender_wallet_id`, so a node `PeerId` there links a wallet to a machine
+   (option B, rejected). Finding which node holds a blob is a separate design item (`QUEUE.md`).
 
 2. **Every existing bootnode multiaddr must be republished.** Any plane whose label differs from
    today's derivation gets a new `PeerId`, including the block plane unless its label is chosen to
@@ -477,13 +481,11 @@ contract is free.
 - **`TET_PEER_ID` → `TET_NODE_LABEL`**, both readers (`StartupConfig`, `local_node_id_from_env`).
   The old name is **refused at startup** when non-empty, not read as an alias: ignoring it would
   move a node whose only label it was to `local-wallet`, a different producer id, in silence.
-- **`storage_node`: the node-side pin exists (`PlaneKeys::storage_node_peer_id()` = block plane,
-  with a guard), but nothing consumes it.** Cost 1 assumes something populates the field with this
-  node's `PeerId`. Nothing does: every client sends the literal `"local"`
-  (`tet-network/ui/app/lib/files.ts:196`, both interop scripts), the node does not check its form,
-  and `files_fetch` falls back to the first connected block-plane peer. The field cannot be wrong
-  by plane today because it is never a `PeerId` at all. Whether to wire it, and how, is a design
-  question and is left open: [`PHASE1_ITEM4_STORAGE_NODE.md`](./PHASE1_ITEM4_STORAGE_NODE.md).
+- **`storage_node`: option A, an opaque hint** (decided 2026-10-04, cost 1 above). No client
+  sends a `PeerId` there (`tet-network/ui/app/lib/files.ts:196`, both interop scripts send
+  `"local"`), so there is nothing to pin. The draft's `PlaneKeys::storage_node_peer_id()` helper,
+  its startup log field and its guard were removed with the decision. Nothing read them, and a
+  tested "this is the storage-node PeerId" helper would invite wiring option B.
 
 ### 2.5 Consensus-route all remaining balance writes
 

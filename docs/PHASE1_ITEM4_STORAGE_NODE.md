@@ -5,6 +5,14 @@ session that built the item on `phase1-item-4-per-plane-keys`. The per-plane key
 `TET_NODE_LABEL` rename are implemented; **this one part of the row is not**, because the code
 does not match what the spec assumes about it.
 
+## Decision (2026-10-04): option A
+
+`storage_node` stays an opaque, unverified hint; clients keep sending `"local"`, and the signed
+envelope does not change. The `storage_node_peer_id()` helper, its startup log field and its guard
+were removed before merge. Spec §2.4 cost 1 is rewritten to match. Finding which node holds a blob
+without a machine identity in a gossiped envelope is a separate design item in `QUEUE.md`. The text
+below is the question as it was put.
+
 ## What the spec says
 
 `PHASE_1_GENESIS_SPEC.md` §2.4, cost 1:
@@ -36,7 +44,7 @@ What does depend on it is **availability**. With more than a handful of peers, "
 connected peer" usually asks a node that does not hold the blob. It answers `found=false` and the
 receiver gets a 404.
 
-## What this branch does about it
+## What this branch did about it (before the decision)
 
 - `PlaneKeys::storage_node_peer_id()` returns the block-plane `PeerId`. The guard
   `storage_node_is_the_block_plane_peer_id` pins it, so if the field is ever wired, the identity it

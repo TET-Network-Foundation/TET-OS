@@ -294,7 +294,6 @@ jobs:
             plane_keys_refuse_a_non_ed25519_root
             nexus_and_ledger_swarms_use_their_own_plane_identity
             block_sync::block_swarm_is_reached_at_its_plane_peer_id
-            storage_node_is_the_block_plane_peer_id
             retired_tet_peer_id_env_is_refused
             node_label_is_read_from_tet_node_label
           )

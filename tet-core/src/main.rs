@@ -378,11 +378,10 @@ async fn main() -> Result<(), AnyErr> {
             Ok(keys) => {
                 use crate::p2p_keystore::Plane;
                 log::info!(
-                    "[startup] keystore loaded, block_peer_id={} nexus_peer_id={} ledger_peer_id={} storage_node={}",
+                    "[startup] keystore loaded, block_peer_id={} nexus_peer_id={} ledger_peer_id={}",
                     keys.peer_id(Plane::Block),
                     keys.peer_id(Plane::Nexus),
-                    keys.peer_id(Plane::Ledger),
-                    keys.storage_node_peer_id()
+                    keys.peer_id(Plane::Ledger)
                 );
                 crate::p2p_keystore::log_peer_id_banner(&keys, &config.p2p_listen);
                 Some(keys)

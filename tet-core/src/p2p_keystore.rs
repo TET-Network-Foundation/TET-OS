@@ -160,13 +160,6 @@ impl PlaneKeys {
     pub fn peer_id(&self, plane: Plane) -> PeerId {
         PeerId::from(self.keypair(plane).public())
     }
-
-    /// The `PeerId` a `FileAnnounce.storage_node` names for this node. `files_fetch` resolves that
-    /// field on the block plane and it is inside the signed envelope pre-image, so it is the
-    /// block-plane identity and nothing else.
-    pub fn storage_node_peer_id(&self) -> PeerId {
-        self.peer_id(Plane::Block)
-    }
 }
 
 /// Log bootnode hints for operators (docker-compose / `TET_BOOTNODES`).

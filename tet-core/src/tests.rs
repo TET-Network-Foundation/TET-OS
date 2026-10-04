@@ -4267,18 +4267,6 @@ async fn nexus_and_ledger_swarms_use_their_own_plane_identity() {
     assert_ne!(nexus_id, nm.local_peer_id(), "two planes, one PeerId");
 }
 
-/// `FileAnnounce.storage_node` is resolved by `files_fetch` on the block plane and sits inside the
-/// signed envelope pre-image, so the identity a node gives for it is its block-plane PeerId.
-#[test]
-fn storage_node_is_the_block_plane_peer_id() {
-    use crate::p2p_keystore::{P2pKeystore, Plane};
-    let tmp = tempfile::tempdir().unwrap();
-    let keys = P2pKeystore::load_or_create(tmp.path()).unwrap().plane_keys().unwrap();
-    assert_eq!(keys.storage_node_peer_id(), keys.peer_id(Plane::Block));
-    assert_ne!(keys.storage_node_peer_id(), keys.peer_id(Plane::Nexus));
-    assert_ne!(keys.storage_node_peer_id(), keys.peer_id(Plane::Ledger));
-}
-
 /// `TET_PEER_ID` was renamed `TET_NODE_LABEL`. A node still setting it must not start, because
 /// ignoring it would change its producer id to `local-wallet` without a word. Empty was ignored
 /// before the rename and still is.
