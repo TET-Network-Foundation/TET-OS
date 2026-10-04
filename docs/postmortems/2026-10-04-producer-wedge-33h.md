@@ -112,11 +112,55 @@ What wedged the loop this time is not known yet. The evidence is on Helsinki
 accept backlog). The refactor is queued as a **design-first, read-only** item in
 [`QUEUE.md`](../QUEUE.md) § Main (testnet) items, and that design starts by reading this evidence.
 
+## Checked hypothesis: did losing its only peer stop the producer?
+
+During the live negative control on 2026-10-04, Nuremberg was stopped on purpose at **20:51:01**,
+and Helsinki stopped producing at **80141**. That suggested a hypothesis: the producer wedges when
+its only peer disconnects, and Nuremberg's stale probe had been restarting it for days. Both logs
+were read to check it.
+
+**Today, 20:51: a different failure, and not a wedge.** Helsinki logged
+`[p2p][mdns] disconnected peer_id=12D3KooWSam6…` (Nuremberg) 0.25 s after the stop, and from then
+on, every 12 s:
+
+```
+[consensus] auto-mine gated: synced=false active=false lag_blocks=0 catch_up_in_progress=false
+```
+
+The event loop kept running (normal log volume, no `swarm-health STALLED`, and the 180 s self-exit
+correctly did not fire), and REST answered every minute. The **sync gate** treats a producer with no
+peers as unsynced and stops it mining. Helsinki is the only validator, so **a follower going down
+halts the chain**. The test itself caused about **13 minutes without blocks** (80142 came at
+21:03:51, after Nuremberg was started again). The new probe behaved as designed: four `WAITING`
+runs, a restart at 320 s with the logs saved first (`/root/tet-wedge-20261004T205650Z.log`), then
+the cooldown. A restart cannot reopen a gate that is waiting for a peer. Tracked as **#28**.
+
+**Oct 3, 06:25: not triggered by a disconnect. Refuted.** In the saved 33 h log:
+
+- `sync_hello peers=1` at 06:24:17, 06:24:33, 06:24:48, 06:25:04 and **06:25:07.94**. There is no
+  disconnect or `ConnectionClosed` between 06:00 and 06:30.
+- `auto-mined block height=78479` at 06:24:58: production was normal until the end.
+- The event loop's last tick was about **06:25:09.7** (`STALLED age_ms=100999` at 06:26:50). There
+  is no `auto-mine gated` line. This was a dead loop, not a closed gate.
+- **Nuremberg restarted nothing before the wedge.** Since its provisioning on 09-30 its probe had
+  3,863 OK runs, one UNHEALTHY (its first boot), and zero restarts. All 33 of its restarts came
+  after 06:30, as a consequence of the wedge. "Restarted hourly for days" is refuted.
+
+**A lead for the refactor design.** At the moment of the wedge the **auto-mine task went silent
+too**. It logs every 12 s ("auto-mined" or "gated"), and its next line, due at about 06:25:10,
+never came. Only the watchdog, which reads lock-free atomics, kept logging. The last thing the swarm
+loop did was handle a `sync_hello` (`p2p.rs:1079`). That fits the swarm loop blocking while it holds
+something auto-mine also needs, such as a lock on the ledger or the block-sync board. It is a lead,
+not a proof, and the design item should start there.
+
 ## Lessons
 
 - **A safety net that depends on its environment needs a test in that environment.** The watchdog
   was correct under systemd and did nothing once the deployment changed underneath it.
 - **Restart on the failure you can't read, not only the one you can.** A hang that takes the
   health endpoint down with it is a wedge, not a reason to stop checking.
+- **A negative control on production is itself a change to production.** Stopping the follower
+  halted the chain through a dependency nobody had written down (#28). The test found it, and it
+  cost 13 minutes.
 - **An alert is finished when a person reads it.** The alert fired within 60 s; the human channel
   added 33 h.
