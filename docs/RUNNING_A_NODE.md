@@ -546,7 +546,10 @@ reports the message invalid to gossipsub, which costs the *publisher* peer score
 relying on either.
 
 **Retention.** A conversation keeps its newest **5** messages; older ones are deleted from the
-store, not hidden. Override with `TET_TMAIL_RETAIN_PER_CONVERSATION`.
+store, not hidden. Override with `TET_TMAIL_RETAIN_PER_CONVERSATION`. Anonymous mail has no
+sender to group by, so each anonymous message is its own conversation (keyed by its nullifier).
+A receiver keeps at most **100** anonymous messages in total
+(`TET_TMAIL_ANON_RETAIN_PER_RECEIVER`). The TTL applies to both.
 
 #### Multi-node
 

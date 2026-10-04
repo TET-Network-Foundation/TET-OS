@@ -8040,6 +8040,131 @@ fn at7_a_pruned_message_is_not_restored_by_re_gossip() {
     assert_eq!(store.get_inbox(&receiver, 50).len(), 5, "still five");
 }
 
+/// An anonymous envelope whose announced journal is consistent with it (ephemeral, receiver,
+/// bucket) and carries `nullifier`. No receipt exists: the store and the metadata check never pull
+/// one, and that is all these retention tests exercise.
+fn anon_env_with_nullifier_for_tests(
+    eph_words: &str,
+    ephemeral: &str,
+    receiver: &str,
+    nullifier: [u8; 32],
+    msg_id: &str,
+    sent_at_ms: u64,
+) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    let journal = nexus_protocol::TmailAnonMembershipV1 {
+        journal_kind: nexus_protocol::TMAIL_ANON_JOURNAL_KIND,
+        merkle_root: [0x11; 32],
+        nullifier,
+        ephemeral_pubkey_bytes: hex::decode(ephemeral).unwrap().try_into().unwrap(),
+        receiver_wallet_bytes: hex::decode(receiver).unwrap().try_into().unwrap(),
+        bucket_index: nexus_protocol::tmail_bucket_index_v1(sent_at_ms),
+    };
+    let words: Vec<u32> = risc0_zkvm::serde::to_vec(&journal).unwrap();
+    let journal_bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let mut env = signed_tmail_env_for_tests(
+        eph_words,
+        ephemeral,
+        receiver,
+        msg_id,
+        tmail_flags_for_tests(false),
+        None,
+    );
+    env.sent_at_ms = sent_at_ms;
+    env.flags.anonymous = true;
+    env.sender_wallet_id = crate::tmail::envelope::ANONYMOUS_SENTINEL.to_string();
+    env.anonymous = Some(crate::tmail::envelope::TmailAnonymous {
+        ephemeral_wallet_id: ephemeral.to_string(),
+        anchor_proof: crate::tmail::envelope::TmailAnchorProof {
+            image_id_hex: "00".repeat(32),
+            journal_b64: base64::engine::general_purpose::STANDARD.encode(&journal_bytes),
+            receipt_sha256_hex: "ab".repeat(32),
+        },
+    });
+    resign_tmail_env_for_tests(&mut env, eph_words);
+    env
+}
+
+/// **SECURITY REGRESSION GUARD: anonymous mail is not one conversation.** Six members each send one
+/// anonymous message to the same receiver; all six are kept. Every anonymous envelope carries the
+/// same sentinel sender, so keying retention by sender made them one conversation and the sixth
+/// evicted the first. Anonymous mail is keyed by nullifier now.
+/// Negative control: `conversation_key` keyed by `sender_wallet_id` again → 5 retained, FAILED.
+#[test]
+fn anonymous_mail_from_six_members_is_all_retained() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let base = tmail_now_ms_for_tests();
+    let mut ids = Vec::new();
+    for i in 0..6u8 {
+        let (eph_words, ephemeral) = tmail_party_for_tests();
+        let env = anon_env_with_nullifier_for_tests(
+            &eph_words,
+            &ephemeral,
+            &receiver,
+            [i + 1; 32],
+            &format!("anon-member-{i}"),
+            base + u64::from(i) * 1000,
+        );
+        // The path gossip and REST take: metadata verification, then the store.
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).expect("consistent anonymous envelope");
+        assert!(store.store_tmail(&env).unwrap());
+        ids.push(env.msg_id);
+    }
+    for id in &ids {
+        assert!(
+            store.get_by_msg_id(id).is_some(),
+            "anonymous message {id} was evicted: six members, six messages, all must be kept"
+        );
+    }
+    assert_eq!(store.get_inbox(&receiver, 50).len(), 6);
+}
+
+/// **SECURITY REGRESSION GUARD: anonymous mail is capped per receiver.** Keying by nullifier makes
+/// every anonymous message its own conversation, so the per-conversation rule no longer bounds it;
+/// the per-receiver cap does. The 101st anonymous message evicts the oldest from the **store**
+/// (the read side caps too, so the inbox count alone could not catch a missing write-side cap).
+/// Negative control: drop the `enforce_anonymous_cap` call from `store_tmail` → the oldest stays,
+/// FAILED.
+#[test]
+fn anonymous_mail_is_capped_per_receiver() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (eph_words, ephemeral) = tmail_party_for_tests();
+    let cap = crate::tmail::store::ANON_RETAIN_PER_RECEIVER;
+    let base = tmail_now_ms_for_tests();
+    let mut ids = Vec::new();
+    for i in 0..=cap {
+        let mut nullifier = [0u8; 32];
+        nullifier[..8].copy_from_slice(&(i as u64 + 1).to_le_bytes());
+        let env = anon_env_with_nullifier_for_tests(
+            &eph_words,
+            &ephemeral,
+            &receiver,
+            nullifier,
+            &format!("anon-cap-{i}"),
+            base + i as u64,
+        );
+        assert!(store.store_tmail(&env).unwrap());
+        ids.push(env.msg_id);
+    }
+    assert!(
+        store.get_by_msg_id(&ids[0]).is_none() && store.is_retention_pruned(&ids[0]),
+        "the oldest of {} anonymous messages must be deleted from the store",
+        cap + 1
+    );
+    for id in &ids[1..] {
+        assert!(store.get_by_msg_id(id).is_some(), "message {id} is within the cap");
+    }
+    // Named mail is not counted against the anonymous cap.
+    let (sw, sender) = tmail_party_for_tests();
+    store_conversation_for_tests(&store, &sw, &sender, &receiver, 3, "named");
+    assert_eq!(store.get_inbox(&receiver, 500).len(), cap + 3);
+}
+
 /// Retention is **per conversation**, not per inbox: two counterparties keep five each.
 #[test]
 fn at7_a_retention_is_per_conversation_not_per_inbox() {
