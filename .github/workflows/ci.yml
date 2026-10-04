@@ -278,6 +278,7 @@ jobs:
             caac_complete_without_signature_is_rejected_and_writes_no_record
             bare_json_signed_envelope_is_rejected_off_mainnet
             envelope_signed_against_a_different_genesis_hash_is_rejected
+            anonymous_post_names_no_poster_to_the_node
             anonymous_mail_from_six_members_is_all_retained
             anonymous_mail_is_capped_per_receiver
           )
@@ -374,6 +375,13 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         run: npm run build
+
+      # The poster's half of the anonymous-send privacy guard: every request the real
+      # anon_poster.mjs makes is recorded, and none may name the poster. Plain Node, no build step.
+      # The node's half is `anonymous_post_names_no_poster_to_the_node` in the rust job.
+      - if: needs.gate.outputs.code == 'true'
+        name: anonymous send — the poster names itself to nobody
+        run: node scripts/anon_poster_guard.mjs
 
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --

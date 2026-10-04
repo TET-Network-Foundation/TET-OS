@@ -389,10 +389,15 @@ pub async fn get_tmail_anon_root(State(state): State<RestState>) -> Response {
         .into_response()
 }
 
-/// `GET /tmail/anon/path/:wallet_id` — the authentication path a member needs to build a proof.
+/// `GET /tmail/anon/path/:wallet_id` — the authentication path for one registered wallet.
 ///
 /// Serving this reveals only which leaf belongs to a **public** registration, which is already
 /// public. The secret never appears, and the path is useless without it.
+///
+/// **A client about to post anonymously must not call this.** The request names the wallet, so the
+/// node (and anything between) learns which member asked for a path just before an anonymous
+/// message appears. Posters page [`get_tmail_anon_leaves`] and compute the path locally. This route
+/// stays for operators and test scripts.
 pub async fn get_tmail_anon_path(
     State(state): State<RestState>,
     Path(wallet_id): Path<String>,
@@ -430,121 +435,67 @@ pub async fn get_tmail_anon_path(
         .into_response()
 }
 
-const _: fn() = || {
-    let _ = anon_registration_error_status;
-    let _: Option<TmailAnonRegistrationError> = None;
-};
+/// Query for [`get_tmail_anon_leaves`].
+#[derive(Debug, Deserialize)]
+pub struct AnonLeavesQuery {
+    /// Epoch whose tree to page through. Defaults to the current one; a future epoch is refused.
+    pub epoch: Option<u64>,
+    #[serde(default)]
+    pub offset: usize,
+    pub limit: Option<usize>,
+}
 
-/// `POST /tmail/anon/send` — start an anonymous send. **Returns `202` with a job id.**
+/// Most leaves one page of [`get_tmail_anon_leaves`] returns.
+pub const ANON_LEAVES_PAGE_MAX: usize = 4096;
+
+/// `GET /tmail/anon/leaves?epoch=&offset=&limit=` — every leaf of one epoch's tree, in leaf order.
 ///
-/// Proving takes ~33 s, so this cannot be a request that returns the result. The client polls
-/// `GET /tmail/anon/job/:job_id`.
+/// **This is how a poster gets its authentication path without telling the node who it is.** It
+/// downloads the whole tree, finds its own commitment locally and computes the path itself. The
+/// request names no wallet, no commitment and no index, so the node learns nothing about which
+/// member is about to post. [`get_tmail_anon_path`] is the opposite: it is keyed by wallet id.
 ///
-/// Two states are reported separately on purpose:
-///
-/// - `registration_propagating` — the sender's own registration is not in this node's tree yet.
-///   It resolves at the **next epoch boundary**, which is deterministic, so the response carries
-///   `eligible_at_ms` and the UI shows a countdown rather than a spinner. Send is refused until
-///   then, rather than queued, because a queued send would silently produce a proof against a root
-///   the sender is not in.
-/// - `proving` — the proof is being built.
-///
-/// Collapsing them would tell the user "wait" without saying whether *they* are not ready or the
-/// *machine* is, which are different problems with different fixes.
-pub async fn post_tmail_anon_send(
+/// An epoch's leaf set is immutable once the epoch has started (a registration admitted during
+/// epoch `e` enters from `e + 1`), so paging a fixed `epoch` by `offset` is consistent across
+/// requests. The response carries that epoch's root so the client can check its rebuilt tree.
+pub async fn get_tmail_anon_leaves(
     State(state): State<RestState>,
-    Json(req): Json<serde_json::Value>,
+    axum::extract::Query(q): axum::extract::Query<AnonLeavesQuery>,
 ) -> Response {
-    let wallet = req
-        .get("wallet_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if !is_wallet_id_64hex(&wallet) {
-        return (StatusCode::BAD_REQUEST, "wallet_id must be 64 hex chars").into_response();
+    let current = state.tmail.anon_current_epoch();
+    let epoch = q.epoch.unwrap_or(current);
+    if epoch > current {
+        return (StatusCode::BAD_REQUEST, "epoch is in the future").into_response();
     }
-    if state.tmail.get_stored_anon(&wallet).is_none() {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "ok": false,
-                "state": "not_registered",
-                "error": "this wallet has no anonymity-set registration on this node",
-                "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
-            })),
-        )
-            .into_response();
-    }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
-
-    if let Some(eligible_at_ms) =
-        crate::tmail::anon::registration_eligible_at_ms(&state.tmail, &wallet)
-    {
-        return (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({
-                "ok": true,
-                "state": "registration_propagating",
-                "eligible_at_ms": eligible_at_ms,
-                "seconds_remaining": eligible_at_ms.saturating_sub(now) / 1000,
-                "note": "Your registration enters this node's anonymity set at the next epoch \
-                         boundary. Sending is disabled until then.",
-            })),
-        )
-            .into_response();
-    }
-
-    let job_id = uuid::Uuid::new_v4().to_string();
-    let job = crate::tmail::anon::AnonSendJob {
-        job_id: job_id.clone(),
-        state: crate::tmail::anon::AnonSendJobState::Proving { started_at_ms: now },
-        created_at_ms: now,
-    };
-    if let Ok(mut jobs) = state.anon_jobs.lock() {
-        jobs.insert(job_id.clone(), job.clone());
-    }
+    let leaves = state.tmail.anon_leaves_for_epoch(epoch);
+    let total = leaves.len();
+    let limit = q.limit.unwrap_or(ANON_LEAVES_PAGE_MAX).clamp(1, ANON_LEAVES_PAGE_MAX);
+    let start = q.offset.min(total);
+    let end = start.saturating_add(limit).min(total);
+    let epoch_ms = crate::tmail::store::TmailStore::anon_epoch_ms_public();
     (
-        StatusCode::ACCEPTED,
+        StatusCode::OK,
         Json(serde_json::json!({
             "ok": true,
-            "job_id": job_id,
-            "state": "proving",
-            "poll": format!("/tmail/anon/job/{job_id}"),
-            "expected_duration_ms": 33_000,
+            "epoch": epoch,
+            "merkle_root": hex::encode(state.tmail.anon_root_for_epoch(epoch)),
+            "depth": nexus_protocol::TET_ANON_MERKLE_DEPTH,
+            "total": total,
+            "offset": start,
+            "leaves": leaves[start..end].iter().map(hex::encode).collect::<Vec<_>>(),
+            "next_offset": (end < total).then_some(end),
+            "epoch_ms": epoch_ms,
+            "next_epoch_at_ms": (current + 1).saturating_mul(epoch_ms),
             "note": crate::tmail::anon::TMAIL_ANON_DISCLOSURE,
         })),
     )
         .into_response()
 }
 
-/// `GET /tmail/anon/job/:job_id` — poll an anonymous send.
-pub async fn get_tmail_anon_job(
-    State(state): State<RestState>,
-    Path(job_id): Path<String>,
-) -> Response {
-    let job = state
-        .anon_jobs
-        .lock()
-        .ok()
-        .and_then(|j| j.get(job_id.trim()).cloned());
-    match job {
-        Some(j) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "job": j }))).into_response(),
-        None => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({
-                "ok": false,
-                "job_id": job_id,
-                "error": "unknown job -- jobs are node-local and do not survive a restart",
-            })),
-        )
-            .into_response(),
-    }
-}
+const _: fn() = || {
+    let _ = anon_registration_error_status;
+    let _: Option<TmailAnonRegistrationError> = None;
+};
 
 /// `PUT /tmail/anon/receipt` — the sender deposits its membership receipt on its own node.
 ///

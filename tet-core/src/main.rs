@@ -678,7 +678,6 @@ async fn main() -> Result<(), AnyErr> {
         files_fetch_tx,
         tx_submit_tx,
         anon_register_tx,
-        anon_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         http_ratelimit: Arc::new(tokio::sync::Mutex::new(HttpRateLimit::new(config.http_rps))),
         workers: Arc::new(StdMutex::new(WorkerRegistry::default())),
         e2ee_jobs: Arc::new(StdMutex::new(crate::rest::E2eeJobQueue::default())),

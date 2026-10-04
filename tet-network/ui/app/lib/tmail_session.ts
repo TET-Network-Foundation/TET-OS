@@ -12,6 +12,11 @@ export type TmailKeySession = {
   x25519_pub: Uint8Array;
   mlkem_sk: Uint8Array;
   mlkem_pub: Uint8Array;
+  /**
+   * Anonymity-set member secret, `HKDF(bip39_seed, "tet-anon-member-v1")` (`anon_tree.mjs`).
+   * Proves membership; whoever holds it can post as this member. Same lifetime as the KEM keys.
+   */
+  anonMemberSecret: Uint8Array;
 };
 
 let session: TmailKeySession | null = null;
