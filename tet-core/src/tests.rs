@@ -190,7 +190,6 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         files_fetch_tx: None,
         tx_submit_tx: None,
         anon_register_tx: None,
-        anon_jobs: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         http_ratelimit: std::sync::Arc::new(tokio::sync::Mutex::new(
             crate::rest::HttpRateLimit::new(999),
         )),
@@ -8927,6 +8926,131 @@ fn at7_a_pruned_message_is_not_restored_by_re_gossip() {
     assert_eq!(store.get_inbox(&receiver, 50).len(), 5, "still five");
 }
 
+/// An anonymous envelope whose announced journal is consistent with it (ephemeral, receiver,
+/// bucket) and carries `nullifier`. No receipt exists: the store and the metadata check never pull
+/// one, and that is all these retention tests exercise.
+fn anon_env_with_nullifier_for_tests(
+    eph_words: &str,
+    ephemeral: &str,
+    receiver: &str,
+    nullifier: [u8; 32],
+    msg_id: &str,
+    sent_at_ms: u64,
+) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    let journal = nexus_protocol::TmailAnonMembershipV1 {
+        journal_kind: nexus_protocol::TMAIL_ANON_JOURNAL_KIND,
+        merkle_root: [0x11; 32],
+        nullifier,
+        ephemeral_pubkey_bytes: hex::decode(ephemeral).unwrap().try_into().unwrap(),
+        receiver_wallet_bytes: hex::decode(receiver).unwrap().try_into().unwrap(),
+        bucket_index: nexus_protocol::tmail_bucket_index_v1(sent_at_ms),
+    };
+    let words: Vec<u32> = risc0_zkvm::serde::to_vec(&journal).unwrap();
+    let journal_bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let mut env = signed_tmail_env_for_tests(
+        eph_words,
+        ephemeral,
+        receiver,
+        msg_id,
+        tmail_flags_for_tests(false),
+        None,
+    );
+    env.sent_at_ms = sent_at_ms;
+    env.flags.anonymous = true;
+    env.sender_wallet_id = crate::tmail::envelope::ANONYMOUS_SENTINEL.to_string();
+    env.anonymous = Some(crate::tmail::envelope::TmailAnonymous {
+        ephemeral_wallet_id: ephemeral.to_string(),
+        anchor_proof: crate::tmail::envelope::TmailAnchorProof {
+            image_id_hex: "00".repeat(32),
+            journal_b64: base64::engine::general_purpose::STANDARD.encode(&journal_bytes),
+            receipt_sha256_hex: "ab".repeat(32),
+        },
+    });
+    resign_tmail_env_for_tests(&mut env, eph_words);
+    env
+}
+
+/// **SECURITY REGRESSION GUARD: anonymous mail is not one conversation.** Six members each send one
+/// anonymous message to the same receiver; all six are kept. Every anonymous envelope carries the
+/// same sentinel sender, so keying retention by sender made them one conversation and the sixth
+/// evicted the first. Anonymous mail is keyed by nullifier now.
+/// Negative control: `conversation_key` keyed by `sender_wallet_id` again → 5 retained, FAILED.
+#[test]
+fn anonymous_mail_from_six_members_is_all_retained() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let base = tmail_now_ms_for_tests();
+    let mut ids = Vec::new();
+    for i in 0..6u8 {
+        let (eph_words, ephemeral) = tmail_party_for_tests();
+        let env = anon_env_with_nullifier_for_tests(
+            &eph_words,
+            &ephemeral,
+            &receiver,
+            [i + 1; 32],
+            &format!("anon-member-{i}"),
+            base + u64::from(i) * 1000,
+        );
+        // The path gossip and REST take: metadata verification, then the store.
+        crate::tmail::envelope::verify_tmail_envelope_v1(&env).expect("consistent anonymous envelope");
+        assert!(store.store_tmail(&env).unwrap());
+        ids.push(env.msg_id);
+    }
+    for id in &ids {
+        assert!(
+            store.get_by_msg_id(id).is_some(),
+            "anonymous message {id} was evicted: six members, six messages, all must be kept"
+        );
+    }
+    assert_eq!(store.get_inbox(&receiver, 50).len(), 6);
+}
+
+/// **SECURITY REGRESSION GUARD: anonymous mail is capped per receiver.** Keying by nullifier makes
+/// every anonymous message its own conversation, so the per-conversation rule no longer bounds it;
+/// the per-receiver cap does. The 101st anonymous message evicts the oldest from the **store**
+/// (the read side caps too, so the inbox count alone could not catch a missing write-side cap).
+/// Negative control: drop the `enforce_anonymous_cap` call from `store_tmail` → the oldest stays,
+/// FAILED.
+#[test]
+fn anonymous_mail_is_capped_per_receiver() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (eph_words, ephemeral) = tmail_party_for_tests();
+    let cap = crate::tmail::store::ANON_RETAIN_PER_RECEIVER;
+    let base = tmail_now_ms_for_tests();
+    let mut ids = Vec::new();
+    for i in 0..=cap {
+        let mut nullifier = [0u8; 32];
+        nullifier[..8].copy_from_slice(&(i as u64 + 1).to_le_bytes());
+        let env = anon_env_with_nullifier_for_tests(
+            &eph_words,
+            &ephemeral,
+            &receiver,
+            nullifier,
+            &format!("anon-cap-{i}"),
+            base + i as u64,
+        );
+        assert!(store.store_tmail(&env).unwrap());
+        ids.push(env.msg_id);
+    }
+    assert!(
+        store.get_by_msg_id(&ids[0]).is_none() && store.is_retention_pruned(&ids[0]),
+        "the oldest of {} anonymous messages must be deleted from the store",
+        cap + 1
+    );
+    for id in &ids[1..] {
+        assert!(store.get_by_msg_id(id).is_some(), "message {id} is within the cap");
+    }
+    // Named mail is not counted against the anonymous cap.
+    let (sw, sender) = tmail_party_for_tests();
+    store_conversation_for_tests(&store, &sw, &sender, &receiver, 3, "named");
+    assert_eq!(store.get_inbox(&receiver, 500).len(), cap + 3);
+}
+
 /// Retention is **per conversation**, not per inbox: two counterparties keep five each.
 #[test]
 fn at7_a_retention_is_per_conversation_not_per_inbox() {
@@ -10538,111 +10662,6 @@ fn s8_anonymous_envelope_journal_must_match_the_receiver() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// S8 step 4 — anonymous send as a job, and the two SENDER states.
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-async fn anon_send_response(
-    state: &crate::rest::RestState,
-    wallet: &str,
-) -> (StatusCode, Value) {
-    let resp = crate::rest::handlers::tmail::post_tmail_anon_send(
-        axum::extract::State(state.clone()),
-        axum::Json(serde_json::json!({ "wallet_id": wallet })),
-    )
-    .await;
-    let status = resp.status();
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    (status, serde_json::from_slice(&body).unwrap())
-}
-
-/// **The two sender states are distinct.** Before the epoch boundary the answer is
-/// `registration_propagating` with a deterministic countdown; after it, `proving` with a job id.
-///
-/// Collapsing them would tell the user "wait" without saying whether *they* are not ready or the
-/// *machine* is — different problems, different fixes, and only one of them has a known end time.
-#[tokio::test]
-async fn s8_anon_send_reports_propagating_then_proving() {
-    let _g = env_lock();
-    set_test_env_base();
-    // A 3 s epoch: long enough to observe the propagating state, short enough to wait out.
-    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "3000");
-    let ledger = std::sync::Arc::new(open_temp_ledger());
-    let state = rest_state_for_tests(ledger);
-    let (w, wallet) = tmail_party_for_tests();
-
-    // Not registered at all is a different answer again -- 409, not "wait".
-    let (status, body) = anon_send_response(&state, &wallet).await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["state"], Value::String("not_registered".into()));
-
-    state
-        .tmail
-        .register_anon(&signed_anon_registration_for_tests(&w, &wallet, &[1u8; 32], 1_000))
-        .unwrap();
-
-    // Registered, but not yet in the tree.
-    let (status, body) = anon_send_response(&state, &wallet).await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(
-        body["state"],
-        Value::String("registration_propagating".into()),
-        "before the epoch boundary the sender is not eligible"
-    );
-    let eligible_at = body["eligible_at_ms"].as_u64().expect("a deterministic instant");
-    assert!(
-        eligible_at > tmail_now_ms_for_tests(),
-        "the countdown target must be in the future"
-    );
-    assert!(
-        body["seconds_remaining"].as_u64().unwrap() <= 3,
-        "and within one epoch"
-    );
-    assert!(body["job_id"].is_null(), "no job is started while ineligible");
-
-    // Wait out the boundary.
-    tokio::time::sleep(std::time::Duration::from_millis(3200)).await;
-
-    let (status, body) = anon_send_response(&state, &wallet).await;
-    assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(
-        body["state"],
-        Value::String("proving".into()),
-        "once in the tree the send becomes a proving job"
-    );
-    let job_id = body["job_id"].as_str().expect("a job id").to_string();
-    assert_eq!(body["expected_duration_ms"].as_u64(), Some(33_000));
-
-    // The job is pollable.
-    let resp = crate::rest::handlers::tmail::get_tmail_anon_job(
-        axum::extract::State(state.clone()),
-        axum::extract::Path(job_id.clone()),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-    let json: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["job"]["job_id"], Value::String(job_id));
-    assert_eq!(json["job"]["state"]["state"], Value::String("proving".into()));
-}
-
-/// An unknown job id is a 404 that says why, rather than an empty 200 a client would read as
-/// "finished".
-#[tokio::test]
-async fn s8_unknown_anon_job_is_not_found() {
-    let _g = env_lock();
-    set_test_env_base();
-    let ledger = std::sync::Arc::new(open_temp_ledger());
-    let state = rest_state_for_tests(ledger);
-    let resp = crate::rest::handlers::tmail::get_tmail_anon_job(
-        axum::extract::State(state.clone()),
-        axum::extract::Path("no-such-job".to_string()),
-    )
-    .await;
-    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-}
-
 /// The eligibility instant is the epoch boundary, computed rather than guessed.
 #[test]
 fn s8_registration_eligibility_is_the_next_epoch_boundary() {
@@ -10671,6 +10690,265 @@ fn s8_registration_eligibility_is_the_next_epoch_boundary() {
         crate::tmail::anon::registration_eligible_at_ms(&store, &wallet).is_none(),
         "once in the tree there is nothing to wait for"
     );
+}
+
+/// `tet-network/ui/app/lib/anon_tree.mjs` must reproduce these byte for byte. The same values are
+/// pinned in `tet-network/ui/scripts/anon_poster_guard.mjs`; a change on either side fails one of
+/// the two, which is the point of a cross-language vector.
+#[test]
+fn anon_client_derivations_match_the_golden_vector() {
+    use sha2::{Digest as _, Sha256};
+    let c = |b: u8| nexus_protocol::tet_anon_commitment_v1(&[b; 32]);
+    assert_eq!(
+        hex::encode(c(7)),
+        "d1b67499baa9328884e4a9dcec455e95ba73d7720d62ccf750bf5a090b153eb1"
+    );
+    let tree = crate::tmail::anon::AnonMerkleTree::build(vec![c(1), c(2), c(3)]);
+    assert_eq!(
+        hex::encode(tree.root()),
+        "817ca6b003ce70734406be37a3ae6a3141e4f7f52eb57e82bfd699c4a2c000b8"
+    );
+    let path: Vec<u8> = tree.path(2).unwrap().concat();
+    assert_eq!(
+        hex::encode(Sha256::digest(&path)),
+        "2340a53722d8c4790d73d50f4aa1cf8f2bf4f718bee4f921083ceb0f5ca37051"
+    );
+    assert_eq!(
+        hex::encode(crate::tmail::anon::AnonMerkleTree::build(vec![]).root()),
+        "554bab803f49ba2b3018008f1ce581365ccc662db3c21964e3a6f15d325ef1a3"
+    );
+    assert_eq!(
+        hex::encode(nexus_protocol::tmail_ephemeral_seed_v1(&[7; 32], &[0xab; 32], 20_000)),
+        "2cabb7226c4dccf14bc47735b4e462f380241e2ef46ae00b0495943bad0c6599"
+    );
+}
+
+/// `GET /tmail/anon/leaves` pages one epoch's leaves in order, and the leaves rebuild the root it
+/// reports. A future epoch is refused rather than answered with a partial set.
+#[tokio::test]
+async fn anon_leaves_pages_reproduce_the_epoch_root() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "1000");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    for b in 1..=5u8 {
+        let (w, id) = tmail_party_for_tests();
+        state
+            .tmail
+            .register_anon(&signed_anon_registration_for_tests(&w, &id, &[b; 32], 1_000))
+            .unwrap();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+
+    let get = |q: crate::rest::handlers::tmail::AnonLeavesQuery| {
+        let state = state.clone();
+        async move {
+            let resp = crate::rest::handlers::tmail::get_tmail_anon_leaves(
+                axum::extract::State(state),
+                axum::extract::Query(q),
+            )
+            .await;
+            let status = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null))
+        }
+    };
+    let (status, first) = get(crate::rest::handlers::tmail::AnonLeavesQuery {
+        epoch: None,
+        offset: 0,
+        limit: Some(2),
+    })
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let epoch = first["epoch"].as_u64().unwrap();
+    assert_eq!(first["total"].as_u64(), Some(5));
+    let mut leaves: Vec<[u8; 32]> = Vec::new();
+    let mut page = first.clone();
+    loop {
+        for l in page["leaves"].as_array().unwrap() {
+            leaves.push(hex::decode(l.as_str().unwrap()).unwrap().try_into().unwrap());
+        }
+        let Some(next) = page["next_offset"].as_u64() else { break };
+        let (s, p) = get(crate::rest::handlers::tmail::AnonLeavesQuery {
+            epoch: Some(epoch),
+            offset: next as usize,
+            limit: Some(2),
+        })
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        assert_eq!(p["epoch"].as_u64(), Some(epoch));
+        page = p;
+    }
+    assert_eq!(leaves.len(), 5);
+    assert_eq!(
+        hex::encode(crate::tmail::anon::AnonMerkleTree::build(leaves).root()),
+        first["merkle_root"].as_str().unwrap(),
+        "the paged leaves must rebuild the root the node reports"
+    );
+    let (status, _) = get(crate::rest::handlers::tmail::AnonLeavesQuery {
+        epoch: Some(epoch + 10),
+        offset: 0,
+        limit: None,
+    })
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Everything the `log` crate emits while installed. Tests that read it hold `env_lock` and clear
+/// it first.
+static CAPTURED_LOG: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+struct CaptureLog;
+
+impl log::Log for CaptureLog {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if let Ok(mut v) = CAPTURED_LOG.lock() {
+            v.push(format!("{} {}", record.target(), record.args()));
+        }
+    }
+    fn flush(&self) {}
+}
+
+/// Install [`CaptureLog`] once per test process. `false` means another logger got there first, and
+/// a test that relies on reading the log must fail rather than pass on an empty capture.
+fn install_capture_log() -> bool {
+    static INSTALLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *INSTALLED.get_or_init(|| {
+        log::set_boxed_logger(Box::new(CaptureLog))
+            .map(|()| log::set_max_level(log::LevelFilter::Trace))
+            .is_ok()
+    })
+}
+
+/// **SECURITY REGRESSION GUARD: an anonymous post names no poster to the node.** Replays the exact
+/// request sequence `tet-network/ui/app/lib/anon_poster.mjs` makes (download the whole registry,
+/// deposit the receipt, send the envelope) through the real router, then looks for the poster's
+/// wallet id and registry commitment in everything the node saw or kept: the requests, the `log`
+/// output, the node's live log feed, and every sled tree except the registry, where the
+/// registration is public by design.
+///
+/// The client half is `scripts/anon_poster_guard.mjs`, which records what `anon_poster.mjs` sends.
+/// Negative controls: C1 adds the old `GET /tmail/anon/path/:wallet_id` call to the sequence →
+/// FAILED (request trace); C2 logs the served leaves in `get_tmail_anon_leaves` → FAILED (log).
+#[tokio::test]
+async fn anonymous_post_names_no_poster_to_the_node() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = EnvVarGuard::set("TET_TMAIL_ANON_EPOCH_MS", "1000");
+    assert!(install_capture_log(), "another logger is installed; this guard cannot see the log");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger.clone());
+    let mut node_log = state.log_tx.subscribe();
+
+    // The poster and two other members register. Registration is public and happens before posting.
+    let secret = [0x42u8; 32];
+    let (pw, poster) = tmail_party_for_tests();
+    state
+        .tmail
+        .register_anon(&signed_anon_registration_for_tests(&pw, &poster, &secret, 1_000))
+        .unwrap();
+    for b in [1u8, 2] {
+        let (w, id) = tmail_party_for_tests();
+        state
+            .tmail
+            .register_anon(&signed_anon_registration_for_tests(&w, &id, &[b; 32], 1_000))
+            .unwrap();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    let commitment = hex::encode(nexus_protocol::tet_anon_commitment_v1(&secret));
+    let (_rw, receiver) = tmail_party_for_tests();
+    CAPTURED_LOG.lock().unwrap().clear();
+
+    let router = crate::rest::routes::build_router(state.clone());
+    let mut trace: Vec<String> = Vec::new();
+    let mut call = |method: &'static str, uri: String, body: Option<Value>| {
+        let router = router.clone();
+        let body_s = body.map(|b| b.to_string()).unwrap_or_default();
+        trace.push(format!("{method} {uri} {body_s}"));
+        async move {
+            let req = axum::http::Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(body_s))
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        }
+    };
+
+    // 1. The whole registry. The client finds its own leaf locally.
+    let (status, set) = call("GET", "/tmail/anon/leaves".into(), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        set["leaves"].as_array().unwrap().iter().any(|l| l.as_str() == Some(commitment.as_str())),
+        "the poster is in the downloaded set"
+    );
+
+    // 2. Deposit the receipt (content-addressed), 3. send the envelope signed by the ephemeral.
+    let receipt = b"receipt-bytes-for-the-trace".to_vec();
+    let receipt_hash = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&receipt));
+    let (status, _) = call(
+        "PUT",
+        "/tmail/anon/receipt".into(),
+        Some(serde_json::json!({
+            "receipt_sha256_hex": receipt_hash,
+            "receipt_b64": base64::engine::general_purpose::STANDARD.encode(&receipt),
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let sent_at = tmail_now_ms_for_tests();
+    let rx: [u8; 32] = hex::decode(&receiver).unwrap().try_into().unwrap();
+    let nullifier = nexus_protocol::tet_anon_nullifier_v1(
+        &secret,
+        &rx,
+        nexus_protocol::tmail_bucket_index_v1(sent_at),
+    );
+    let (eph_words, ephemeral) = tmail_party_for_tests();
+    let mut env = anon_env_with_nullifier_for_tests(
+        &eph_words, &ephemeral, &receiver, nullifier, "anon-trace-1", sent_at,
+    );
+    env.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = receipt_hash;
+    let (status, _) =
+        call("POST", "/tmail/send".into(), Some(serde_json::to_value(&env).unwrap())).await;
+    assert!(status.is_success(), "the anonymous envelope is accepted: {status}");
+
+    let needles = [poster.clone(), poster.to_ascii_uppercase(), commitment.clone()];
+    let hit = |hay: &str| needles.iter().find(|n| hay.contains(n.as_str())).cloned();
+
+    for line in &trace {
+        assert!(hit(line).is_none(), "a request names the poster: {line}");
+    }
+    for line in CAPTURED_LOG.lock().unwrap().iter() {
+        assert!(hit(line).is_none(), "the node logged the poster: {line}");
+    }
+    while let Ok(line) = node_log.try_recv() {
+        assert!(hit(&line).is_none(), "the node's live log names the poster: {line}");
+    }
+    let db = ledger.sled_db();
+    for name in db.tree_names() {
+        if name.as_ref() == b"tmail_anon_registry_v1" {
+            continue;
+        }
+        let tree = db.open_tree(&name).unwrap();
+        for item in tree.iter() {
+            let (k, v) = item.unwrap();
+            let kv = format!("{} {}", String::from_utf8_lossy(&k), String::from_utf8_lossy(&v));
+            assert!(
+                hit(&kv).is_none(),
+                "tree {} keeps the poster after an anonymous post",
+                String::from_utf8_lossy(&name)
+            );
+        }
+    }
 }
 
 /// **The receiver's three states reach the client.** An anonymous row always carries a verdict, and
@@ -10747,6 +11025,46 @@ async fn s8_inbox_row_carries_the_anonymity_verdict() {
     // And the JSON a client actually receives says so in words.
     let json = serde_json::to_string(&row).unwrap();
     assert!(json.contains("\"state\":\"failed\""), "verdict must serialize its state");
+}
+
+/// Live-run check for `tet-prover-host`'s `POST /prove_anon`: tet-core's own verifier accepts the
+/// receipt the daemon returned, and every journal field is what the inputs imply. Run by hand
+/// after proving through the daemon (needs a zk build):
+///
+///   TET_ANON_RECEIPT_B64, TET_ANON_JOURNAL_B64, TET_ANON_IMAGE_ID_HEX — the daemon's response
+///   TET_PROVE_SECRET_HEX, TET_PROVE_EPHEMERAL_HEX, TET_PROVE_RECEIVER_HEX, TET_PROVE_BUCKET,
+///   TET_PROVE_ROOT_HEX — the inputs, and the root the client computed
+#[test]
+#[ignore = "live-run check; needs a receipt from tet-prover-host"]
+fn s8_prover_host_receipt_verifies_for_live_run() {
+    let _g = env_lock();
+    set_test_env_base();
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} required"));
+    let arr = |h: &str| -> [u8; 32] {
+        <[u8; 32]>::try_from(hex::decode(h.trim()).expect("hex").as_slice()).expect("32 bytes")
+    };
+    assert_eq!(
+        env("TET_ANON_IMAGE_ID_HEX"),
+        crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID),
+        "the daemon proved with a different guest than this node verifies"
+    );
+    let verified = crate::zk_verifier::verify_tx_receipt_and_journal(
+        methods::NEXUS_GUEST_ID,
+        &env("TET_ANON_JOURNAL_B64"),
+        &env("TET_ANON_RECEIPT_B64"),
+    )
+    .expect("tet-core verifies the daemon's receipt");
+    let crate::zk_verifier::VerifiedZkJournal::TmailAnon(j) = verified else {
+        panic!("the receipt proves a different claim than anonymous membership");
+    };
+    let secret = arr(&env("TET_PROVE_SECRET_HEX"));
+    let receiver = arr(&env("TET_PROVE_RECEIVER_HEX"));
+    let bucket: u64 = env("TET_PROVE_BUCKET").trim().parse().unwrap();
+    assert_eq!(hex::encode(j.merkle_root), env("TET_PROVE_ROOT_HEX").trim());
+    assert_eq!(j.nullifier, nexus_protocol::tet_anon_nullifier_v1(&secret, &receiver, bucket));
+    assert_eq!(j.ephemeral_pubkey_bytes, arr(&env("TET_PROVE_EPHEMERAL_HEX")));
+    assert_eq!(j.receiver_wallet_bytes, receiver);
+    assert_eq!(j.bucket_index, bucket);
 }
 
 /// Emit a mode-3 proof for the live run, from parameters supplied in the environment.

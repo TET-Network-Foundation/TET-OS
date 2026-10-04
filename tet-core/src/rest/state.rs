@@ -69,9 +69,6 @@ pub struct RestState {
     /// Direct `/tet/v1/anon-register` channel. `None` disables the direct path only — gossip is
     /// unaffected, which is what makes the two paths independently testable.
     pub anon_register_tx: Option<tokio::sync::mpsc::Sender<crate::p2p::AnonRegisterCmd>>,
-    /// In-flight anonymous send jobs, keyed by job id. Node-local and in memory: a restart loses
-    /// them, which costs one re-send and never a wrong result.
-    pub anon_jobs: Arc<std::sync::Mutex<std::collections::HashMap<String, crate::tmail::anon::AnonSendJob>>>,
     pub tx_submit_tx: Option<mpsc::Sender<crate::p2p::TxSubmitCmd>>,
     pub http_ratelimit: Arc<Mutex<HttpRateLimit>>,
     pub workers: Arc<StdMutex<WorkerRegistry>>,
