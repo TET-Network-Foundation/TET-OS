@@ -493,7 +493,14 @@ jobs:
           shellcheck --version
           # Every script, and the run fails on ANY finding. All are clean as of this commit, so
           # there is no backlog to normalise and a new finding is always new.
-          shellcheck deploy/*.sh tet-cli/scripts/*.sh
+          shellcheck deploy/*.sh deploy/tests/*.sh tet-cli/scripts/*.sh
+
+      # The seed monitor's guarantees, against stubbed docker/curl/df/date: a dead node is red,
+      # success means the height advanced, a rejected ping is logged, a stale install reports itself.
+      # Written after the 2026-10-04 33 h producer wedge (docs/postmortems/2026-10-04-producer-wedge-33h.md).
+      - if: needs.gate.outputs.code == 'true'
+        name: seed-healthcheck.sh behaves as documented
+        run: bash deploy/tests/seed-healthcheck.test.sh
 
       # The refusal paths are the whole safety property, so they are asserted rather than assumed.
       # None of these reaches ssh: each exits during argument validation.
