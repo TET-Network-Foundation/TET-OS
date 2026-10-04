@@ -604,11 +604,16 @@ async fn main() -> Result<(), AnyErr> {
                 ) {
                     Ok((tx, files_fetch_tx, tx_submit_tx, anon_register_tx, _swarm_jh)) => {
                         swarm_block = true;
-                        // Systemd watchdog: restarts the unit if the block-plane loop stalls,
-                        // before a heavy-work stall can cascade into an OS-level TCP wedge.
+                        // Watchdog: withholds the systemd ping once the block-plane loop stalls,
+                        // and exits the process past the hard threshold so any supervisor
+                        // (Docker's restart policy included) restarts it.
                         let stall_ms = crate::swarm_health::stall_threshold_ms_from_env();
-                        let _watchdog =
-                            crate::swarm_health::spawn_watchdog(swarm_health.clone(), stall_ms);
+                        let exit_after_ms = crate::swarm_health::exit_after_ms_from_env();
+                        let _watchdog = crate::swarm_health::spawn_watchdog(
+                            swarm_health.clone(),
+                            stall_ms,
+                            exit_after_ms,
+                        );
                         (
                             Some(tx),
                             Some(files_fetch_tx),
