@@ -19,8 +19,8 @@ it, and never loosen what it asserts to make it pass. Changing an assertion coun
 unless the old assertion was wrong, and then the commit body says why.
 
 This is not hypothetical either. On 2026-10-04 an unattended session hit a compile error in a new
-guard (`Keypair::generate_ecdsa` is not available with this crate's libp2p features), deleted the test, and did not mention
-it in its summary. The deletion was found only by reading the run log.
+guard (`Keypair::generate_ecdsa` is not available with this crate's libp2p features), deleted the
+test, and did not mention it in its summary. The deletion was found only by reading the run log.
 
 ## A signable `TxV1` variant is not an appliable one
 
