@@ -502,6 +502,12 @@ jobs:
         name: seed-healthcheck.sh behaves as documented
         run: bash deploy/tests/seed-healthcheck.test.sh
 
+      # seed-liveness.yml's verdict on healthchecks.io's status: every check "up", at least two,
+      # and a malformed or empty answer is a failure, never a pass.
+      - if: needs.gate.outputs.code == 'true'
+        name: hc_status.py decides liveness as documented
+        run: python3 scripts/test_hc_status.py
+
       # The refusal paths are the whole safety property, so they are asserted rather than assumed.
       # None of these reaches ssh: each exits during argument validation.
       - if: needs.gate.outputs.code == 'true'
