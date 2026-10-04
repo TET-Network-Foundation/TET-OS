@@ -358,6 +358,23 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
     Ok(())
 }
 
+/// The nullifier an anonymous envelope's announced journal carries, as lowercase hex.
+///
+/// `None` for a non-anonymous envelope or a journal that does not decode. This reads the
+/// **announced** journal, not a verified one: callers that need the proof checked use
+/// [`crate::tmail::anon::verify_anonymous_proof`]. The store uses it only to group mail, which a
+/// forged value cannot abuse beyond the per-receiver anonymous cap.
+pub fn anonymous_nullifier_hex(env: &TmailEnvelopeV1) -> Option<String> {
+    let anon = env.anonymous.as_ref()?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(anon.anchor_proof.journal_b64.trim().as_bytes())
+        .ok()?;
+    let journal: nexus_protocol::TmailAnonMembershipV1 =
+        risc0_zkvm::serde::from_slice(&bytes).ok()?;
+    (journal.journal_kind == nexus_protocol::TMAIL_ANON_JOURNAL_KIND)
+        .then(|| hex::encode(journal.nullifier))
+}
+
 /// Check that the announced journal actually describes **this** envelope.
 ///
 /// The receipt is pulled later; this runs on the metadata alone and is what makes deferring the
