@@ -12223,3 +12223,85 @@ fn follower_producer_pin_is_stated_consistently() {
     );
     assert!(provision.contains("TET_PRODUCER_PEERS=$PRODUCER_PEERS"), "and must write the line at all");
 }
+
+
+// ---------------------------------------------------------------------------
+// #21 — a wedged block plane exits the process instead of waiting for a systemd that isn't there.
+// ---------------------------------------------------------------------------
+
+/// Drive the real watchdog loop with a fake clock: the beacon ticks once at `t0`, the clock reads
+/// `t0 + age_ms`, and paused tokio time runs the 20 s ticker. Returns what the exit hook received
+/// and whether the task ended within `ticks` ticker periods.
+async fn run_watchdog_for_tests(age_ms: u64, ticks: u64) -> (Vec<String>, bool) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let health = crate::swarm_health::SwarmHealth::new();
+    let t0 = 1_700_000_000_000u64;
+    health.tick(t0);
+    let clock_ms = std::sync::Arc::new(AtomicU64::new(t0 + age_ms));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let hook_seen = seen.clone();
+    let clock_read = clock_ms.clone();
+    let task = crate::swarm_health::spawn_watchdog_with(
+        health,
+        crate::swarm_health::DEFAULT_STALL_THRESHOLD_MS,
+        crate::swarm_health::DEFAULT_EXIT_AFTER_MS,
+        std::sync::Arc::new(move |evidence: String| hook_seen.lock().unwrap().push(evidence)),
+        std::sync::Arc::new(move || clock_read.load(Ordering::Relaxed)),
+    );
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(20 * ticks), task)
+        .await
+        .is_ok();
+    let got = seen.lock().unwrap().clone();
+    (got, ended)
+}
+
+/// **SECURITY REGRESSION GUARD (#21): a block plane stalled past the hard threshold exits the
+/// process.** On 2026-10-04 the watchdog only withheld a systemd ping that nothing in Docker
+/// receives, and Helsinki sat wedged for 33 h. The real loop, at 181 s stalled, must call the exit
+/// hook (production: log + `process::exit(70)`) with the evidence, and stop.
+/// Negative controls: the `Exit` arm only logs → FAILED; `watchdog_action` never returns `Exit`
+/// → FAILED.
+#[tokio::test(start_paused = true)]
+async fn stalled_block_plane_exits_the_process_past_the_hard_threshold() {
+    let (calls, ended) = run_watchdog_for_tests(181_000, 3).await;
+    assert_eq!(calls.len(), 1, "the exit hook must run exactly once: {calls:?}");
+    assert!(
+        calls[0].contains("age_ms=181000") && calls[0].contains("exiting with status 70"),
+        "the exit must carry its evidence: {}",
+        calls[0]
+    );
+    assert!(ended, "the watchdog stops after handing over to the exit hook");
+}
+
+/// The companion: stalled past the 90 s stall threshold but not the 180 s hard one, the watchdog
+/// withholds the ping and keeps watching. Exiting here would turn a slow-but-alive loop into a
+/// restart loop.
+/// Negative control: exit at the stall threshold instead of the hard one → FAILED.
+#[tokio::test(start_paused = true)]
+async fn stalled_block_plane_below_the_hard_threshold_keeps_running() {
+    let (calls, ended) = run_watchdog_for_tests(120_000, 5).await;
+    assert!(calls.is_empty(), "no exit below the hard threshold: {calls:?}");
+    assert!(!ended, "the watchdog keeps running");
+}
+
+#[test]
+fn watchdog_action_boundaries() {
+    use crate::swarm_health::{watchdog_action, SwarmHealth, WatchdogAction};
+    let h = SwarmHealth::default();
+    assert_eq!(watchdog_action(&h, 10_000_000, 90_000, 180_000), WatchdogAction::Wait);
+    h.tick(1_000);
+    assert_eq!(watchdog_action(&h, 1_000 + 90_000, 90_000, 180_000), WatchdogAction::Pet);
+    assert_eq!(
+        watchdog_action(&h, 1_000 + 180_000, 90_000, 180_000),
+        WatchdogAction::Withhold { age_ms: 180_000 }
+    );
+    assert_eq!(
+        watchdog_action(&h, 1_000 + 180_001, 90_000, 180_000),
+        WatchdogAction::Exit { age_ms: 180_001 }
+    );
+    assert_eq!(
+        watchdog_action(&h, 1_000 + 10_000_000, 90_000, 0),
+        WatchdogAction::Withhold { age_ms: 10_000_000 },
+        "TET_SWARM_EXIT_AFTER_MS=0 never exits"
+    );
+}
