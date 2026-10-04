@@ -11,6 +11,17 @@ the control caught them — one drove a public entry point that rejected the tes
 unrelated earlier check, so the assertion was true for the wrong reason; another guarded a wire
 path that worked regardless of the fix it claimed to protect.
 
+## Never delete or weaken a test
+
+If a test will not compile or fails, fix it, or mark it `#[ignore = "<reason>"]`, and say so
+explicitly in the PR body: the test's name, what broke, and which of the two you did. Never delete
+it, and never loosen what it asserts to make it pass. Changing an assertion counts as weakening it
+unless the old assertion was wrong, and then the commit body says why.
+
+This is not hypothetical either. On 2026-10-04 an unattended session hit a compile error in a new
+guard (`Keypair::generate_ecdsa` is not available with this crate's libp2p features), deleted the
+test, and did not mention it in its summary. The deletion was found only by reading the run log.
+
 ## A signable `TxV1` variant is not an appliable one
 
 Before routing any REST write through the mempool, confirm `apply_consensus_block_batch` has an
