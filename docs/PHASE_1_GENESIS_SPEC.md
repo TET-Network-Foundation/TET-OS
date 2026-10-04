@@ -466,7 +466,11 @@ contract is free.
 - **The swarm constructors take `PlaneKeys` and select their own plane** (`start_mdns_ping_swarm` →
   block, `start_p2p_node` / `build_nexus_swarm` → nexus, `NetworkManager::new` → ledger). `main.rs`
   no longer holds a raw keypair to hand to the wrong swarm.
-- **A non-Ed25519 root is refused**, not replaced. `load_or_create` only ever wrote Ed25519.
+- **A non-Ed25519 root is refused**, not replaced. `load_or_create` only ever wrote Ed25519. This
+  build compiles `libp2p-identity` with only `ed25519`, so such a file fails to *decode* at load;
+  `PlaneKeys::derive`'s own `try_into_ed25519` refusal is a second line that no test can reach
+  without enabling another key type. `plane_keys_refuse_a_non_ed25519_root` drives the reachable
+  refusal and checks that the file is left untouched.
 - **Banner.** `libp2p PeerId:` is now the block plane's, which is what `print-bootnode.sh`,
   `start-network.sh` and `provision-seed.sh` grep for and what `TET_BOOTNODES` /
   `TET_PRODUCER_PEERS` need. The nexus and ledger PeerIds follow on their own lines.

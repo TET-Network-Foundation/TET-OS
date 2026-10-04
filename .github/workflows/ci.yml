@@ -291,6 +291,7 @@ jobs:
             # Phase 1 §2.4: per-plane libp2p identities and the TET_PEER_ID -> TET_NODE_LABEL rename.
             plane_keys_match_the_spec_derivation_vector
             plane_peer_ids_are_distinct_stable_and_never_the_root
+            plane_keys_refuse_a_non_ed25519_root
             nexus_and_ledger_swarms_use_their_own_plane_identity
             block_sync::block_swarm_is_reached_at_its_plane_peer_id
             storage_node_is_the_block_plane_peer_id

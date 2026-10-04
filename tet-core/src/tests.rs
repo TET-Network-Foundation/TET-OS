@@ -4213,6 +4213,33 @@ fn plane_peer_ids_are_distinct_stable_and_never_the_root() {
     }
 }
 
+/// A `libp2p_keypair.bin` holding a non-Ed25519 key is refused at startup, not replaced.
+///
+/// This build compiles `libp2p-identity` with only its `ed25519` key type, so no non-Ed25519
+/// `Keypair` value can exist and `PlaneKeys::derive`'s own `try_into_ed25519` refusal is
+/// unreachable from a test. (The first version of this test called `Keypair::generate_ecdsa()`,
+/// which does not exist without the `ecdsa` feature, and was removed. This replaces it.)
+/// The reachable refusal is one step earlier, so this test drives it: a well-formed protobuf
+/// secp256k1 private key (`KeyType = 2`) written to the key file. It must fail to load with the decode error,
+/// and the file must be left as it was. A keystore that "recovered" by generating a fresh key
+/// would silently give the node new PeerIds on every plane.
+#[test]
+fn plane_keys_refuse_a_non_ed25519_root() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("libp2p_keypair.bin");
+    // PrivateKey { Type: Secp256k1 (2), Data: 32 bytes }
+    let mut bytes = vec![0x08, 0x02, 0x12, 0x20];
+    bytes.extend_from_slice(&[0x11u8; 32]);
+    std::fs::write(&path, &bytes).unwrap();
+
+    let err = crate::p2p_keystore::P2pKeystore::load_or_create(tmp.path())
+        .err()
+        .expect("a non-Ed25519 root key file must be refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    assert!(err.to_string().contains("libp2p keypair decode failed"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the key file must not be replaced");
+}
+
 /// The nexus and ledger swarms are built under their own plane's identity from the same
 /// `PlaneKeys`. (The block plane is covered over the wire by
 /// `block_sync::block_swarm_is_reached_at_its_plane_peer_id`, because its swarm is built inside
