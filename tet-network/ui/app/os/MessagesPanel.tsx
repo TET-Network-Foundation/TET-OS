@@ -21,19 +21,35 @@ import {
   getTmailAnonRoot,
   getTmailInbox,
   getTmailKeys,
+  anonNodeAdapter,
   normalizeWalletId64,
-  postTmailAnonSend,
+  postTmailAnonRegister,
   postTmailReadReceipt,
   postTmailSend,
   putTmailKeys,
 } from "../lib/tet_core_http";
 import {
   anonLabel,
+  buildTmailAnonRegistrationV1,
   secondsUntil,
   TMAIL_ANON_DISCLOSURE,
+  type AnonSendState,
   type AnonVerdict,
 } from "../lib/tmail_anon";
-import { buildTmailEnvelopeV1, TMAIL_MAX_PLAINTEXT_CHARS, type TmailInboxRowV1 } from "../lib/tmail";
+import {
+  buildAnonymousTmailEnvelopeV1,
+  buildTmailEnvelopeV1,
+  ephemeralWalletIdFromSeed,
+  TMAIL_MAX_PLAINTEXT_CHARS,
+  type TmailInboxRowV1,
+} from "../lib/tmail";
+import {
+  ANON_PROVER_MISSING,
+  DEFAULT_PROVER_URL,
+  makeHelperProver,
+  runAnonPost,
+  sendPathFor,
+} from "../lib/anon_poster.mjs";
 import { buildTmailBurnRevokeV1, TMAIL_BURN_DISCLOSURE } from "../lib/tmail_burn";
 import {
   formatReleaseAt,
@@ -49,13 +65,14 @@ import { b64ToBytes } from "../lib/encoding";
 
 const INBOX_POLL_MS = 5_000;
 
-/** Sender-side anonymous state. `propagating` has a known end; `proving` does not. */
-type AnonSendUi =
-  | { state: "idle" }
-  | { state: "not_registered" }
-  | { state: "propagating"; eligibleAtMs: number }
-  | { state: "proving"; jobId: string }
-  | { state: "error"; reason: string };
+/**
+ * The native prover on this machine (`cargo run --release -p tet-prover-host`). It receives the
+ * member secret, so it is local by design; the node never sees it. If nothing answers, the send
+ * ends in `failed` with {@link ANON_PROVER_MISSING} rather than sitting in `proving`.
+ */
+const proveAnon = makeHelperProver({
+  url: process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROVER_URL,
+});
 
 type InboxItem = {
   msgId: string;
@@ -102,7 +119,8 @@ export default function MessagesPanel(props: {
   const [scheduled, setScheduled] = useState(false);
   const [scheduleMinutes, setScheduleMinutes] = useState(60);
   const [anonymous, setAnonymous] = useState(false);
-  const [anonSend, setAnonSend] = useState<AnonSendUi>({ state: "idle" });
+  const [anonSend, setAnonSend] = useState<AnonSendState>({ state: "idle" });
+  const [anonRegisterNote, setAnonRegisterNote] = useState<string>("");
   const [anonMembers, setAnonMembers] = useState<number | null>(null);
   // Re-renders once a second so the propagating countdown actually counts.
   const [, setTick] = useState(0);
@@ -126,7 +144,7 @@ export default function MessagesPanel(props: {
 
   // Only ticks while a countdown is on screen; idle compose does no work.
   useEffect(() => {
-    if (anonSend.state !== "propagating") return;
+    if (anonSend.state !== "not_in_set") return;
     const h = window.setInterval(() => setTick((t) => t + 1), 1000);
     return () => window.clearInterval(h);
   }, [anonSend.state]);
@@ -253,6 +271,11 @@ export default function MessagesPanel(props: {
   }, [baseUrl, myWalletId, decryptEnvelope]);
 
   async function onSend() {
+    // Anonymous mode must never reach the named builder below: it signs with this wallet.
+    if (sendPathFor({ anonymous }) === "anonymous") {
+      await onAnonSend();
+      return;
+    }
     setSendNotice(null);
     const to = normalizeWalletId64(recipient);
     if (!myWalletId) {
@@ -351,25 +374,116 @@ export default function MessagesPanel(props: {
    * theatre, and §A.3.2 Layer 3 is explicit that this is a network burn, not local amnesia.
    */
   /**
-   * Ask the node whether this wallet can send anonymously yet.
-   *
-   * The three answers stay distinct all the way to the screen: not registered is a different
-   * problem from waiting, and waiting-for-the-boundary has a known end time while proving does not.
+   * The anonymity-set size, for the label. `GET /tmail/anon/root` names no wallet; whether *this*
+   * wallet is in the set is worked out in the browser when it sends.
    */
   async function refreshAnonEligibility() {
-    if (!myWalletId) return;
     const root = await getTmailAnonRoot(baseUrl);
     if (mountedRef.current && root.ok) setAnonMembers(root.members ?? null);
-    const r = await postTmailAnonSend(baseUrl, myWalletId);
-    if (!mountedRef.current) return;
-    if (r.status === 409 || r.state === "not_registered") {
-      setAnonSend({ state: "not_registered" });
-    } else if (r.state === "registration_propagating" && r.eligibleAtMs) {
-      setAnonSend({ state: "propagating", eligibleAtMs: r.eligibleAtMs });
-    } else if (r.state === "proving" && r.jobId) {
-      setAnonSend({ state: "proving", jobId: r.jobId });
-    } else {
-      setAnonSend({ state: "error", reason: r.text ?? `HTTP ${r.status}` });
+  }
+
+  /** Publish this wallet's commitment. Public by design: it says this wallet is a member. */
+  async function onAnonRegister() {
+    const ks = getTmailKeySession();
+    if (!ks || !myWalletId) {
+      setAnonRegisterNote("Unlock a mnemonic/PIN wallet first.");
+      return;
+    }
+    setAnonRegisterNote("Registering…");
+    try {
+      const reg = await buildTmailAnonRegistrationV1({ memberSecret: ks.anonMemberSecret, baseUrl });
+      const r = await postTmailAnonRegister(baseUrl, reg);
+      if (!mountedRef.current) return;
+      setAnonRegisterNote(
+        r.ok
+          ? `Registered (${r.outcome ?? "ok"}). You join this node's anonymity set at the next epoch.`
+          : (r.text ?? `Registration failed (HTTP ${r.status}).`),
+      );
+      void refreshAnonEligibility();
+    } catch (e: unknown) {
+      if (mountedRef.current) setAnonRegisterNote(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Anonymous send, entirely in the browser (`anon_poster.mjs`). The node receives the whole-registry
+   * download, a content-addressed receipt and an envelope signed by a one-day ephemeral key —
+   * nothing that names this wallet.
+   */
+  async function onAnonSend() {
+    setSendNotice(null);
+    const to = normalizeWalletId64(recipient);
+    const ks = getTmailKeySession();
+    if (!ks || !myWalletId) {
+      setSendNotice({ kind: "err", text: "Unlock your wallet first." });
+      return;
+    }
+    if (!to) {
+      setSendNotice({ kind: "err", text: "Recipient wallet ID must be 64 hex chars." });
+      return;
+    }
+    if (burnAfterRead || scheduled) {
+      setSendNotice({
+        kind: "err",
+        text: "Burn-after-read and scheduled release are not available with anonymous send yet.",
+      });
+      return;
+    }
+    const text = messageText;
+    if (!text.trim() || text.length > TMAIL_MAX_PLAINTEXT_CHARS) {
+      setSendNotice({ kind: "err", text: "Message is empty or too long." });
+      return;
+    }
+    setSendBusy(true);
+    try {
+      const keys = await getTmailKeys(baseUrl, to);
+      if (!keys.registration) {
+        setSendNotice({ kind: "err", text: "Recipient hasn't registered messaging keys yet." });
+        return;
+      }
+      const reg = keys.registration;
+      const out = await runAnonPost(
+        {
+          node: anonNodeAdapter(baseUrl),
+          prove: proveAnon,
+          ephemeralWalletId: ephemeralWalletIdFromSeed,
+          buildEnvelope: (a: {
+            ephemeralSeed: Uint8Array;
+            ephemeralWalletId: string;
+            receiverWalletId: string;
+            plaintext: string;
+            sentAtMs: number;
+            proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string };
+          }) =>
+            buildAnonymousTmailEnvelopeV1({
+              ephemeralSeed: a.ephemeralSeed,
+              ephemeralWalletId: a.ephemeralWalletId,
+              receiverWalletId: a.receiverWalletId,
+              plaintextUtf8: a.plaintext,
+              receiverX25519Pub: b64ToBytes(reg.x25519_pub_b64),
+              receiverMlkemPub: b64ToBytes(reg.mlkem_pub_b64),
+              sentAtMs: a.sentAtMs,
+              proof: a.proof,
+              baseUrl,
+            }),
+          now: () => Date.now(),
+          onState: (st: AnonSendState) => {
+            if (mountedRef.current) setAnonSend(st);
+          },
+        },
+        { memberSecret: ks.anonMemberSecret, receiverWalletId: to, plaintext: text },
+      );
+      if (!mountedRef.current) return;
+      if (out.state === "sent") {
+        setSendNotice({ kind: "ok", text: `Sent anonymously (msg_id: ${out.msgId}).` });
+        setMessageText("");
+      }
+    } catch (e: unknown) {
+      if (mountedRef.current) {
+        setAnonSend({ state: "failed", reason: e instanceof Error ? e.message : String(e) });
+      }
+    } finally {
+      if (mountedRef.current) setSendBusy(false);
     }
   }
 
@@ -492,24 +606,49 @@ export default function MessagesPanel(props: {
               </span>
             ) : null}
             <span className="block text-black/60">{TMAIL_ANON_DISCLOSURE}</span>
-            {anonymous && anonSend.state === "not_registered" ? (
-              <span className="block text-[#8a1f1f]">
-                This wallet has no anonymity-set registration on this node. Register first.
+            {anonymous ? (
+              <span className="mt-1 block">
+                <button
+                  type="button"
+                  onClick={() => void onAnonRegister()}
+                  className={`${winBtn} bg-[#DAD8D2] px-2 py-[1px] text-[11px]`}
+                >
+                  Register this wallet for anonymous sending
+                </button>
+                <span className="ml-2 text-black/60">
+                  Registration is public: it says this wallet is a member, not which messages it sent.
+                </span>
+                {anonRegisterNote ? <span className="block text-black/70">{anonRegisterNote}</span> : null}
               </span>
             ) : null}
-            {anonymous && anonSend.state === "propagating" ? (
-              <span className="block text-[#1f3f7a]">
-                Registration propagating — you can send in {secondsUntil(anonSend.eligibleAtMs)}s
-                (next registry epoch). Sending is disabled until then.
+            {anonymous && anonSend.state === "not_in_set" ? (
+              <span className="block text-[#8a1f1f]">
+                This wallet is not in this node&apos;s anonymity set. Register above; if you just did,
+                you can send in {secondsUntil(anonSend.nextEpochAtMs)}s (next registry epoch).
               </span>
+            ) : null}
+            {anonymous && anonSend.state === "loading_set" ? (
+              <span className="block text-[#1f3f7a]">Downloading this node&apos;s anonymity set…</span>
             ) : null}
             {anonymous && anonSend.state === "proving" ? (
               <span className="block text-[#1f3f7a]">
-                Building your membership proof — this takes about 33 seconds.
+                Building your membership proof with the native prover on this machine — usually
+                under a minute; it gives up after five.
               </span>
             ) : null}
-            {anonymous && anonSend.state === "error" ? (
-              <span className="block text-[#8a1f1f]">{anonSend.reason}</span>
+            {anonymous && (anonSend.state === "depositing" || anonSend.state === "sending") ? (
+              <span className="block text-[#1f3f7a]">Sending…</span>
+            ) : null}
+            {anonymous && anonSend.state === "failed" ? (
+              <span className="block text-[#8a1f1f]">
+                {anonSend.reason}
+                {anonSend.reason.startsWith(ANON_PROVER_MISSING) ? (
+                  <span className="block text-black/70">
+                    Start it on this computer with <code>cargo run --release -p tet-prover-host</code>{" "}
+                    — docs/RUNNING_A_NODE.md, &ldquo;Anonymous sending&rdquo;.
+                  </span>
+                ) : null}
+              </span>
             ) : null}
           </span>
         </label>
@@ -519,21 +658,16 @@ export default function MessagesPanel(props: {
           </span>
           <button
             type="button"
-            disabled={
-              sendBusy ||
-              (anonymous &&
-                anonSend.state !== "proving" &&
-                anonSend.state !== "idle")
-            }
+            disabled={sendBusy}
             onClick={() => void onSend()}
             className={`${winBtn} bg-[#DAD8D2] px-4 py-1 text-sm ${sendBusy ? "opacity-60" : ""}`}
           >
             {sendBusy
-              ? "Encrypting…"
-              : anonymous && anonSend.state === "propagating"
-                ? `Waiting ${secondsUntil(anonSend.eligibleAtMs)}s…`
-                : anonymous
-                  ? "Send Anonymously"
+              ? anonymous
+                ? "Sending anonymously…"
+                : "Encrypting…"
+              : anonymous
+                ? "Send Anonymously"
                   : scheduled
                 ? "Send Scheduled"
                 : burnAfterRead

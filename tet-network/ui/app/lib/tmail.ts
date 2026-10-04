@@ -15,6 +15,11 @@ import { mldsa44SignDeterministic } from "./pqc";
 import { u8ToStdBase64 } from "./ai_infer_hybrid";
 import { bytesToB64, bytesToHex } from "./encoding";
 import { sha256 } from "@noble/hashes/sha2";
+import { entropyToMnemonic } from "@scure/bip39";
+import { wordlist } from "@scure/bip39/wordlists/english";
+import { mnemonicToTetEd25519Keypair, signTetEd25519 } from "./ed25519_tet";
+import { mldsa44KeypairFromMnemonic } from "./pqc";
+import { ANONYMOUS_SENTINEL } from "./anon_poster.mjs";
 
 /** Stable `kind` discriminator — mirrors Rust `TMAIL_ENVELOPE_KIND`. */
 export const TMAIL_ENVELOPE_KIND = "tmail_envelope_v1";
@@ -68,6 +73,11 @@ export type TmailEnvelopeV1 = {
   pin_stake_micro: number;
   e2ee: TmailE2eeBlock;
   hybrid_sig: TmailHybridSig;
+  /** Present only on anonymous envelopes (spec §A.1.2 `anonymous`). */
+  anonymous?: {
+    ephemeral_wallet_id: string;
+    anchor_proof: { image_id_hex: string; journal_b64: string; receipt_sha256_hex: string };
+  };
 };
 
 /** Canonical flags string for the §A.1.3 preimage — mirrors Rust `TmailFlags::canonical()`. */
@@ -236,6 +246,111 @@ export async function buildTmailEnvelopeV1(opts: BuildTmailEnvelopeOpts): Promis
       ed25519_sig_b64: u8ToStdBase64(edSig),
       mldsa_pubkey_b64: sess.mldsa44_pubkey_b64,
       mldsa_sig_b64: mldsaSig,
+    },
+  };
+}
+
+/**
+ * The one-day ephemeral signer for an anonymous message, as an ordinary 12-word wallet: the
+ * mnemonic is the first 16 bytes of `tmail_ephemeral_seed_v1(member_secret, receiver, bucket)`, the
+ * same 128 bits of entropy every TET wallet has. Derived, never stored: the member re-derives it.
+ */
+function ephemeralMnemonic(ephemeralSeed: Uint8Array): string {
+  if (ephemeralSeed.length !== 32) throw new Error("ephemeral seed must be 32 bytes");
+  return entropyToMnemonic(ephemeralSeed.slice(0, 16), wordlist);
+}
+
+/** The ephemeral's wallet id (its Ed25519 public key), which the membership proof commits to. */
+export async function ephemeralWalletIdFromSeed(ephemeralSeed: Uint8Array): Promise<string> {
+  return mnemonicToTetEd25519Keypair(ephemeralMnemonic(ephemeralSeed)).walletIdHex;
+}
+
+/**
+ * Build an anonymous envelope (spec §A.1.2): sender is the sentinel, the signer is the ephemeral,
+ * and the anchor proof is metadata only — the receipt was deposited separately.
+ *
+ * **The user's own wallet is not an input**, so it cannot end up in the envelope. This is the
+ * builder anonymous mode must use; `buildTmailEnvelopeV1` signs with the unlocked wallet.
+ */
+export async function buildAnonymousTmailEnvelopeV1(opts: {
+  ephemeralSeed: Uint8Array;
+  ephemeralWalletId: string;
+  receiverWalletId: string;
+  plaintextUtf8: string;
+  receiverX25519Pub: Uint8Array;
+  receiverMlkemPub: Uint8Array;
+  sentAtMs: number;
+  proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string };
+  baseUrl?: string;
+}): Promise<TmailEnvelopeV1> {
+  const receiver = opts.receiverWalletId.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(receiver)) {
+    throw new Error("Recipient wallet id must be 64 lowercase hex chars.");
+  }
+  const words = ephemeralMnemonic(opts.ephemeralSeed);
+  const ed = mnemonicToTetEd25519Keypair(words);
+  if (ed.walletIdHex !== opts.ephemeralWalletId.trim().toLowerCase()) {
+    throw new Error("ephemeral key does not match the one the proof commits to");
+  }
+  const pqc = await mldsa44KeypairFromMnemonic(words);
+
+  const plaintext = new TextEncoder().encode(opts.plaintextUtf8);
+  const bundle = await encryptForReceiver(plaintext, opts.receiverX25519Pub, opts.receiverMlkemPub);
+  const payloadSha256Hex = bytesToHex(sha256(bundle.ciphertext));
+  const flags: TmailFlags = { basic: true, time_lock: false, burn_after_read: false, anonymous: true };
+  const msgId = newMsgId();
+  const { chainId, genesisHash } = await expectedChainBinding(opts.baseUrl);
+  const msg = tmailEnvelopeAuthMessageBytes({
+    chainId,
+    genesisHash,
+    msgId,
+    flags,
+    senderWalletId: ANONYMOUS_SENTINEL,
+    receiverWalletId: receiver,
+    releaseAtMs: 0,
+    feeMicro: TMAIL_DEFAULT_FEE_MICRO,
+    payloadSha256Hex,
+    mldsaPubkeyB64: pqc.pubkey_b64,
+  });
+  const edSig = await signTetEd25519(ed.secretKey, msg);
+  const mldsaSig = await mldsa44SignDeterministic(pqc.keypair_b64, msg);
+
+  return {
+    v: 1,
+    kind: TMAIL_ENVELOPE_KIND,
+    msg_id: msgId,
+    flags,
+    sender_wallet_id: ANONYMOUS_SENTINEL,
+    receiver_wallet_id: receiver,
+    sent_at_ms: opts.sentAtMs,
+    release_at_ms: 0,
+    ttl_ms: TMAIL_DEFAULT_TTL_MS,
+    fee_paid_micro: TMAIL_DEFAULT_FEE_MICRO,
+    pin_stake_micro: 0,
+    e2ee: {
+      v: 1,
+      scheme: TMAIL_E2EE_SCHEME,
+      client_ephemeral_pub_b64: bytesToB64(bundle.client_ephemeral_pub),
+      client_mlkem_pub_b64: bytesToB64(bundle.client_mlkem_pub),
+      receiver_x25519_pub_b64: bytesToB64(opts.receiverX25519Pub),
+      receiver_mlkem_pub_b64: bytesToB64(opts.receiverMlkemPub),
+      mlkem_ciphertext_b64: bytesToB64(bundle.mlkem_ciphertext),
+      nonce_b64: bytesToB64(bundle.nonce),
+      ciphertext_b64: bytesToB64(bundle.ciphertext),
+    },
+    hybrid_sig: {
+      ed25519_pubkey_hex: ed.walletIdHex,
+      ed25519_sig_b64: u8ToStdBase64(edSig),
+      mldsa_pubkey_b64: pqc.pubkey_b64,
+      mldsa_sig_b64: mldsaSig,
+    },
+    anonymous: {
+      ephemeral_wallet_id: ed.walletIdHex,
+      anchor_proof: {
+        image_id_hex: opts.proof.image_id_hex,
+        journal_b64: opts.proof.journal_b64,
+        receipt_sha256_hex: opts.proof.receipt_sha256_hex,
+      },
     },
   };
 }

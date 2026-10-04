@@ -296,6 +296,9 @@ jobs:
             block_sync::block_swarm_is_reached_at_its_plane_peer_id
             retired_tet_peer_id_env_is_refused
             node_label_is_read_from_tet_node_label
+            anonymous_post_names_no_poster_to_the_node
+            anonymous_mail_from_six_members_is_all_retained
+            anonymous_mail_is_capped_per_receiver
           )
           # Phase 1 §1 replaced the wall-clock pin (`wallclock_time_changes_spendability_for_the_same_block`)
           # with the fix's guards: the block's time decides, the node's clock does not.
@@ -402,6 +405,13 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         run: npm run build
+
+      # The poster's half of the anonymous-send privacy guard: every request the real
+      # anon_poster.mjs makes is recorded, and none may name the poster. Plain Node, no build step.
+      # The node's half is `anonymous_post_names_no_poster_to_the_node` in the rust job.
+      - if: needs.gate.outputs.code == 'true'
+        name: anonymous send — the poster names itself to nobody
+        run: node scripts/anon_poster_guard.mjs
 
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --

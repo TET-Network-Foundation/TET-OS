@@ -18,7 +18,9 @@
 //! [`RETAIN_PER_CONVERSATION`] messages. This is a *store* rule, not a display rule: the older ones
 //! are deleted, not hidden. Conversation identity in Phase 0 is the counterparty wallet pair
 //! (Appendix K.3 — flat threads, one conversation per counterparty), so for an inbox belonging to
-//! `receiver` the grouping key is `sender_wallet_id`.
+//! `receiver` the grouping key is `sender_wallet_id`. **Anonymous mail is the exception:** its
+//! sender is always the sentinel, so it is grouped by nullifier instead, and bounded per receiver
+//! by [`ANON_RETAIN_PER_RECEIVER`] alongside the TTL.
 
 use crate::tmail::envelope::TmailEnvelopeV1;
 use crate::tmail::keys::TmailKeyRegistrationV1;
@@ -114,6 +116,13 @@ const PRUNED_PREFIX: &[u8] = b"pruned:";
 /// Messages kept per conversation (spec Appendix K.1 / AT-7). Older ones are deleted.
 pub const RETAIN_PER_CONVERSATION: usize = 5;
 
+/// Most anonymous messages one receiver keeps, across all anonymous senders.
+///
+/// Anonymous mail is grouped per nullifier (see [`conversation_key`]), so the per-conversation
+/// rule alone would not bound it: every new nullifier is a new conversation. This is the bound,
+/// alongside the TTL. Env override: `TET_TMAIL_ANON_RETAIN_PER_RECEIVER`.
+pub const ANON_RETAIN_PER_RECEIVER: usize = 100;
+
 const DEFAULT_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1000; // 7 days
 const MAX_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
 const DEFAULT_MAX_ENTRIES: usize = 50_000;
@@ -196,8 +205,28 @@ fn retain_per_conversation() -> usize {
     env_usize("TET_TMAIL_RETAIN_PER_CONVERSATION", RETAIN_PER_CONVERSATION)
 }
 
+fn anon_retain_per_receiver() -> usize {
+    env_usize("TET_TMAIL_ANON_RETAIN_PER_RECEIVER", ANON_RETAIN_PER_RECEIVER)
+}
+
+fn is_anonymous(env: &TmailEnvelopeV1) -> bool {
+    env.anonymous.is_some()
+}
+
 /// Conversation key for an inbox entry (Appendix K.3, Phase 0 flat threads): the counterparty.
+///
+/// **Anonymous mail is keyed by its nullifier, not its sender.** Every anonymous envelope has the
+/// same `sender_wallet_id` (the sentinel), so keying by sender made all anonymous mail to a
+/// receiver one conversation, and the sixth anonymous message from a sixth member evicted the
+/// first. A nullifier is one per (member, receiver, day), which is the closest thing to a
+/// counterparty an anonymous sender has. Anonymous mail is bounded per receiver instead, by
+/// [`ANON_RETAIN_PER_RECEIVER`].
 fn conversation_key(env: &TmailEnvelopeV1) -> String {
+    if is_anonymous(env) {
+        let id = crate::tmail::envelope::anonymous_nullifier_hex(env)
+            .unwrap_or_else(|| format!("msg:{}", env.msg_id.trim()));
+        return format!("anonymous:{id}");
+    }
     env.sender_wallet_id.trim().to_ascii_lowercase()
 }
 
@@ -263,7 +292,50 @@ impl TmailStore {
         // even if nothing ever calls `GET /tmail/inbox`. Enforcing it only on read would make the
         // cap a display convention again -- exactly what S7-0 exists to stop being true.
         self.enforce_retention(&receiver, &conversation_key(env))?;
+        if is_anonymous(env) {
+            self.enforce_anonymous_cap(&receiver)?;
+        }
         Ok(true)
+    }
+
+    /// Delete anonymous mail past the newest [`ANON_RETAIN_PER_RECEIVER`] for one receiver.
+    ///
+    /// Same ordering and the same [`PRUNED_PREFIX`] marker as [`Self::enforce_retention`], so two
+    /// nodes holding the same mail drop the same messages, and a re-gossiped one stays dropped.
+    pub fn enforce_anonymous_cap(&self, receiver: &str) -> Result<usize, TmailStoreError> {
+        let receiver = receiver.trim().to_ascii_lowercase();
+        if !is_wallet_id_64hex(&receiver) {
+            return Ok(0);
+        }
+        let keep = anon_retain_per_receiver();
+        let mut rows: Vec<(u64, Vec<u8>, String, u64)> = Vec::new();
+        for item in self.by_receiver.scan_prefix(receiver.as_bytes()) {
+            let Ok((k, v)) = item else { continue };
+            let Ok(env) = serde_json::from_slice::<TmailEnvelopeV1>(&v) else {
+                continue;
+            };
+            if !is_anonymous(&env) {
+                continue;
+            }
+            let expire_at = env.sent_at_ms.saturating_add(effective_ttl_ms(env.ttl_ms));
+            rows.push((env.sent_at_ms, k.to_vec(), env.msg_id.trim().to_string(), expire_at));
+        }
+        if rows.len() <= keep {
+            return Ok(0);
+        }
+        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        let mut removed = 0usize;
+        for (_sent, key, msg_id, expire_at) in rows.into_iter().skip(keep) {
+            if matches!(self.by_receiver.remove(&key), Ok(Some(_))) {
+                removed += 1;
+            }
+            if !msg_id.is_empty() {
+                let mut mark = PRUNED_PREFIX.to_vec();
+                mark.extend_from_slice(expire_at.to_string().as_bytes());
+                self.by_msg_id.insert(msg_id.as_bytes(), mark)?;
+            }
+        }
+        Ok(removed)
     }
 
     /// Delete everything past the newest [`retain_per_conversation`] messages in one conversation.
@@ -351,7 +423,8 @@ impl TmailStore {
     }
 
     /// Return up to `limit` non-expired envelopes addressed to `wallet_id`, newest first, capped at
-    /// [`retain_per_conversation`] **per conversation** (spec Appendix K.1).
+    /// [`retain_per_conversation`] **per conversation** (spec Appendix K.1), and anonymous mail at
+    /// [`ANON_RETAIN_PER_RECEIVER`] in total.
     ///
     /// The cap is applied here as well as at write time. That is deliberate belt-and-braces: the
     /// store is the authority and `enforce_retention` already deleted the overflow, but a stale row
@@ -364,6 +437,8 @@ impl TmailStore {
         }
         let now = now_ms();
         let keep = retain_per_conversation();
+        let anon_keep = anon_retain_per_receiver();
+        let mut anon_seen = 0usize;
         let mut per_conversation: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
         let mut out = Vec::new();
@@ -389,6 +464,12 @@ impl TmailStore {
             let slot = per_conversation.entry(counterparty.clone()).or_insert(0);
             if *slot >= keep && !self.is_pinned(&receiver, &counterparty) {
                 continue;
+            }
+            if is_anonymous(&env) {
+                if anon_seen >= anon_keep {
+                    continue;
+                }
+                anon_seen += 1;
             }
             *slot += 1;
             out.push(env);

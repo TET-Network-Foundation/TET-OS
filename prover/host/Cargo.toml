@@ -12,11 +12,16 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
+base64 = "0.22"
+bincode = "1.3"
 borsh.workspace = true
 hex.workspace = true
 risc0-zkvm = { workspace = true, default-features = false, features = ["prove", "std"] }
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10"
+# The anonymous-membership guest (mode 3) lives in tet-core's `methods` crate, not prover/methods.
+methods = { path = "../../methods" }
 tet-prover-methods = { path = "../methods" }
 tokio.workspace = true
 tower-http.workspace = true
