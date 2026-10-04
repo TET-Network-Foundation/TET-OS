@@ -20,6 +20,9 @@ work from this file, top to bottom.
 - When an item's PR is merged, a person moves it to **Done** and marks the next one `ready`.
 - If an item turns out to need something not in its row, stop and say so in the PR rather than
   widening the item.
+- **A draft PR with a design question is resolved by the human in a PR comment; the nightly does
+  not wait on it.** That item is skipped while its PR is open, and the next night takes the next
+  qualifying item.
 
 ## Queue
 
@@ -27,7 +30,6 @@ work from this file, top to bottom.
 |---|---|---|---|---|---|
 | 2 | **`Transfer` nonce**: what the nonce is, how it enters the tx hash, replay and ordering rules, what other variants should copy | §2 table | — | **no** — schema design; new variants (3, 7) should follow it | ready |
 | 3 | **`TxV1::TmailPin`**: 1_000 µTET, 50 % treasury / 50 % burn, an apply arm, the retention exemption | §2 table; `SOVEREIGN_OS_PHASE0_SPEC.md` App. C | 2 (approved design) | **yes** | blocked |
-| 4 | **Per-plane libp2p keypairs**: HKDF per plane from the node key; `FileAnnounce.storage_node` pinned to the block plane with a test; the `TET_PEER_ID` → `TET_NODE_LABEL` rename | §2.4 | — | **yes** — branch only; new multiaddrs are published at the ceremony, not by the session | ready |
 | 5 | **Minimum ML-DSA level**: consensus verification refuses a key below the floor instead of inferring the level from its length | §2 table, WP §7.1 | — | **yes** | ready |
 | 6 | **Leader mode as a genesis parameter**: `TET_CONSENSUS_LEADER_MODE` stops being a per-node setting | §1 inventory | 1 | **yes** | ready |
 | 7 | **Founder vesting, cliff + linear** | §2 table, WP §17.3 | 1 | **no** — the schedule is an economic decision | ready |
@@ -47,6 +49,7 @@ Listed so they are decided rather than forgotten. All `autonomous: no`; a design
 | CAAC server-measured latency | §2.3 | changes what consensus weights mean |
 | Per-block `state_root` checkpoints | §2 table | changes what nodes exchange |
 | Genesis-bridge apply arm | §2.5 | the variant is signable but has no apply arm |
+| **Locate a file blob without a machine identity** | §2.4 cost 1; `PHASE1_ITEM4_STORAGE_NODE.md` | `storage_node` is an opaque hint (item 4, option A), so `files_fetch` asks the first connected peer and availability falls as the network grows. Candidates: ask the receiver's peers in turn, or a Kademlia provider record keyed by `file_id`. Neither may put a node `PeerId` in the gossiped, signed envelope. Files are off-chain, so this is not genesis-bound |
 | **Validator-set rotation** (Phase 1.1) | §1 design 5, D4 | the set is in the genesis hash, so today any change is a new genesis; rotation needs a signed, consensus-applied set change and a rule for which set signs the block that changes it |
 
 ## Decisions
@@ -78,3 +81,4 @@ Recorded 2026-10-02. These bind every item above; an item that seems to need oth
 |---|---|
 | §1 design written | #7 |
 | 1 — Block time as the consensus clock: V3 header (`ts_ms`, length-prefixed `block_id`, producer signature), genesis v2, clock seam, 36 CI guards | #11 |
+| 4 — Per-plane libp2p keypairs (HKDF per plane, all three PeerIds new), `TET_PEER_ID` → `TET_NODE_LABEL` (old name refused); `storage_node` stays an opaque hint (option A) | #14 |
