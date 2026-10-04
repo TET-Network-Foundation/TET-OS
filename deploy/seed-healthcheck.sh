@@ -82,6 +82,16 @@ deployed_copy="$COMPOSE_DIR/deploy/seed-healthcheck.sh"
 if [ -f "$deployed_copy" ] && ! cmp -s "$0" "$deployed_copy"; then
   stale_monitor="$0 differs from $deployed_copy (reinstall: install -m 0755 $deployed_copy $0)"
 fi
+# The same for the systemd units that run this script. The repository's service file names
+# /opt/TET-OS; provision substitutes the seed directory, so compare after the same substitution.
+UNIT_DIR="${TET_HC_UNIT_DIR:-/etc/systemd/system}"
+for unit in tet-healthcheck.service tet-healthcheck.timer; do
+  repo_unit="$COMPOSE_DIR/deploy/systemd/$unit"
+  if [ -f "$repo_unit" ] && [ -f "$UNIT_DIR/$unit" ] \
+     && ! sed "s#/opt/TET-OS#$COMPOSE_DIR#g" "$repo_unit" | cmp -s - "$UNIT_DIR/$unit"; then
+    stale_monitor="${stale_monitor:+$stale_monitor; }$UNIT_DIR/$unit differs from $repo_unit"
+  fi
+done
 
 # restart_or_alert REASON — the one place this node is restarted, whatever the kind of stall.
 #

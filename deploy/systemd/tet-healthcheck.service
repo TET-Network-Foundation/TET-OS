@@ -1,0 +1,10 @@
+[Unit]
+Description=TET seed liveness probe
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/tet/healthcheck.env
+Environment=TET_HC_COMPOSE_DIR=/opt/TET-OS
+ExecStart=/usr/local/bin/tet-healthcheck

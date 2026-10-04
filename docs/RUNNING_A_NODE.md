@@ -750,16 +750,20 @@ ssh root@95.217.158.153 'cd /opt/TET-OS && bash deploy/provision-seed.sh'
 
 **Updating a running seed without touching `.env`.** `provision-seed.sh` rewrites `.env`, so a
 routine update pushes the tree, rebuilds with the compose files the seed's profile uses, and
-**reinstalls the monitor**. A deploy refreshes `/opt/TET-OS` and nothing else, and on 2026-10-04
-both seeds were found running healthcheck copies weeks old:
+**reinstalls the monitor and its systemd units** from the tree. Without that last step a deploy
+refreshes `/opt/TET-OS` and nothing else, and on 2026-10-04 both seeds were found running
+healthcheck copies weeks old:
 
 ```bash
 COPYFILE_DISABLE=1 git archive --format=tar <commit> | ssh -p 443 root@<host> 'tar -x -C /opt/TET-OS'
-ssh -p 443 root@<host> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0_SKIP_BUILD=1" .env && f="$f -f docker-compose.dev.yml"; docker compose $f -f deploy/docker-compose.seed.yml up -d --build tet-core && install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck'
+ssh -p 443 root@<host> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0_SKIP_BUILD=1" .env && f="$f -f docker-compose.dev.yml"; docker compose $f -f deploy/docker-compose.seed.yml up -d --build tet-core && install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck && install -m 0644 deploy/systemd/tet-healthcheck.service deploy/systemd/tet-healthcheck.timer /etc/systemd/system/ && systemctl daemon-reload && systemctl restart tet-healthcheck.timer'
 ```
 
-The monitor compares itself with `/opt/TET-OS/deploy/seed-healthcheck.sh` on every run and reports
-`this monitor is stale` if the reinstall was skipped.
+The units are repository files (`deploy/systemd/tet-healthcheck.{service,timer}`). The service names
+`/opt/TET-OS`; on a seed in another directory, install it through
+`sed "s#/opt/TET-OS#<dir>#g"`, as `provision-seed.sh` does. On every run the monitor compares
+itself and both installed units with the tree's copies, and reports `this monitor is stale` if a
+reinstall was skipped.
 
 The seed holds **no** credential — the source is pushed over the operator's own SSH session rather
 than pulled with a key, so a host whose whole job is accepting connections from strangers on 8002
