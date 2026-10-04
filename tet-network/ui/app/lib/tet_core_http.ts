@@ -1118,49 +1118,46 @@ export async function deleteFilesItem(
   return { ok: true, status: r.status, deleted: r.data?.deleted ?? true };
 }
 
-export type AnonSendResult = {
-  ok: boolean;
-  status: number;
-  state?: string;
-  jobId?: string;
-  eligibleAtMs?: number;
-  secondsRemaining?: number;
-  expectedDurationMs?: number;
-  text?: string;
-};
+/**
+ * `POST /tmail/anon/register` — publish this wallet's anonymity-set commitment.
+ *
+ * **Registration is public by design**: it says "this wallet is a member". What stays private is
+ * which member wrote a given anonymous message, and that is why nothing on the *sending* path
+ * names the wallet (see `anon_poster.mjs`).
+ */
+export async function postTmailAnonRegister(
+  baseUrl: string,
+  registration: unknown,
+): Promise<{ ok: boolean; status: number; effectiveFromEpoch?: number; outcome?: string; text?: string }> {
+  const r = await fetchJson<{ ok?: boolean; outcome?: string; effective_from_epoch?: number }>(
+    tetCoreUrl(baseUrl, "/tmail/anon/register"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(registration),
+    },
+  );
+  return {
+    ok: r.ok && r.data?.ok !== false,
+    status: r.status,
+    effectiveFromEpoch: r.data?.effective_from_epoch,
+    outcome: r.data?.outcome,
+    text: r.text,
+  };
+}
 
 /**
- * `POST /tmail/anon/send` — start an anonymous send.
- *
- * Never returns the finished result: proving takes ~33 s. The three answers are distinct on
- * purpose — `not_registered` (nothing to do but register), `registration_propagating` (wait, with a
- * known end time), `proving` (wait, with a job to poll).
+ * The node adapter `runAnonPost` takes: path in, `{ status, json, text }` out. Every request the
+ * anonymous poster makes goes through here, and none of them carries a wallet id.
  */
-export async function postTmailAnonSend(
-  baseUrl: string,
-  walletId: string,
-): Promise<AnonSendResult> {
-  const r = await fetchJson<{
-    ok?: boolean;
-    state?: string;
-    job_id?: string;
-    eligible_at_ms?: number;
-    seconds_remaining?: number;
-    expected_duration_ms?: number;
-  }>(tetCoreUrl(baseUrl, "/tmail/anon/send"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ wallet_id: walletId }),
-  });
-  return {
-    ok: r.ok,
-    status: r.status,
-    state: r.data?.state,
-    jobId: r.data?.job_id,
-    eligibleAtMs: r.data?.eligible_at_ms,
-    secondsRemaining: r.data?.seconds_remaining,
-    expectedDurationMs: r.data?.expected_duration_ms,
-    text: r.text,
+export function anonNodeAdapter(baseUrl: string) {
+  return async (path: string, init: { method?: string; body?: string } = {}) => {
+    const r = await fetchJson<unknown>(tetCoreUrl(baseUrl, path), {
+      method: init.method ?? "GET",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: init.body,
+    });
+    return { status: r.status, json: r.data ?? null, text: r.text };
   };
 }
 

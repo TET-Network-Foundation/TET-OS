@@ -6,7 +6,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { cryptoWaitReady, mnemonicValidate } from "@polkadot/util-crypto";
-import { mnemonicToTetEd25519Keypair, signTetEd25519 } from "../lib/ed25519_tet";
+import { mnemonicToTetEd25519Keypair, normalizeMnemonicPhrase, signTetEd25519 } from "../lib/ed25519_tet";
+import { mnemonicToSeedSync } from "@scure/bip39";
+import { anonMemberSecretFromBip39Seed } from "../lib/anon_tree.mjs";
 import { stringToU8a } from "@polkadot/util";
 import { clearSession, loadSession } from "../lib/session";
 import { loadAddressBook, saveAddressBook, type AddressBookEntryV0 } from "../lib/address_book_store";
@@ -581,6 +583,9 @@ export default function NexusOS() {
         x25519_pub: km.x25519_pub,
         mlkem_sk: km.mlkem_sk,
         mlkem_pub: km.mlkem_pub,
+        anonMemberSecret: anonMemberSecretFromBip39Seed(
+          mnemonicToSeedSync(normalizeMnemonicPhrase(phrase), ""),
+        ),
       });
       setTmailKeysWallet(wid);
     } catch {

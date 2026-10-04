@@ -454,13 +454,13 @@ async function main() {
   step("both nodes agree on the registry root", rootN1.merkle_root === rootN2.merkle_root,
     `${rootN1.merkle_root.slice(0, 16)}… members=${rootN2.members}`);
 
-  // --- 3. sender eligibility: the two states ------------------------------
-  const send1 = await postJson(N1, "/tmail/anon/send", { wallet_id: A.walletId });
-  const s1 = JSON.parse(send1.body);
-  step("POST /tmail/anon/send reports a job state", send1.status === 202,
-    `state=${s1.state}${s1.job_id ? " job=" + s1.job_id.slice(0, 8) : ""}`);
-  step("state is 'proving' once eligible (not 'registration_propagating')",
-    s1.state === "proving", `state=${s1.state}`);
+  // --- 3. sender eligibility, without naming the sender -------------------
+  // POST /tmail/anon/send {wallet_id} was removed: it told the node which wallet was about to post.
+  // A poster downloads the whole registry and looks for its own commitment (anon_poster.mjs).
+  const leavesResp = await fetch(`${N1}/tmail/anon/leaves`);
+  const leavesJson = await leavesResp.json();
+  step("A's commitment is in N1's registry download", leavesResp.status === 200 &&
+    leavesJson.leaves.includes(hex(anonCommitment(secret))), `total=${leavesJson.total}`);
 
   // --- 4. build the proof (this is the ~33 s job) -------------------------
   log("\n--- proving (this is the job the API returns 202 for) ---");
