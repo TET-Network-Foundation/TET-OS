@@ -53,9 +53,10 @@ There is **no `.gitmodules`** in this monorepo at present; clone the single repo
 | `TET_DB_DIR` | Recommended | Sled ledger path. If unset, defaults to `tet.db_{PORT}` (see `main.rs`). |
 | `PORT` | Optional | REST bind port; default **5010**. |
 | `TET_ENABLE_P2P` | Optional | Default **enabled** (`1` / `true`). Set `0` to disable block-plane P2P. |
-| `TET_WALLET_ID` | Optional | Local operator wallet id for dev faucet / identity; default `local-wallet` or `TET_PEER_ID`. |
+| `TET_WALLET_ID` | Optional | Local operator wallet id for dev faucet / identity; default `TET_NODE_LABEL`, else `local-wallet`. |
+| `TET_NODE_LABEL` | Optional | Fallback producer / wallet label when `TET_WALLET_ID` is unset. Formerly `TET_PEER_ID`; it was never a libp2p PeerId. **A node with a non-empty `TET_PEER_ID` refuses to start** rather than silently change its producer id. |
 
-**There is no `TET_KEYSTORE_PATH` env var.** libp2p identity is stored as **`{TET_DB_DIR}/libp2p_keypair.bin`** (persistent Ed25519; see `p2p_keystore.rs`).
+**There is no `TET_KEYSTORE_PATH` env var.** libp2p identity is stored as **`{TET_DB_DIR}/libp2p_keypair.bin`** (persistent Ed25519; see `p2p_keystore.rs`). That file is a root secret, not a wire identity: each of the three swarms (block 8002, nexus 4003, ledger 4005) runs under its own key, `HKDF-SHA256(root, "tet/plane/<plane>")`, and so has its own PeerId. The startup banner's `libp2p PeerId:` line is the **block plane's** — the one `TET_BOOTNODES` and `TET_PRODUCER_PEERS` name; the nexus and ledger PeerIds are printed under it. (Phase 1 branch. Seed multiaddrs change with this and are reissued at the genesis ceremony.)
 
 Example (dev):
 

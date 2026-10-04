@@ -454,6 +454,33 @@ in exactly the area this section is about, and it is read in only two places. Re
 `TET_NODE_LABEL` (or fold it into `TET_WALLET_ID`) at the ceremony, when changing an env var
 contract is free.
 
+#### As built (2026-10-04, branch `phase1-item-4-per-plane-keys`)
+
+- **All three planes are derived, the block plane included.** `info` is exactly the three labels
+  above, `salt` is empty, the output is used as an Ed25519 seed. No label reproduces today's key,
+  so every plane's `PeerId` changes and the root key is never a wire identity. The alternative —
+  the block plane keeps the root key so its multiaddr survives — would leave one plane on a key no
+  other plane's derivation separates it from, to save a reissue the ceremony does anyway.
+  `plane_keys_match_the_spec_derivation_vector` pins the derivation against an independent Python
+  computation.
+- **The swarm constructors take `PlaneKeys` and select their own plane** (`start_mdns_ping_swarm` →
+  block, `start_p2p_node` / `build_nexus_swarm` → nexus, `NetworkManager::new` → ledger). `main.rs`
+  no longer holds a raw keypair to hand to the wrong swarm.
+- **A non-Ed25519 root is refused**, not replaced. `load_or_create` only ever wrote Ed25519.
+- **Banner.** `libp2p PeerId:` is now the block plane's, which is what `print-bootnode.sh`,
+  `start-network.sh` and `provision-seed.sh` grep for and what `TET_BOOTNODES` /
+  `TET_PRODUCER_PEERS` need. The nexus and ledger PeerIds follow on their own lines.
+- **`TET_PEER_ID` → `TET_NODE_LABEL`**, both readers (`StartupConfig`, `local_node_id_from_env`).
+  The old name is **refused at startup** when non-empty, not read as an alias: ignoring it would
+  move a node whose only label it was to `local-wallet`, a different producer id, in silence.
+- **`storage_node`: the node-side pin exists (`PlaneKeys::storage_node_peer_id()` = block plane,
+  with a guard), but nothing consumes it.** Cost 1 assumes something populates the field with this
+  node's `PeerId`. Nothing does: every client sends the literal `"local"`
+  (`tet-network/ui/app/lib/files.ts:196`, both interop scripts), the node does not check its form,
+  and `files_fetch` falls back to the first connected block-plane peer. The field cannot be wrong
+  by plane today because it is never a `PeerId` at all. Whether to wire it, and how, is a design
+  question and is left open: [`PHASE1_ITEM4_STORAGE_NODE.md`](./PHASE1_ITEM4_STORAGE_NODE.md).
+
 ### 2.5 Consensus-route all remaining balance writes
 
 After the 2026-09-23 sweep, **nine paths** still write balances outside the block pipeline. Every one
