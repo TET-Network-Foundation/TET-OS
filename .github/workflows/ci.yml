@@ -279,6 +279,8 @@ jobs:
             bare_json_signed_envelope_is_rejected_off_mainnet
             envelope_signed_against_a_different_genesis_hash_is_rejected
             anonymous_post_names_no_poster_to_the_node
+            anonymous_mail_from_six_members_is_all_retained
+            anonymous_mail_is_capped_per_receiver
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block
