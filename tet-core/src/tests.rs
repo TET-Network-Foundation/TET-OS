@@ -83,6 +83,7 @@ fn set_test_env_base() {
         std::env::remove_var("TET_GENESIS_TIME_MS");
         std::env::remove_var("TET_WALLET_ID");
         std::env::remove_var("TET_PEER_ID");
+        std::env::remove_var("TET_NODE_LABEL");
         std::env::remove_var("TET_BLOCK_TIME_SEC");
         std::env::remove_var("TET_CONSENSUS_LEADER_MODE");
         std::env::remove_var("TET_BASE_BLOCK_REWARD");
@@ -4148,6 +4149,148 @@ fn test_p2p_keystore_persistence() {
     assert_eq!(pid1, pid2, "PeerId must persist across loads");
 }
 
+// ── PHASE_1_GENESIS_SPEC §2.4: per-plane libp2p identities ──────────────────────────────────────
+
+/// The derivation is the one the spec writes down, checked against an independent implementation:
+/// the seeds and PeerIds below were computed in Python (`hmac`/`hashlib` HKDF-SHA256 with no salt,
+/// `cryptography` Ed25519, hand-rolled identity multihash + base58btc), not by this code. A label,
+/// salt or KDF change moves every node's PeerIds, so it has to show up here first.
+#[test]
+fn plane_keys_match_the_spec_derivation_vector() {
+    use crate::p2p_keystore::{Plane, PlaneKeys, plane_seed};
+    let root_secret = [7u8; 32];
+    let expected = [
+        (
+            Plane::Block,
+            "24c5a18e8f207fd9d5933287ae7f3e9879f0ee959c219e7115f116d67c16b95c",
+            "12D3KooWE8t3Hm9Y6Si5xZGEVfRoM8b7js2MA8LX2ufarRhNwT3F",
+        ),
+        (
+            Plane::Nexus,
+            "726092ee75cc3dc647c51aeeb416e5d5a5b2fbe65d8374f290a098a388b4e35f",
+            "12D3KooWFopAPEJ19XqdwwQzy87vvfYCPkD3TjaSr895RA7ucrtB",
+        ),
+        (
+            Plane::Ledger,
+            "e3e5a66ff2806fee73ac49c9b088abfce7dd5da9e2611e938bb34305ff4b6179",
+            "12D3KooWH4t3qbEPZACqNeFugWNaKt7ijKwv6iM6Vy3bvexf4HfC",
+        ),
+    ];
+    let mut root_bytes = root_secret;
+    let root = libp2p::identity::Keypair::ed25519_from_bytes(&mut root_bytes).unwrap();
+    assert_eq!(
+        libp2p::PeerId::from(root.public()).to_string(),
+        "12D3KooWRawPbxPtP1eZaJpumGnyWX2DcUyd3RQnydr3eAto4Az7",
+        "fixture root PeerId (Python) must match libp2p's encoding"
+    );
+    let keys = PlaneKeys::derive(&root).unwrap();
+    for (plane, seed_hex, peer_id) in expected {
+        assert_eq!(hex::encode(plane_seed(&root_secret, plane)), seed_hex, "{plane:?} seed");
+        assert_eq!(keys.peer_id(plane).to_string(), peer_id, "{plane:?} PeerId");
+    }
+}
+
+/// Every plane has its own PeerId, none of them is the root key's, and they survive a restart.
+/// The first is the property that makes a cross-plane dial an ordinary first connection; the
+/// last is what keeps published bootnode multiaddrs valid.
+#[test]
+fn plane_peer_ids_are_distinct_stable_and_never_the_root() {
+    use crate::p2p_keystore::{P2pKeystore, Plane};
+    let tmp = tempfile::tempdir().unwrap();
+    let ks = P2pKeystore::load_or_create(tmp.path()).unwrap();
+    let root = ks.peer_id();
+    let keys = ks.plane_keys().unwrap();
+    let ids: Vec<_> = Plane::ALL.iter().map(|p| keys.peer_id(*p)).collect();
+    for (i, a) in ids.iter().enumerate() {
+        assert_ne!(*a, root, "{:?} must not reuse the root identity", Plane::ALL[i]);
+        for (j, b) in ids.iter().enumerate().skip(i + 1) {
+            assert_ne!(a, b, "{:?} and {:?} share a PeerId", Plane::ALL[i], Plane::ALL[j]);
+        }
+    }
+    let reloaded = P2pKeystore::load_or_create(tmp.path()).unwrap().plane_keys().unwrap();
+    for p in Plane::ALL {
+        assert_eq!(reloaded.peer_id(p), keys.peer_id(p), "{p:?} PeerId must persist");
+    }
+}
+
+/// The nexus and ledger swarms are built under their own plane's identity from the same
+/// `PlaneKeys`. (The block plane is covered over the wire by
+/// `block_sync::block_swarm_is_reached_at_its_plane_peer_id`, because its swarm is built inside
+/// the spawned task.)
+#[tokio::test]
+async fn nexus_and_ledger_swarms_use_their_own_plane_identity() {
+    use crate::p2p_keystore::{P2pKeystore, Plane};
+    let _g = env_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let keys = P2pKeystore::load_or_create(tmp.path()).unwrap().plane_keys().unwrap();
+
+    let (_nexus, nexus_id) = crate::p2p_network::build_nexus_swarm(&keys).unwrap();
+    assert_eq!(nexus_id, keys.peer_id(Plane::Nexus), "nexus swarm identity");
+
+    let prev = std::env::var("TET_LEDGER_P2P_LISTEN").ok();
+    unsafe { std::env::set_var("TET_LEDGER_P2P_LISTEN", "/ip4/127.0.0.1/tcp/0") };
+    let nm = crate::network::NetworkManager::new("t".into(), &keys).await.unwrap();
+    unsafe {
+        match prev {
+            Some(v) => std::env::set_var("TET_LEDGER_P2P_LISTEN", v),
+            None => std::env::remove_var("TET_LEDGER_P2P_LISTEN"),
+        }
+    }
+    assert_eq!(nm.local_peer_id(), keys.peer_id(Plane::Ledger), "ledger swarm identity");
+    assert_ne!(nexus_id, nm.local_peer_id(), "two planes, one PeerId");
+}
+
+/// `FileAnnounce.storage_node` is resolved by `files_fetch` on the block plane and sits inside the
+/// signed envelope pre-image, so the identity a node gives for it is its block-plane PeerId.
+#[test]
+fn storage_node_is_the_block_plane_peer_id() {
+    use crate::p2p_keystore::{P2pKeystore, Plane};
+    let tmp = tempfile::tempdir().unwrap();
+    let keys = P2pKeystore::load_or_create(tmp.path()).unwrap().plane_keys().unwrap();
+    assert_eq!(keys.storage_node_peer_id(), keys.peer_id(Plane::Block));
+    assert_ne!(keys.storage_node_peer_id(), keys.peer_id(Plane::Nexus));
+    assert_ne!(keys.storage_node_peer_id(), keys.peer_id(Plane::Ledger));
+}
+
+/// `TET_PEER_ID` was renamed `TET_NODE_LABEL`. A node still setting it must not start, because
+/// ignoring it would change its producer id to `local-wallet` without a word. Empty was ignored
+/// before the rename and still is.
+#[test]
+fn retired_tet_peer_id_env_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    unsafe { std::env::set_var("TET_PEER_ID", "alice") };
+    let refused = crate::consensus::refuse_retired_peer_id_env();
+    unsafe { std::env::set_var("TET_PEER_ID", "  ") };
+    let empty = crate::consensus::refuse_retired_peer_id_env();
+    unsafe { std::env::remove_var("TET_PEER_ID") };
+    let unset = crate::consensus::refuse_retired_peer_id_env();
+    let err = refused.expect_err("a set TET_PEER_ID must be refused");
+    assert!(err.contains("TET_NODE_LABEL"), "the error names the new variable: {err}");
+    assert_eq!(empty, Ok(()));
+    assert_eq!(unset, Ok(()));
+}
+
+/// Both readers of the label — the consensus node id and the startup config that `--producer-key`
+/// prints the genesis entry from — read `TET_NODE_LABEL` and not the retired name.
+#[test]
+fn node_label_is_read_from_tet_node_label() {
+    let _g = env_lock();
+    set_test_env_base();
+    unsafe {
+        std::env::set_var("TET_NODE_LABEL", "bob");
+        std::env::set_var("TET_PEER_ID", "alice");
+    }
+    let consensus_id = crate::consensus::local_node_id_from_env();
+    let startup_id = crate::StartupConfig::from_env().initial_wallet;
+    unsafe {
+        std::env::remove_var("TET_NODE_LABEL");
+        std::env::remove_var("TET_PEER_ID");
+    }
+    assert_eq!(consensus_id, "bob");
+    assert_eq!(startup_id, "bob");
+}
+
 /// Sprint 1 Phase C — in-process multi-node block sync integration tests.
 mod block_sync {
     use super::{env_lock, rest_state_for_tests, set_test_env_base, signed_env_for_tests};
@@ -4204,8 +4347,10 @@ mod block_sync {
         JoinHandle<()>,
     ) {
         let ks = crate::p2p_keystore::P2pKeystore::load_or_create(db_dir).unwrap();
-        let keypair = ks.keypair();
-        let peer_id = ks.peer_id();
+        let keys = ks.plane_keys().unwrap();
+        // The block plane's PeerId, as `main.rs` publishes for `TET_BOOTNODES`. A follower's dial
+        // names it, so a block swarm built under any other identity is unreachable here.
+        let peer_id = keys.peer_id(crate::p2p_keystore::Plane::Block);
 
         let port = alloc_tcp_port();
         let listen: Multiaddr = format!("/ip4/127.0.0.1/tcp/{port}")
@@ -4242,7 +4387,7 @@ mod block_sync {
             crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
             mempool.clone(),
-            keypair,
+            &keys,
             listen,
             hello_registry,
             catch_up_driver,
@@ -4447,6 +4592,80 @@ mod block_sync {
             );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
+    }
+
+    /// §2.4 over the wire: a follower that dials the block-plane multiaddr `main.rs` publishes
+    /// (`/p2p/<block PeerId>`) reaches the node, and the peer it records is that PeerId and none of
+    /// the node's other identities.
+    ///
+    /// The block swarm also runs mDNS, which would connect the two regardless of the dialled
+    /// PeerId — a fallback that could make a reachability check pass with the wrong key. So the
+    /// assertion is on *which* PeerId the follower recorded, which mDNS cannot fake.
+    #[tokio::test]
+    async fn block_swarm_is_reached_at_its_plane_peer_id() {
+        use crate::p2p_keystore::{P2pKeystore, Plane};
+        let _g = env_lock();
+        block_sync_env();
+
+        let n1 = spawn_node(None, true).await;
+        let ks1 = P2pKeystore::load_or_create(&n1.db_dir).unwrap();
+        let keys1 = ks1.plane_keys().unwrap();
+        let block_id = keys1.peer_id(Plane::Block).to_string();
+        assert!(n1.boot_multiaddr.ends_with(&block_id));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let db_dir = tmp.path().to_path_buf();
+        std::mem::forget(tmp);
+        let ledger2 = Arc::new(
+            crate::ledger::Ledger::open(db_dir.join("db").to_str().unwrap()).unwrap(),
+        );
+        ledger2.init_genesis_founder_premine_from_env().unwrap();
+        let _ = ledger2.apply_genesis_allocation("founder");
+        let keys2 = P2pKeystore::load_or_create(&db_dir).unwrap().plane_keys().unwrap();
+        unsafe {
+            std::env::set_var("TET_BOOTNODES", &n1.boot_multiaddr);
+            std::env::remove_var("TET_IS_BOOTNODE");
+        }
+        let hello2 = crate::sync::new_hello_registry();
+        let driver2 = crate::sync::new_catch_up_driver();
+        let board2 = crate::sync::new_block_sync_board(hello2.clone(), driver2.clone());
+        let port = alloc_tcp_port();
+        let (_g2, _f2, _t2, _a2, task2) = crate::p2p::start_mdns_ping_swarm(
+            ledger2.clone(),
+            Arc::new(Mutex::new(Vec::new())),
+            &keys2,
+            format!("/ip4/127.0.0.1/tcp/{port}").parse().unwrap(),
+            hello2.clone(),
+            driver2,
+            board2,
+            Arc::new(crate::tmail::store::TmailStore::open(&ledger2.sled_db()).unwrap()),
+            Arc::new(crate::files::storage::FileStore::open(&ledger2.sled_db()).unwrap()),
+            crate::swarm_health::SwarmHealth::new(),
+        )
+        .expect("follower block swarm");
+
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if hello2.lock().await.get(&block_id).is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "follower never recorded the node under its block-plane PeerId {block_id}; saw {:?}",
+                hello2.lock().await.heights_snapshot()
+            );
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        let reg = hello2.lock().await;
+        for other in [ks1.peer_id(), keys1.peer_id(Plane::Nexus), keys1.peer_id(Plane::Ledger)] {
+            assert!(
+                reg.get(&other.to_string()).is_none(),
+                "block plane answered under a non-block identity {other}"
+            );
+        }
+        drop(reg);
+        task2.abort();
+        stop(&[n1]);
     }
 
     /// C.1 — bootstrap mines, two followers catch up; heights within ±2; same state_root.

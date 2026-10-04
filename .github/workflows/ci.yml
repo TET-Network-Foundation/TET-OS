@@ -288,6 +288,14 @@ jobs:
             block_id_v3_golden_vector
             block_time_not_after_parent_is_refused
             block_ahead_of_the_clock_is_held_then_accepted
+            # Phase 1 §2.4: per-plane libp2p identities and the TET_PEER_ID -> TET_NODE_LABEL rename.
+            plane_keys_match_the_spec_derivation_vector
+            plane_peer_ids_are_distinct_stable_and_never_the_root
+            nexus_and_ledger_swarms_use_their_own_plane_identity
+            block_sync::block_swarm_is_reached_at_its_plane_peer_id
+            storage_node_is_the_block_plane_peer_id
+            retired_tet_peer_id_env_is_refused
+            node_label_is_read_from_tet_node_label
           )
           # Phase 1 §1 replaced the wall-clock pin (`wallclock_time_changes_spendability_for_the_same_block`)
           # with the fix's guards: the block's time decides, the node's clock does not.
