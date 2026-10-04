@@ -309,31 +309,11 @@ else
   warn "no TET_HC_URL set — probe will run but not report. Add it to /etc/tet/healthcheck.env"
 fi
 
-cat > /etc/systemd/system/tet-healthcheck.service <<EOF
-[Unit]
-Description=TET seed liveness probe
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/tet/healthcheck.env
-Environment=TET_HC_COMPOSE_DIR=$SEED_DIR
-ExecStart=/usr/local/bin/tet-healthcheck
-EOF
-
-cat > /etc/systemd/system/tet-healthcheck.timer <<'EOF'
-[Unit]
-Description=Run the TET seed liveness probe every minute
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=60s
-AccuracySec=5s
-
-[Install]
-WantedBy=timers.target
-EOF
+# The units are repository files (deploy/systemd/), so a deploy can refresh them from the same tree
+# it refreshes the probe from. The service names the seed directory; the file says /opt/TET-OS.
+sed "s#/opt/TET-OS#$SEED_DIR#g" "$SEED_DIR/deploy/systemd/tet-healthcheck.service" \
+  > /etc/systemd/system/tet-healthcheck.service
+install -m 0644 "$SEED_DIR/deploy/systemd/tet-healthcheck.timer" /etc/systemd/system/tet-healthcheck.timer
 
 systemctl daemon-reload
 systemctl enable --now tet-healthcheck.timer >/dev/null 2>&1

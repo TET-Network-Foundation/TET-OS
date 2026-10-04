@@ -71,6 +71,8 @@ zk-prove = ["risc0-zkvm/client"]
 
 [dev-dependencies]
 proptest = "1.6"
+# Paused time drives the swarm watchdog's real loop in tests (its tick is 20 s).
+tokio = { version = "1", features = ["test-util"] }
 # Router-level tests (ServiceExt::oneshot) -- asserts removed routes are really gone.
 tower = { version = "0.5", features = ["util"] }
 tempfile = "3"

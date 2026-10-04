@@ -12,6 +12,12 @@
 //!  2. [`spawn_watchdog`] — a task that translates that beacon into a systemd `sd_notify` heartbeat:
 //!     it only pets the watchdog while the loop is demonstrably alive, so a stalled loop causes
 //!     systemd to restart the unit *before* the box wedges.
+//!  3. **Self-exit** (added 2026-10-04): past a hard threshold the watchdog logs the evidence and
+//!     **exits the process non-zero**. The seeds run in Docker, where nothing listens for the
+//!     systemd ping; withholding it there did nothing, and Helsinki sat wedged for 33 h logging
+//!     "unit will be restarted" (`docs/postmortems/2026-10-04-producer-wedge-33h.md`). An exit is
+//!     the one signal every supervisor acts on: Docker's `restart: unless-stopped`, systemd's
+//!     `Restart=`, a shell loop.
 //!
 //! The heavy-work fix itself lives in `p2p.rs` (offloading the blocking ledger calls via
 //! `tokio::task::spawn_blocking`); this module is the detection + auto-recovery layer.
@@ -23,6 +29,14 @@ use std::time::Duration;
 /// Default stall threshold (ms). The loop ticks at least once per second (1s `catch_up_interval`),
 /// so 90s is far above the healthy cadence and avoids false positives during brief GC/IO hiccups.
 pub const DEFAULT_STALL_THRESHOLD_MS: u64 = 90_000;
+
+/// Default hard threshold (ms) past which a stalled loop exits the process. Twice the stall
+/// threshold: long enough that a slow-but-alive loop recovers by itself, short enough that a wedge
+/// costs minutes, not hours.
+pub const DEFAULT_EXIT_AFTER_MS: u64 = 180_000;
+
+/// Process exit status when the watchdog gives up on a stalled loop (`EX_SOFTWARE`).
+pub const STALL_EXIT_CODE: i32 = 70;
 
 /// Shared handle to the swarm liveness beacon.
 pub type SharedSwarmHealth = Arc<SwarmHealth>;
@@ -123,6 +137,63 @@ pub fn stall_threshold_ms_from_env() -> u64 {
         .unwrap_or(DEFAULT_STALL_THRESHOLD_MS)
 }
 
+/// Hard threshold from `TET_SWARM_EXIT_AFTER_MS` (default [`DEFAULT_EXIT_AFTER_MS`]). `0` disables
+/// the self-exit, for a debugging session that wants to attach to a wedged process.
+pub fn exit_after_ms_from_env() -> u64 {
+    std::env::var("TET_SWARM_EXIT_AFTER_MS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_EXIT_AFTER_MS)
+}
+
+/// What one watchdog tick should do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchdogAction {
+    /// Loop not started yet (booting): do nothing.
+    Wait,
+    /// Loop alive: pet the systemd watchdog.
+    Pet,
+    /// Stalled past the stall threshold: withhold the ping and log.
+    Withhold { age_ms: u64 },
+    /// Stalled past the hard threshold: log the evidence and exit the process.
+    Exit { age_ms: u64 },
+}
+
+/// Decide one tick. `exit_after_ms == 0` never exits.
+pub fn watchdog_action(
+    health: &SwarmHealth,
+    now_ms: u64,
+    stall_threshold_ms: u64,
+    exit_after_ms: u64,
+) -> WatchdogAction {
+    if !health.started() {
+        return WatchdogAction::Wait;
+    }
+    if health.is_healthy(now_ms, stall_threshold_ms) {
+        return WatchdogAction::Pet;
+    }
+    let age_ms = health.since_last_tick_ms(now_ms).unwrap_or(0);
+    if exit_after_ms > 0 && age_ms > exit_after_ms {
+        WatchdogAction::Exit { age_ms }
+    } else {
+        WatchdogAction::Withhold { age_ms }
+    }
+}
+
+/// What the watchdog calls instead of returning when it gives up. Production exits the process;
+/// tests inject a recorder.
+pub type ExitHook = Arc<dyn Fn(String) + Send + Sync>;
+
+/// The production [`ExitHook`]: log, flush, and exit with [`STALL_EXIT_CODE`].
+pub fn exit_process_hook() -> ExitHook {
+    Arc::new(|evidence: String| {
+        log::error!("{evidence}");
+        log::logger().flush();
+        eprintln!("{evidence}");
+        std::process::exit(STALL_EXIT_CODE);
+    })
+}
+
 /// Spawn the systemd watchdog task.
 ///
 /// Sends `READY=1` once the swarm loop has started, then pets the watchdog (`WATCHDOG=1`) on a cadence
@@ -135,6 +206,19 @@ pub fn stall_threshold_ms_from_env() -> u64 {
 pub fn spawn_watchdog(
     health: SharedSwarmHealth,
     stall_threshold_ms: u64,
+    exit_after_ms: u64,
+) -> tokio::task::JoinHandle<()> {
+    spawn_watchdog_with(health, stall_threshold_ms, exit_after_ms, exit_process_hook(), Arc::new(now_ms))
+}
+
+/// [`spawn_watchdog`] with the exit hook and the clock injected, so the real loop can be driven by
+/// a test.
+pub fn spawn_watchdog_with(
+    health: SharedSwarmHealth,
+    stall_threshold_ms: u64,
+    exit_after_ms: u64,
+    exit_hook: ExitHook,
+    clock: Arc<dyn Fn() -> u64 + Send + Sync>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut wd_usec: u64 = 0;
@@ -149,14 +233,16 @@ pub fn spawn_watchdog(
             Duration::from_secs(20)
         };
         log::info!(
-            "[swarm-health] watchdog started under_systemd_watchdog={under_watchdog} ping_interval={ping_interval:?} stall_threshold_ms={stall_threshold_ms}"
+            "[swarm-health] watchdog started under_systemd_watchdog={under_watchdog} ping_interval={ping_interval:?} stall_threshold_ms={stall_threshold_ms} exit_after_ms={exit_after_ms}"
         );
 
         let mut ready_sent = false;
         let mut ticker = tokio::time::interval(ping_interval);
         loop {
             ticker.tick().await;
-            if !health.started() {
+            let now = clock();
+            let action = watchdog_action(&health, now, stall_threshold_ms, exit_after_ms);
+            if action == WatchdogAction::Wait {
                 continue;
             }
             if !ready_sent {
@@ -164,14 +250,27 @@ pub fn spawn_watchdog(
                 ready_sent = true;
                 log::info!("[swarm-health] sd_notify READY=1 sent (loop is live)");
             }
-            let now = now_ms();
-            if health.is_healthy(now, stall_threshold_ms) {
-                let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Watchdog]);
-            } else {
-                let age = health.since_last_tick_ms(now).unwrap_or(0);
-                log::error!(
-                    "[swarm-health] block-plane event loop STALLED age_ms={age} > {stall_threshold_ms}ms; withholding systemd watchdog ping (unit will be restarted)"
-                );
+            match action {
+                WatchdogAction::Wait => {}
+                WatchdogAction::Pet => {
+                    let _ = sd_notify::notify(false, &[sd_notify::NotifyState::Watchdog]);
+                }
+                WatchdogAction::Withhold { age_ms } => {
+                    log::error!(
+                        "[swarm-health] block-plane event loop STALLED age_ms={age_ms} > {stall_threshold_ms}ms; withholding the systemd watchdog ping; exiting at {exit_after_ms}ms"
+                    );
+                }
+                WatchdogAction::Exit { age_ms } => {
+                    exit_hook(format!(
+                        "[swarm-health] block-plane event loop STALLED age_ms={age_ms} > exit_after_ms={exit_after_ms}; \
+                         last_tick_ms={} tick_count={} peers={} listeners={}; exiting with status {STALL_EXIT_CODE} so the supervisor restarts the node",
+                        health.last_tick_ms(),
+                        health.tick_count(),
+                        health.connected_peers(),
+                        health.listeners(),
+                    ));
+                    return;
+                }
             }
         }
     })

@@ -64,7 +64,7 @@ run() {
   local state="$WORK/state-$1"; shift
   : > "$CALLS"
   env PATH="$STUBS:$PATH" TET_HC_URL="https://hc.example/abc123" TET_HC_STATE_DIR="$state" \
-      TET_HC_COMPOSE_DIR="$WORK/nonexistent" TET_HC_STALL_SEC=300 "$@" \
+      TET_HC_COMPOSE_DIR="$WORK/nonexistent" TET_HC_UNIT_DIR="$WORK/units" TET_HC_STALL_SEC=300 "$@" \
       bash "$SCRIPT" > "$WORK/out" 2>&1
   echo $? > "$WORK/rc"
 }
@@ -109,6 +109,72 @@ if has 'PING /fail | node OK at height 8, but this monitor is stale'; then pass 
 cp "$SCRIPT" "$WORK/tree/deploy/seed-healthcheck.sh"
 run stale FAKE_HEIGHT=9 FAKE_NOW=1120 TET_HC_COMPOSE_DIR="$WORK/tree"
 if has 'PING  | height=9' && ! has '/fail'; then pass "installed copy matches the tree → success"; else flunk "installed copy matches the tree → success"; fi
+
+# --- the systemd units are checked too ---------------------------------------------------------
+mkdir -p "$WORK/utree/deploy/systemd" "$WORK/units"
+cp "$SCRIPT" "$WORK/utree/deploy/seed-healthcheck.sh"
+cp "$HERE/../systemd/tet-healthcheck.service" "$HERE/../systemd/tet-healthcheck.timer" "$WORK/utree/deploy/systemd/"
+# Installed as provision installs it: the service with the seed directory substituted.
+sed "s#/opt/TET-OS#$WORK/utree#g" "$HERE/../systemd/tet-healthcheck.service" > "$WORK/units/tet-healthcheck.service"
+cp "$HERE/../systemd/tet-healthcheck.timer" "$WORK/units/"
+run units FAKE_HEIGHT=1 FAKE_NOW=1000 TET_HC_COMPOSE_DIR="$WORK/utree"
+run units FAKE_HEIGHT=2 FAKE_NOW=1060 TET_HC_COMPOSE_DIR="$WORK/utree"
+if has 'PING  | height=2' && ! has '/fail'; then pass "installed units match the tree → success"; else flunk "installed units match the tree → success"; fi
+echo "OnUnitActiveSec=300s" >> "$WORK/units/tet-healthcheck.timer"
+run units FAKE_HEIGHT=3 FAKE_NOW=1120 TET_HC_COMPOSE_DIR="$WORK/utree"
+if has "PING /fail | node OK at height 3, but this monitor is stale: $WORK/units/tet-healthcheck.timer differs"; then pass "an installed unit differs from the tree → /fail"; else flunk "an installed unit differs from the tree → /fail"; fi
+
+# The units ship from the repository: provision installs these files rather than writing its own.
+if grep -q 'deploy/systemd/tet-healthcheck.service' "$HERE/../provision-seed.sh" \
+   && ! grep -q 'cat > /etc/systemd/system/tet-healthcheck' "$HERE/../provision-seed.sh"; then
+  pass "provision installs the units from deploy/systemd/"
+else flunk "provision installs the units from deploy/systemd/"; fi
+
+# --- part 2: a producer restarts on a wedge, saving the logs first ----------------------------
+# A seed tree like /opt/TET-OS: an .env naming the profile, and the deployed copy of the monitor.
+seed_tree() {  # NAME RISC0_SKIP_BUILD
+  mkdir -p "$WORK/$1/deploy" "$WORK/$1-evidence"
+  printf 'RISC0_SKIP_BUILD=%s\n' "$2" > "$WORK/$1/.env"
+  cp "$SCRIPT" "$WORK/$1/deploy/seed-healthcheck.sh"
+}
+wedge() {  # STATE TREE NOW [VAR=value ...]
+  local st="$1" tree="$2" t="$3"; shift 3
+  run "$st" FAKE_REST=down FAKE_NOW="$t" TET_HC_COMPOSE_DIR="$WORK/$tree" \
+      TET_HC_EVIDENCE_DIR="$WORK/$tree-evidence" "$@"
+}
+logs_before_restart() { awk '/^DOCKER logs/{l=NR} /^COMPOSE/{c=NR} END{exit !(l && c && l < c)}' "$CALLS"; }
+
+T=1700000000   # a real clock: "never restarted" (last_restart 0) must be far outside the cooldown
+seed_tree prod 0
+wedge w1 prod $((T + 0))
+if has 'PING /fail | REST /ledger/state unreachable (down 0s)' && ! has '^COMPOSE'; then pass "REST down, inside the window → /fail, no restart yet"; else flunk "REST down, inside the window → /fail, no restart yet"; fi
+wedge w1 prod $((T + 400))
+if has '^COMPOSE -f docker-compose.yml -f deploy/docker-compose.seed.yml restart tet-core$' \
+   && has 'PING /fail | REST /ledger/state unreachable for 400s — restarted tet-core; logs saved to'; then
+  pass "producer, REST down past the window → restart (production profile files)"
+else flunk "producer, REST down past the window → restart (production profile files)"; fi
+if logs_before_restart && grep -q 'fake container log line' "$WORK"/prod-evidence/tet-wedge-*.log; then pass "the container's logs are saved before the restart"; else flunk "the container's logs are saved before the restart"; fi
+wedge w1 prod $((T + 500))
+if ! has '^COMPOSE' && has 'NOT restarting (last restart 100s ago'; then pass "inside the cooldown → alert, no second restart"; else flunk "inside the cooldown → alert, no second restart"; fi
+
+seed_tree quick 1
+wedge w2 quick $((T + 0))
+wedge w2 quick $((T + 400))
+if has '^COMPOSE -f docker-compose.yml -f docker-compose.dev.yml -f deploy/docker-compose.seed.yml restart tet-core$'; then pass "quickstart profile → the dev overlay is included"; else flunk "quickstart profile → the dev overlay is included"; fi
+
+run w3 FAKE_HEALTH=unhealthy FAKE_NOW=$((T + 0)) TET_HC_COMPOSE_DIR="$WORK/prod" TET_HC_EVIDENCE_DIR="$WORK/prod-evidence"
+run w3 FAKE_HEALTH=unhealthy FAKE_NOW=$((T + 400)) TET_HC_COMPOSE_DIR="$WORK/prod" TET_HC_EVIDENCE_DIR="$WORK/prod-evidence"
+if has '^COMPOSE .* restart tet-core$' && logs_before_restart; then pass "producer, container unhealthy past the window → logs saved, restart"; else flunk "producer, container unhealthy past the window → logs saved, restart"; fi
+
+wedge w4 prod $((T + 0)) TET_HC_ALLOW_RESTART=0
+wedge w4 prod $((T + 400)) TET_HC_ALLOW_RESTART=0
+if ! has '^COMPOSE' && ! has '^DOCKER logs' && has 'does not produce blocks, so NOT restarting'; then pass "follower, REST down past the window → alert only"; else flunk "follower, REST down past the window → alert only"; fi
+
+# A REST answer ends the down streak: a later outage starts its window from zero.
+wedge w5 prod $((T + 0))
+run w5 FAKE_HEIGHT=50 FAKE_NOW=$((T + 60)) TET_HC_COMPOSE_DIR="$WORK/prod"
+wedge w5 prod $((T + 400))
+if has '(down 0s)' && ! has '^COMPOSE'; then pass "recovery resets the down streak"; else flunk "recovery resets the down streak"; fi
 
 echo
 if [ "$failed" -eq 0 ]; then echo "all passed"; exit 0; else echo "$failed FAILED"; exit 1; fi
