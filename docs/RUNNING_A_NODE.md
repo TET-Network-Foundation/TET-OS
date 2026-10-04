@@ -748,6 +748,19 @@ COPYFILE_DISABLE=1 git archive --format=tar HEAD \
 ssh root@95.217.158.153 'cd /opt/TET-OS && bash deploy/provision-seed.sh'
 ```
 
+**Updating a running seed without touching `.env`.** `provision-seed.sh` rewrites `.env`, so a
+routine update pushes the tree, rebuilds with the compose files the seed's profile uses, and
+**reinstalls the monitor**. A deploy refreshes `/opt/TET-OS` and nothing else, and on 2026-10-04
+both seeds were found running healthcheck copies weeks old:
+
+```bash
+COPYFILE_DISABLE=1 git archive --format=tar <commit> | ssh -p 443 root@<host> 'tar -x -C /opt/TET-OS'
+ssh -p 443 root@<host> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0_SKIP_BUILD=1" .env && f="$f -f docker-compose.dev.yml"; docker compose $f -f deploy/docker-compose.seed.yml up -d --build tet-core && install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck'
+```
+
+The monitor compares itself with `/opt/TET-OS/deploy/seed-healthcheck.sh` on every run and reports
+`this monitor is stale` if the reinstall was skipped.
+
 The seed holds **no** credential — the source is pushed over the operator's own SSH session rather
 than pulled with a key, so a host whose whole job is accepting connections from strangers on 8002
 has nothing to steal. `git archive HEAD` ships tracked files only, so `deploy/secrets/` and `.env`
@@ -989,4 +1002,38 @@ Both paths were exercised on Nuremberg rather than assumed, by forcing the stall
   Helsinki's self-healing.
 
 If you add a third node, set `TET_HC_ALLOW_RESTART=0` unless it is in the validator set.
+
+### What the probe does (since 2026-10-04)
+
+- **Success is pinged only when the height has advanced** since the last run. The first run
+  records a baseline. A flat height inside `TET_HC_STALL_SEC` pings nothing, so the check's grace
+  period turns lasting silence red.
+- **Every failure pings `/fail` with its reason**, and every ping's answer is checked: anything
+  but `OK` is logged as `PING NOT ACCEPTED`.
+- **On a producer, a node it cannot read counts as stalled.** An unhealthy container or an
+  unreachable `/ledger/state` for `TET_HC_STALL_SEC` leads to the same restart as a stalled height,
+  at most once per `TET_HC_RESTART_COOLDOWN_SEC`. **Before restarting it saves `docker logs` to
+  `$TET_HC_EVIDENCE_DIR/tet-wedge-<UTC>.log`** (default `/root`, newest 10 kept).
+- The node itself exits with status 70 when its block-plane loop has been stalled for
+  `TET_SWARM_EXIT_AFTER_MS` (default 180 000; `0` disables). Docker's restart policy then restarts
+  it, usually before the probe's window ends.
+
+See `docs/postmortems/2026-10-04-producer-wedge-33h.md` for why each of these exists.
+
+### Alerts that reach a person
+
+healthchecks.io went red within a minute of the 2026-10-04 wedge, and the only notification was an
+email that nobody read for 33 hours. Both checks need a **push** channel as well as email:
+
+1. healthchecks.io → the project → **Integrations** → **Add Integration**.
+2. Pick a channel that notifies a phone. Either:
+   - **Telegram:** choose *Telegram*, follow the link to the Healthchecks bot, press *Start*, and
+     confirm in the browser tab it opens.
+   - **ntfy:** install the ntfy app, subscribe to a hard-to-guess topic, then choose *ntfy* in
+     healthchecks.io with that topic. Anyone who knows the topic can read the alerts, so treat it
+     as a secret.
+3. On the integration's page, make sure it is **enabled for both checks** (Helsinki and Nuremberg).
+   A new integration is not always assigned to existing checks.
+4. Press **Test!** on the integration and confirm the phone actually buzzes.
+5. Keep each check at **period 1 minute, grace 5 minutes**.
 
