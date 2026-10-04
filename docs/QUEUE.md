@@ -55,7 +55,7 @@ Queue table above, and these are not autonomous.
 
 | Item | Spec | Autonomous | Status |
 |---|---|---|---|
-| **Block-plane accept-loop refactor**: get every blocking call off the swarm event loop, so the loop cannot wedge (2026-05-30, 06-05, 06-06, 10-03). **Design first, read-only:** read the 10-04 evidence on Helsinki (`/root/helsinki-wedge-20261004T1507Z.*`, including `ss` on :8002), list every await and blocking call on the loop, propose the detached-task structure. No code until the design is reviewed | [postmortem](./postmortems/2026-10-04-producer-wedge-33h.md) § Open; `ebc80d3`; `TET_STATE_2026-09.md` items 4 and 7 | **no** — design first, then a reviewed implementation | ready (design) |
+| **Block-plane accept-loop refactor**: get every blocking call off the swarm event loop, so the loop cannot wedge (2026-05-30, 06-05, 06-06, 10-03). **Design first, read-only:** read the 10-04 evidence on Helsinki (`/root/helsinki-wedge-20261004T1507Z.*`, including `ss` on :8002), list every await and blocking call on the loop, propose the detached-task structure. No code until the design is reviewed. Lead: at 06:25:09 the auto-mine task went silent together with the loop, right after a `sync_hello` (postmortem § Checked hypothesis), which suggests a lock the loop holds and auto-mine waits on | [postmortem](./postmortems/2026-10-04-producer-wedge-33h.md) § Open; `ebc80d3`; `TET_STATE_2026-09.md` items 4 and 7 | **no** — design first, then a reviewed implementation | ready (design) |
 
 ## Decisions
 
