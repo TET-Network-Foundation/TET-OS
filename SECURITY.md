@@ -60,6 +60,19 @@ registrations *their node has seen*. On today's testnet that set is small, so th
 small. Registration is free, so there is no sybil resistance until the Phase 1 escrow. This is
 disclosed in the product itself, not only here.
 
+**What an anonymous send reveals, and to whom.** The node receives a download of its whole registry,
+a content-addressed receipt and an envelope signed by a one-day key. None of these names the sender,
+and two guards check that: the node half in tet-core (requests, logs and stored state) and the client
+half in `scripts/anon_poster_guard.mjs`. The member secret goes only to the native prover on the
+sender's own machine (`tet-prover-host`, loopback only). Not hidden: the sender's IP address and
+request timing, from their node and the first relaying peer. Registration itself is public.
+
+**Fixed: the desktop's anonymous mode could send a named message.** Before #17, ticking *Send
+anonymously* sent the wallet id to the node
+(`POST /tmail/anon/send`). Once that answered, the button sent an ordinary envelope signed by the
+user's own wallet. Anyone who used anonymous mode from the desktop before then should treat those
+messages as signed by their own wallet. Anonymous sends from the step scripts were not affected.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about

@@ -13,8 +13,15 @@
  *    `/tmail/anon/path/<commitment>` → FAILED.
  * 3. SECURITY REGRESSION GUARD: anonymous mode never takes the named send path, which signs with
  *    the user's own wallet. Negative control: `sendPathFor` returns "named" → FAILED.
+ * 4. Every send ends. With no native prover the send ends in `failed` with ANON_PROVER_MISSING
+ *    (a real refused connection, not a mock); a prover that never answers ends the send at the
+ *    budget; a real local HTTP prover takes it to `sent`. Each run has a watchdog, so "stuck in
+ *    proving" fails the guard instead of hanging it.
+ *    Negative controls: `runAnonPost` awaits `prove` without `withinBudget` → FAILED (watchdog);
+ *    `makeHelperProver` throws a plain Error on a refused connection → FAILED (message).
  */
 
+import http from "node:http";
 import { sha256 } from "@noble/hashes/sha2";
 import {
   anonCommitment,
@@ -24,7 +31,13 @@ import {
   tmailEphemeralSeed,
   toHex,
 } from "../app/lib/anon_tree.mjs";
-import { ANONYMOUS_SENTINEL, runAnonPost, sendPathFor } from "../app/lib/anon_poster.mjs";
+import {
+  ANON_PROVER_MISSING,
+  ANONYMOUS_SENTINEL,
+  makeHelperProver,
+  runAnonPost,
+  sendPathFor,
+} from "../app/lib/anon_poster.mjs";
 
 let failed = 0;
 function check(name, ok, detail = "") {
@@ -182,6 +195,91 @@ function deps(node, states, proveCalls) {
 // ---- 3. anonymous mode never takes the named path -------------------------------------------
 check("SECURITY: anonymous mode uses the anonymous path", sendPathFor({ anonymous: true }) === "anonymous");
 check("named mode uses the named path", sendPathFor({ anonymous: false }) === "named");
+
+// ---- 4. every send ends -----------------------------------------------------------------------
+const WATCHDOG_MS = 5000;
+async function endsWithin(run) {
+  let timer;
+  const watchdog = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ state: "still running", reason: `after ${WATCHDOG_MS} ms` }), WATCHDOG_MS);
+  });
+  try {
+    return await Promise.race([run(), watchdog]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+const input = { memberSecret, receiverWalletId: "cd".repeat(32), plaintext: "hello" };
+
+// No prover: a port that was just closed, so the refusal is real.
+{
+  const port = await new Promise((resolve) => {
+    const srv = http.createServer().listen(0, "127.0.0.1", () => {
+      const p = srv.address().port;
+      srv.close(() => resolve(p));
+    });
+  });
+  const { node } = fakeNode();
+  const states = [];
+  const d = { ...deps(node, states, []), prove: makeHelperProver({ url: `http://127.0.0.1:${port}` }) };
+  const out = await endsWithin(() => runAnonPost(d, input));
+  check(
+    "no native prover → failed with the documented message",
+    out.state === "failed" && out.reason.startsWith(ANON_PROVER_MISSING),
+    JSON.stringify(out),
+  );
+  check("…and the last state is not proving", states[states.length - 1] === "failed", states.join(">"));
+}
+
+// A prover that never answers: the send's own budget ends it.
+{
+  const { node } = fakeNode();
+  const d = { ...deps(node, [], []), prove: () => new Promise(() => {}), proveBudgetMs: 100 };
+  const t0 = Date.now();
+  const out = await endsWithin(() => runAnonPost(d, input));
+  check(
+    "a silent prover → failed at the budget, not proving forever",
+    out.state === "failed" && /did not finish/.test(out.reason) && Date.now() - t0 < WATCHDOG_MS,
+    JSON.stringify(out),
+  );
+}
+
+// A daemon built without its guest answers 503: that is "no usable prover", said the same way.
+{
+  const { node } = fakeNode();
+  const fetchImpl = async () => new Response('{"error":"guest ELF empty"}', { status: 503 });
+  const d = { ...deps(node, [], []), prove: makeHelperProver({ fetchImpl }) };
+  const out = await endsWithin(() => runAnonPost(d, input));
+  check("prover without its guest → the documented message", out.state === "failed" && out.reason.startsWith(ANON_PROVER_MISSING), JSON.stringify(out));
+}
+
+// A real local HTTP prover: the request it receives, and a send that reaches sent.
+{
+  let seen = null;
+  const srv = http.createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      seen = { path: req.url, body: JSON.parse(body) };
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        receipt_b64: "cmVjZWlwdA==", journal_b64: "am91cm5hbA==",
+        image_id_hex: "00".repeat(32), receipt_sha256_hex: "ab".repeat(32),
+      }));
+    });
+  });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const { node } = fakeNode();
+  const d = { ...deps(node, [], []), prove: makeHelperProver({ url: `http://127.0.0.1:${srv.address().port}` }) };
+  const out = await endsWithin(() => runAnonPost(d, input));
+  srv.close();
+  check("local prover → sent", out.state === "sent", JSON.stringify(out));
+  check(
+    "the prover gets the guest inputs, path computed by the client",
+    seen?.path === "/prove_anon" && seen.body.siblings_hex.length === 20 && seen.body.index === 1,
+    seen ? `index=${seen.body.index}` : "no request",
+  );
+}
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

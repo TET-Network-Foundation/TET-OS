@@ -548,6 +548,37 @@ relying on either.
 **Retention.** A conversation keeps its newest **5** messages; older ones are deleted from the
 store, not hidden. Override with `TET_TMAIL_RETAIN_PER_CONVERSATION`.
 
+### Anonymous sending
+
+The desktop's **Send anonymously** needs the **native prover on the sender's own computer**. The
+browser cannot build the membership proof (it is a RISC Zero proof, ~33 s of native work), and the
+proof needs the member secret, which must not go to a node.
+
+```bash
+# from the repository root, on the machine you browse from — not on the server
+cargo run --release -p tet-prover-host      # listens on http://127.0.0.1:9945 only
+```
+
+The first build compiles the zkVM guest and needs the RISC Zero toolchain (`rzup install`, see §1).
+A build with `RISC0_SKIP_BUILD=1` starts, but answers `503` to `POST /prove_anon`. The desktop
+treats that the same as no prover. Point the UI elsewhere with `NEXT_PUBLIC_TET_PROVER_URL`.
+
+Without it, an anonymous send ends with *"anonymous send needs the native prover (see docs)"*.
+It does not sit in a proving state. With it, the flow is:
+
+1. **Register once** (Messages → Send anonymously → *Register this wallet*). This is public: it
+   publishes a commitment signed by your wallet, so anyone can see that the wallet is a member. You
+   join your node's anonymity set at the next registry epoch (60 s).
+2. **Send.** The browser downloads the node's whole registry (`GET /tmail/anon/leaves`), finds your
+   leaf and computes its path. The local prover proves membership, the browser deposits the
+   receipt (`PUT /tmail/anon/receipt`), and the message goes out signed by a one-day key derived for
+   that recipient. **None of these requests names your wallet.** A send gives up after five minutes
+   of proving.
+
+What it does not hide: your IP address and the timing of your requests, from your node and from the
+first peer to relay the message. Sending right after registering links the two. One member can
+send one anonymous message per recipient per UTC day.
+
 #### Multi-node
 
 For `tet-node-1`…`3`, see `tet-core/README.md`. Use `./scripts/print-bootnode.sh` for Docker PeerId
