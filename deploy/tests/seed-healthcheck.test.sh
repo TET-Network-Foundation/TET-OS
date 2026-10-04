@@ -64,7 +64,7 @@ run() {
   local state="$WORK/state-$1"; shift
   : > "$CALLS"
   env PATH="$STUBS:$PATH" TET_HC_URL="https://hc.example/abc123" TET_HC_STATE_DIR="$state" \
-      TET_HC_COMPOSE_DIR="$WORK/nonexistent" TET_HC_STALL_SEC=300 "$@" \
+      TET_HC_COMPOSE_DIR="$WORK/nonexistent" TET_HC_UNIT_DIR="$WORK/units" TET_HC_STALL_SEC=300 "$@" \
       bash "$SCRIPT" > "$WORK/out" 2>&1
   echo $? > "$WORK/rc"
 }
@@ -109,6 +109,26 @@ if has 'PING /fail | node OK at height 8, but this monitor is stale'; then pass 
 cp "$SCRIPT" "$WORK/tree/deploy/seed-healthcheck.sh"
 run stale FAKE_HEIGHT=9 FAKE_NOW=1120 TET_HC_COMPOSE_DIR="$WORK/tree"
 if has 'PING  | height=9' && ! has '/fail'; then pass "installed copy matches the tree → success"; else flunk "installed copy matches the tree → success"; fi
+
+# --- the systemd units are checked too ---------------------------------------------------------
+mkdir -p "$WORK/utree/deploy/systemd" "$WORK/units"
+cp "$SCRIPT" "$WORK/utree/deploy/seed-healthcheck.sh"
+cp "$HERE/../systemd/tet-healthcheck.service" "$HERE/../systemd/tet-healthcheck.timer" "$WORK/utree/deploy/systemd/"
+# Installed as provision installs it: the service with the seed directory substituted.
+sed "s#/opt/TET-OS#$WORK/utree#g" "$HERE/../systemd/tet-healthcheck.service" > "$WORK/units/tet-healthcheck.service"
+cp "$HERE/../systemd/tet-healthcheck.timer" "$WORK/units/"
+run units FAKE_HEIGHT=1 FAKE_NOW=1000 TET_HC_COMPOSE_DIR="$WORK/utree"
+run units FAKE_HEIGHT=2 FAKE_NOW=1060 TET_HC_COMPOSE_DIR="$WORK/utree"
+if has 'PING  | height=2' && ! has '/fail'; then pass "installed units match the tree → success"; else flunk "installed units match the tree → success"; fi
+echo "OnUnitActiveSec=300s" >> "$WORK/units/tet-healthcheck.timer"
+run units FAKE_HEIGHT=3 FAKE_NOW=1120 TET_HC_COMPOSE_DIR="$WORK/utree"
+if has "PING /fail | node OK at height 3, but this monitor is stale: $WORK/units/tet-healthcheck.timer differs"; then pass "an installed unit differs from the tree → /fail"; else flunk "an installed unit differs from the tree → /fail"; fi
+
+# The units ship from the repository: provision installs these files rather than writing its own.
+if grep -q 'deploy/systemd/tet-healthcheck.service' "$HERE/../provision-seed.sh" \
+   && ! grep -q 'cat > /etc/systemd/system/tet-healthcheck' "$HERE/../provision-seed.sh"; then
+  pass "provision installs the units from deploy/systemd/"
+else flunk "provision installs the units from deploy/systemd/"; fi
 
 # --- part 2: a producer restarts on a wedge, saving the logs first ----------------------------
 # A seed tree like /opt/TET-OS: an .env naming the profile, and the deployed copy of the monitor.
