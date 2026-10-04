@@ -484,12 +484,32 @@ fn leader_score(height: u64, validator_id: &str) -> [u8; 32] {
     h.finalize().into()
 }
 
+/// `TET_PEER_ID` is the retired name of `TET_NODE_LABEL`. It was never a libp2p `PeerId` — it is
+/// the fallback producer / wallet label — and the name misled in exactly the area where per-plane
+/// `PeerId`s now matter (PHASE_1_GENESIS_SPEC §2.4).
+///
+/// Refused rather than ignored: a node whose only label was `TET_PEER_ID` would otherwise come up
+/// as `local-wallet`, a different producer id, without a word. Rather than read it as an alias,
+/// which would keep the misleading name working indefinitely.
+pub fn refuse_retired_peer_id_env() -> Result<(), String> {
+    // Empty was ignored before the rename too, so it changes nothing and is not refused.
+    match std::env::var_os("TET_PEER_ID").filter(|v| !v.to_string_lossy().trim().is_empty()) {
+        None => Ok(()),
+        Some(_) => Err(
+            "TET_PEER_ID is no longer read: it was renamed TET_NODE_LABEL (it is the producer / \
+             wallet label, not a libp2p PeerId). Set TET_NODE_LABEL to the same value and unset \
+             TET_PEER_ID."
+                .to_string(),
+        ),
+    }
+}
+
 pub fn local_node_id_from_env() -> String {
     std::env::var("TET_WALLET_ID")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .or_else(|| {
-            std::env::var("TET_PEER_ID")
+            std::env::var("TET_NODE_LABEL")
                 .ok()
                 .filter(|s| !s.trim().is_empty())
         })

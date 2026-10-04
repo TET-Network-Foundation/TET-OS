@@ -12,7 +12,6 @@ use futures::StreamExt;
 use libp2p::core::transport::Transport as _;
 use libp2p::core::upgrade;
 use libp2p::gossipsub::{self, IdentTopic as Topic, MessageAuthenticity, ValidationMode};
-use libp2p::identity;
 use libp2p::kad::{self, store::MemoryStore};
 use libp2p::noise;
 use libp2p::swarm::{NetworkBehaviour, Swarm, SwarmEvent};
@@ -135,7 +134,14 @@ struct PeerBudget {
 }
 
 impl NetworkManager {
-    pub async fn new(_namespace: String, keypair: identity::Keypair) -> NetResult<Self> {
+    /// Build the ledger-plane swarm under its own identity, [`Plane::Ledger`] of `keys`.
+    ///
+    /// [`Plane::Ledger`]: crate::p2p_keystore::Plane::Ledger
+    pub async fn new(
+        _namespace: String,
+        keys: &crate::p2p_keystore::PlaneKeys,
+    ) -> NetResult<Self> {
+        let keypair = keys.keypair(crate::p2p_keystore::Plane::Ledger);
         let peer_id = PeerId::from(keypair.public());
 
         let transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true))
@@ -188,6 +194,11 @@ impl NetworkManager {
             tx,
             rx,
         })
+    }
+
+    #[cfg(test)]
+    pub fn local_peer_id(&self) -> PeerId {
+        *self.swarm.local_peer_id()
     }
 
     pub fn tx(&self) -> mpsc::UnboundedSender<Vec<u8>> {

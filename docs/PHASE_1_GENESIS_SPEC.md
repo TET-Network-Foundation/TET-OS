@@ -428,11 +428,15 @@ to generate, distribute or back up, and identities remain stable across restarts
 
 #### Two costs, both found by reading the code
 
-1. **`FileAnnounce.storage_node` must remain the block-plane `PeerId`.** It is a `PeerId` string
-   that `files_fetch` resolves on the block plane, and it is **bound into the signed envelope
-   pre-image** (`files/mod.rs:134-144`). Deriving it from the wrong plane does not fail loudly —
-   it invalidates envelopes at signature-verification time, far from the cause. Whatever populates
-   that field must be pinned to the block-plane identity explicitly, with a test.
+1. **`FileAnnounce.storage_node` is an opaque hint, not a `PeerId`** (decided 2026-10-04, option A
+   of [`PHASE1_ITEM4_STORAGE_NODE.md`](./PHASE1_ITEM4_STORAGE_NODE.md)). This cost first assumed
+   the field carries the block-plane `PeerId`. It never has: every client signs the literal
+   `"local"`, the node does not check its form, and `files_fetch` falls back to the first
+   connected block-plane peer. The field stays in the signed envelope pre-image
+   (`files/mod.rs:134-144`) as an unverified hint, and nothing pins it to a plane, so the
+   per-plane split cannot break it. Do not wire it to a `PeerId`. The envelope is gossiped and
+   already names `sender_wallet_id`, so a node `PeerId` there links a wallet to a machine
+   (option B, rejected). Finding which node holds a blob is a separate design item (`QUEUE.md`).
 
 2. **Every existing bootnode multiaddr must be republished.** Any plane whose label differs from
    today's derivation gets a new `PeerId`, including the block plane unless its label is chosen to
@@ -453,6 +457,35 @@ within one plane.
 in exactly the area this section is about, and it is read in only two places. Rename it to
 `TET_NODE_LABEL` (or fold it into `TET_WALLET_ID`) at the ceremony, when changing an env var
 contract is free.
+
+#### As built (2026-10-04, branch `phase1-item-4-per-plane-keys`)
+
+- **All three planes are derived, the block plane included.** `info` is exactly the three labels
+  above, `salt` is empty, the output is used as an Ed25519 seed. No label reproduces today's key,
+  so every plane's `PeerId` changes and the root key is never a wire identity. The alternative —
+  the block plane keeps the root key so its multiaddr survives — would leave one plane on a key no
+  other plane's derivation separates it from, to save a reissue the ceremony does anyway.
+  `plane_keys_match_the_spec_derivation_vector` pins the derivation against an independent Python
+  computation.
+- **The swarm constructors take `PlaneKeys` and select their own plane** (`start_mdns_ping_swarm` →
+  block, `start_p2p_node` / `build_nexus_swarm` → nexus, `NetworkManager::new` → ledger). `main.rs`
+  no longer holds a raw keypair to hand to the wrong swarm.
+- **A non-Ed25519 root is refused**, not replaced. `load_or_create` only ever wrote Ed25519. This
+  build compiles `libp2p-identity` with only `ed25519`, so such a file fails to *decode* at load;
+  `PlaneKeys::derive`'s own `try_into_ed25519` refusal is a second line that no test can reach
+  without enabling another key type. `plane_keys_refuse_a_non_ed25519_root` drives the reachable
+  refusal and checks that the file is left untouched.
+- **Banner.** `libp2p PeerId:` is now the block plane's, which is what `print-bootnode.sh`,
+  `start-network.sh` and `provision-seed.sh` grep for and what `TET_BOOTNODES` /
+  `TET_PRODUCER_PEERS` need. The nexus and ledger PeerIds follow on their own lines.
+- **`TET_PEER_ID` → `TET_NODE_LABEL`**, both readers (`StartupConfig`, `local_node_id_from_env`).
+  The old name is **refused at startup** when non-empty, not read as an alias: ignoring it would
+  move a node whose only label it was to `local-wallet`, a different producer id, in silence.
+- **`storage_node`: option A, an opaque hint** (decided 2026-10-04, cost 1 above). No client
+  sends a `PeerId` there (`tet-network/ui/app/lib/files.ts:196`, both interop scripts send
+  `"local"`), so there is nothing to pin. The draft's `PlaneKeys::storage_node_peer_id()` helper,
+  its startup log field and its guard were removed with the decision. Nothing read them, and a
+  tested "this is the storage-node PeerId" helper would invite wiring option B.
 
 ### 2.5 Consensus-route all remaining balance writes
 

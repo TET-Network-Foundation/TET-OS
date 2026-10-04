@@ -98,7 +98,7 @@ impl StartupConfig {
             .ok()
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| {
-                std::env::var("TET_PEER_ID")
+                std::env::var("TET_NODE_LABEL")
                     .ok()
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| "local-wallet".to_string())
@@ -195,6 +195,9 @@ fn fatal_db_lock_help(db_dir: &str, port: u16, e: &dyn std::error::Error) -> ! {
 
 #[tokio::main]
 async fn main() -> Result<(), AnyErr> {
+    // `TET_PEER_ID` was renamed `TET_NODE_LABEL` (PHASE_1_GENESIS_SPEC §2.4). Ignoring the old name
+    // would quietly change this node's producer id, so a node that still sets it does not start.
+    crate::consensus::refuse_retired_peer_id_env().map_err(|e| -> AnyErr { e.into() })?;
     // Phase 1: print this node's genesis validator entry (producer id + producer public key), for
     // the genesis validator set. Creates the producer key under TET_DB_DIR if it does not exist.
     // Usage: `TET_DB_DIR=… TET_WALLET_ID=… TET-Core --producer-key`
@@ -366,14 +369,22 @@ async fn main() -> Result<(), AnyErr> {
     }
 
     // --- Step 2: libp2p keystore ---
-    let libp2p_keypair = if config.enable_p2p {
+    // One root secret, three wire identities (PHASE_1_GENESIS_SPEC §2.4): each swarm takes the
+    // `PlaneKeys` and selects its own plane, so no two planes share a PeerId.
+    let plane_keys = if config.enable_p2p {
         match crate::p2p_keystore::P2pKeystore::load_or_create(std::path::Path::new(&config.db_dir))
+            .and_then(|ks| ks.plane_keys())
         {
-            Ok(ks) => {
-                let peer_id = ks.peer_id();
-                log::info!("[startup] keystore loaded, peer_id={peer_id}");
-                crate::p2p_keystore::log_peer_id_banner(&peer_id, &config.p2p_listen);
-                Some(ks.keypair())
+            Ok(keys) => {
+                use crate::p2p_keystore::Plane;
+                log::info!(
+                    "[startup] keystore loaded, block_peer_id={} nexus_peer_id={} ledger_peer_id={}",
+                    keys.peer_id(Plane::Block),
+                    keys.peer_id(Plane::Nexus),
+                    keys.peer_id(Plane::Ledger)
+                );
+                crate::p2p_keystore::log_peer_id_banner(&keys, &config.p2p_listen);
+                Some(keys)
             }
             Err(e) => {
                 log::warn!("[startup] libp2p keystore unavailable: {e}");
@@ -575,9 +586,9 @@ async fn main() -> Result<(), AnyErr> {
     let mut swarm_block = false;
 
     let p2p = if config.enable_p2p {
-        match libp2p_keypair.clone() {
-            Some(keypair) => {
-                let mut nm = NetworkManager::new(config.initial_wallet.clone(), keypair).await?;
+        match plane_keys.as_ref() {
+            Some(keys) => {
+                let mut nm = NetworkManager::new(config.initial_wallet.clone(), keys).await?;
                 let tx = nm.tx();
                 crate::replication::set_p2p_sender(Some(tx.clone()));
                 tokio::spawn(async move {
@@ -603,8 +614,8 @@ async fn main() -> Result<(), AnyErr> {
     // Nothing ran it in production. Worker staking is a TET-ledger concern — see
     // PHASE_1_GENESIS_SPEC.md §2, which needs a Stake tx variant that does not exist yet.
 
-    let nexus_p2p_client = match libp2p_keypair.as_ref() {
-        Some(kp) => match crate::p2p_network::start_p2p_node(ledger.clone(), kp.clone()) {
+    let nexus_p2p_client = match plane_keys.as_ref() {
+        Some(keys) => match crate::p2p_network::start_p2p_node(ledger.clone(), keys) {
             Ok((c, _jh)) => {
                 swarm_p2p_network = true;
                 Some(c)
@@ -621,7 +632,7 @@ async fn main() -> Result<(), AnyErr> {
     let catch_up_driver = crate::sync::new_catch_up_driver();
 
     // --- Step 5: BlockSyncBoard (REST + auto-mine sync gate) ---
-    let block_sync_board = if config.enable_p2p && libp2p_keypair.is_some() {
+    let block_sync_board = if config.enable_p2p && plane_keys.is_some() {
         let board =
             crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
         log::info!("[startup] sync board created (per-node Arc<BlockSyncBoard>)");
@@ -639,12 +650,12 @@ async fn main() -> Result<(), AnyErr> {
     // Liveness beacon for the block-plane swarm loop (feeds the systemd watchdog + /health/swarm).
     let swarm_health = crate::swarm_health::SwarmHealth::new();
     let (gossip_tx, files_fetch_tx, tx_submit_tx, anon_register_tx) = if config.enable_p2p {
-        match libp2p_keypair {
-            Some(kp) => {
+        match plane_keys.as_ref() {
+            Some(keys) => {
                 match crate::p2p::start_mdns_ping_swarm(
                     ledger.clone(),
                     mempool.clone(),
-                    kp,
+                    keys,
                     block_p2p_listen.clone(),
                     hello_registry,
                     catch_up_driver,

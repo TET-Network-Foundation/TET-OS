@@ -1809,7 +1809,7 @@ pub type BlockSwarmHandles = (
 pub fn start_mdns_ping_swarm(
     ledger: Arc<crate::ledger::Ledger>,
     mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
-    keypair: identity::Keypair,
+    keys: &crate::p2p_keystore::PlaneKeys,
     listen: Multiaddr,
     hello_registry: SharedHelloRegistry,
     catch_up_driver: SharedCatchUpDriver,
@@ -1818,6 +1818,9 @@ pub fn start_mdns_ping_swarm(
     file_store: Arc<crate::files::storage::FileStore>,
     swarm_health: crate::swarm_health::SharedSwarmHealth,
 ) -> Result<BlockSwarmHandles, AnyErr> {
+    // The block plane's own identity (PHASE_1_GENESIS_SPEC §2.4). `TET_BOOTNODES`,
+    // `TET_PRODUCER_PEERS` and `FileAnnounce.storage_node` all name this PeerId.
+    let keypair = keys.keypair(crate::p2p_keystore::Plane::Block);
     let (tx, rx) = mpsc::channel::<String>(256);
     let (files_fetch_tx, files_fetch_rx) = mpsc::channel::<FilesFetchCmd>(32);
     let (tx_submit_tx, tx_submit_rx) = mpsc::channel::<TxSubmitCmd>(256);

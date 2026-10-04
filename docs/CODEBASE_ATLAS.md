@@ -876,7 +876,7 @@ Generated from `tet-core/src/rest/routes.rs` (2026-05-21). Duplicate paths (alia
 | `PORT` | `main.rs` | Host port if `TET_REST_BIND` unset |
 | `TET_REST_BIND` | `main.rs` | Axum bind address |
 | `TET_WALLET_ID` | `main.rs`, `consensus.rs` | Node's logical wallet id |
-| `TET_PEER_ID` | `main.rs` | Fallback wallet id label |
+| `TET_NODE_LABEL` | `main.rs`, `consensus.rs` | Fallback wallet / producer label (was `TET_PEER_ID`, which is now refused at startup) |
 | `TET_PROD` | `main.rs` | Production strict mode |
 | `TET_JSON_LOG` | `main.rs` | JSON log format |
 | `TET_DEV_FAUCET_MICRO` | `main.rs` | Dev faucet sizing |

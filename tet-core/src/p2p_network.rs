@@ -497,7 +497,7 @@ impl P2pClient {
 
 /// Build a minimal, encrypted, multiplexed libp2p swarm.
 ///
-/// - Identity: ephemeral Ed25519 keypair generated locally at boot (Phase 1).
+/// - Identity: the caller's keypair; in the node, the nexus-plane key ([`build_nexus_swarm`]).
 /// - Transport: TCP (tokio) + Noise (XX) + Yamux.
 /// - Behaviour: NexusBehaviour = Kademlia + Gossipsub (discovery + broadcast).
 pub fn build_basic_swarm(
@@ -1221,12 +1221,21 @@ pub async fn run_swarm_loop(
     }
 }
 
+/// The inference-plane swarm under its own identity, [`Plane::Nexus`] of `keys`.
+///
+/// [`Plane::Nexus`]: crate::p2p_keystore::Plane::Nexus
+pub fn build_nexus_swarm(
+    keys: &crate::p2p_keystore::PlaneKeys,
+) -> Result<(Swarm<NexusBehaviour>, PeerId), AnyErr> {
+    build_basic_swarm(keys.keypair(crate::p2p_keystore::Plane::Nexus))
+}
+
 pub fn start_p2p_node(
     ledger: Arc<crate::ledger::Ledger>,
-    keypair: identity::Keypair,
+    keys: &crate::p2p_keystore::PlaneKeys,
 ) -> anyhow::Result<(P2pClient, tokio::task::JoinHandle<()>)> {
     let (mut swarm, _peer_id) =
-        build_basic_swarm(keypair).map_err(|e| anyhow::anyhow!("build_basic_swarm failed: {e}"))?;
+        build_nexus_swarm(keys).map_err(|e| anyhow::anyhow!("build_basic_swarm failed: {e}"))?;
     let listen: Multiaddr = std::env::var("TET_NEXUS_P2P_LISTEN")
         .unwrap_or_else(|_| "/ip4/0.0.0.0/tcp/4003".to_string())
         .parse()
