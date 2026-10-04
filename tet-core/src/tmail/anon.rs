@@ -324,40 +324,6 @@ pub fn encode_image_id_hex(id: &[u32; 8]) -> String {
     hex::encode(bytes)
 }
 
-// ---------------------------------------------------------------------------
-// Anonymous send as a JOB (spec §A.4, S8 step 4).
-//
-// Proving takes ~33 s. A request that blocks for 33 s is not a button, and an HTTP client that
-// waits that long will be timed out by something in between. So the send is a job: `202 Accepted`
-// with a job id, and the client polls.
-// ---------------------------------------------------------------------------
-
-/// Where an anonymous send has got to.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "state", rename_all = "snake_case")]
-pub enum AnonSendJobState {
-    /// The member's registration has not reached this node's tree yet.
-    ///
-    /// Distinct from `Proving` on purpose: it is the *sender* who is not ready, not the proof, and
-    /// it resolves at a **deterministic** moment — the next epoch boundary — so the UI can show a
-    /// countdown rather than a spinner.
-    RegistrationPropagating { eligible_at_ms: u64 },
-    /// Building the membership proof (~33 s).
-    Proving { started_at_ms: u64 },
-    /// Proof built, envelope signed, announced to peers.
-    Sent { msg_id: String, sent_at_ms: u64 },
-    Failed { reason: String, failed_at_ms: u64 },
-}
-
-/// A job record. Node-local and in memory: a restart loses in-flight jobs, which costs one re-send
-/// and never a wrong result.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct AnonSendJob {
-    pub job_id: String,
-    pub state: AnonSendJobState,
-    pub created_at_ms: u64,
-}
-
 /// When does this wallet's registration become provable on this node?
 ///
 /// `None` means it already is. `Some(ms)` is the epoch boundary at which it will be — deterministic,
