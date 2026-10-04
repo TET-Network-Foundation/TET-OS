@@ -30,7 +30,10 @@ sharing as a Win95-style desktop, so the chain is something you use rather than 
   - **Burn-after-read** — the ciphertext is gone from both nodes once it is read
   - **Anonymous sending** — a zero-knowledge proof that the sender is a registered
     user, without revealing which one. Hash-only (SHA-256), so the proof itself has
-    nothing in it for a quantum computer to break
+    nothing in it for a quantum computer to break. From the desktop it needs the
+    native prover running on your own computer (`cargo run --release -p tet-prover-host`;
+    see [RUNNING_A_NODE § Anonymous sending](./docs/RUNNING_A_NODE.md#anonymous-sending)).
+    Without it, the desktop says so instead of sending
 
   Not built: pinned messages, and the deposit that would make anonymous sending cost
   something. Both are Phase 1 and both have acceptance tests that fail on purpose.

@@ -43,7 +43,13 @@ import {
   TMAIL_MAX_PLAINTEXT_CHARS,
   type TmailInboxRowV1,
 } from "../lib/tmail";
-import { ProverUnavailableError, runAnonPost, sendPathFor } from "../lib/anon_poster.mjs";
+import {
+  ANON_PROVER_MISSING,
+  DEFAULT_PROVER_URL,
+  makeHelperProver,
+  runAnonPost,
+  sendPathFor,
+} from "../lib/anon_poster.mjs";
 import { buildTmailBurnRevokeV1, TMAIL_BURN_DISCLOSURE } from "../lib/tmail_burn";
 import {
   formatReleaseAt,
@@ -60,14 +66,13 @@ import { b64ToBytes } from "../lib/encoding";
 const INBOX_POLL_MS = 5_000;
 
 /**
- * Where an anonymous send has got to. Every send ends in `sent`, `not_in_set` or `failed`.
- *
- * Until the native prover is wired in, `prove` reports that it is missing, so the send ends in
- * `failed` with that message rather than sitting in `proving`.
+ * The native prover on this machine (`cargo run --release -p tet-prover-host`). It receives the
+ * member secret, so it is local by design; the node never sees it. If nothing answers, the send
+ * ends in `failed` with {@link ANON_PROVER_MISSING} rather than sitting in `proving`.
  */
-async function proveAnon(): Promise<never> {
-  throw new ProverUnavailableError();
-}
+const proveAnon = makeHelperProver({
+  url: process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROVER_URL,
+});
 
 type InboxItem = {
   msgId: string;
@@ -627,14 +632,23 @@ export default function MessagesPanel(props: {
             ) : null}
             {anonymous && anonSend.state === "proving" ? (
               <span className="block text-[#1f3f7a]">
-                Building your membership proof on this machine — about 33 seconds.
+                Building your membership proof with the native prover on this machine — usually
+                under a minute; it gives up after five.
               </span>
             ) : null}
             {anonymous && (anonSend.state === "depositing" || anonSend.state === "sending") ? (
               <span className="block text-[#1f3f7a]">Sending…</span>
             ) : null}
             {anonymous && anonSend.state === "failed" ? (
-              <span className="block text-[#8a1f1f]">{anonSend.reason}</span>
+              <span className="block text-[#8a1f1f]">
+                {anonSend.reason}
+                {anonSend.reason.startsWith(ANON_PROVER_MISSING) ? (
+                  <span className="block text-black/70">
+                    Start it on this computer with <code>cargo run --release -p tet-prover-host</code>{" "}
+                    — docs/RUNNING_A_NODE.md, &ldquo;Anonymous sending&rdquo;.
+                  </span>
+                ) : null}
+              </span>
             ) : null}
           </span>
         </label>

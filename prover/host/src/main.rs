@@ -1,4 +1,11 @@
 //! HTTP Prover Daemon: `POST /prove`（送金）、`POST /prove_ai`（AI 推論の指紋）→ zkVM guest、`Receipt` を Borsh + hex で返す。
+//!
+//! `POST /prove_anon` builds the anonymous-membership proof (spec §A.4.3) for the desktop's
+//! anonymous send. **It receives the member secret**, which is why the daemon binds 127.0.0.1 only
+//! and must run on the user's own machine: the secret goes from the browser to this process and
+//! never to a node. Nothing here logs a request body.
+
+mod anon;
 
 use axum::{
     extract::State,
@@ -70,21 +77,27 @@ async fn main() -> anyhow::Result<()> {
         ai_inference_image_id_hex,
     });
 
+    // `allow_private_network`: a page served from a LAN or public address may call this daemon on
+    // the user's own loopback (Chrome's Private Network Access preflight).
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_headers(Any)
+        .allow_private_network(true);
 
     let app = Router::new()
         .route("/prove", post(prove_handler))
         .route("/prove_ai", post(prove_ai_handler))
+        .route("/prove_anon", post(anon::prove_anon_handler))
         .route("/health", get(health_handler))
         .route("/image_id", get(image_id_handler))
         .layer(cors)
         .with_state(state);
 
     let bind = format!("127.0.0.1:{port}");
-    eprintln!("tet-prover-host listening on http://{bind} (POST /prove, POST /prove_ai)");
+    eprintln!(
+        "tet-prover-host listening on http://{bind} (POST /prove, POST /prove_ai, POST /prove_anon)"
+    );
     let listener = tokio::net::TcpListener::bind(&bind).await?;
     axum::serve(listener, app).await?;
     Ok(())

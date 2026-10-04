@@ -10140,6 +10140,46 @@ async fn s8_inbox_row_carries_the_anonymity_verdict() {
     assert!(json.contains("\"state\":\"failed\""), "verdict must serialize its state");
 }
 
+/// Live-run check for `tet-prover-host`'s `POST /prove_anon`: tet-core's own verifier accepts the
+/// receipt the daemon returned, and every journal field is what the inputs imply. Run by hand
+/// after proving through the daemon (needs a zk build):
+///
+///   TET_ANON_RECEIPT_B64, TET_ANON_JOURNAL_B64, TET_ANON_IMAGE_ID_HEX — the daemon's response
+///   TET_PROVE_SECRET_HEX, TET_PROVE_EPHEMERAL_HEX, TET_PROVE_RECEIVER_HEX, TET_PROVE_BUCKET,
+///   TET_PROVE_ROOT_HEX — the inputs, and the root the client computed
+#[test]
+#[ignore = "live-run check; needs a receipt from tet-prover-host"]
+fn s8_prover_host_receipt_verifies_for_live_run() {
+    let _g = env_lock();
+    set_test_env_base();
+    let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k} required"));
+    let arr = |h: &str| -> [u8; 32] {
+        <[u8; 32]>::try_from(hex::decode(h.trim()).expect("hex").as_slice()).expect("32 bytes")
+    };
+    assert_eq!(
+        env("TET_ANON_IMAGE_ID_HEX"),
+        crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID),
+        "the daemon proved with a different guest than this node verifies"
+    );
+    let verified = crate::zk_verifier::verify_tx_receipt_and_journal(
+        methods::NEXUS_GUEST_ID,
+        &env("TET_ANON_JOURNAL_B64"),
+        &env("TET_ANON_RECEIPT_B64"),
+    )
+    .expect("tet-core verifies the daemon's receipt");
+    let crate::zk_verifier::VerifiedZkJournal::TmailAnon(j) = verified else {
+        panic!("the receipt proves a different claim than anonymous membership");
+    };
+    let secret = arr(&env("TET_PROVE_SECRET_HEX"));
+    let receiver = arr(&env("TET_PROVE_RECEIVER_HEX"));
+    let bucket: u64 = env("TET_PROVE_BUCKET").trim().parse().unwrap();
+    assert_eq!(hex::encode(j.merkle_root), env("TET_PROVE_ROOT_HEX").trim());
+    assert_eq!(j.nullifier, nexus_protocol::tet_anon_nullifier_v1(&secret, &receiver, bucket));
+    assert_eq!(j.ephemeral_pubkey_bytes, arr(&env("TET_PROVE_EPHEMERAL_HEX")));
+    assert_eq!(j.receiver_wallet_bytes, receiver);
+    assert_eq!(j.bucket_index, bucket);
+}
+
 /// Emit a mode-3 proof for the live run, from parameters supplied in the environment.
 ///
 /// The live driver is JavaScript (it shares the browser's crypto), and JavaScript cannot prove.

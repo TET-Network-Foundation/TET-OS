@@ -28,11 +28,90 @@ export class ProverUnavailableError extends Error {
   }
 }
 
+/** The prover did not answer within the send's budget. */
+export class ProverTimeoutError extends Error {
+  /** @param {number} ms */
+  constructor(ms) {
+    super(`the native prover did not finish within ${ms / 1000} s`);
+    this.name = "ProverTimeoutError";
+  }
+}
+
 /** `ANONYMOUS_SENTINEL` in `tet-core/src/tmail/envelope.rs`. */
 export const ANONYMOUS_SENTINEL = "anonymous";
 
 /** Most pages of `/tmail/anon/leaves` fetched before giving up (4096 leaves per page). */
 const MAX_LEAF_PAGES = 64;
+
+/**
+ * Longest a send waits for the prover before giving up. Proving takes ~33 s on a recent laptop;
+ * five minutes covers a slow machine, and past it the user is told rather than left watching.
+ */
+export const ANON_PROVE_BUDGET_MS = 300_000;
+
+/** Where the native prover listens unless configured otherwise (`cargo run -p tet-prover-host`). */
+export const DEFAULT_PROVER_URL = "http://127.0.0.1:9945";
+
+/**
+ * A `prove` implementation that calls the native prover daemon on this machine
+ * (`POST /prove_anon`). The member secret goes to that local process only.
+ *
+ * - nothing listening, or a refused connection → {@link ProverUnavailableError}
+ * - a daemon built without its guest (HTTP 503) → {@link ProverUnavailableError}
+ * - anything else that is not 200 → an ordinary error naming the status
+ *
+ * @param {{ url?: string, fetchImpl?: typeof fetch, budgetMs?: number }} [opts]
+ * @returns {(params: AnonProveParams) => Promise<AnonProof>}
+ */
+export function makeHelperProver(opts = {}) {
+  const url = (opts.url ?? DEFAULT_PROVER_URL).replace(/\/+$/, "");
+  const fetchImpl = opts.fetchImpl ?? globalThis.fetch;
+  const budgetMs = opts.budgetMs ?? ANON_PROVE_BUDGET_MS;
+  return async (params) => {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), budgetMs);
+    let r;
+    try {
+      r = await fetchImpl(`${url}/prove_anon`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(params),
+        signal: ctl.signal,
+      });
+    } catch (e) {
+      if (ctl.signal.aborted) throw new ProverTimeoutError(budgetMs);
+      // fetch rejects with a TypeError when nothing answers at all.
+      throw new ProverUnavailableError(`no prover at ${url}`);
+    } finally {
+      clearTimeout(timer);
+    }
+    const text = await r.text();
+    if (r.status === 503) throw new ProverUnavailableError("the prover was built without its guest");
+    if (r.status !== 200) throw new Error(`prover HTTP ${r.status}: ${text.slice(0, 200)}`);
+    const j = JSON.parse(text);
+    for (const k of ["receipt_b64", "journal_b64", "image_id_hex", "receipt_sha256_hex"]) {
+      if (typeof j[k] !== "string" || !j[k]) throw new Error(`prover response is missing ${k}`);
+    }
+    return j;
+  };
+}
+
+/**
+ * Resolve `p`, or reject once `ms` have passed. The budget belongs to the send, not to whichever
+ * `prove` was injected: a prover that never answers must still end the send.
+ *
+ * @template T @param {Promise<T>} p @param {number} ms @returns {Promise<T>}
+ */
+function withinBudget(p, ms) {
+  let timer;
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new ProverTimeoutError(ms)),
+      ms,
+    );
+  });
+  return Promise.race([p, expired]).finally(() => clearTimeout(timer));
+}
 
 /**
  * Which builder a send uses. Anonymous mode must never fall through to the named builder: that
@@ -97,6 +176,7 @@ export async function fetchAnonLeaves(node) {
  *   buildEnvelope: (args: AnonEnvelopeArgs) => Promise<{ msg_id: string }>,
  *   now: () => number,
  *   onState?: (s: AnonPostState) => void,
+ *   proveBudgetMs?: number,
  * }} deps
  * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string }} input
  * @returns {Promise<AnonPostState>}
@@ -133,16 +213,16 @@ export async function runAnonPost(deps, input) {
     emit({ state: "proving", startedAtMs: sentAtMs });
     let proof;
     try {
-      proof = await deps.prove({
+      proof = await withinBudget(deps.prove({
         secret_hex: toHex(input.memberSecret),
         index,
         siblings_hex: siblings.map(toHex),
         ephemeral_hex: ephemeral,
         receiver_hex: receiver,
         bucket,
-      });
+      }), deps.proveBudgetMs ?? ANON_PROVE_BUDGET_MS);
     } catch (e) {
-      if (e instanceof ProverUnavailableError) return fail(e.message);
+      if (e instanceof ProverUnavailableError || e instanceof ProverTimeoutError) return fail(e.message);
       return fail(`prover: ${e instanceof Error ? e.message : String(e)}`);
     }
 
