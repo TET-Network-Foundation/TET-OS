@@ -14,7 +14,9 @@
 # healthy minute, and use the /fail endpoint to raise a detected problem
 # immediately rather than waiting out the grace period.
 #
-# Set the check's period to 1m and grace to 5m.
+# Set the check's period to 2m and grace to 5m. The timer fires every 61-65 s (OnUnitActiveSec counts
+# from the previous start), so a 1 m period put a healthy check in "grace" for a few seconds every
+# cycle, and seed-liveness.yml read it as late.
 #
 # A SUCCESS PING MEANS "THE CHAIN MOVED", NOTHING LESS
 #

@@ -12457,3 +12457,56 @@ fn defaulted_validator_set_is_not_a_sole_validator() {
     assert!(!sole(Some("local-wallet,nbg"), &two, "local-wallet"), "two validators: not sole");
     assert!(!sole(Some("other"), &ValidatorSet::new(["other"]), "local-wallet"), "set names another node");
 }
+// The ML-DSA half of a hybrid signature is not bound to the wallet (found by the item-5 nightly, #30).
+// ---------------------------------------------------------------------------
+
+/// **RED BY DESIGN until the Phase 1 genesis binds the ML-DSA key to the wallet id** (QUEUE item 5,
+/// options D + A). This is the guard the fix must turn green; today it fails, which is the point.
+///
+/// A transfer is signed by the wallet's own Ed25519 key and by an ML-DSA key from an **unrelated**
+/// mnemonic. `verify_envelope_v1` checks each signature against the public key the envelope itself
+/// carries, and nothing relates the ML-DSA key to the wallet id, so the envelope is accepted: the
+/// post-quantum half proves nothing about who sent it, and identity rests on Ed25519 alone.
+///
+/// The companion assertion (the same transfer with the wallet's own ML-DSA key verifies) is the
+/// control that this test fails for the binding and not for a malformed envelope.
+#[test]
+#[ignore = "RED until the Phase 1 genesis binds the ML-DSA key to the wallet id (QUEUE item 5) — run with --ignored to confirm it still fails"]
+fn mldsa_key_unrelated_to_the_wallet_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, wallet) = tmail_party_for_tests();
+    let (other_words, _other_wallet) = tmail_party_for_tests();
+    let (_tw, to) = tmail_party_for_tests();
+    let tx = crate::protocol::TxV1::Transfer {
+        from_wallet: wallet.clone(),
+        to_wallet: to,
+        amount_micro: 1_000,
+        fee_bps: 100,
+    };
+
+    // Control: the wallet's own keys verify, so the envelope shape is sound.
+    let own = signed_env_for_tests(tx.clone(), &words, &wallet);
+    assert!(
+        crate::rest::helpers::verify_envelope_v1(&own).is_ok(),
+        "control: an envelope signed with the wallet's own two keys must verify"
+    );
+
+    // The wallet's Ed25519 key, an unrelated mnemonic's ML-DSA key.
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
+    let foreign = crate::wallet::mldsa_keypair_from_mnemonic(&other_words).unwrap();
+    let foreign_pk_b64 = base64::engine::general_purpose::STANDARD.encode(foreign.public_key());
+    let msg = crate::wallet::tx_v1_auth_message_bytes(&tx, &foreign_pk_b64).unwrap();
+    let mut mixed = own.clone();
+    mixed.sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    mixed.sig.mldsa_pubkey_b64 = foreign_pk_b64;
+    mixed.sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&foreign, msg.as_slice()).unwrap());
+
+    assert!(
+        crate::rest::helpers::verify_envelope_v1(&mixed).is_err(),
+        "verify_envelope_v1 accepted an ML-DSA key unrelated to wallet {wallet}: the post-quantum \
+         half of the signature is not bound to the sender"
+    );
+}

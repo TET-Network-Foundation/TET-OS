@@ -1045,5 +1045,7 @@ email that nobody read for 33 hours. Both checks need a **push** channel as well
 3. On the integration's page, make sure it is **enabled for both checks** (Helsinki and Nuremberg).
    A new integration is not always assigned to existing checks.
 4. Press **Test!** on the integration and confirm the phone actually buzzes.
-5. Keep each check at **period 1 minute, grace 5 minutes**.
+5. Keep each check at **period 2 minutes, grace 5 minutes**. The probe runs every 61–65 s, so a
+   1-minute period puts a healthy check in "grace" briefly every cycle, and `seed-liveness.yml`
+   (which refuses `grace`) reads that as late. A `/fail` still turns the check red at once.
 
