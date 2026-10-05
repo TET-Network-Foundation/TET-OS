@@ -12627,14 +12627,30 @@ fn concrete_path_for_tests(pattern: &str) -> String {
         .join("/")
 }
 
+/// The trusted proxy the public-mode tests stand behind (the demo compose subnet).
+const TEST_PROXY_PEER: &str = "172.30.77.10:40000";
+
 async fn public_call_for_tests(
     router: &axum::Router,
     method: &str,
     path: &str,
     xff: Option<&str>,
 ) -> (StatusCode, bool) {
+    public_call_from_for_tests(router, method, path, xff, TEST_PROXY_PEER).await
+}
+
+async fn public_call_from_for_tests(
+    router: &axum::Router,
+    method: &str,
+    path: &str,
+    xff: Option<&str>,
+    peer: &str,
+) -> (StatusCode, bool) {
     use tower::ServiceExt as _;
-    let mut b = axum::http::Request::builder().method(method).uri(path);
+    let mut b = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .extension(axum::extract::ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()));
     if let Some(x) = xff {
         b = b.header("x-forwarded-for", x);
     }
@@ -12645,8 +12661,11 @@ async fn public_call_for_tests(
     (resp.status(), gate)
 }
 
-fn public_router_for_tests(on: bool) -> (axum::Router, EnvVarGuard) {
-    let guard = EnvVarGuard::set("TET_PUBLIC_API", if on { "1" } else { "0" });
+fn public_router_for_tests(on: bool) -> (axum::Router, (EnvVarGuard, EnvVarGuard)) {
+    let guard = (
+        EnvVarGuard::set("TET_PUBLIC_API", if on { "1" } else { "0" }),
+        EnvVarGuard::set("TET_PUBLIC_TRUSTED_PROXIES", "172.30.77.0/24"),
+    );
     let ledger = std::sync::Arc::new(open_temp_ledger());
     (crate::rest::routes::build_router(rest_state_for_tests(ledger)), guard)
 }
@@ -12757,4 +12776,45 @@ async fn public_mode_is_off_by_default() {
     let (router, _e) = public_router_for_tests(false);
     let (status, gate) = public_call_for_tests(&router, "GET", "/metrics", None).await;
     assert!(!gate && status != StatusCode::NOT_FOUND, "/metrics must exist when public mode is off");
+}
+
+
+/// **SECURITY REGRESSION GUARD: `X-Forwarded-For` is believed only from a trusted proxy.** A client
+/// that reaches tet-core directly and invents a new header value on every request is still one
+/// client, keyed by its own address. (Commit security review of #36: trust boundary.)
+/// Negative control: treat every peer as trusted → FAILED.
+#[tokio::test]
+async fn public_mode_ignores_forwarded_for_from_an_untrusted_peer() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "3");
+    let _rs = EnvVarGuard::set("TET_PUBLIC_READ_PER_SEC", "0.001");
+    let (router, _e) = public_router_for_tests(true);
+    let mut last = StatusCode::OK;
+    for i in 0..4 {
+        let fake = format!("203.0.113.{i}");
+        (last, _) =
+            public_call_from_for_tests(&router, "GET", "/status", Some(&fake), "198.51.100.50:5555").await;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS, "rotating X-Forwarded-For from a direct peer escaped the limit");
+}
+
+/// **SECURITY REGRESSION GUARD: IPv6 clients are limited per /64.** Rotating addresses inside one /64
+/// is still one client. (Commit security review of #36: rate-limit bypass.)
+/// Negative control: key IPv6 by the full address → FAILED.
+#[tokio::test]
+async fn public_mode_limits_ipv6_per_slash_64() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "3");
+    let _rs = EnvVarGuard::set("TET_PUBLIC_READ_PER_SEC", "0.001");
+    let (router, _e) = public_router_for_tests(true);
+    let mut last = StatusCode::OK;
+    for i in 1..=4 {
+        let addr = format!("2001:db8:1:2::{i:x}");
+        (last, _) = public_call_for_tests(&router, "GET", "/status", Some(&addr)).await;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS, "rotating addresses within one /64 escaped the limit");
+    let (other, _) = public_call_for_tests(&router, "GET", "/status", Some("2001:db8:1:3::1")).await;
+    assert_ne!(other, StatusCode::TOO_MANY_REQUESTS, "another /64 is another client");
 }

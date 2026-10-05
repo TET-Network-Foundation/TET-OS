@@ -292,6 +292,8 @@ jobs:
             public_mode_lets_every_allowlisted_route_through
             public_mode_rate_limit_fires_per_client
             public_mode_is_off_by_default
+            public_mode_ignores_forwarded_for_from_an_untrusted_peer
+            public_mode_limits_ipv6_per_slash_64
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block

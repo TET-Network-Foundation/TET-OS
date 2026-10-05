@@ -8,15 +8,18 @@
 //! The gate is the outermost layer: nothing (handler, rate limit, CORS) runs for a request it
 //! refuses.
 //!
-//! **Client IP.** The demo node runs tet-core behind Caddy, which (2.5+, no `trusted_proxies`)
-//! replaces any client-supplied `X-Forwarded-For` with the real remote address. tet-core is
-//! published only on `127.0.0.1`, so a request carrying `X-Forwarded-For` came through Caddy, and
-//! its **right-most** entry is the client. A request with no usable header came from the host itself
-//! (the health probe) and shares one bucket, `local`.
+//! **Client identity.** The client is the TCP peer, unless the peer is a configured trusted proxy
+//! (`TET_PUBLIC_TRUSTED_PROXIES`, addresses or CIDRs), in which case it is the **right-most**
+//! `X-Forwarded-For` entry. On the demo node the proxies are Caddy and the UI container on a pinned
+//! compose subnet; Caddy (2.5+, no `trusted_proxies`) replaces any client-supplied value. So the
+//! header is believed only from a hop that set it, and a request reaching tet-core any other way is
+//! keyed by its own address and cannot invent new ones. IPv6 clients are keyed by their /64: one
+//! subscriber usually holds a whole /64, and per-address keys would give each 2^64 buckets.
 
 use axum::http::{HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -78,9 +81,62 @@ fn pattern_matches(pattern: &str, segs: &[&str]) -> bool {
         })
 }
 
-/// The client a request is accounted to: the right-most `X-Forwarded-For` entry if it parses as an
-/// IP, else `local`.
-pub fn client_key(headers: &HeaderMap) -> String {
+/// A bucket key for an address: IPv4 as is (IPv4-mapped IPv6 too), IPv6 by its /64.
+pub fn ip_key(ip: IpAddr) -> String {
+    match ip {
+        IpAddr::V4(v4) => v4.to_string(),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => v4.to_string(),
+            None => {
+                let s = v6.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", s[0], s[1], s[2], s[3])
+            }
+        },
+    }
+}
+
+/// `addr` or `addr/prefix`, IPv4 or IPv6.
+fn cidr_contains(cidr: &str, ip: IpAddr) -> bool {
+    let (net, bits) = match cidr.split_once('/') {
+        Some((n, b)) => (n, b.parse::<u32>().ok()),
+        None => (cidr, None),
+    };
+    let Ok(net) = net.trim().parse::<IpAddr>() else { return false };
+    match (net, ip) {
+        (IpAddr::V4(n), IpAddr::V4(i)) => {
+            let b = bits.unwrap_or(32).min(32);
+            let mask = if b == 0 { 0 } else { u32::MAX << (32 - b) };
+            (u32::from(n) & mask) == (u32::from(i) & mask)
+        }
+        (IpAddr::V6(n), IpAddr::V6(i)) => {
+            let b = bits.unwrap_or(128).min(128);
+            let mask = if b == 0 { 0 } else { u128::MAX << (128 - b) };
+            (u128::from(n) & mask) == (u128::from(i) & mask)
+        }
+        _ => false,
+    }
+}
+
+fn trusted_proxies_from_env() -> Vec<String> {
+    std::env::var("TET_PUBLIC_TRUSTED_PROXIES")
+        .ok()
+        .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default()
+}
+
+/// The client a request is accounted to.
+///
+/// - The TCP peer, if it is not a trusted proxy (or if no proxies are configured).
+/// - The right-most `X-Forwarded-For` entry, if the peer is a trusted proxy and the entry parses.
+/// - `unknown` if the peer address is not available (only in-process calls), shared by all.
+pub fn client_key(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[String]) -> String {
+    let Some(peer) = peer else {
+        return "unknown".to_string();
+    };
+    let peer_trusted = trusted.iter().any(|c| cidr_contains(c, peer));
+    if !peer_trusted {
+        return ip_key(peer);
+    }
     headers
         .get_all("x-forwarded-for")
         .iter()
@@ -89,9 +145,9 @@ pub fn client_key(headers: &HeaderMap) -> String {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .last()
-        .and_then(|s| s.parse::<std::net::IpAddr>().ok())
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "local".to_string())
+        .and_then(|s| s.parse::<IpAddr>().ok())
+        .map(ip_key)
+        .unwrap_or_else(|| ip_key(peer))
 }
 
 fn env_f64(key: &str, default: f64) -> f64 {
@@ -147,12 +203,13 @@ impl Bucket {
 
 pub struct PublicGate {
     limits: Limits,
+    trusted: Vec<String>,
     buckets: Mutex<HashMap<(String, bool), Bucket>>,
 }
 
 impl PublicGate {
     pub fn new(limits: Limits) -> Arc<Self> {
-        Arc::new(Self { limits, buckets: Mutex::new(HashMap::new()) })
+        Arc::new(Self { limits, trusted: trusted_proxies_from_env(), buckets: Mutex::new(HashMap::new()) })
     }
 
     /// Spend one token for `client` in its class. `false` means over the limit.
@@ -190,7 +247,11 @@ pub async fn public_api_gate(
     if !is_allowed(req.method(), req.uri().path()) {
         return (StatusCode::NOT_FOUND, [(GATE_HEADER, "refused")], "not found").into_response();
     }
-    let client = client_key(req.headers());
+    let peer = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|c| c.0.ip());
+    let client = client_key(peer, req.headers(), &gate.trusted);
     if !gate.allow(&client, is_write(req.method()), Instant::now()) {
         return (
             StatusCode::TOO_MANY_REQUESTS,

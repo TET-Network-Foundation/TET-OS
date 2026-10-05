@@ -49,11 +49,20 @@ These are token buckets, separate for reads and writes:
 An over-limit request gets `429` with `Retry-After: 5`.
 
 ### Client identity
-The client is the **right-most** `X-Forwarded-For` entry:
-- Caddy 2.5+ (with no `trusted_proxies`) replaces whatever the client sent with the real remote
-  address, so a forged left-most entry can't escape the bucket.
-- A request without the header can only come from the host itself, such as the health probe. Those
-  share the `local` bucket.
+The client is the **TCP peer**, except when the peer is a configured trusted proxy
+(`TET_PUBLIC_TRUSTED_PROXIES`, addresses or CIDRs). Then the client is the **right-most**
+`X-Forwarded-For` entry.
+
+- **On the demo node** the trusted proxies are the compose network, a pinned subnet holding Caddy
+  and the UI container. Caddy 2.5+ (with no `trusted_proxies`) replaces whatever the client sent, so
+  the header is believed only from a hop that set it.
+- **A request that reaches tet-core any other way** is keyed by its own address and can't invent new
+  ones.
+- **IPv6 clients are keyed by their `/64`.** One subscriber usually holds a whole `/64`; per-address
+  keys would give them about 2⁶⁴ buckets.
+- **The host probe** (`127.0.0.1`) is its own client.
+
+Both rules come from the commit security review of #36.
 
 ### Guards
 Each has its negative control recorded in the commit:
@@ -64,6 +73,8 @@ Each has its negative control recorded in the commit:
 | `public_mode_lets_every_allowlisted_route_through` | the allow-list doesn't lock the page out |
 | `public_mode_rate_limit_fires_per_client` | the limit fires for one client, a second client is unaffected, a forged prefix doesn't help, and writes are tighter |
 | `public_mode_is_off_by_default` | the seeds are unchanged |
+| `public_mode_ignores_forwarded_for_from_an_untrusted_peer` | a direct peer rotating `X-Forwarded-For` is still one client |
+| `public_mode_limits_ipv6_per_slash_64` | rotating addresses inside one `/64` is still one client |
 
 ## File fees: sponsored, capped, never a faucet (part 3; designed here)
 
