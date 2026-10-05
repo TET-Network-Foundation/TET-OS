@@ -91,26 +91,35 @@ a liveness check, and it does not ping healthchecks.io.
 | The deploy never reinstalled the monitor | The deploy command now ends with `install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck` (`RUNNING_A_NODE.md`). #22 makes a missed reinstall visible |
 | Email was the only human channel | **A push channel** (Telegram, or ntfy on a phone) on both checks: `RUNNING_A_NODE.md`, *Alerts that reach a person* |
 
-## Open: the wedge itself
+## Root cause: a lock-order deadlock (confirmed 2026-10-05)
 
-The changes above make the node **recover** within minutes. They do not stop it **wedging**.
-This is the block-plane accept-loop class:
+The block-plane loop and the auto-miner **deadlocked on two mutexes taken in opposite orders**.
+Every second the loop's catch-up tick (`p2p.rs` `try_start_catch_up`) holds `catch_up_driver` and
+waits for `hello_registry`. Every 12 s the auto-mine sync gate (`sync.rs`
+`auto_mine_blocked_by_sync`) holds the sync board and `hello_registry` and waits for
+`catch_up_driver`. When the two interleave, both wait forever. REST `/ledger/state` takes the
+gate's order too, so it queued behind the board and hung.
 
-- **2026-05-30**, [`BUG_long_idle_connection_failure.md`](../BUG_long_idle_connection_failure.md):
-  the same signature. `/ledger/state` hangs, kad reports "Failed to trigger bootstrap: No known
-  peers", and there is no recovery.
-- **2026-06-05 and 06-06**, commit `ebc80d3`: ledger work running inline on the swarm event loop
-  starved it, the accept queue overflowed, and once the OS's TCP stack locked up. It moved five hot
-  paths to `spawn_blocking` and added the watchdog. It deferred a **"deeper detached-task
-  refactor"** of the accept loop. (`TET_STATE_2026-09.md` item 7 attributes that deferral to
-  `83e0074`, which is not in this repository's history. `ebc80d3` is the June commit that is.)
-- **Still inline:** `TET_STATE_2026-09.md` item 4 lists blocking calls not yet moved off the
-  executor (`sync.rs:749`, `sync.rs:792`, `p2p.rs:1472`, as numbered then).
+- **The timing fits.** The loop's last tick was at about 06:25:09.7, and the gate was due at about
+  06:25:10.7. The loop and mining went silent at the same moment, REST hung, and only the
+  lock-free watchdog kept logging.
+- **Reproduced** with the real gate and status functions, the test taking the loop's side:
+  `loop_got_registry=false gate_finished=false rest_answered=false`.
+- **Since when:** the inverted orders came with the catch-up driver and the Phase 2A gate,
+  2026-05-18/19 (`6850003`, `1a8ea22`). They predate the 2026-05-30 and 2026-06-05/06 wedges. Those
+  were attributed at the time to idle connections (`BUG_long_idle_connection_failure.md`) and to
+  inline ledger work (`ebc80d3`), and those fixes were real. Whether this deadlock was also behind
+  them **cannot be checked now** (no logs of that kind survive). The code that could deadlock was
+  present for all of them.
+- **Why it was rare:** the window is microseconds per tick.
 
-What wedged the loop this time is not known yet. The evidence is on Helsinki
-(`/root/helsinki-wedge-20261004T1507Z.log` and `.extra`, which include `ss` on :8002 for the
-accept backlog). The refactor is queued as a **design-first, read-only** item in
-[`QUEUE.md`](../QUEUE.md) § Main (testnet) items, and that design starts by reading this evidence.
+**The fix**, in [`DESIGN_accept_loop.md`](../DESIGN_accept_loop.md):
+- **A:** one sync lock, never held across an await. This removes the deadlock, and its guard is
+  the reproduction above.
+- **B:** the loop only routes; apply moves to a worker with bounded queues.
+- **C:** a watchdog that measures lag.
+
+A ships first, on its own.
 
 ## Checked hypothesis: did losing its only peer stop the producer?
 
@@ -146,7 +155,7 @@ the cooldown. A restart cannot reopen a gate that is waiting for a peer. Tracked
   3,863 OK runs, one UNHEALTHY (its first boot), and zero restarts. All 33 of its restarts came
   after 06:30, as a consequence of the wedge. "Restarted hourly for days" is refuted.
 
-**A lead for the refactor design.** At the moment of the wedge the **auto-mine task went silent
+**A lead for the refactor design** (confirmed on 2026-10-05; see § Root cause). At the moment of the wedge the **auto-mine task went silent
 too**. It logs every 12 s ("auto-mined" or "gated"), and its next line, due at about 06:25:10,
 never came. Only the watchdog, which reads lock-free atomics, kept logging. The last thing the swarm
 loop did was handle a `sync_hello` (`p2p.rs:1079`). That fits the swarm loop blocking while it holds
