@@ -4284,7 +4284,7 @@ mod block_sync {
         board: &crate::sync::SharedBlockSyncBoard,
         ledger: &crate::ledger::Ledger,
     ) -> bool {
-        crate::sync::auto_mine_blocked_by_sync(Some(board), ledger).await
+        crate::sync::auto_mine_blocked_by_sync(Some(board), ledger, false).await
     }
 
     fn tip_triplet(ledger: &crate::ledger::Ledger) -> (u64, String, String) {
@@ -12304,4 +12304,139 @@ fn watchdog_action_boundaries() {
         WatchdogAction::Withhold { age_ms: 10_000_000 },
         "TET_SWARM_EXIT_AFTER_MS=0 never exits"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #28 — the sole validator keeps mining when its last peer leaves.
+// ---------------------------------------------------------------------------
+
+/// A producer as Helsinki runs: `TET_BOOTNODES` set (so the "awaiting first hello" rule applies),
+/// not a bootnode, a chain of `height` blocks mined as `alice`, and an empty sync board.
+async fn sole_producer_fixture_for_tests(
+    height: u64,
+) -> (
+    std::sync::Arc<crate::ledger::Ledger>,
+    crate::sync::SharedBlockSyncBoard,
+    crate::sync::SharedHelloRegistry,
+) {
+    set_test_env_base();
+    unsafe {
+        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        std::env::set_var("TET_SYNC_STABLE_SEC", "1");
+        std::env::set_var(
+            "TET_BOOTNODES",
+            "/ip4/127.0.0.1/tcp/1/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM",
+        );
+        std::env::remove_var("TET_IS_BOOTNODE");
+        std::env::remove_var("TET_AUTO_MINE_IGNORE_SYNC");
+        std::env::remove_var("TET_SOLO_PRODUCER_GRACE_SEC");
+    }
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    let _ = ledger.apply_genesis_allocation("founder");
+    let state = rest_state_for_tests(ledger.clone());
+    for _ in 0..height {
+        crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
+            .await
+            .expect("mine");
+    }
+    let registry = crate::sync::new_hello_registry();
+    let board =
+        crate::sync::new_block_sync_board(registry.clone(), crate::sync::new_catch_up_driver());
+    (ledger, board, registry)
+}
+
+/// A peer at our own tip, as Nuremberg is in steady state.
+async fn add_peer_at_our_tip_for_tests(
+    registry: &crate::sync::SharedHelloRegistry,
+    ledger: &crate::ledger::Ledger,
+    peer: &str,
+    ahead_by: u64,
+) {
+    let h = ledger.block_height().unwrap();
+    let hello = crate::sync::ChainHello {
+        chain_id: crate::ledger::chain_id_from_env(),
+        block_height: h + ahead_by,
+        tip_block_id: if ahead_by == 0 {
+            ledger.chain_tip().unwrap().map(|t| t.block_id).unwrap_or_default()
+        } else {
+            "0xahead".into()
+        },
+        state_root: if ahead_by == 0 { ledger.compute_state_root().unwrap() } else { "0xahead".into() },
+    };
+    registry.lock().await.record_peer_hello(peer, hello, h);
+}
+
+/// Pass the gate (including the 1 s stability window), as the producer does every block.
+async fn gate_opens_for_tests(
+    board: &crate::sync::SharedBlockSyncBoard,
+    ledger: &crate::ledger::Ledger,
+    sole: bool,
+) -> bool {
+    for _ in 0..4 {
+        if !crate::sync::auto_mine_blocked_by_sync(Some(board), ledger, sole).await {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    }
+    false
+}
+
+/// **SECURITY REGRESSION GUARD (#28): the sole validator keeps mining after its last peer leaves.**
+/// On 2026-10-04 stopping Nuremberg (Helsinki's only peer) closed the sync gate ("auto-mine gated:
+/// synced=false") and halted the chain for 13 minutes. The real gate, after the producer has
+/// mined with a peer and that peer is removed, must stay open.
+/// Control in the test: a node that is NOT the sole validator still gates on the same state.
+/// Negative control: `peerless_mining_allowed` always false → FAILED.
+#[tokio::test]
+async fn sole_validator_keeps_mining_after_its_last_peer_leaves() {
+    let _g = env_lock();
+    let (ledger, board, registry) = sole_producer_fixture_for_tests(3).await;
+    add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
+    assert!(gate_opens_for_tests(&board, &ledger, true).await, "mines with its follower connected");
+
+    registry.lock().await.remove_peer("nuremberg");
+    assert!(
+        !crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
+        "the sole validator must keep mining when its only peer disconnects"
+    );
+    assert!(
+        crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, false).await,
+        "control: a node that is not the sole validator still waits for a peer"
+    );
+}
+
+/// The fork guard the gate exists for is kept: a peer that is **ahead** still stops the sole
+/// validator, so a restarted producer that is behind catches up instead of forking.
+/// Negative control: `peerless_ok` also lifts the peer-ahead condition → FAILED. (Without clearing
+/// `catch_up_triggered` this control passed: the guard was measuring the wrong condition.)
+#[tokio::test]
+async fn sole_validator_still_gates_on_a_peer_ahead() {
+    let _g = env_lock();
+    let (ledger, board, registry) = sole_producer_fixture_for_tests(3).await;
+    add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
+    assert!(gate_opens_for_tests(&board, &ledger, true).await);
+    add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 5).await;
+    // A peer ahead also sets `catch_up_triggered`, which gates by itself. Clear it, as a finished
+    // catch-up does while the peer keeps moving, so only the peer-ahead check can hold the gate.
+    registry.lock().await.clear_catch_up_triggered();
+    assert!(
+        crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
+        "a peer ahead must stop the sole validator"
+    );
+}
+
+/// A fresh process with no peer waits out the grace period before mining alone; an empty chain
+/// never mines peerless.
+/// Negative control: drop `local_height > 0` → FAILED; drop the grace (`|| true`) → FAILED.
+#[test]
+fn peerless_mining_allowed_boundaries() {
+    use crate::sync::peerless_mining_allowed as ok;
+    use std::time::Duration as D;
+    let g = D::from_secs(120);
+    assert!(ok(true, 10, true, D::ZERO, g), "synced once in this process → mine peerless");
+    assert!(!ok(true, 10, false, D::from_secs(119), g), "fresh process inside the grace → wait");
+    assert!(ok(true, 10, false, D::from_secs(120), g), "fresh process past the grace → mine");
+    assert!(!ok(true, 0, true, D::from_secs(9_999), g), "empty chain → never peerless");
+    assert!(!ok(false, 10, true, D::from_secs(9_999), g), "not the sole validator → never peerless");
 }

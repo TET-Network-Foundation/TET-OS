@@ -670,9 +670,12 @@ pub fn spawn_auto_miner(
     validator_set: ValidatorSet,
 ) -> tokio::task::JoinHandle<()> {
     let block_time = block_time_from_env();
+    // The sole validator keeps mining when its peers leave (#28); see `peerless_mining_allowed`.
+    let sole_validator = validator_set.validators().len() == 1
+        && validator_set.validators()[0].as_str() == local_node_id;
     tokio::spawn(async move {
         log::info!(
-            "[consensus] auto-mining enabled block_time_sec={} node_id={}",
+            "[consensus] auto-mining enabled block_time_sec={} node_id={} sole_validator={sole_validator}",
             block_time.as_secs(),
             local_node_id
         );
@@ -681,7 +684,7 @@ pub fn spawn_auto_miner(
         loop {
             tokio::time::sleep(block_time).await;
             let local_height = state.ledger.block_height().unwrap_or(0);
-            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                 .await
             {
                 let sync = match block_sync_board.as_ref() {
@@ -729,7 +732,7 @@ pub fn spawn_auto_miner(
                     "[consensus] auto-mine routing: node_id={} is not POC; preserving AI workload mempool and mining coinbase-only block",
                     local_node_id
                 );
-                if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+                if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                     .await
                 {
                     continue;
@@ -756,7 +759,7 @@ pub fn spawn_auto_miner(
                 continue;
             }
 
-            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                 .await
             {
                 continue;

@@ -283,6 +283,8 @@ jobs:
             anonymous_mail_is_capped_per_receiver
             stalled_block_plane_exits_the_process_past_the_hard_threshold
             stalled_block_plane_below_the_hard_threshold_keeps_running
+            sole_validator_keeps_mining_after_its_last_peer_leaves
+            sole_validator_still_gates_on_a_peer_ahead
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block

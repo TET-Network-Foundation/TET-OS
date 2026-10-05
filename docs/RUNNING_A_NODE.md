@@ -807,6 +807,11 @@ Admin / faucet routes may require `TET_ADMIN_API_KEY` (see `tet-core/.env.exampl
 ```
 
 - **`synced: false`** while catching up, awaiting first hello (when `TET_BOOTNODES` set), or **tip conflict** (same height, different `state_root` / `tip_block_id` vs a peer).
+- **The sole validator does not wait for peers** (since 2026-10-05, #28). With
+  `TET_VALIDATOR_IDS` naming only this node, losing every peer no longer stops it mining: a
+  follower outage cannot halt the chain. Two limits keep the fork guard: an empty chain (height 0)
+  still waits for a hello, and a freshly started producer waits `TET_SOLO_PRODUCER_GRACE_SEC`
+  (default 120) for a peer before mining alone. A peer that is **ahead** still stops it.
 - Auto-mine also waits **`TET_SYNC_STABLE_SEC`** after `synced` becomes true before producing blocks.
 
 ---
