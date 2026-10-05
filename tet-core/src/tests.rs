@@ -12440,3 +12440,20 @@ fn peerless_mining_allowed_boundaries() {
     assert!(!ok(true, 0, true, D::from_secs(9_999), g), "empty chain → never peerless");
     assert!(!ok(false, 10, true, D::from_secs(9_999), g), "not the sole validator → never peerless");
 }
+
+/// **SECURITY REGRESSION GUARD (#28): only an explicitly configured sole validator mines peerless.**
+/// With `TET_VALIDATOR_IDS` unset every node's set defaults to `[self]`; counting that as "sole"
+/// would let any partitioned follower started with `TET_AUTO_MINE=1` fork. Found by the commit
+/// security review of the first #28 change.
+/// Negative control: drop the `explicit` requirement → FAILED.
+#[test]
+fn defaulted_validator_set_is_not_a_sole_validator() {
+    use crate::consensus::{is_explicit_sole_validator as sole, ValidatorSet};
+    let me = ValidatorSet::new(["local-wallet"]);
+    assert!(!sole(None, &me, "local-wallet"), "unset TET_VALIDATOR_IDS: defaulted, not sole");
+    assert!(!sole(Some("  "), &me, "local-wallet"), "blank TET_VALIDATOR_IDS: defaulted, not sole");
+    assert!(sole(Some("local-wallet"), &me, "local-wallet"), "explicit [self]: sole");
+    let two = ValidatorSet::new(["local-wallet", "nbg"]);
+    assert!(!sole(Some("local-wallet,nbg"), &two, "local-wallet"), "two validators: not sole");
+    assert!(!sole(Some("other"), &ValidatorSet::new(["other"]), "local-wallet"), "set names another node");
+}
