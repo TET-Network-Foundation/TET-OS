@@ -663,6 +663,23 @@ pub fn block_time_from_env() -> Duration {
     Duration::from_secs(sec)
 }
 
+/// Is this node the sole validator **by explicit configuration** (#28)?
+///
+/// `TET_VALIDATOR_IDS` must be set and name exactly this node. A validator set that merely
+/// defaulted to `[self]` (`ValidatorSet::from_env_or_single`) does not count: every node started
+/// without the variable has that set, and letting all of them mine with no peers would let any
+/// partitioned, misconfigured follower extend its own chain.
+pub fn is_explicit_sole_validator(
+    validator_ids_env: Option<&str>,
+    validator_set: &ValidatorSet,
+    local_node_id: &str,
+) -> bool {
+    let explicit = validator_ids_env.is_some_and(|v| v.split(',').any(|s| !s.trim().is_empty()));
+    explicit
+        && validator_set.validators().len() == 1
+        && validator_set.validators()[0].as_str() == local_node_id
+}
+
 pub fn spawn_auto_miner(
     state: RestState,
     block_sync_board: Option<crate::sync::SharedBlockSyncBoard>,
@@ -670,9 +687,15 @@ pub fn spawn_auto_miner(
     validator_set: ValidatorSet,
 ) -> tokio::task::JoinHandle<()> {
     let block_time = block_time_from_env();
+    // The sole validator keeps mining when its peers leave (#28); see `peerless_mining_allowed`.
+    let sole_validator = is_explicit_sole_validator(
+        std::env::var("TET_VALIDATOR_IDS").ok().as_deref(),
+        &validator_set,
+        &local_node_id,
+    );
     tokio::spawn(async move {
         log::info!(
-            "[consensus] auto-mining enabled block_time_sec={} node_id={}",
+            "[consensus] auto-mining enabled block_time_sec={} node_id={} sole_validator={sole_validator}",
             block_time.as_secs(),
             local_node_id
         );
@@ -681,7 +704,7 @@ pub fn spawn_auto_miner(
         loop {
             tokio::time::sleep(block_time).await;
             let local_height = state.ledger.block_height().unwrap_or(0);
-            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                 .await
             {
                 let sync = match block_sync_board.as_ref() {
@@ -729,7 +752,7 @@ pub fn spawn_auto_miner(
                     "[consensus] auto-mine routing: node_id={} is not POC; preserving AI workload mempool and mining coinbase-only block",
                     local_node_id
                 );
-                if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+                if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                     .await
                 {
                     continue;
@@ -756,7 +779,7 @@ pub fn spawn_auto_miner(
                 continue;
             }
 
-            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                 .await
             {
                 continue;

@@ -615,10 +615,37 @@ pub fn compute_ledger_sync_status_with_local_tip_and_bootnodes(
     in_progress: Option<&InProgressRangeRequest>,
     has_bootnodes: bool,
 ) -> LedgerSyncStatus {
+    compute_ledger_sync_status_full(
+        local_height,
+        local_state_root,
+        local_tip_block_id,
+        registry,
+        driver,
+        in_progress,
+        has_bootnodes,
+        false,
+    )
+}
+
+/// The sync gate with every input explicit. `peerless_ok` lifts only the "no peer has said hello"
+/// condition; a peer that is ahead, a tip conflict or a catch-up in flight still gate (#28).
+#[allow(clippy::too_many_arguments)]
+pub fn compute_ledger_sync_status_full(
+    local_height: u64,
+    local_state_root: &str,
+    local_tip_block_id: &str,
+    registry: &SyncHelloRegistry,
+    driver: &CatchUpDriver,
+    in_progress: Option<&InProgressRangeRequest>,
+    has_bootnodes: bool,
+    peerless_ok: bool,
+) -> LedgerSyncStatus {
     let active = !driver.is_idle();
     let catch_up_triggered = registry.catch_up_triggered();
-    let awaiting_first_hello =
-        has_bootnodes && registry.peer_count() == 0 && !is_bootnode_from_env();
+    let awaiting_first_hello = has_bootnodes
+        && registry.peer_count() == 0
+        && !is_bootnode_from_env()
+        && !peerless_ok;
     let tip_conflict =
         peer_tip_conflicts_with_local(local_height, local_state_root, local_tip_block_id, registry);
     let (best_peer_id, best_peer_height) = registry
@@ -648,6 +675,38 @@ fn stable_sync_sec_from_env() -> u64 {
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(2)
         .max(1)
+}
+
+/// How long a sole validator that started with no peers waits for one before mining on its own
+/// chain (#28). `TET_SOLO_PRODUCER_GRACE_SEC`, default 120.
+pub fn solo_producer_grace_from_env() -> Duration {
+    Duration::from_secs(
+        std::env::var("TET_SOLO_PRODUCER_GRACE_SEC")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(120),
+    )
+}
+
+/// May a node mine with zero peers (#28)?
+///
+/// Only the **sole validator**: nobody else can produce a competing chain, so "no peer has said
+/// hello" cannot mean "someone is ahead of me". Losing every peer must not halt the chain; on
+/// 2026-10-04 stopping the one follower stopped Helsinki for 13 minutes.
+///
+/// Two limits keep the fork guard that the gate exists for (`provision-seed.sh`: a fresh node must
+/// not mine before it hears the real chain):
+/// - an **empty chain never mines peerless**: a node at height 0 waits for a hello, however long;
+/// - a node that has **not yet passed the gate in this process** waits `grace` for a peer first,
+///   so a restarted producer gives the network a chance to tell it it is behind.
+pub fn peerless_mining_allowed(
+    sole_validator: bool,
+    local_height: u64,
+    synced_once: bool,
+    since_start: Duration,
+    grace: Duration,
+) -> bool {
+    sole_validator && local_height > 0 && (synced_once || since_start >= grace)
 }
 
 /// True when auto-mine must pause for chain catch-up (B.4).
@@ -683,6 +742,10 @@ pub(crate) struct BlockSyncBoard {
     in_progress: Option<InProgressRangeRequest>,
     /// When `synced` + tip match + `lag_blocks == 0` were first observed (A.5 stability gate).
     stable_tip_since: Option<std::time::Instant>,
+    /// The auto-miner has passed the gate at least once in this process (#28).
+    synced_once: bool,
+    /// When this board was created, i.e. when the block swarm started (#28 grace period).
+    created_at: std::time::Instant,
 }
 
 pub type SharedBlockSyncBoard = Arc<Mutex<BlockSyncBoard>>;
@@ -697,6 +760,8 @@ pub fn new_block_sync_board(
         catch_up_driver,
         in_progress: None,
         stable_tip_since: None,
+        synced_once: false,
+        created_at: std::time::Instant::now(),
     }))
 }
 
@@ -753,6 +818,7 @@ pub async fn ledger_sync_status_with_state_root(
 pub async fn auto_mine_blocked_by_sync(
     board: Option<&SharedBlockSyncBoard>,
     ledger: &crate::ledger::Ledger,
+    sole_validator: bool,
 ) -> bool {
     if auto_mine_ignore_sync_from_env() {
         return false;
@@ -775,15 +841,24 @@ pub async fn auto_mine_blocked_by_sync(
 
     let status = {
         let board_g = board.lock().await;
+        let peerless_ok = peerless_mining_allowed(
+            sole_validator,
+            local_height,
+            board_g.synced_once,
+            board_g.created_at.elapsed(),
+            solo_producer_grace_from_env(),
+        );
         let reg = board_g.hello_registry.lock().await;
         let driver = board_g.catch_up_driver.lock().await;
-        compute_ledger_sync_status_with_local_tip(
+        compute_ledger_sync_status_full(
             local_height,
             &local_state_root,
             &local_tip_block_id,
             &reg,
             &driver,
             board_g.in_progress.as_ref(),
+            !crate::vision::fluid_net::bootnode_addrs_from_env().is_empty(),
+            peerless_ok,
         )
     };
 
@@ -791,6 +866,7 @@ pub async fn auto_mine_blocked_by_sync(
         board.lock().await.stable_tip_since = None;
         return true;
     }
+    board.lock().await.synced_once = true;
 
     let stable_sec = stable_sync_sec_from_env();
     let mut board_g = board.lock().await;
