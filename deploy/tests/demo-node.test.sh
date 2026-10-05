@@ -87,6 +87,12 @@ PY
 then pass "Caddy's allow-list equals tet-core's PUBLIC_ALLOWLIST"
 else flunk "Caddy's allow-list equals tet-core's PUBLIC_ALLOWLIST"; fi
 
+# Ambiguous paths are refused first, inside the single ordered route block.
+if awk '/^\troute \{/{r=1; next} r && NF{print; exit}' deploy/demo/Caddyfile | grep -q 'respond @ambiguous_path 400' \
+   && ! grep -E '^\s*handle' deploy/demo/Caddyfile >/dev/null; then
+  pass "the Caddyfile refuses ambiguous paths before any other rule"
+else flunk "the Caddyfile refuses ambiguous paths before any other rule"; fi
+
 if grep -q 'die "tet-core is not in public mode' deploy/provision-seed.sh \
    && awk '/Public mode check/{c=1} c && /up -d caddy/{ok=1} END{exit !ok}' deploy/provision-seed.sh; then
   pass "provision starts Caddy only after tet-core proves public mode"
@@ -123,6 +129,14 @@ if docker info >/dev/null 2>&1; then
   expect GET    /try 200
   expect GET    /_next/static/chunk.js 200
   expect GET    / 302
+  # Path-differential bypasses (commit security review of #37): refused before any rule matches.
+  expect GET    "/try/..%2Fapi%2Follama%2Ftags" 400
+  expect GET    "/_next/static/..%2F..%2Fapi%2Ftet%2Fnonce" 400
+  expect GET    "/tet-node-api/tmail/inbox/.." 400
+  expect GET    "/tet-node-api/tmail/inbox/%2e%2e" 400
+  expect GET    "//tet-node-api/status" 400
+  expect GET    "/tet-node-api/files/fetch/%252e%252e" 400
+  expect GET    /try/anything 404
   docker rm -f "edge-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
 elif [ -n "${CI:-}" ]; then
   flunk "caddy behaviour" "no Docker daemon in CI"

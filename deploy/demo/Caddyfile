@@ -1,14 +1,19 @@
 # The demo node's only internet-facing listener (docs/DEMO_NODE.md).
 #
-# Two rules this file keeps, each asserted by deploy/tests/demo-node.test.sh:
+# Rules this file keeps, each asserted by deploy/tests/demo-node.test.sh:
 #
 # 1. No `trusted_proxies`: without it Caddy (2.5+) replaces any client-supplied X-Forwarded-For with
 #    the real remote address, and tet-core's per-client limits rely on that.
-# 2. Caddy enforces tet-core's allow-list itself, independently of tet-core: `@tet_allowed` below is
-#    PUBLIC_ALLOWLIST (tet-core/src/rest/public_api.rs) as method + path. A tet-core that is not in
-#    public mode (an old image, a missing env var) still cannot be reached on any other route, and
-#    the UI's own server routes (/api/*) are not reachable at all. Only the /try page, its static
-#    files and the allow-listed node API are served.
+# 2. Ambiguous paths are refused before anything else (400): an encoded `.`, `/` or `\`, a double
+#    encoding (`%25`), a dot-segment or an empty segment. Caddy matches the decoded path but forwards
+#    the raw one, and Next.js normalises it again: without this, `/try/..%2Fapi%2F…` passed the `/try`
+#    rule and reached the UI's internal /api routes (commit security review of #37).
+# 3. Caddy enforces tet-core's allow-list itself: `@tet_allowed` is PUBLIC_ALLOWLIST
+#    (tet-core/src/rest/public_api.rs) as method + path, a second layer that holds even if tet-core is
+#    not in public mode.
+# 4. Only the /try page, its static files and the allow-listed node API are served; everything
+#    else, the UI's own /api/* routes included, is 404. One `route` block, so the order below is the
+#    order of evaluation.
 {
 	email {$TET_DEMO_ACME_EMAIL}
 }
@@ -22,50 +27,37 @@
 		-Server
 	}
 
+	@ambiguous_path expression `{http.request.uri}.matches("^[^?]*(?:(?i:%2e|%2f|%5c|%25)|\\\\|//|/\\.{1,2}(?:/|\\?|$))")`
+
 	@tet_allowed expression `
-			({method} == "GET" && {path}.matches("^/tet-node-api/status$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/chain$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/ledger/state$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/ledger/balance/[^/%]+$")) ||
-			({method} == "POST" && {path}.matches("^/tet-node-api/tmail/send$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/tmail/inbox/[^/%]+$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/tmail/keys/[^/%]+$")) ||
-			({method} == "PUT" && {path}.matches("^/tet-node-api/tmail/keys/[^/%]+$")) ||
-			({method} == "POST" && {path}.matches("^/tet-node-api/tmail/keys/[^/%]+$")) ||
-			({method} == "POST" && {path}.matches("^/tet-node-api/tmail/read-receipt$")) ||
-			({method} == "POST" && {path}.matches("^/tet-node-api/tmail/anon/register$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/root$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/leaves$")) ||
-			({method} == "PUT" && {path}.matches("^/tet-node-api/tmail/anon/receipt$")) ||
-			({method} == "POST" && {path}.matches("^/tet-node-api/tmail/anon/receipt$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/receipt/[^/%]+$")) ||
-			({method} == "POST" && {path}.matches("^/tet-node-api/files/upload$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/files/inbox/[^/%]+$")) ||
-			({method} == "GET" && {path}.matches("^/tet-node-api/files/fetch/[^/%]+$")) ||
-			({method} == "DELETE" && {path}.matches("^/tet-node-api/files/item/[^/%]+$"))`
+		({method} == "GET" && {path}.matches("^/tet-node-api/status$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/chain$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/ledger/state$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/ledger/balance/[^/%]+$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/send$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/inbox/[^/%]+$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/keys/[^/%]+$")) ||
+		({method} == "PUT" && {path}.matches("^/tet-node-api/tmail/keys/[^/%]+$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/keys/[^/%]+$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/read-receipt$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/anon/register$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/root$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/leaves$")) ||
+		({method} == "PUT" && {path}.matches("^/tet-node-api/tmail/anon/receipt$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/anon/receipt$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/receipt/[^/%]+$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/files/upload$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/files/inbox/[^/%]+$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/files/fetch/[^/%]+$")) ||
+		({method} == "DELETE" && {path}.matches("^/tet-node-api/files/item/[^/%]+$"))`
 
-	handle /tet-node-api/* {
-		handle @tet_allowed {
-			reverse_proxy ui:3000
-		}
-		respond 404
-	}
+	@page path /try /_next/static/* /pqc/* /favicon.ico
 
-	# The UI's own server routes proxy to other services; none of them is part of the demo.
-	handle /api/* {
-		respond 404
-	}
-
-	@page path /try /try/* /_next/* /pqc/* /favicon.ico
-	handle @page {
-		reverse_proxy ui:3000
-	}
-
-	handle / {
-		redir /try 302
-	}
-
-	handle {
+	route {
+		respond @ambiguous_path 400
+		redir / /try 302
+		reverse_proxy @tet_allowed ui:3000
+		reverse_proxy @page ui:3000
 		respond 404
 	}
 }
