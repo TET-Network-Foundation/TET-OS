@@ -866,10 +866,7 @@ impl BootnodeWatch {
         for peer in newly_dead {
             self.mark_bootnode_dead(peer);
             let _ = swarm.disconnect_peer_id(peer);
-            catch_up_driver
-                .lock()
-                .await
-                .blacklist_peer(peer.to_string());
+            catch_up_driver.with(|s| s.driver.blacklist_peer(peer.to_string()));
             dialing.remove(&peer);
         }
 
@@ -942,11 +939,11 @@ impl BootnodeWatch {
         self.dial_known_followers(swarm, listen, peer_dial_book, dialing);
         Self::request_hello_from_connected_peers(swarm, ledger, &exclude).await;
         let local_height = ledger.block_height().unwrap_or(0);
-        let mut reg = hello_registry.lock().await;
-        if reg.peer_count() == 0 || reg.any_peer_ahead(local_height) {
-            reg.force_catch_up_triggered();
-        }
-        drop(reg);
+        hello_registry.with(|s| {
+            if s.registry.peer_count() == 0 || s.registry.any_peer_ahead(local_height) {
+                s.registry.force_catch_up_triggered();
+            }
+        });
         try_start_catch_up(
             block_sync_board,
             catch_up_driver,
@@ -1058,8 +1055,15 @@ async fn ingest_remote_chain_hello(
     }
     let local_height = ledger.block_height().unwrap_or(0);
     let peer_s = peer.to_string();
-    let mut reg = registry.lock().await;
-    let record = reg.record_peer_hello(&peer_s, hello, local_height);
+    let (record, snap, peer_count, catch_up_triggered) = registry.with(|s| {
+        let record = s.registry.record_peer_hello(&peer_s, hello, local_height);
+        (
+            record,
+            s.registry.heights_snapshot(),
+            s.registry.peer_count(),
+            s.registry.catch_up_triggered(),
+        )
+    });
     println!(
         "[P2P-block] 🤝 chain_hello from {peer} height={} tip={} local={local_height} diff={} catch_up_pending={}",
         record.hello.block_height,
@@ -1070,17 +1074,10 @@ async fn ingest_remote_chain_hello(
     if record.catch_up_pending {
         println!("[P2P-block] 🔔 catch-up trigger set (peer ahead; B.3b driver pending)");
     }
-    let snap = reg.heights_snapshot();
     println!(
-        "[P2P-block] sync_hello map peers={} catch_up_triggered={} snapshot={snap:?}",
-        reg.peer_count(),
-        reg.catch_up_triggered(),
+        "[P2P-block] sync_hello map peers={peer_count} catch_up_triggered={catch_up_triggered} snapshot={snap:?}",
     );
-    log::info!(
-        "[p2p][block] sync_hello peers={} catch_up_triggered={}",
-        reg.peer_count(),
-        reg.catch_up_triggered(),
-    );
+    log::info!("[p2p][block] sync_hello peers={peer_count} catch_up_triggered={catch_up_triggered}");
 }
 
 async fn run_catch_up_action(
@@ -1094,7 +1091,7 @@ async fn run_catch_up_action(
     match action {
         CatchUpAction::None => {}
         CatchUpAction::ClearCatchUpTriggered => {
-            hello_registry.lock().await.clear_catch_up_triggered();
+            hello_registry.with(|s| s.registry.clear_catch_up_triggered());
             set_in_progress_range(block_sync_board, None).await;
             println!("[P2P-block] ✅ catch-up complete; catch_up_triggered=false");
             log::info!("[p2p][block] catch-up complete");
@@ -1102,7 +1099,7 @@ async fn run_catch_up_action(
         CatchUpAction::SendRangeRequest { peer_id, request } => {
             let Ok(pid) = peer_id.parse::<PeerId>() else {
                 log::warn!("[p2p][block] catch-up invalid peer_id={peer_id}");
-                catch_up_driver.lock().await.blacklist_peer(peer_id);
+                catch_up_driver.with(|s| s.driver.blacklist_peer(peer_id));
                 return;
             };
             set_in_progress_range(
@@ -1127,6 +1124,21 @@ async fn run_catch_up_action(
     }
 }
 
+/// The catch-up tick's decision: driver and registry read and advanced in ONE acquisition of the one
+/// sync lock. With two locks this site held the driver while awaiting the registry and deadlocked
+/// against the auto-mine gate on 2026-10-03 (guard G1 drives it concurrently with the gate and REST).
+pub(crate) fn catch_up_trigger_action(
+    sync: &SharedCatchUpDriver,
+    local_height: u64,
+) -> Option<CatchUpAction> {
+    sync.with(|s| {
+        if !s.driver.is_idle() || !s.registry.catch_up_triggered() {
+            return None;
+        }
+        Some(s.driver.handle(CatchUpDriverEvent::Triggered, &s.registry, local_height))
+    })
+}
+
 async fn try_start_catch_up(
     block_sync_board: &SharedBlockSyncBoard,
     catch_up_driver: &SharedCatchUpDriver,
@@ -1136,16 +1148,8 @@ async fn try_start_catch_up(
     pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
 ) {
     let local_height = ledger.block_height().unwrap_or(0);
-    let action = {
-        let mut driver = catch_up_driver.lock().await;
-        if !driver.is_idle() {
-            return;
-        }
-        let reg = hello_registry.lock().await;
-        if !reg.catch_up_triggered() {
-            return;
-        }
-        driver.handle(CatchUpDriverEvent::Triggered, &reg, local_height)
+    let Some(action) = catch_up_trigger_action(catch_up_driver, local_height) else {
+        return;
     };
     run_catch_up_action(
         action,
@@ -1230,19 +1234,17 @@ async fn on_catch_up_range_response(
 
     if response.blocks.is_empty() {
         set_in_progress_range(block_sync_board, None).await;
-        let action = {
-            let mut driver = catch_up_driver.lock().await;
-            let reg = hello_registry.lock().await;
+        let action = catch_up_driver.with(|s| {
             let local_height = ledger.block_height().unwrap_or(0);
-            driver.handle(
+            s.driver.handle(
                 CatchUpDriverEvent::RangeFailed {
                     peer_id: peer_s,
                     reason: "empty range response".into(),
                 },
-                &reg,
+                &s.registry,
                 local_height,
             )
-        };
+        });
         run_catch_up_action(
             action,
             block_sync_board,
@@ -1258,19 +1260,17 @@ async fn on_catch_up_range_response(
     let (applied, failed) = apply_catch_up_blocks(ledger.clone(), mempool, response.blocks).await;
     set_in_progress_range(block_sync_board, None).await;
     let local_height = ledger.block_height().unwrap_or(0);
-    let action = {
-        let mut driver = catch_up_driver.lock().await;
-        let reg = hello_registry.lock().await;
-        driver.handle(
+    let action = catch_up_driver.with(|s| {
+        s.driver.handle(
             CatchUpDriverEvent::BatchApplied {
                 peer_id: peer_s,
                 applied,
                 failed,
             },
-            &reg,
+            &s.registry,
             local_height,
         )
-    };
+    });
     run_catch_up_action(
         action,
         block_sync_board,
@@ -1294,18 +1294,16 @@ async fn on_catch_up_range_failed(
 ) {
     set_in_progress_range(block_sync_board, None).await;
     let local_height = ledger.block_height().unwrap_or(0);
-    let action = {
-        let mut driver = catch_up_driver.lock().await;
-        let reg = hello_registry.lock().await;
-        driver.handle(
+    let action = catch_up_driver.with(|s| {
+        s.driver.handle(
             CatchUpDriverEvent::RangeFailed {
                 peer_id: peer.to_string(),
                 reason,
             },
-            &reg,
+            &s.registry,
             local_height,
         )
-    };
+    });
     run_catch_up_action(
         action,
         block_sync_board,
@@ -2829,10 +2827,7 @@ async fn run_mdns_ping_swarm(
                     )
                     .await;
                     if bootnode_watch.is_bootnode(&peer) {
-                        catch_up_driver
-                            .lock()
-                            .await
-                            .unblacklist_peer(&peer.to_string());
+                        catch_up_driver.with(|s| s.driver.unblacklist_peer(&peer.to_string()));
                     }
                     try_start_catch_up(
                         &block_sync_board,
@@ -2863,10 +2858,7 @@ async fn run_mdns_ping_swarm(
                     )
                     .await;
                     if bootnode_watch.is_bootnode(&peer) {
-                        catch_up_driver
-                            .lock()
-                            .await
-                            .unblacklist_peer(&peer.to_string());
+                        catch_up_driver.with(|s| s.driver.unblacklist_peer(&peer.to_string()));
                     }
                     try_start_catch_up(
                         &block_sync_board,
@@ -3177,10 +3169,7 @@ async fn run_mdns_ping_swarm(
                 last_chain_hello_sent_at.remove(&peer_id);
                 if bootnode_watch.is_bootnode(&peer_id) && !bootnode_watch.is_dead(&peer_id) {
                     bootnode_watch.mark_bootnode_dead(peer_id);
-                    catch_up_driver
-                        .lock()
-                        .await
-                        .blacklist_peer(peer_id.to_string());
+                    catch_up_driver.with(|s| s.driver.blacklist_peer(peer_id.to_string()));
                     bootnode_watch
                         .run_bootnode_recovery_fallback(
                             &mut swarm,
@@ -3197,20 +3186,17 @@ async fn run_mdns_ping_swarm(
                 }
                 {
                     let peer_s = peer_id.to_string();
-                    let action = {
-                        let mut reg = hello_registry.lock().await;
-                        reg.remove_peer(&peer_s);
-                        println!(
-                            "[P2P-block] sync_hello removed peer={peer_id} map_size={}",
-                            reg.peer_count()
-                        );
-                        let local_height = ledger.block_height().unwrap_or(0);
-                        catch_up_driver.lock().await.handle(
+                    let local_height = ledger.block_height().unwrap_or(0);
+                    let (action, map_size) = hello_registry.with(|s| {
+                        s.registry.remove_peer(&peer_s);
+                        let action = s.driver.handle(
                             CatchUpDriverEvent::PeerRemoved { peer_id: peer_s },
-                            &reg,
+                            &s.registry,
                             local_height,
-                        )
-                    };
+                        );
+                        (action, s.registry.peer_count())
+                    });
+                    println!("[P2P-block] sync_hello removed peer={peer_id} map_size={map_size}");
                     run_catch_up_action(
                         action,
                         &block_sync_board,
@@ -3320,14 +3306,9 @@ async fn run_mdns_ping_swarm(
                                 let local_h = ledger.block_height().unwrap_or(0);
                                 if let Some(source) = source_peer {
                                     let peer_s = source.to_string();
-                                    {
-                                        let mut reg = hello_registry.lock().await;
-                                        reg.note_peer_block_height(
-                                            &peer_s,
-                                            block_height,
-                                            local_h,
-                                        );
-                                    }
+                                    hello_registry.with(|s| {
+                                        s.registry.note_peer_block_height(&peer_s, block_height, local_h)
+                                    });
                                     if block_height > local_h {
                                         try_start_catch_up(
                                             &block_sync_board,
@@ -3445,13 +3426,9 @@ async fn run_mdns_ping_swarm(
                                         if needs_catch_up {
                                             if let Some(source) = source_peer {
                                                 let peer_s = source.to_string();
-                                                let mut reg = hello_registry.lock().await;
-                                                reg.note_peer_block_height(
-                                                    &peer_s,
-                                                    block_height,
-                                                    local_h,
-                                                );
-                                                drop(reg);
+                                                hello_registry.with(|s| {
+                                                    s.registry.note_peer_block_height(&peer_s, block_height, local_h)
+                                                });
                                             }
                                             try_start_catch_up(
                                                 &block_sync_board,

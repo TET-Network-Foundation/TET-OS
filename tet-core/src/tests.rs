@@ -4097,10 +4097,10 @@ mod block_sync {
         }
 
         let mempool = Arc::new(Mutex::new(Vec::new()));
-        let hello_registry = crate::sync::new_hello_registry();
-        let catch_up_driver = crate::sync::new_catch_up_driver();
-        let block_sync_board =
-            crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
+        let sync_state = crate::sync::new_sync_state();
+        let hello_registry = sync_state.clone();
+        let catch_up_driver = sync_state.clone();
+        let block_sync_board = sync_state.clone();
 
         let tmail_store = std::sync::Arc::new(
             crate::tmail::store::TmailStore::open(&ledger.sled_db()).expect("tmail store"),
@@ -4464,7 +4464,7 @@ mod block_sync {
         let _ = ledger2.apply_genesis_allocation("founder");
         let (state2, board2, _, swarm2) =
             start_block_swarm_on_ledger(ledger2.clone(), &db_dir2, Some(&boot), false, 0).await;
-        assert_ne!(Arc::as_ptr(&n1.block_sync_board), Arc::as_ptr(&board2));
+        assert!(!n1.block_sync_board.same(&board2), "each node has its own sync state");
         assert!(
             sync_gate_active(&board2, ledger2.as_ref()).await,
             "node2 should gate before first hello (awaiting_first_hello)"
@@ -4480,9 +4480,9 @@ mod block_sync {
             auto_miner: None,
         };
         let mut n3 = spawn_node(Some(&boot), false).await;
-        assert_ne!(
-            Arc::as_ptr(&n2.block_sync_board),
-            Arc::as_ptr(&n3.block_sync_board),
+        assert!(
+            !n2.block_sync_board.same(&n3.block_sync_board),
+            "each node has its own sync state"
         );
 
         tokio::time::sleep(Duration::from_millis(600)).await;
@@ -12340,9 +12340,8 @@ async fn sole_producer_fixture_for_tests(
             .await
             .expect("mine");
     }
-    let registry = crate::sync::new_hello_registry();
-    let board =
-        crate::sync::new_block_sync_board(registry.clone(), crate::sync::new_catch_up_driver());
+    let board = crate::sync::new_sync_state();
+    let registry = board.clone();
     (ledger, board, registry)
 }
 
@@ -12364,7 +12363,7 @@ async fn add_peer_at_our_tip_for_tests(
         },
         state_root: if ahead_by == 0 { ledger.compute_state_root().unwrap() } else { "0xahead".into() },
     };
-    registry.lock().await.record_peer_hello(peer, hello, h);
+    registry.with(|s| s.registry.record_peer_hello(peer, hello, h));
 }
 
 /// Pass the gate (including the 1 s stability window), as the producer does every block.
@@ -12395,7 +12394,7 @@ async fn sole_validator_keeps_mining_after_its_last_peer_leaves() {
     add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
     assert!(gate_opens_for_tests(&board, &ledger, true).await, "mines with its follower connected");
 
-    registry.lock().await.remove_peer("nuremberg");
+    registry.with(|s| s.registry.remove_peer("nuremberg"));
     assert!(
         !crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
         "the sole validator must keep mining when its only peer disconnects"
@@ -12419,7 +12418,7 @@ async fn sole_validator_still_gates_on_a_peer_ahead() {
     add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 5).await;
     // A peer ahead also sets `catch_up_triggered`, which gates by itself. Clear it, as a finished
     // catch-up does while the peer keeps moving, so only the peer-ahead check can hold the gate.
-    registry.lock().await.clear_catch_up_triggered();
+    registry.with(|s| s.registry.clear_catch_up_triggered());
     assert!(
         crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
         "a peer ahead must stop the sole validator"
@@ -12509,4 +12508,86 @@ fn mldsa_key_unrelated_to_the_wallet_is_refused() {
         "verify_envelope_v1 accepted an ML-DSA key unrelated to wallet {wallet}: the post-quantum \
          half of the signature is not bound to the sender"
     );
+}
+
+// ---------------------------------------------------------------------------
+// DESIGN_accept_loop § A — one sync lock (the 2026-10-03 deadlock).
+// ---------------------------------------------------------------------------
+
+/// **SECURITY REGRESSION GUARD G1: the swarm loop's catch-up step, the auto-mine gate and REST status
+/// never deadlock.** On 2026-10-03 the loop held `catch_up_driver` waiting for `hello_registry` while
+/// the gate held `hello_registry` waiting for `catch_up_driver`; mining, the loop and `/ledger/state`
+/// all stopped for 33 h. This drives the real `catch_up_trigger_action` (what the loop's 1 s tick runs),
+/// peer add/remove (the hello and disconnect handlers), the real `auto_mine_blocked_by_sync` and the
+/// real `ledger_sync_status` concurrently on four threads; all must finish.
+/// Negative control: the pre-fix two-lock code (`main` at `c940b0c`) with the same interleaving pinned
+/// → `loop_got_registry=false gate_finished=false rest_answered=false` (2026-10-05). A one-line mutation
+/// cannot restore the bug: with one lock there is no order to invert, which is the point of the fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn catch_up_tick_and_sync_gate_never_deadlock() {
+    let _g = env_lock();
+    let (ledger, sync, _) = sole_producer_fixture_for_tests(3).await;
+    let h = ledger.block_height().unwrap();
+    add_peer_at_our_tip_for_tests(&sync, &ledger, "nuremberg", 0).await;
+
+    let (s1, l1) = (sync.clone(), ledger.clone());
+    let gate = tokio::spawn(async move {
+        for _ in 0..40 {
+            let _ = crate::sync::auto_mine_blocked_by_sync(Some(&s1), &l1, true).await;
+        }
+    });
+    let (s2, l2) = (sync.clone(), ledger.clone());
+    let rest = tokio::spawn(async move {
+        for _ in 0..40 {
+            let _ = crate::sync::ledger_sync_status(&s2, &l2).await;
+        }
+    });
+    let s3 = sync.clone();
+    let loop_side = tokio::spawn(async move {
+        for i in 0..4000u64 {
+            // A peer ahead sets catch_up_triggered, so the trigger step takes the driver path too.
+            let hello = crate::sync::ChainHello {
+                chain_id: crate::ledger::chain_id_from_env(),
+                block_height: h + (i % 3),
+                tip_block_id: format!("0x{i}"),
+                state_root: format!("0x{i}"),
+            };
+            s3.with(|s| s.registry.record_peer_hello("p", hello, h));
+            let _ = crate::p2p::catch_up_trigger_action(&s3, h);
+            s3.with(|s| s.registry.remove_peer("p"));
+            if i % 64 == 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+    });
+    let all = async {
+        gate.await.unwrap();
+        rest.await.unwrap();
+        loop_side.await.unwrap();
+    };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(60), all).await.is_ok(),
+        "the loop's catch-up step, the auto-mine gate and REST status did not all finish: deadlock"
+    );
+}
+
+/// **G2: the sync lock cannot be held across an await.** Structural, so it is checked against the
+/// source: `SyncState` is reachable only through `SyncHandle::with` (a synchronous closure), the
+/// mutex is a private field, nothing returns a guard, and nothing outside `with` locks it. A
+/// `std::sync::MutexGuard` is also `!Send`, so holding one across an `.await` in a spawned task does
+/// not compile.
+/// Negative control: add `pub fn guard(&self) -> std::sync::MutexGuard<'_, SyncState>` → FAILED.
+#[test]
+fn sync_state_lock_is_never_held_across_an_await() {
+    let src = include_str!("sync.rs");
+    let start = src.find("pub struct SyncHandle(").expect("SyncHandle exists");
+    let decl = &src[start..src[start..].find(';').map(|e| start + e).unwrap()];
+    assert!(!decl.contains("pub Arc"), "the mutex inside SyncHandle must stay private: {decl}");
+    assert!(!src.contains("MutexGuard<'_, SyncState>"), "nothing may hand out a SyncState guard");
+    assert_eq!(src.matches(".0.lock()").count(), 1, "the lock is taken only inside SyncHandle::with");
+    for file in [include_str!("p2p.rs"), include_str!("consensus.rs"), include_str!("main.rs")] {
+        for needle in ["hello_registry.lock()", "catch_up_driver.lock()", "block_sync_board.lock()", "board.lock()"] {
+            assert!(!file.contains(needle), "sync state locked outside SyncHandle::with: {needle}");
+        }
+    }
 }

@@ -286,6 +286,8 @@ jobs:
             sole_validator_keeps_mining_after_its_last_peer_leaves
             sole_validator_still_gates_on_a_peer_ahead
             defaulted_validator_set_is_not_a_sole_validator
+            catch_up_tick_and_sync_gate_never_deadlock
+            sync_state_lock_is_never_held_across_an_await
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block

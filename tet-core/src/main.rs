@@ -564,14 +564,15 @@ async fn main() -> Result<(), AnyErr> {
         None => None,
     };
 
-    let hello_registry = crate::sync::new_hello_registry();
-    let catch_up_driver = crate::sync::new_catch_up_driver();
+    // One sync state, one lock (DESIGN_accept_loop § A); the three names are clones of one handle.
+    let sync_state = crate::sync::new_sync_state();
+    let hello_registry = sync_state.clone();
+    let catch_up_driver = sync_state.clone();
 
     // --- Step 5: BlockSyncBoard (REST + auto-mine sync gate) ---
     let block_sync_board = if config.enable_p2p && libp2p_keypair.is_some() {
-        let board =
-            crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
-        log::info!("[startup] sync board created (per-node Arc<BlockSyncBoard>)");
+        let board = sync_state.clone();
+        log::info!("[startup] sync state created (one lock: registry + catch-up driver + board)");
         Some(board)
     } else {
         log::info!("[startup] sync board skipped (p2p disabled or no keystore)");
