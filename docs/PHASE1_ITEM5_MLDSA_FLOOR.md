@@ -5,6 +5,29 @@ session on `phase1-item-5-mldsa-floor`. **Nothing is implemented.** The row cann
 written, and choosing what to build instead is a cryptography decision. `QUEUE.md` says that is not
 the session's to make.
 
+## Decision (2026-10-05): D + A
+
+- **D, binding first.** The wallet id commits to both public keys, e.g.
+  `wallet_id = H("tet wallet v2" ‖ ed25519_pk ‖ mldsa44_pk)`. Every hybrid verifier, consensus
+  (`verify_envelope_v1`) and node-local (`verify_hybrid`) alike, checks that the carried keys hash to
+  the claimed wallet id. That turns the post-quantum half into an identity check, not just a
+  signature check.
+- **A, the level pinned at 44.** Accept exactly ML-DSA-44 (1312-byte public key), as the producer
+  key (D4) and the agent keys already are. Not a floor: there is nothing below 44.
+- **Cost, accepted:** every wallet id changes. Balances do not carry over anyway (Strategy C), but
+  mnemonics now derive a different id, and every client (browser wallet, agent SDK, `tet-cli`,
+  `tet-signer`) must derive it the same way.
+- **Reproduced:** `mldsa_key_unrelated_to_the_wallet_is_refused` (TET-OS #31, `#[ignore]`, red by
+  design) fails today with "accepted an ML-DSA key unrelated to wallet …". It is the test this item
+  turns green. SECURITY.md states the limitation at class level; the `file:line` detail is kept
+  privately.
+- **Next:** a design doc (QUEUE item 5, autonomous **no**) covering the id derivation and its
+  domain tag, the migration of every client, what `tet-signer` does (it signs at ML-DSA-65 today),
+  and one guard per verifier path. The answers to the questions at the end of this document go
+  there.
+
+The rest of this document is the question as the unattended session put it.
+
 ## What the row and the spec say
 
 `QUEUE.md` item 5:
