@@ -390,6 +390,12 @@ jobs:
         name: anonymous send — the poster names itself to nobody
         run: node scripts/anon_poster_guard.mjs
 
+      # Try TET (docs/DEMO_NODE.md): making the disposable wallet touches no network and no storage,
+      # the page names no server-side mnemonic route, and the wallet id is tet-core's derivation.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the disposable wallet stays in the tab
+        run: node scripts/try_wallet_guard.mjs
+
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --
       # which would cost another billed minute per push AND have to be mirrored in
