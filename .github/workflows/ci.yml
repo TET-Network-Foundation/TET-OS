@@ -288,6 +288,10 @@ jobs:
             defaulted_validator_set_is_not_a_sole_validator
             catch_up_tick_and_sync_gate_never_deadlock
             sync_state_lock_is_never_held_across_an_await
+            public_mode_refuses_every_route_off_the_allowlist
+            public_mode_lets_every_allowlisted_route_through
+            public_mode_rate_limit_fires_per_client
+            public_mode_is_off_by_default
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block

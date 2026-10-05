@@ -12591,3 +12591,170 @@ fn sync_state_lock_is_never_held_across_an_await() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Public-API mode — the "Try TET" demo node (docs/DEMO_NODE.md).
+// ---------------------------------------------------------------------------
+
+/// Every route the router defines, as `(METHOD, path)`, parsed from `rest/routes.rs`, so a route added
+/// later is covered by the 404 guard without anyone remembering to list it.
+fn all_defined_routes_for_tests() -> Vec<(String, String)> {
+    let src = include_str!("rest/routes.rs");
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(i) = rest.find(".route(") {
+        rest = &rest[i + 7..];
+        let q1 = rest.find('"').unwrap();
+        let q2 = q1 + 1 + rest[q1 + 1..].find('"').unwrap();
+        let path = rest[q1 + 1..q2].to_string();
+        let end = rest.find(".route(").unwrap_or(rest.len());
+        let chain = &rest[q2..end];
+        for m in ["get", "post", "put", "delete", "patch"] {
+            if chain.contains(&format!("routing::{m}(")) || chain.contains(&format!(".{m}(")) {
+                out.push((m.to_ascii_uppercase(), path.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// A concrete path for a route pattern (`:x` → a 64-hex value).
+fn concrete_path_for_tests(pattern: &str) -> String {
+    pattern
+        .split('/')
+        .map(|s| if s.starts_with(':') { "ab".repeat(32) } else { s.to_string() })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+async fn public_call_for_tests(
+    router: &axum::Router,
+    method: &str,
+    path: &str,
+    xff: Option<&str>,
+) -> (StatusCode, bool) {
+    use tower::ServiceExt as _;
+    let mut b = axum::http::Request::builder().method(method).uri(path);
+    if let Some(x) = xff {
+        b = b.header("x-forwarded-for", x);
+    }
+    let body = if method == "GET" || method == "DELETE" { "" } else { "{}" };
+    let req = b.header("content-type", "application/json").body(axum::body::Body::from(body)).unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    let gate = resp.headers().get(crate::rest::public_api::GATE_HEADER).is_some();
+    (resp.status(), gate)
+}
+
+fn public_router_for_tests(on: bool) -> (axum::Router, EnvVarGuard) {
+    let guard = EnvVarGuard::set("TET_PUBLIC_API", if on { "1" } else { "0" });
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    (crate::rest::routes::build_router(rest_state_for_tests(ledger)), guard)
+}
+
+/// **SECURITY REGRESSION GUARD: in public mode every route not on the allow-list is a 404 from the gate**
+/// — including mining, `/execute`, logs, admin, founder, the server-side mnemonic generator and the
+/// wallet-keyed anonymity path — and so are near-miss spellings that a looser matcher would let through.
+/// Negative controls: put `POST /ledger/mine` on the allow-list → FAILED; build the router with public
+/// mode off → FAILED (the routes exist and answer).
+#[tokio::test]
+async fn public_mode_refuses_every_route_off_the_allowlist() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (router, _e) = public_router_for_tests(true);
+    let routes = all_defined_routes_for_tests();
+    assert!(routes.len() > 100, "parsed only {} routes", routes.len());
+    let mut refused = 0;
+    for (m, p) in &routes {
+        let path = concrete_path_for_tests(p);
+        let method = axum::http::Method::from_bytes(m.as_bytes()).unwrap();
+        if crate::rest::public_api::is_allowed(&method, &path) {
+            continue;
+        }
+        let (status, gate) = public_call_for_tests(&router, m, &path, Some("203.0.113.7")).await;
+        assert!(status == StatusCode::NOT_FOUND && gate, "{m} {p} is reachable in public mode ({status})");
+        refused += 1;
+    }
+    assert!(refused > 80, "only {refused} routes were checked as refused");
+    for (m, p) in [
+        ("POST", "/ledger/mine"),
+        ("POST", "/execute"),
+        ("GET", "/logs"),
+        ("POST", "/admin/gossip"),
+        ("POST", "/founder/withdraw_treasury"),
+        ("POST", "/wallet/mnemonic/new"),
+        ("POST", "/ledger/initial_airdrop/claim"),
+        ("GET", "/metrics"),
+        ("POST", "/files/fee"),
+        ("GET", "/tmail/anon/path/abababababababababababababababababababababababababababababababab"),
+        // near misses of allowed routes
+        ("GET", "/ledger/state/"),
+        ("GET", "//ledger/state"),
+        ("GET", "/tmail/inbox/a/b"),
+        ("GET", "/tmail/inbox/a%2Fb"),
+        ("POST", "/ledger/state"),
+    ] {
+        let (status, gate) = public_call_for_tests(&router, m, p, Some("203.0.113.7")).await;
+        assert!(status == StatusCode::NOT_FOUND && gate, "{m} {p} is reachable in public mode ({status})");
+    }
+}
+
+/// Every allow-listed route reaches its handler: the gate does not refuse it. (The handler may well
+/// answer 400 or 404 for the dummy input; only the gate's own refusal counts as failure.)
+#[tokio::test]
+async fn public_mode_lets_every_allowlisted_route_through() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "1000");
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "1000");
+    let (router, _e) = public_router_for_tests(true);
+    for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
+        let (status, gate) =
+            public_call_for_tests(&router, m, &concrete_path_for_tests(p), Some("203.0.113.8")).await;
+        assert!(!gate, "{m} {p} is on the allow-list but the gate refused it ({status})");
+        assert_ne!(status, StatusCode::TOO_MANY_REQUESTS, "{m} {p}");
+    }
+}
+
+/// **SECURITY REGRESSION GUARD: the per-client limit fires, per client, and cannot be dodged by
+/// prepending a forged `X-Forwarded-For` entry.** One client exhausts its read burst and gets 429; a
+/// second client is unaffected; the first client adding a fake left-most address is still the same
+/// client (Caddy's right-most entry decides). Writes have their own, tighter bucket.
+/// Negative controls: `PublicGate::allow` always true → FAILED; `client_key` takes the left-most
+/// entry → FAILED (the forged prefix escapes the bucket).
+#[tokio::test]
+async fn public_mode_rate_limit_fires_per_client() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "5");
+    let _rs = EnvVarGuard::set("TET_PUBLIC_READ_PER_SEC", "0.001");
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "2");
+    let _wm = EnvVarGuard::set("TET_PUBLIC_WRITE_PER_MIN", "0.001");
+    let (router, _e) = public_router_for_tests(true);
+    for i in 0..5 {
+        let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.1")).await;
+        assert_ne!(s, StatusCode::TOO_MANY_REQUESTS, "request {i} is inside the burst");
+    }
+    let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.1")).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "the 6th read from one client must be limited");
+    let (s, _) =
+        public_call_for_tests(&router, "GET", "/status", Some("192.0.2.99, 198.51.100.1")).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "a forged left-most entry must not escape the bucket");
+    let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.2")).await;
+    assert_ne!(s, StatusCode::TOO_MANY_REQUESTS, "another client is not limited");
+    for _ in 0..2 {
+        let (s, _) = public_call_for_tests(&router, "POST", "/tmail/send", Some("198.51.100.3")).await;
+        assert_ne!(s, StatusCode::TOO_MANY_REQUESTS);
+    }
+    let (s, _) = public_call_for_tests(&router, "POST", "/tmail/send", Some("198.51.100.3")).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "writes have their own, tighter limit");
+}
+
+/// Public mode is opt-in: without `TET_PUBLIC_API` the router is unchanged (the seeds' behaviour).
+#[tokio::test]
+async fn public_mode_is_off_by_default() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (router, _e) = public_router_for_tests(false);
+    let (status, gate) = public_call_for_tests(&router, "GET", "/metrics", None).await;
+    assert!(!gate && status != StatusCode::NOT_FOUND, "/metrics must exist when public mode is off");
+}
