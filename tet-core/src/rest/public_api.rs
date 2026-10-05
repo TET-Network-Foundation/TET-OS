@@ -23,8 +23,9 @@ use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-/// `(method, path pattern)`. A `:name` segment matches exactly one non-empty segment; everything
-/// else must match exactly. Trailing slashes, extra segments and encoded slashes do not match.
+/// `(method, path pattern)`. A `:name` segment matches exactly one non-empty segment that is not
+/// `.`/`..` and has no `%`; everything else must match exactly. Trailing slashes, extra segments,
+/// dot-segments and encoded characters do not match.
 pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/status"),
     ("GET", "/chain"),
@@ -74,7 +75,9 @@ fn pattern_matches(pattern: &str, segs: &[&str]) -> bool {
     pat.len() == segs.len()
         && pat.iter().zip(segs).all(|(p, s)| {
             if p.starts_with(':') {
-                !s.is_empty() && !s.contains('%')
+                // One plain segment: not empty, nothing percent-encoded, and not a dot-segment that
+                // a proxy or router in front might resolve to a different path than this one.
+                !s.is_empty() && !s.contains('%') && *s != "." && *s != ".."
             } else {
                 p == s
             }

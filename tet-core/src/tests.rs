@@ -12710,6 +12710,9 @@ async fn public_mode_refuses_every_route_off_the_allowlist() {
         ("GET", "//ledger/state"),
         ("GET", "/tmail/inbox/a/b"),
         ("GET", "/tmail/inbox/a%2Fb"),
+        ("GET", "/tmail/inbox/.."),
+        ("GET", "/tmail/inbox/."),
+        ("GET", "/files/fetch/%2e%2e"),
         ("POST", "/ledger/state"),
     ] {
         let (status, gate) = public_call_for_tests(&router, m, p, Some("203.0.113.7")).await;
