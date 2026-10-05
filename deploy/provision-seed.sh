@@ -112,6 +112,7 @@ case "$ROLE" in
   demo)
     [ -n "$BOOTNODES" ]   || die "a demo node follows the seeds: set TET_BOOTNODES"
     [ -n "$DEMO_DOMAIN" ] || die "set TET_DEMO_DOMAIN (the name Caddy gets a certificate for)"
+    [ -n "${TET_DEMO_ACME_EMAIL:-}" ] || die "set TET_DEMO_ACME_EMAIL (Let's Encrypt contact; Caddy will not start without it)"
     [ "$AUTO_MINE" = 0 ]  || die "a demo node never produces blocks: TET_AUTO_MINE must be 0"
     ;;
   *) die "TET_NODE_ROLE must be seed or demo (got '$ROLE')" ;;

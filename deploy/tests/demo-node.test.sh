@@ -27,12 +27,13 @@ refuses() {  # NAME EXPECTED-MESSAGE ENV...
 BOOT=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
 refuses "demo without bootnodes" "a demo node follows the seeds" TET_NODE_ROLE=demo TET_DEMO_DOMAIN=try.example.org
 refuses "demo without a domain"  "set TET_DEMO_DOMAIN"          TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT"
-refuses "demo that would mine"   "never produces blocks"        TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT" TET_DEMO_DOMAIN=try.example.org TET_AUTO_MINE=1
+refuses "demo without an email"  "set TET_DEMO_ACME_EMAIL"      TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT" TET_DEMO_DOMAIN=try.example.org
+refuses "demo that would mine"   "never produces blocks"        TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT" TET_DEMO_DOMAIN=try.example.org TET_DEMO_ACME_EMAIL=ops@example.org TET_AUTO_MINE=1
 refuses "an unknown role"        "must be seed or demo"         TET_NODE_ROLE=validator
 
 compose_json() { docker compose -f docker-compose.yml -f "$1" config --format json 2>&1; }
 
-json=$(TET_DEMO_DOMAIN=try.example.org compose_json deploy/demo/docker-compose.demo.yml)
+json=$(TET_DEMO_DOMAIN=try.example.org TET_DEMO_ACME_EMAIL=ops@example.org compose_json deploy/demo/docker-compose.demo.yml)
 if ! python3 - "$json" <<'PY'
 import json, sys
 cfg = json.loads(sys.argv[1]); s = cfg["services"]; bad = []
@@ -60,7 +61,7 @@ then flunk "the composed demo config exposes only what the design says"
 else pass "the composed demo config exposes only what the design says"; fi
 
 # Captured first: compose exits non-zero here (that is the point), which pipefail would carry.
-nodomain=$(env -u TET_DEMO_DOMAIN docker compose -f docker-compose.yml -f deploy/demo/docker-compose.demo.yml config --format json 2>&1)
+nodomain=$(env -u TET_DEMO_DOMAIN TET_DEMO_ACME_EMAIL=ops@example.org docker compose -f docker-compose.yml -f deploy/demo/docker-compose.demo.yml config --format json 2>&1)
 if grep -q "set TET_DEMO_DOMAIN" <<<"$nodomain"; then
   pass "compose refuses a demo config without a domain"
 else flunk "compose refuses a demo config without a domain"; fi
@@ -106,10 +107,16 @@ if docker info >/dev/null 2>&1; then
   docker run -d --rm --name "ui-$$" --network "$net" --network-alias ui caddy:2.8 \
     caddy respond --listen :3000 --body upstream >/dev/null
   docker run -d --rm --name "edge-$$" --network "$net" -p 127.0.0.1:18080:8080 \
-    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="" \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
     -v "$PWD/deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
-  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18080/try && break; sleep 1; done
-  code() { curl -s -o /dev/null -w "%{http_code}" -X "$1" "http://127.0.0.1:18080$2"; }
+  up=0
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18080/try && { up=1; break; }; sleep 1; done
+  if [ "$up" != 1 ]; then
+    flunk "caddy started with the demo Caddyfile" "it never answered; its log:"
+    docker logs "edge-$$" 2>&1 | tail -20 | sed 's/^/     /'
+  fi
+  # --path-as-is: curl would otherwise resolve dot-segments itself, and Caddy would never see them.
+  code() { curl --path-as-is -s -o /dev/null -w "%{http_code}" -X "$1" "http://127.0.0.1:18080$2"; }
   expect() {  # METHOD PATH WANT
     local got; got=$(code "$1" "$2")
     if [ "$got" = "$3" ]; then pass "caddy: $1 $2 → $3"; else flunk "caddy: $1 $2 → $3" "got $got"; fi
@@ -121,7 +128,7 @@ if docker info >/dev/null 2>&1; then
   expect POST   /tet-node-api/execute 404
   expect GET    /tet-node-api/metrics 404
   expect GET    /tet-node-api/ledger/state/ 404
-  expect GET    /tet-node-api/tmail/inbox/a%2Fb 404
+  expect GET    /tet-node-api/tmail/inbox/a%2Fb 400
   expect GET    /tet-node-api/tmail/anon/path/abababab 404
   expect GET    /api/ollama/tags 404
   expect POST   /api/tet/infer_signed 404
@@ -133,6 +140,7 @@ if docker info >/dev/null 2>&1; then
   expect GET    "/try/..%2Fapi%2Follama%2Ftags" 400
   expect GET    "/_next/static/..%2F..%2Fapi%2Ftet%2Fnonce" 400
   expect GET    "/tet-node-api/tmail/inbox/.." 400
+  expect GET    "/try/../api/ollama/tags" 400
   expect GET    "/tet-node-api/tmail/inbox/%2e%2e" 400
   expect GET    "//tet-node-api/status" 400
   expect GET    "/tet-node-api/files/fetch/%252e%252e" 400

@@ -29,7 +29,7 @@ services:
       - "443:443"
     environment:
       TET_DEMO_DOMAIN: "${TET_DEMO_DOMAIN:?set TET_DEMO_DOMAIN in .env}"
-      TET_DEMO_ACME_EMAIL: "${TET_DEMO_ACME_EMAIL:-}"
+      TET_DEMO_ACME_EMAIL: "${TET_DEMO_ACME_EMAIL:?set TET_DEMO_ACME_EMAIL in .env (Caddy refuses an empty email)}"
     volumes:
       - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
