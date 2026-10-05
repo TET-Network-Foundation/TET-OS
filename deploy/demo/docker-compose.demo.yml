@@ -1,0 +1,49 @@
+# The "Try TET" demo node (docs/DEMO_NODE.md). Layered on top of docker-compose.yml:
+#
+#     docker compose -f docker-compose.yml [-f docker-compose.dev.yml] \
+#       -f deploy/demo/docker-compose.demo.yml up -d --build tet-core ui caddy
+#
+# Only Caddy faces the internet (80 for ACME and the redirect, 443). tet-core is published on
+# 127.0.0.1 for the host probe; the UI is not published at all. The compose network is pinned so
+# TET_PUBLIC_TRUSTED_PROXIES names exactly the hops that set X-Forwarded-For (Caddy, the UI).
+# deploy/tests/demo-node.test.sh asserts each of these properties.
+services:
+  tet-core:
+    ports: !override
+      - "127.0.0.1:5010:5010"
+      - "8002:8002/tcp"
+    environment:
+      TET_PUBLIC_API: "1"
+      TET_PUBLIC_TRUSTED_PROXIES: "172.30.77.0/24"
+      TET_AUTO_MINE: "0"
+
+  ui:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.8
+    container_name: tet-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TET_DEMO_DOMAIN: "${TET_DEMO_DOMAIN:?set TET_DEMO_DOMAIN in .env}"
+      TET_DEMO_ACME_EMAIL: "${TET_DEMO_ACME_EMAIL:?set TET_DEMO_ACME_EMAIL in .env (Caddy refuses an empty email)}"
+    volumes:
+      - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      ui:
+        condition: service_healthy
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.30.77.0/24
+
+volumes:
+  caddy_data:
+  caddy_config:
