@@ -19,6 +19,14 @@ host-only:  127.0.0.1:5010 ──> tet-core   (the health probe)
   from outside is Caddy → UI → the UI's server-side proxy.
 - **Ports open to the internet:** 443 (and 80, for the ACME challenge and redirect), 8002 (P2P,
   like any node) and SSH. Nothing else.
+- **Two independent layers enforce the allow-list:** tet-core's gate (below) and Caddy, whose
+  `@tet_allowed` matcher is the same `(method, path)` set (a CI test keeps them equal).
+  - Caddy also refuses the UI's own server routes (`/api/*`) and serves only `/try`, its static files
+    and the allow-listed node API.
+  - `provision-seed.sh` starts Caddy only after tet-core has proved public mode: `/metrics` must come
+    back as the gate's own 404.
+  - So an image without public mode, or a missing env var, can't open the node. (Commit security
+    review of #37.)
 
 ## Public mode (`tet-core/src/rest/public_api.rs`)
 

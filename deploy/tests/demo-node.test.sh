@@ -7,6 +7,9 @@
 # 2. The composed demo config exposes exactly what the design says: Caddy on 80/443, tet-core only on
 #    127.0.0.1 (REST) and 8002 (P2P), the UI not at all; public mode on; the trusted-proxy range is the
 #    pinned compose subnet; the Caddyfile does not trust client X-Forwarded-For.
+# 3. Caddy enforces the same allow-list as tet-core (a second, independent layer), refuses the UI's
+#    own /api/* routes, and serves only the /try page; provision starts Caddy only after tet-core
+#    proves it is in public mode. (Commit security review of #37.)
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 
@@ -65,6 +68,67 @@ else flunk "compose refuses a demo config without a domain"; fi
 if grep -v '^\s*#' deploy/demo/Caddyfile | grep -q 'trusted_proxies'; then
   flunk "the Caddyfile must not trust client X-Forwarded-For (trusted_proxies)"
 else pass "the Caddyfile does not trust client X-Forwarded-For"; fi
+
+# Caddy enforces tet-core's allow-list on its own: same (method, path) set as PUBLIC_ALLOWLIST.
+if python3 - <<'PY'
+import re, sys
+rs = open("tet-core/src/rest/public_api.rs").read()
+blk = rs[rs.index("pub const PUBLIC_ALLOWLIST"):]
+blk = blk[:blk.index("];")]
+want = {(m, re.sub(r":[^/]+", ":", p)) for m, p in re.findall(r'\("([A-Z]+)",\s*"([^"]+)"\)', blk)}
+cf = open("deploy/demo/Caddyfile").read()
+got = set()
+for m, rx in re.findall(r'\{method\} == "([A-Z]+)" && \{path\}\.matches\("\^/tet-node-api(.*?)\$"\)', cf):
+    got.add((m, rx.replace("[^/%]+", ":").replace("\\", "")))
+if want != got:
+    print("    only in tet-core:", sorted(want - got)); print("    only in Caddy:", sorted(got - want))
+    sys.exit(1)
+PY
+then pass "Caddy's allow-list equals tet-core's PUBLIC_ALLOWLIST"
+else flunk "Caddy's allow-list equals tet-core's PUBLIC_ALLOWLIST"; fi
+
+if grep -q 'die "tet-core is not in public mode' deploy/provision-seed.sh \
+   && awk '/Public mode check/{c=1} c && /up -d caddy/{ok=1} END{exit !ok}' deploy/provision-seed.sh; then
+  pass "provision starts Caddy only after tet-core proves public mode"
+else flunk "provision starts Caddy only after tet-core proves public mode"; fi
+
+# The real Caddyfile in front of a stub upstream, with real requests. Needs a Docker daemon: CI has
+# one; a laptop without one skips (and says so) rather than passing silently.
+if docker info >/dev/null 2>&1; then
+  net=tet-demo-test-$$
+  docker network create "$net" >/dev/null
+  docker run -d --rm --name "ui-$$" --network "$net" --network-alias ui caddy:2.8 \
+    caddy respond --listen :3000 --body upstream >/dev/null
+  docker run -d --rm --name "edge-$$" --network "$net" -p 127.0.0.1:18080:8080 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="" \
+    -v "$PWD/deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18080/try && break; sleep 1; done
+  code() { curl -s -o /dev/null -w "%{http_code}" -X "$1" "http://127.0.0.1:18080$2"; }
+  expect() {  # METHOD PATH WANT
+    local got; got=$(code "$1" "$2")
+    if [ "$got" = "$3" ]; then pass "caddy: $1 $2 → $3"; else flunk "caddy: $1 $2 → $3" "got $got"; fi
+  }
+  expect GET    /tet-node-api/status 200
+  expect POST   /tet-node-api/tmail/send 200
+  expect GET    /tet-node-api/tmail/inbox/abababab 200
+  expect POST   /tet-node-api/ledger/mine 404
+  expect POST   /tet-node-api/execute 404
+  expect GET    /tet-node-api/metrics 404
+  expect GET    /tet-node-api/ledger/state/ 404
+  expect GET    /tet-node-api/tmail/inbox/a%2Fb 404
+  expect GET    /tet-node-api/tmail/anon/path/abababab 404
+  expect GET    /api/ollama/tags 404
+  expect POST   /api/tet/infer_signed 404
+  expect GET    /os 404
+  expect GET    /try 200
+  expect GET    /_next/static/chunk.js 200
+  expect GET    / 302
+  docker rm -f "edge-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
+elif [ -n "${CI:-}" ]; then
+  flunk "caddy behaviour" "no Docker daemon in CI"
+else
+  echo "SKIP caddy behaviour: no Docker daemon here (CI runs it)"
+fi
 
 # The seeds' composition is untouched: REST on loopback, no Caddy.
 seed=$(compose_json deploy/docker-compose.seed.yml)

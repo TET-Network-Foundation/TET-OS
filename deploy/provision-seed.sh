@@ -313,12 +313,28 @@ COMPOSE=(docker compose -f docker-compose.yml)
 SERVICES=(tet-core)
 if [ "$ROLE" = demo ]; then
   COMPOSE+=(-f deploy/demo/docker-compose.demo.yml)
-  SERVICES+=(ui caddy)
+  SERVICES+=(ui)
 else
   COMPOSE+=(-f deploy/docker-compose.seed.yml)
 fi
 printf '    %s\n' "${COMPOSE[*]} up -d --build ${SERVICES[*]}"
 "${COMPOSE[@]}" up -d --build "${SERVICES[@]}"
+
+# A demo node faces the internet only through Caddy, and Caddy starts only once tet-core has
+# PROVED it is in public mode: a route off the allow-list must come back as the gate's own 404.
+# An image without public mode would otherwise sit behind Caddy with every route open.
+if [ "$ROLE" = demo ]; then
+  log "Public mode check (before Caddy)"
+  gate=""
+  for _ in $(seq 1 60); do
+    gate=$(curl -s -o /dev/null -D - -m 5 http://127.0.0.1:5010/metrics 2>/dev/null | tr -d '\r' | grep -i '^x-tet-public-gate: refused' || true)
+    [ -n "$gate" ] && break
+    sleep 5
+  done
+  [ -n "$gate" ] || die "tet-core is not in public mode (/metrics was not refused by the gate); NOT starting Caddy"
+  ok "tet-core refuses off-list routes; starting Caddy"
+  "${COMPOSE[@]}" up -d caddy
+fi
 
 # --- 8b. monitoring ---------------------------------------------------------
 # A systemd timer rather than cron: it survives reboots, logs to the journal,
