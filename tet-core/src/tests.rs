@@ -4060,6 +4060,8 @@ mod block_sync {
         boot_multiaddr: String,
         swarm_task: JoinHandle<()>,
         auto_miner: Option<JoinHandle<()>>,
+        /// The node's swarm-loop beacon: stamped on every loop iteration (at least once a second).
+        health: crate::swarm_health::SharedSwarmHealth,
     }
 
     async fn start_block_swarm_on_ledger(
@@ -4073,6 +4075,7 @@ mod block_sync {
         crate::sync::SharedBlockSyncBoard,
         String,
         JoinHandle<()>,
+        crate::swarm_health::SharedSwarmHealth,
     ) {
         let ks = crate::p2p_keystore::P2pKeystore::load_or_create(db_dir).unwrap();
         let keypair = ks.keypair();
@@ -4109,6 +4112,7 @@ mod block_sync {
         let file_store = std::sync::Arc::new(
             crate::files::storage::FileStore::open(&ledger.sled_db()).expect("file store"),
         );
+        let health = crate::swarm_health::SwarmHealth::new();
         let (gossip_tx, files_fetch_tx, tx_submit_tx, _anon_register_tx, swarm_task) =
             crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
@@ -4120,7 +4124,7 @@ mod block_sync {
             block_sync_board.clone(),
             tmail_store,
             file_store,
-            crate::swarm_health::SwarmHealth::new(),
+            health.clone(),
         )
         .expect("block swarm");
 
@@ -4138,7 +4142,7 @@ mod block_sync {
         if post_listen_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(post_listen_delay_ms)).await;
         }
-        (state, block_sync_board, boot_multiaddr, swarm_task)
+        (state, block_sync_board, boot_multiaddr, swarm_task, health)
     }
 
     async fn spawn_node(bootnode_of: Option<&str>, is_boot: bool) -> TestNode {
@@ -4149,7 +4153,7 @@ mod block_sync {
         let ledger = Arc::new(crate::ledger::Ledger::open(db.to_str().unwrap()).unwrap());
         ledger.init_genesis_founder_premine_from_env().unwrap();
         let _ = ledger.apply_genesis_allocation("founder");
-        let (state, block_sync_board, boot_multiaddr, swarm_task) =
+        let (state, block_sync_board, boot_multiaddr, swarm_task, health) =
             start_block_swarm_on_ledger(ledger.clone(), &db_dir, bootnode_of, is_boot, 400).await;
         TestNode {
             ledger,
@@ -4159,6 +4163,7 @@ mod block_sync {
             boot_multiaddr,
             swarm_task,
             auto_miner: None,
+            health,
         }
     }
 
@@ -4179,7 +4184,7 @@ mod block_sync {
         }
         node.swarm_task.abort();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let (state, board, boot, task) = start_block_swarm_on_ledger(
+        let (state, board, boot, task, health) = start_block_swarm_on_ledger(
             node.ledger.clone(),
             &node.db_dir,
             bootnode_of,
@@ -4191,6 +4196,7 @@ mod block_sync {
         node.block_sync_board = board;
         node.boot_multiaddr = boot;
         node.swarm_task = task;
+        node.health = health;
     }
 
     async fn mine_n(state: &crate::rest::RestState, n: u64) {
@@ -4463,7 +4469,7 @@ mod block_sync {
         let ledger2 = Arc::new(crate::ledger::Ledger::open(db2.to_str().unwrap()).unwrap());
         ledger2.init_genesis_founder_premine_from_env().unwrap();
         let _ = ledger2.apply_genesis_allocation("founder");
-        let (state2, board2, _, swarm2) =
+        let (state2, board2, _, swarm2, health2) =
             start_block_swarm_on_ledger(ledger2.clone(), &db_dir2, Some(&boot), false, 0).await;
         assert!(!n1.block_sync_board.same(&board2), "each node has its own sync state");
         assert!(
@@ -4479,6 +4485,7 @@ mod block_sync {
             boot_multiaddr: String::new(),
             swarm_task: swarm2,
             auto_miner: None,
+            health: health2,
         };
         let mut n3 = spawn_node(Some(&boot), false).await;
         assert!(
@@ -4825,6 +4832,227 @@ mod block_sync {
             "the peer's block must settle a tx that gossip never carried"
         );
 
+        rebroadcast.abort();
+        stop(&[n1, n2]);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Accept loop, part B (docs/DESIGN_accept_loop.md): the loop only routes. Its liveness is read
+    // from the swarm-health beacon, which the loop stamps on every iteration and at least once a
+    // second (the catch-up tick). A loop that awaits slow work shows a gap as long as the work.
+    // -----------------------------------------------------------------------------------------
+
+    /// Sample `health` every 50 ms until stopped; the result is the longest gap between two loop
+    /// iterations seen.
+    fn sample_loop_gaps(
+        health: crate::swarm_health::SharedSwarmHealth,
+    ) -> (Arc<std::sync::atomic::AtomicBool>, JoinHandle<u64>) {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let h = tokio::spawn(async move {
+            let mut max = 0u64;
+            while !stop2.load(Ordering::Relaxed) {
+                if let Some(g) = health.since_last_tick_ms(crate::swarm_health::now_ms()) {
+                    max = max.max(g);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            max
+        });
+        (stop, h)
+    }
+
+    async fn stop_sampler(s: (Arc<std::sync::atomic::AtomicBool>, JoinHandle<u64>)) -> u64 {
+        s.0.store(true, Ordering::Relaxed);
+        s.1.await.unwrap()
+    }
+
+    /// The test-only delay every apply job sleeps first; reset on drop so a failing test cannot
+    /// leave it set for the next one.
+    struct ApplyDelay;
+    impl ApplyDelay {
+        fn set(ms: u64) -> Self {
+            crate::apply_worker::TEST_APPLY_DELAY_MS.store(ms, Ordering::Relaxed);
+            ApplyDelay
+        }
+    }
+    impl Drop for ApplyDelay {
+        fn drop(&mut self) {
+            crate::apply_worker::TEST_APPLY_DELAY_MS.store(0, Ordering::Relaxed);
+        }
+    }
+
+    async fn synced_pair() -> (TestNode, TestNode) {
+        unsafe {
+            std::env::set_var("TET_CHAIN_HELLO_INTERVAL_SEC", "1");
+            std::env::remove_var("TET_PRODUCER_PEERS");
+        }
+        let n1 = spawn_node(None, true).await;
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        mine_n(&n1.state, 2).await;
+        wait_height_convergence(&[n1.ledger.clone(), n2.ledger.clone()], 0, Duration::from_secs(40)).await;
+        (n1, n2)
+    }
+
+    /// **G3 (accept loop B): the loop keeps draining while a block apply is slow.** The follower's
+    /// apply sleeps 10 s per block. Meanwhile its loop must keep iterating (no gap near 10 s) and keep
+    /// taking in what the producer says: the producer's new height reaches the follower's registry
+    /// while the follower's own ledger has not moved.
+    /// Negative control: await the apply result in the loop again → a gap of ~10 s → FAILED.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn loop_keeps_draining_while_apply_is_slow() {
+        let _g = env_lock();
+        block_sync_env();
+        let (n1, n2) = synced_pair().await;
+        let h0 = n2.ledger.block_height().unwrap();
+
+        let delay = ApplyDelay::set(10_000);
+        let sampler = sample_loop_gaps(n2.health.clone());
+        let started = Instant::now();
+        mine_n(&n1.state, 4).await;
+        let n1_h = n1.ledger.block_height().unwrap();
+        loop {
+            let seen = n2
+                .block_sync_board
+                .with(|s| s.registry.heights_snapshot().iter().map(|r| r.1).max().unwrap_or(0));
+            if seen >= n1_h {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(9),
+                "the follower's loop did not take in the producer's height {n1_h} (saw {seen}) while its apply slept"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(
+            n2.ledger.block_height().unwrap(),
+            h0,
+            "test premise: the follower's apply is still asleep"
+        );
+        tokio::time::sleep(Duration::from_secs(9).saturating_sub(started.elapsed())).await;
+        let gap = stop_sampler(sampler).await;
+        drop(delay);
+        assert!(gap < 3_000, "the swarm loop stalled for {gap} ms while a block apply was slow");
+
+        wait_height_convergence(&[n1.ledger.clone(), n2.ledger.clone()], 0, Duration::from_secs(90)).await;
+        stop(&[n1, n2]);
+    }
+
+    /// **G4 (accept loop B): the loop keeps draining under 1000 queued blocks, with bounded memory.**
+    /// The producer floods the follower with 1000 gossip blocks while each apply takes 2 s. The
+    /// follower's loop keeps iterating (no gap over 1.5 s), its apply queue never holds more than its
+    /// cap, the overflow is dropped and counted, and once the flood is over it syncs the real chain.
+    /// Negative controls: an apply queue that never refuses (unbounded) → depth far past the cap →
+    /// FAILED; awaiting the queue in the loop → stall → FAILED.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn loop_keeps_draining_under_1000_queued_blocks() {
+        let _g = env_lock();
+        block_sync_env();
+        let (n1, n2) = synced_pair().await;
+        let h = n2.ledger.block_height().unwrap();
+        let tip = block_id_at_height(n2.ledger.as_ref(), h).expect("tip");
+        let dropped0 = crate::metrics::apply_dropped_total();
+
+        let delay = ApplyDelay::set(2_000);
+        let gaps = sample_loop_gaps(n2.health.clone());
+        let depth_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let depth_max = {
+            let stop = depth_stop.clone();
+            tokio::spawn(async move {
+                let mut max = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    max = max.max(crate::metrics::apply_queue_depth());
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                max
+            })
+        };
+        let gossip = n1.state.gossip_tx.clone().expect("publish channel");
+        let salt = crate::swarm_health::now_ms();
+        for i in 0..1000u32 {
+            let ev = crate::models::NetworkEvent::BlockMined {
+                block_height: h + 1,
+                block_id: format!("flood-{salt}-{i:04}"),
+                parent_block_id: Some(tip.clone()),
+                producer_id: "alice".into(),
+                base_reward_micro: 0,
+                compute_reward_micro: 0,
+                total_reward_micro: 0,
+                state_root: "not-a-real-root".into(),
+                txs: vec![],
+            };
+            gossip.send(serde_json::to_string(&ev).unwrap()).await.unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while crate::metrics::apply_dropped_total() - dropped0 < 500 {
+            assert!(
+                Instant::now() < deadline,
+                "backpressure never engaged: {} dropped",
+                crate::metrics::apply_dropped_total() - dropped0
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let gap = stop_sampler(gaps).await;
+        depth_stop.store(true, Ordering::Relaxed);
+        let max_depth = depth_max.await.unwrap();
+        drop(delay);
+        let dropped = crate::metrics::apply_dropped_total() - dropped0;
+        assert!(gap < 1_500, "the swarm loop stalled for {gap} ms under a flood of blocks");
+        assert!(
+            max_depth as usize <= crate::apply_worker::APPLY_QUEUE_CAP_DEFAULT,
+            "the apply queue grew to {max_depth}, past its cap: memory is not bounded"
+        );
+        assert!(dropped >= 500, "only {dropped} of 1000 flood blocks were dropped");
+
+        // The flood is over: the follower still follows the real chain.
+        mine_n(&n1.state, 2).await;
+        wait_height_convergence(&[n1.ledger.clone(), n2.ledger.clone()], 0, Duration::from_secs(120)).await;
+        stop(&[n1, n2]);
+    }
+
+    /// **G6 (accept loop B): the loop drains while the mempool is held.** The test holds the
+    /// producer's mempool lock for 8 s, as a miner building a block does, while the follower sends
+    /// it a transaction (gossip and direct submit). The producer's loop keeps iterating, and the
+    /// transaction is admitted once the lock is released.
+    /// Negative control: await the admission result in the loop again → stall → FAILED.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn loop_drains_while_mempool_is_held() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            std::env::set_var("TET_TX_REBROADCAST_SEC", "1");
+        }
+        let (n1, n2) = synced_pair().await;
+        let rebroadcast = crate::rest::RestState::spawn_mempool_rebroadcast(n2.state.clone()).expect("retry loop");
+
+        let held = n1.state.mempool.lock().await;
+        let gaps = sample_loop_gaps(n1.health.clone());
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let words = w.mnemonic_12.clone().unwrap();
+        let wallet_id = w.address_hex.to_ascii_lowercase();
+        let env = signed_env_for_tests(
+            crate::protocol::TxV1::InitialAirdrop { wallet_id: wallet_id.clone() },
+            &words,
+            &wallet_id,
+        );
+        let resp = crate::rest::handlers::ledger::post_initial_airdrop_claim(
+            axum::extract::State(n2.state.clone()),
+            axum::Json(env),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let gap = stop_sampler(gaps).await;
+        drop(held);
+        assert!(gap < 3_000, "the producer's swarm loop stalled for {gap} ms while its mempool was held");
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while n1.state.mempool.lock().await.len() != 1 {
+            assert!(Instant::now() < deadline, "the transaction was never admitted after the lock was released");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         rebroadcast.abort();
         stop(&[n1, n2]);
     }

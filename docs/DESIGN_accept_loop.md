@@ -1,6 +1,7 @@
 # Design: the block-plane loop must not block
 
-Status: **A in progress** (2026-10-05); B and C after A has run on both seeds for a day.
+Status: **A deployed** 2026-10-05 13:06 UTC, clean on both seeds for 30 h. **B: in review**
+(2026-10-06; as built below). C after B.
 Root cause of the 2026-10-03 33 h outage. See [the postmortem](./postmortems/2026-10-04-producer-wedge-33h.md).
 
 **On the wire: nothing changes.** It's the same protocols, messages and timing.
@@ -71,6 +72,36 @@ on 2026-05-18/19 (`6850003`, `1a8ea22`).
   of its own.
 - **Disk lookups stay on `spawn_blocking`**, but the loop spawns them and handles the result as a
   later event, never awaiting inline.
+
+#### B as built (2026-10-06)
+
+- `src/apply_worker.rs`:
+  - **The apply worker** is one task, FIFO, with a bounded queue (`TET_APPLY_QUEUE_CAP`, 64). It
+    applies gossip blocks, catch-up batches **and backfilled-branch reorgs**. The reorgs were
+    running synchronously inside the loop, which this section had not listed.
+  - **The admission worker** is a queue of its own (`TET_TX_ADMISSION_QUEUE_CAP`, 256), so block
+    applies never delay transaction admission.
+- **Backpressure:**
+  - A full apply queue drops gossip blocks and backfill reorgs (`tet_p2p_apply_dropped_total`).
+  - Two slots are reserved for catch-up, which has at most one batch queued: the driver stays
+    `Requesting` until the worker reports.
+  - If even the reserve is full, a new driver event, `LocalBackpressure`, idles the driver **without
+    blacklisting the peer** (`RangeFailed` would have). The next tick retries.
+  - A full admission queue drops gossiped transactions (`tet_p2p_tx_admission_dropped_total`) and
+    answers a direct tx-submit with `busy`.
+- **Disk work off the loop:** every chain_hello build (periodic, on connect, bootnode recovery, and
+  replies) and every range and block lookup now runs on a task, at most 16 in flight. Past that the
+  loop declines and counts it (`tet_p2p_loop_lookups_refused_total`). The response channel waits in
+  the loop until the result arrives. Bootnode recovery used to build its hello **synchronously** in
+  the loop; it now names the peers and the hello is built off the loop.
+- **What remains in the loop:** only `.await`s whose futures cannot suspend (the catch-up helpers
+  bottom out in A's synchronous lock). Two pieces of synchronous work also stay:
+  - recording a backfill candidate (one sled write);
+  - verifying an anonymous-mail receipt (RISC Zero), which can take long enough to matter.
+
+  Moving the receipt verification out is a follow-up; C's lag watchdog will show whether it does
+  matter.
+- `/metrics` adds `tet_p2p_apply_queue_depth`.
 
 ### C. A lag watchdog, not a liveness watchdog
 
