@@ -116,6 +116,26 @@ after delivery. The demo node pays it from a **sponsor wallet**:
   affect the file."* It never retries automatically.
 - `sponsor_low` alerts the operator: a healthchecks.io `/fail` with the balance.
 
+## The anonymous board (part 1)
+
+- **A board is a Tmail wallet whose messaging keys are random.** They come from a 32-byte board
+  seed, and the seed is the invite: `/try#board=tetboard1.<board wallet id>.<seed>.<name>`.
+  Whoever has the invite can decrypt the board's inbox, so can read every post. Anyone can post,
+  because posting needs only the public keys the node serves.
+- **The invite is in the URL fragment,** which browsers never send to a server. No request the
+  page makes carries the seed or a secret key (`scripts/try_board_guard.mjs`).
+- **The board wallet's own 12 words register its keys,** and are not in the invite. An invite
+  holder can read the board but cannot replace its keys. Opening an invite checks that the keys
+  it derives equal the board's registered keys.
+- **Posts are labelled by the envelope and the node:** *named, not anonymous* with the sender's
+  wallet id, or anonymous with the node's verdict (verified, pending or failed; no verdict is
+  pending).
+- **Anonymous never falls back to named.** Without the native prover, an anonymous post is refused
+  and nothing is sent. Posting named is a separate, labelled choice.
+- **Allowance:** one anonymous post per member per board per UTC day (the node accepts the day
+  either side of its own, so up to 3 around midnight UTC). The board keeps each named sender's
+  newest 5 posts and 100 anonymous posts.
+
 ## What the page must say (honest limits)
 
 - **Everything is testnet.** The demo node sees your IP address and request timing, and it is
