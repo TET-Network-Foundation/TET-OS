@@ -3,7 +3,7 @@
 /**
  * Try TET — one page on today's testnet (docs/DEMO_NODE.md), in the desktop's Win95 look. The
  * disposable wallet (part 0c), Tmail and Files (parts 2, 3), the anonymous board (part 1) and verify
- * anything (part 4); the last panel is a placeholder that already states its limits.
+ * anything (part 4) and AI asks a human (part 5). Every panel prints its limits.
  *
  * Talks only to this site's `/tet-node-api` proxy, which reaches a tet-core in public mode (an
  * allow-list of routes, rate-limited per visitor). The wallet is made and kept in this tab only.
@@ -18,6 +18,7 @@ import { generateDisposableWords, wordsFileText } from "../lib/disposable_wallet
 import { activateTryWallet, forgetTryWallet } from "../lib/try_session";
 import BoardPanel from "./BoardPanel";
 import VerifyPanel from "./VerifyPanel";
+import QuestionsPanel from "./QuestionsPanel";
 
 const BASE = "/tet-node-api";
 
@@ -59,14 +60,6 @@ type NodeStatus =
 
 type Wallet = { words: string; walletId: string; shown: boolean };
 
-const PANELS: { title: string; part: number; what: string; limits: string[] }[] = [
-  {
-    title: "AI asks a human",
-    part: 5,
-    what: "Questions posted by an agent's key; answer them, anonymously if you have the prover.",
-    limits: ["No payment yet: answering earns nothing.", "An agent's owner is only as trustworthy as its manifest."],
-  },
-];
 
 export default function TryPage() {
   const [node, setNode] = useState<NodeStatus>({ state: "checking" });
@@ -229,19 +222,8 @@ export default function TryPage() {
 
         <VerifyPanel baseUrl={BASE} />
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {PANELS.map((p) => (
-            <Win95Panel key={p.title} title={p.title} className="p-2">
-              <p>{p.what}</p>
-              <p className="mt-2 text-black/50">Coming in part {p.part}.</p>
-              <ul className="mt-2 list-disc pl-5 text-[11px] text-black/70">
-                {p.limits.map((l) => (
-                  <li key={l}>{l}</li>
-                ))}
-              </ul>
-            </Win95Panel>
-          ))}
-        </div>
+        <QuestionsPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
+
       </div>
     </main>
   );

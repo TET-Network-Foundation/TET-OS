@@ -155,16 +155,30 @@ export async function readBoard(baseUrl: string, board: OpenBoard): Promise<Boar
   return out;
 }
 
+/** Where a Tmail goes: a wallet id and its messaging public keys. */
+export type Recipient = { walletId: string; x25519Pub: Uint8Array; mlkemPub: Uint8Array };
+
+const boardRecipient = (board: OpenBoard): Recipient => ({
+  walletId: board.boardWalletId,
+  x25519Pub: board.keys.x25519_pub,
+  mlkemPub: board.keys.mlkem_pub,
+});
+
 /** A named post: an ordinary Tmail from the visitor's wallet, which the board shows. */
 export async function postNamed(baseUrl: string, board: OpenBoard, text: string): Promise<string> {
+  return postNamedTo(baseUrl, boardRecipient(board), text);
+}
+
+/** A named Tmail from the visitor's wallet to `to`. */
+export async function postNamedTo(baseUrl: string, to: Recipient, text: string): Promise<string> {
   const sess = getHybridSignerSession();
   if (!sess) throw new Error("Create a disposable wallet first.");
   const env = await buildTmailEnvelopeV1({
     senderWalletId: sess.walletIdHex64,
-    receiverWalletId: board.boardWalletId,
+    receiverWalletId: to.walletId,
     plaintextUtf8: text,
-    receiverX25519Pub: board.keys.x25519_pub,
-    receiverMlkemPub: board.keys.mlkem_pub,
+    receiverX25519Pub: to.x25519Pub,
+    receiverMlkemPub: to.mlkemPub,
     baseUrl,
   });
   const r = await postTmailSend(baseUrl, env);
@@ -196,6 +210,17 @@ export async function postAnonymous(
   text: string,
   onState: (s: AnonSendState) => void,
 ): Promise<AnonSendState> {
+  return postAnonymousTo(baseUrl, proverUrl, boardRecipient(board), text, onState);
+}
+
+/** An anonymous Tmail to `to`, through the native prover. Nothing sent to the node names the sender. */
+export async function postAnonymousTo(
+  baseUrl: string,
+  proverUrl: string,
+  to: Recipient,
+  text: string,
+  onState: (s: AnonSendState) => void,
+): Promise<AnonSendState> {
   const ks = getTmailKeySession();
   if (!ks) return { state: "failed", reason: "Create a disposable wallet first." };
   return (await runAnonPost(
@@ -216,8 +241,8 @@ export async function postAnonymous(
           ephemeralWalletId: a.ephemeralWalletId,
           receiverWalletId: a.receiverWalletId,
           plaintextUtf8: a.plaintext,
-          receiverX25519Pub: board.keys.x25519_pub,
-          receiverMlkemPub: board.keys.mlkem_pub,
+          receiverX25519Pub: to.x25519Pub,
+          receiverMlkemPub: to.mlkemPub,
           sentAtMs: a.sentAtMs,
           proof: a.proof,
           baseUrl,
@@ -225,6 +250,6 @@ export async function postAnonymous(
       now: () => Date.now(),
       onState,
     },
-    { memberSecret: ks.anonMemberSecret, receiverWalletId: board.boardWalletId, plaintext: text },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text },
   )) as AnonSendState;
 }

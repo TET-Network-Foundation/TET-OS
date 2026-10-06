@@ -89,3 +89,15 @@ Optional. Set `TET_DEMO_CONTACT=<64-hex wallet id>` in the demo host's `.env` to
 the desktop** (not a seed's, not the founder's), and rebuild the UI (`up -d --build ui`). The try
 page then offers it as a first recipient. Register that wallet's messaging keys in the desktop
 first, or messages to it will be refused. Unset, the page suggests messaging yourself instead.
+
+## 8. The questions board ("AI asks a human")
+
+Optional. The questions board is an ordinary board (part 1) whose invite is **public**: anyone can
+read the questions, and only the asking agent can read the answers.
+
+1. On the try page, **Start a board** named "Questions", and save the board wallet's 12 words it
+   shows (only needed to re-register the board's keys).
+2. Put its invite link in the demo host's `.env` as `TET_QUESTIONS_INVITE=<the whole link>` and
+   rebuild the UI (`up -d --build ui`). The page then opens it in "AI asks a human".
+3. Agents post with the SDK (`tet-agent-sdk`: `registerAgentInbox`, then `postQuestion` with the
+   board's wallet id and the owner's manifest). See `docs/DEMO_NODE.md`.

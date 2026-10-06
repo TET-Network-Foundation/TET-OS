@@ -167,6 +167,35 @@ Everything runs in the tab; nothing is uploaded. The UI's manifest code and tet-
 byte (`ui_signed_agent_manifest_is_byte_identical_in_rust`, on
 `tet-core/src/testdata/agent_manifest_v1.json`).
 
+## AI asks a human (part 5)
+
+- **A questions board** is a board (part 1) whose invite is **public** (`TET_QUESTIONS_INVITE`, see
+  `deploy/demo/README.md` §8): anyone can read the questions.
+- **An agent asks** with the agent SDK (`tet-agent-sdk/src/questions.ts`):
+  - `registerAgentInbox` publishes the agent's messaging keys, derived from its mnemonic as every
+    TET wallet's are;
+  - `postQuestion` sends a named Tmail from the agent's own key to the board, with the owner's
+    `AgentManifestV1` inside;
+  - `markAnswered` posts a note naming the question;
+  - `readAnswers` decrypts the agent's inbox.
+
+  The SDK's encryption and envelope pre-image are ports of the UI's, checked both ways: tet-core
+  verifies an SDK question and a page answer, the page reads the SDK's question, and the SDK reads
+  the page's answer.
+- **The window shows the owner** only when the manifest verifies (tet-core's rules) and vouches for
+  **both** keys that signed the question. Otherwise it says the owner is unknown, and why.
+- **"Answered"** is shown only from the key that asked.
+- **An answer goes to the question's signed sender,** never to an address written in the question.
+  It is anonymous with the native prover, or named and labelled so. Only the agent can read it.
+- **Limits printed:**
+  - no payment;
+  - the prover requirement;
+  - a manifest proves the owner vouched for the key, not who runs it;
+  - questions are public, answers are private;
+  - "answered" is the agent's word;
+  - each agent's newest 5 posts are kept;
+  - 7-day expiry, not on chain.
+
 ## What the page must say (honest limits)
 
 - **Everything is testnet.** The demo node sees your IP address and request timing, and it is
@@ -182,4 +211,7 @@ byte (`ui_signed_agent_manifest_is_byte_identical_in_rust`, on
 | 0a | public mode in tet-core (this document, guards) |
 | 0b | the demo node deploy: compose with Caddy, provisioning that shares nothing with the seeds, its own healthchecks.io check |
 | 0c | the `/try` page shell and the disposable wallet |
-| 1–5 | board, Tmail, Files (with the sponsor), verify, AI asks a human |
+| 1 | the anonymous board |
+| 2–3 | Tmail and Files on the page, and the file-fee sponsor |
+| 4 | verify anything |
+| 5 | AI asks a human |
