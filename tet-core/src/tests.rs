@@ -11704,6 +11704,41 @@ fn agent_fixture_doc() -> serde_json::Value {
     doc
 }
 
+const UI_AGENT_MANIFEST: &str = include_str!("testdata/agent_manifest_v1.json");
+
+/// **The browser signs manifests the node accepts, byte for byte.** The try page's verifier checks
+/// manifests in the browser (`tet-network/ui/app/lib/verify_anything.mjs`) and the UI signs them
+/// (`agent_manifest.ts`); this fixture is the UI's output. The node re-signs it from the same
+/// mnemonic and must produce the same signature bytes, then must accept the UI's manifest, and must
+/// refuse it once one signed field changes.
+#[test]
+fn ui_signed_agent_manifest_is_byte_identical_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_AGENT_MANIFEST).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let ui: crate::agent::AgentManifestV1 =
+        serde_json::from_value(doc["manifest"].clone()).expect("the UI's manifest must deserialize");
+    let now = doc["verify_at_ms"].as_u64().unwrap();
+
+    let mut ours = ui.clone();
+    crate::agent::sign_agent_manifest(doc["owner_mnemonic"].as_str().unwrap(), &mut ours)
+        .expect("rust could not sign the manifest");
+    assert_eq!(ours.hybrid_sig.ed25519_pubkey_hex, ui.hybrid_sig.ed25519_pubkey_hex, "owner id differs");
+    assert_eq!(ours.hybrid_sig.mldsa_pubkey_b64, ui.hybrid_sig.mldsa_pubkey_b64, "owner ML-DSA key differs");
+    assert_eq!(ours.hybrid_sig.ed25519_sig_b64, ui.hybrid_sig.ed25519_sig_b64, "Ed25519 bytes differ between the UI and the node");
+    assert_eq!(ours.hybrid_sig.mldsa_sig_b64, ui.hybrid_sig.mldsa_sig_b64, "ML-DSA-44 bytes differ between the UI and the node");
+
+    crate::agent::verify_agent_manifest_v1(&ui, now).expect("the node must accept the UI's manifest");
+
+    let mut altered = ui.clone();
+    altered.agent_id.push('!');
+    assert!(
+        crate::agent::verify_agent_manifest_v1(&altered, now).is_err(),
+        "a manifest with a changed agent_id must not verify"
+    );
+}
+
 /// **The SDK and the node produce the same bytes.** Not "both verify" — the same bytes.
 #[test]
 fn sdk_agent_payload_signatures_are_byte_identical_in_rust() {

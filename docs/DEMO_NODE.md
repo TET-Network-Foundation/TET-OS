@@ -136,6 +136,23 @@ after delivery. The demo node pays it from a **sponsor wallet**:
   either side of its own, so up to 3 around midnight UTC). The board keeps each named sender's
   newest 5 posts and 100 anonymous posts.
 
+## Verify anything (part 4)
+
+A file or text, its `.sig.json` (the agent payload envelope), and optionally an owner's manifest
+and a pinned key give a **graded verdict**. Each step says only what it proves:
+
+1. **The bytes match and both signatures are valid, by key X.** The content must be byte-identical
+   to the signed payload, and both signatures (Ed25519 and ML-DSA-44, size-pinned) must verify on
+   the chain binding. The binding is the node's `/chain`, or one the user types, and is never read
+   from the sidecar.
+2. **Key X belongs to agent A, owned by wallet W,** only with an `AgentManifestV1` that verifies as
+   tet-core's `verify_agent_manifest_v1` does, and that names the same two keys.
+3. **This is the key you pinned,** only with a pin.
+
+Everything runs in the tab; nothing is uploaded. The UI's manifest code and tet-core agree byte for
+byte (`ui_signed_agent_manifest_is_byte_identical_in_rust`, on
+`tet-core/src/testdata/agent_manifest_v1.json`).
+
 ## What the page must say (honest limits)
 
 - **Everything is testnet.** The demo node sees your IP address and request timing, and it is
