@@ -10,7 +10,14 @@ function absoluteOrigin(raw: string | undefined): string {
   return /^https?:\/\//i.test(v) ? v.replace(/\/+$/, "") : "";
 }
 
+/**
+ * Where to send a request. An explicit `TET_CORE_ORIGIN` (compose deploys and the demo node set it)
+ * is the only origin: its answers, 404s included, are passed through. Without one (local dev),
+ * the guesses below are tried in order, and a 404 or 502 moves on to the next.
+ */
 function candidateOrigins(): string[] {
+  const explicit = absoluteOrigin(process.env.TET_CORE_ORIGIN);
+  if (explicit) return [explicit];
   const origins = [
     absoluteOrigin(process.env.TET_CORE_ORIGIN),
     absoluteOrigin(process.env.NEXT_PUBLIC_API_URL),

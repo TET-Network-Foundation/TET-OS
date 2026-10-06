@@ -1,15 +1,19 @@
 "use client";
 
 /**
- * Try TET — one page on today's testnet (docs/DEMO_NODE.md). Part 0c: the shell and the disposable
- * wallet. The panels are placeholders that already state their limits; each fills in with its part.
+ * Try TET — one page on today's testnet (docs/DEMO_NODE.md), in the desktop's Win95 look. The
+ * disposable wallet (part 0c) and the anonymous board (part 1); the other panels are placeholders that
+ * already state their limits, and fill in with their parts.
  *
  * Talks only to this site's `/tet-node-api` proxy, which reaches a tet-core in public mode (an
  * allow-list of routes, rate-limited per visitor). The wallet is made and kept in this tab only.
  */
 import { useEffect, useState } from "react";
+import Win95Button from "../os/components/Win95Button";
+import Win95Panel from "../os/components/Win95Panel";
 import { generateDisposableWords, wordsFileText } from "../lib/disposable_wallet.mjs";
 import { activateTryWallet, forgetTryWallet } from "../lib/try_session";
+import BoardPanel from "./BoardPanel";
 
 const BASE = "/tet-node-api";
 
@@ -38,16 +42,6 @@ const PANELS: { title: string; part: number; what: string; limits: string[] }[] 
     limits: [
       "The demo sponsors a few file fees per visitor per day; past that the file still arrives.",
       "Files are stored on the demo node with a size cap and an expiry.",
-    ],
-  },
-  {
-    title: "Anonymous board",
-    part: 1,
-    what: "Post to a board with a zero-knowledge proof that you're a member, not who you are.",
-    limits: [
-      "Anonymous posting needs the native prover on your own computer; without it, posts are named.",
-      "You're anonymous only among registered members, a handful today.",
-      "The demo node sees your IP address and timing.",
     ],
   },
   {
@@ -120,79 +114,82 @@ export default function TryPage() {
   }
 
   return (
-    <main className="mx-auto max-w-4xl px-4 py-8 text-sm text-black">
-      <h1 className="text-2xl font-semibold">Try TET</h1>
-      <p className="mt-2 rounded border border-amber-300 bg-amber-50 p-3 text-[13px]">
-        Testnet. The demo node sees your IP address and when you make requests; it is run by one
-        person. Nothing here is audited. The wallet you make lives in this tab.
-      </p>
+    <main className="min-h-screen bg-[#D6D4CE] font-mono text-sm text-black">
+      <div className="bg-[#000080] px-2 py-1 text-sm font-bold text-white">Try TET — testnet</div>
+      <div className="mx-auto max-w-5xl space-y-3 p-3">
+        <Win95Panel variant="inset" className="bg-[#fff8e1] p-2 text-[13px]">
+          Testnet. The demo node sees your IP address and when you make requests; it is run by one
+          person. Nothing here is audited. The wallet you make lives in this tab.
+        </Win95Panel>
 
-      <section className="mt-6 rounded border p-4">
-        <h2 className="font-semibold">Node</h2>
-        {node.state === "checking" ? <p>Checking the demo node…</p> : null}
-        {node.state === "up" ? (
-          <p>
-            Connected · chain <code>{node.chainId}</code> · height {node.height ?? "?"}
-          </p>
-        ) : null}
-        {node.state === "down" ? <p className="text-red-700">The demo node isn&apos;t answering ({node.reason}).</p> : null}
-      </section>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Win95Panel title="Node" className="p-2">
+            {node.state === "checking" ? <p>Checking the demo node…</p> : null}
+            {node.state === "up" ? (
+              <p>
+                Connected · chain <code>{node.chainId}</code> · height {node.height ?? "?"}
+              </p>
+            ) : null}
+            {node.state === "down" ? (
+              <p className="text-[#8a1f1f]">The demo node isn&apos;t answering ({node.reason}).</p>
+            ) : null}
+          </Win95Panel>
 
-      <section className="mt-4 rounded border p-4">
-        <h2 className="font-semibold">Your disposable wallet</h2>
-        {!wallet ? (
-          <>
-            <p className="mt-1">
-              Made in this tab from 12 random words. They are never sent anywhere, not even to the demo node.
-            </p>
-            <button type="button" onClick={() => void onCreate()} className="mt-2 rounded border px-3 py-1">
-              Create a wallet
-            </button>
-          </>
-        ) : (
-          <>
-            <p className="mt-1">
-              Wallet id <code className="break-all">{wallet.walletId}</code>
-            </p>
-            <p className="mt-2">
-              {wallet.shown ? (
-                <code className="break-words">{wallet.words}</code>
-              ) : (
-                <button type="button" onClick={() => setWallet({ ...wallet, shown: true })} className="rounded border px-2 py-0.5">
-                  Show the 12 words
-                </button>
-              )}
-            </p>
-            <p className="mt-2 flex gap-2">
-              <button type="button" onClick={onDownload} className="rounded border px-2 py-0.5">
-                Download the words
-              </button>
-              <button type="button" onClick={onForget} className="rounded border px-2 py-0.5">
-                Forget this wallet
-              </button>
-            </p>
-            <p className="mt-2 text-black/60">
-              Close this tab and the wallet is gone unless you saved the words. They open the same wallet in
-              the TET desktop.
-            </p>
-          </>
-        )}
-        {err ? <p className="mt-2 text-red-700">{err}</p> : null}
-      </section>
+          <Win95Panel title="Your disposable wallet" className="p-2">
+            {!wallet ? (
+              <>
+                <p>Made in this tab from 12 random words. They are never sent anywhere, not even to the demo node.</p>
+                <Win95Button className="mt-2 px-3 py-0.5 text-sm" onClick={() => void onCreate()}>
+                  Create a wallet
+                </Win95Button>
+              </>
+            ) : (
+              <>
+                <p>
+                  Wallet id <code className="break-all">{wallet.walletId}</code>
+                </p>
+                <p className="mt-2">
+                  {wallet.shown ? (
+                    <code className="break-words">{wallet.words}</code>
+                  ) : (
+                    <Win95Button className="px-2 py-0.5 text-xs" onClick={() => setWallet({ ...wallet, shown: true })}>
+                      Show the 12 words
+                    </Win95Button>
+                  )}
+                </p>
+                <p className="mt-2 flex gap-2">
+                  <Win95Button className="px-2 py-0.5 text-xs" onClick={onDownload}>
+                    Download the words
+                  </Win95Button>
+                  <Win95Button className="px-2 py-0.5 text-xs" variant="danger" onClick={onForget}>
+                    Forget this wallet
+                  </Win95Button>
+                </p>
+                <p className="mt-2 text-[12px] text-black/60">
+                  Close this tab and the wallet is gone unless you saved the words. They open the same wallet in
+                  the TET desktop.
+                </p>
+              </>
+            )}
+            {err ? <p className="mt-2 text-[#8a1f1f]">{err}</p> : null}
+          </Win95Panel>
+        </div>
 
-      <div className="mt-4 grid gap-4 sm:grid-cols-2">
-        {PANELS.map((p) => (
-          <section key={p.title} className="rounded border p-4">
-            <h2 className="font-semibold">{p.title}</h2>
-            <p className="mt-1">{p.what}</p>
-            <p className="mt-2 text-black/50">Coming in part {p.part}.</p>
-            <ul className="mt-2 list-disc pl-5 text-[12px] text-black/70">
-              {p.limits.map((l) => (
-                <li key={l}>{l}</li>
-              ))}
-            </ul>
-          </section>
-        ))}
+        <BoardPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          {PANELS.map((p) => (
+            <Win95Panel key={p.title} title={p.title} className="p-2">
+              <p>{p.what}</p>
+              <p className="mt-2 text-black/50">Coming in part {p.part}.</p>
+              <ul className="mt-2 list-disc pl-5 text-[11px] text-black/70">
+                {p.limits.map((l) => (
+                  <li key={l}>{l}</li>
+                ))}
+              </ul>
+            </Win95Panel>
+          ))}
+        </div>
       </div>
     </main>
   );
