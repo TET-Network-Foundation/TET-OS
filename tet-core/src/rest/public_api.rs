@@ -45,11 +45,13 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("PUT", "/tmail/anon/receipt"),
     ("POST", "/tmail/anon/receipt"),
     ("GET", "/tmail/anon/receipt/:hash"),
-    // Files (the fee route comes with the sponsor, part 3 of docs/DEMO_NODE.md)
+    // Files. `/files/fee` is not here: a visitor's fee goes through the sponsor below.
     ("POST", "/files/upload"),
     ("GET", "/files/inbox/:wallet_id"),
     ("GET", "/files/fetch/:file_id"),
     ("DELETE", "/files/item/:file_id"),
+    // The file-fee sponsor (part 3): answers `no_sponsor` on a node without one.
+    ("POST", "/demo/files/sponsor-fee"),
 ];
 
 /// Set on the gate's own refusals, so a test can tell "the gate refused" from a handler's 404.
@@ -120,7 +122,7 @@ fn cidr_contains(cidr: &str, ip: IpAddr) -> bool {
     }
 }
 
-fn trusted_proxies_from_env() -> Vec<String> {
+pub fn trusted_proxies_from_env() -> Vec<String> {
     std::env::var("TET_PUBLIC_TRUSTED_PROXIES")
         .ok()
         .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())

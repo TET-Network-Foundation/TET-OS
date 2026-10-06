@@ -34,7 +34,8 @@ host-only:  127.0.0.1:5010 ──> tet-core   (the health probe)
 `PUBLIC_ALLOWLIST` holds exactly the routes the try page needs:
 - status, chain binding, ledger state, balance;
 - Tmail send, inbox, keys, read receipt, and anonymous register/root/leaves/receipt;
-- Files upload, inbox, fetch, delete.
+- Files upload, inbox, fetch, delete;
+- the file-fee sponsor, `POST /demo/files/sponsor-fee` (below).
 
 **Everything else is a 404 from the gate**, which runs before any handler, rate limiter or CORS
 layer. That includes mining, `/execute`, logs, admin, founder, the server-side mnemonic generator,
@@ -42,7 +43,8 @@ the faucet/airdrop routes, metrics, `/files/fee` (the sponsor replaces it, below
 wallet-keyed `/tmail/anon/path/*`.
 
 ### Path matching
-Path matching is strict: a `:param` matches exactly one non-empty segment without `%`. Trailing
+Path matching is strict: a `:param` matches exactly one non-empty segment without `%` that is not
+`.` or `..`. Trailing
 slashes, double slashes and extra segments never match.
 
 ### Per-client rate limits
@@ -84,37 +86,49 @@ Each has its negative control recorded in the commit:
 | `public_mode_ignores_forwarded_for_from_an_untrusted_peer` | a direct peer rotating `X-Forwarded-For` is still one client |
 | `public_mode_limits_ipv6_per_slash_64` | rotating addresses inside one `/64` is still one client |
 
-## File fees: sponsored, capped, never a faucet (part 3; designed here)
+## File fees: sponsored, capped, never a faucet (part 3)
 
 A visitor's disposable wallet has 0 TET. The file is delivered either way; the fee is settled
-after delivery. The demo node pays it from a **sponsor wallet**:
+after delivery. The demo node pays it from a **sponsor wallet** (`tet-core/src/demo_sponsor.rs`):
 
-- **The sponsor wallet** is demo-only. Its mnemonic is in `/etc/tet-demo/sponsor.mnemonic` (mode
-  600). It is never in `.env`, the repository, or the seeds. The founder funds it with a fixed
-  budget by an ordinary transfer, for example 50 TET (50,000 fees of 1,000 µTET).
-- **The only thing it signs** is `TxV1::FileFee`, with `from_wallet = sponsor`, for a `file_id` that
-  **this node stored** (`/files/upload` came through it) and that hasn't been paid yet. The sponsor
-  code has no transfer path, so it cannot become a faucet. `FileFee` already allows a payer
-  different from the file's sender, so **nothing changes in consensus**.
-- **Route:** `POST /demo/files/sponsor-fee {file_id}`, signed by the file's sender (proving it's
-  their file). It's on the allow-list only when the sponsor is configured.
+- **The sponsor wallet** is demo-only. Its 12 words are in `/etc/tet-demo/sponsor.mnemonic` on the
+  demo host (root only), mounted read-only into tet-core as `TET_DEMO_SPONSOR_MNEMONIC_FILE`. They
+  are never in `.env`, the repository, or the seeds. The operator funds it with a fixed budget by an
+  ordinary transfer, for example 50 TET (50,000 fees of 1,000 µTET). Until the file exists the
+  sponsor is off; a file that exists but is unusable stops the node at start.
+- **The only thing it signs** is `TxV1::FileFee`, with `from_wallet` = the sponsor, for a file that
+  was **uploaded through this node** (`/files/upload` recorded it), by the sender who asks, and
+  that **this node has not sponsored before**. Nothing records whether someone else already paid a
+  file's fee, so "not paid yet" can only mean "not sponsored here". The module has no other signing
+  path, so it cannot become a faucet. `FileFee` already allows a payer other than the file's
+  sender, so **nothing changes in consensus**.
+- **Route:** `POST /demo/files/sponsor-fee` with a `SponsorFeeRequestV1` `{file_id,
+  sender_wallet_id, requested_at_ms, hybrid_sig}`, signed by the file's sender over
+  `tet demo sponsor fee v1|chain_id=…|genesis_hash=…|file_id=…|sender=…|requested_at_ms=…|mldsa_pk=…`
+  (ML-DSA-44, within 5 minutes of the node's clock). It is on the public allow-list; a node
+  without a sponsor answers `no_sponsor`.
 
 **Caps.** Each one, when hit, is a **refusal, not a queue**:
 
-| Cap | Default | Refusal reason |
+| Cap | Default (`.env`) | Refusal reason |
 |---|---|---|
-| Per client IP per UTC day | 5 files | `daily_cap_ip` |
-| Per sender wallet per UTC day | 5 files | `daily_cap_wallet` |
-| All visitors per UTC day | 500 files | `daily_cap_global` |
-| Sponsor balance floor | stop below 10 TET | `sponsor_low` |
-| Not uploaded here, already paid, or unknown | — | `not_sponsorable` |
+| Per client per UTC day | 5 files (`TET_DEMO_SPONSOR_PER_IP`) | `daily_cap_ip` (429) |
+| Per sender wallet per UTC day | 5 files (`TET_DEMO_SPONSOR_PER_WALLET`) | `daily_cap_wallet` (429) |
+| All visitors per UTC day | 500 files (`TET_DEMO_SPONSOR_GLOBAL`) | `daily_cap_global` (429) |
+| Sponsor balance floor | stop below 10 TET (`TET_DEMO_SPONSOR_FLOOR_TET`) | `sponsor_low` (402) |
+| Not uploaded here, not the sender's, or already sponsored | — | `not_sponsorable` (404) |
+| No sponsor on this node | — | `no_sponsor` (404) |
 
-- The counters live in a node-local sled tree keyed by **(UTC day, salted hash of the IP)**. The
-  salt rotates daily, so the node never stores visitors' IP addresses.
-- The refusal is `429` (`402` for `sponsor_low`) with `{reason}`.
-- The page says: *"Your file was delivered. Its fee wasn't sponsored (`<reason>`); that doesn't
-  affect the file."* It never retries automatically.
-- `sponsor_low` alerts the operator: a healthchecks.io `/fail` with the balance.
+- **The client** is the one public mode rate-limits (the TCP peer, or the right-most
+  `X-Forwarded-For` from a trusted proxy; IPv6 by /64).
+- **No IP address is stored.** The per-client counter is keyed by `SHA-256(daily salt ‖ client)`.
+  The salt is random, held in memory only, and replaced each UTC day. A restart forgets it and
+  resets that day's per-client counts; the wallet and global counts are durable.
+- **What the page says:** *"Your file was delivered. Its fee wasn't sponsored (`<reason in
+  words>`); that doesn't affect the file."* It never retries. A 429 from public mode's own rate
+  limit (not a sponsor cap) is named as such.
+- **Not built yet:** an alert when the sponsor runs low. Today `sponsor_low` is a refusal and a
+  warning in tet-core's log; wiring it to the healthchecks.io check is a follow-up.
 
 ## The anonymous board (part 1)
 

@@ -76,6 +76,8 @@ pub struct RestState {
     pub genesis_1k_lock: Arc<tokio::sync::Mutex<()>>,
     pub log_tx: broadcast::Sender<String>,
     pub log_sse_connections: Arc<AtomicUsize>,
+    /// The demo node's file-fee sponsor (`None` everywhere else). See [`crate::demo_sponsor`].
+    pub demo_sponsor: Option<Arc<crate::demo_sponsor::DemoSponsor>>,
 }
 
 #[derive(Debug, Clone)]

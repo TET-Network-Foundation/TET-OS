@@ -315,6 +315,9 @@ SERVICES=(tet-core)
 if [ "$ROLE" = demo ]; then
   COMPOSE+=(-f deploy/demo/docker-compose.demo.yml)
   SERVICES+=(ui)
+  # The file-fee sponsor's words go here later (deploy/demo/README.md, section 6). Root only; the
+  # demo overlay mounts it read-only. Nothing in it comes from, or goes to, the seeds.
+  install -d -m 700 /etc/tet-demo
 else
   COMPOSE+=(-f deploy/docker-compose.seed.yml)
 fi

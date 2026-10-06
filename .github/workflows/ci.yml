@@ -295,6 +295,10 @@ jobs:
             public_mode_ignores_forwarded_for_from_an_untrusted_peer
             public_mode_limits_ipv6_per_slash_64
             ui_signed_agent_manifest_is_byte_identical_in_rust
+            demo_sponsor_pays_once_for_its_own_upload_and_only_for_the_sender
+            demo_sponsor_caps_refuse_rather_than_queue
+            demo_sponsor_signs_nothing_but_file_fees_and_stores_no_address
+            ui_signed_sponsor_request_verifies_in_rust
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block
@@ -416,6 +420,12 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — verify anything grades only what it proves
         run: node --experimental-strip-types scripts/try_verify_guard.mjs
+
+      # Try TET parts 2-3: on the try page a visitor's wallet never pays a file fee (the demo's
+      # sponsor does, or it is unpaid), and every refusal is final and worded as the design says.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — file fees are sponsored or unpaid, never the visitor's
+        run: node --experimental-strip-types scripts/try_files_fee_guard.mjs
 
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --

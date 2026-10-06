@@ -60,3 +60,32 @@ curl -s -o /dev/null -w "%{http_code}\n" -X POST https://try.<your domain>/tet-n
 curl -s -o /dev/null -w "%{http_code}\n" https://try.<your domain>/tet-node-api/metrics             # 404
 for i in $(seq 1 60); do curl -s -o /dev/null -w "%{http_code} " https://try.<your domain>/tet-node-api/status; done; echo   # 429s appear after the burst
 ```
+
+## 6. Turning on the file-fee sponsor
+
+Optional, and off until you do this. The sponsor pays visitors' file fees under the caps in
+`docs/DEMO_NODE.md`; without it, the page says each fee is unpaid (the file is delivered either way).
+
+1. **Make a demo-only wallet** on your own computer. It must not be a seed's or your founder wallet:
+   ```bash
+   cargo run -q -p tet-cli -- keys generate --words 12
+   ```
+2. **Fund it** from the founder wallet in the desktop with a fixed budget, for example 50 TET
+   (50,000 fees). The sponsor stops at 10 TET.
+3. **Put its 12 words on the demo host only,** readable by root only:
+   ```bash
+   ssh -p 8443 root@<demo-ip> 'umask 077 && cat > /etc/tet-demo/sponsor.mnemonic'   # paste the words, Enter, Ctrl-D
+   ssh -p 8443 root@<demo-ip> 'cd /opt/TET-OS && docker compose restart tet-core && sleep 10 && docker logs tet-core-mainnet 2>&1 | grep demo-sponsor | tail -1'
+   ```
+   The log line should read `[demo-sponsor] on; sponsor wallet <id>`, with the wallet you funded.
+4. **To turn it off,** delete the file and restart tet-core.
+
+Caps can be changed in `.env`: `TET_DEMO_SPONSOR_PER_IP` (5), `TET_DEMO_SPONSOR_PER_WALLET` (5),
+`TET_DEMO_SPONSOR_GLOBAL` (500 a day), `TET_DEMO_SPONSOR_FLOOR_TET` (10).
+
+## 7. The "message the demo" address
+
+Optional. Set `TET_DEMO_CONTACT=<64-hex wallet id>` in the demo host's `.env` to a wallet **you read in
+the desktop** (not a seed's, not the founder's), and rebuild the UI (`up -d --build ui`). The try
+page then offers it as a first recipient. Register that wallet's messaging keys in the desktop
+first, or messages to it will be refused. Unset, the page suggests messaging yourself instead.

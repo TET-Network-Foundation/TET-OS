@@ -51,6 +51,12 @@ if env.get("TET_PUBLIC_API") != "1":
     bad.append("public mode is off")
 if env.get("TET_AUTO_MINE") != "0":
     bad.append("the demo node would mine")
+# The sponsor's words come in read-only from the host's /etc/tet-demo, never from .env.
+mounts = [v for v in s["tet-core"].get("volumes", []) if v.get("source") == "/etc/tet-demo"]
+if len(mounts) != 1 or not mounts[0].get("read_only") or mounts[0].get("target") != "/run/tet-demo":
+    bad.append(f"sponsor mount {mounts}")
+if env.get("TET_DEMO_SPONSOR_MNEMONIC_FILE") != "/run/tet-demo/sponsor.mnemonic":
+    bad.append("the sponsor file is not configured")
 subnets = [c["subnet"] for c in cfg["networks"]["default"]["ipam"]["config"]]
 if env.get("TET_PUBLIC_TRUSTED_PROXIES") not in subnets:
     bad.append(f"trusted proxies {env.get('TET_PUBLIC_TRUSTED_PROXIES')} is not the pinned subnet {subnets}")
@@ -154,7 +160,7 @@ fi
 
 # The seeds' composition is untouched: REST on loopback, no Caddy.
 seed=$(compose_json deploy/docker-compose.seed.yml)
-if python3 -c 'import json,sys; c=json.loads(sys.argv[1]); s=c["services"]; sys.exit(0 if "caddy" not in s and any(str(p.get("host_ip"))=="127.0.0.1" and str(p.get("published"))=="5010" for p in s["tet-core"]["ports"]) else 1)' "$seed"; then
+if python3 -c 'import json,sys; c=json.loads(sys.argv[1]); s=c["services"]; sys.exit(0 if "caddy" not in s and "TET_DEMO_SPONSOR_MNEMONIC_FILE" not in s["tet-core"].get("environment", {}) and not any(v.get("source") == "/etc/tet-demo" for v in s["tet-core"].get("volumes", [])) and any(str(p.get("host_ip"))=="127.0.0.1" and str(p.get("published"))=="5010" for p in s["tet-core"]["ports"]) else 1)' "$seed"; then
   pass "the seed composition is unchanged"
 else flunk "the seed composition is unchanged"; fi
 

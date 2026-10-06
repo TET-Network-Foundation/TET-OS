@@ -280,6 +280,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::post(super::handlers::files::post_files_fee),
         )
         .route(
+            "/demo/files/sponsor-fee",
+            axum::routing::post(super::handlers::files::post_demo_sponsor_fee),
+        )
+        .route(
             "/files/inbox/:wallet_id",
             axum::routing::get(super::handlers::files::get_files_inbox),
         )
