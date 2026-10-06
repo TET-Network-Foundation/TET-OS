@@ -288,6 +288,11 @@ jobs:
             block_id_v3_golden_vector
             block_time_not_after_parent_is_refused
             block_ahead_of_the_clock_is_held_then_accepted
+            # Phase 1 item 6: the leader mode is a genesis parameter, read by every acceptance site.
+            leader_mode_is_in_the_genesis_hash
+            unknown_leader_mode_refuses_the_genesis
+            gossip_validates_the_leader_under_the_genesis_leader_mode
+            backfill_validates_the_leader_under_the_genesis_leader_mode
             # Phase 1 §2.4: per-plane libp2p identities and the TET_PEER_ID -> TET_NODE_LABEL rename.
             plane_keys_match_the_spec_derivation_vector
             plane_peer_ids_are_distinct_stable_and_never_the_root

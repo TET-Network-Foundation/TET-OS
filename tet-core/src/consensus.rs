@@ -438,18 +438,9 @@ pub fn weighted_score(height: u64, validator_id: &str, weight: u64) -> u64 {
     u64::from_be_bytes(first) / weight.max(1)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeaderElectionMode {
-    Hash,
-    Caac,
-}
-
-pub fn leader_election_mode_from_env() -> LeaderElectionMode {
-    match std::env::var("TET_CONSENSUS_LEADER_MODE") {
-        Ok(v) if v.trim().eq_ignore_ascii_case("caac") => LeaderElectionMode::Caac,
-        _ => LeaderElectionMode::Hash,
-    }
-}
+/// The leader-election mode is a genesis parameter (Phase 1 item 6); the type lives with the other
+/// genesis parameters so the lib's genesis hash and the node's validation share it.
+pub use crate::genesis::LeaderElectionMode;
 
 pub fn leader_for_height_with_mode(
     height: u64,
@@ -856,7 +847,16 @@ pub fn spawn_auto_miner(
             local_node_id
         );
         let election = HashLeaderElection;
-        let leader_mode = leader_election_mode_from_env();
+        // The genesis leader mode. `main` refuses to start on an invalid genesis, so this only
+        // fails if the environment changed underneath a running node; mining then stops rather
+        // than guessing a schedule.
+        let leader_mode = match crate::genesis::leader_mode_from_env() {
+            Ok(m) => m,
+            Err(e) => {
+                log::error!("[consensus] auto-mining disabled: {e}");
+                return;
+            }
+        };
         loop {
             tokio::time::sleep(block_time).await;
             let local_height = state.ledger.block_height().unwrap_or(0);
@@ -1122,7 +1122,8 @@ pub fn validate_and_record_backfill_candidate(
             producer_id.as_str()
         )));
     }
-    let leader_mode = leader_election_mode_from_env();
+    let leader_mode =
+        crate::genesis::leader_mode_from_env().map_err(RemoteBlockApplyError::Rejected)?;
     let expected_leader = leader_for_height_with_mode(
         block_height,
         &validator_set,
@@ -1790,7 +1791,8 @@ fn apply_remote_block_from_gossip_sync(
             producer_id.as_str()
         )));
     }
-    let leader_mode = leader_election_mode_from_env();
+    let leader_mode =
+        crate::genesis::leader_mode_from_env().map_err(RemoteBlockApplyError::Rejected)?;
     let expected_leader =
         leader_for_height_with_mode(block_height, &validator_set, leader_mode, ledger.clone())
             .ok_or_else(|| RemoteBlockApplyError::Rejected("validator set is empty".to_string()))?;

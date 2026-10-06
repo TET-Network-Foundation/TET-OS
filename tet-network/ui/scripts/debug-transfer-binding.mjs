@@ -50,7 +50,8 @@ function buildGenesisPayload(chainId, founder, treasury) {
     // v2 (Phase 1). Defaults match a dev node that sets none of these.
     `|genesis_time_ms=${process.env.TET_GENESIS_TIME_MS || "0"}` +
     `|founder_cliff_ms=${process.env.TET_FOUNDER_CLIFF_MS || String(365 * 86_400_000)}` +
-    `|validators=${process.env.TET_GENESIS_VALIDATORS_DIGEST || "48026ca38ababf8c4f25aa286b5fafa47914cabd5026b7ea9c4fba9ee3b9dd38"}`
+    `|validators=${process.env.TET_GENESIS_VALIDATORS_DIGEST || "48026ca38ababf8c4f25aa286b5fafa47914cabd5026b7ea9c4fba9ee3b9dd38"}` +
+    `|leader_mode=${((process.env.TET_CONSENSUS_LEADER_MODE || "").trim().toLowerCase() || "hash")}`
   );
 }
 

@@ -62,6 +62,11 @@ const FOUNDER_CLIFF_MS = process.env.TET_FOUNDER_CLIFF_MS || String(365 * 86_400
 const GENESIS_VALIDATORS_DIGEST =
   process.env.TET_GENESIS_VALIDATORS_DIGEST ||
   "48026ca38ababf8c4f25aa286b5fafa47914cabd5026b7ea9c4fba9ee3b9dd38";
+// Item 6: the leader mode is a genesis parameter (tet-core `genesis::leader_mode_from_env`).
+const LEADER_MODE = ((process.env.TET_CONSENSUS_LEADER_MODE || "").trim().toLowerCase() || "hash");
+if (LEADER_MODE !== "hash" && LEADER_MODE !== "caac") {
+  throw new Error(`TET_CONSENSUS_LEADER_MODE must be hash or caac, got ${LEADER_MODE}`);
+}
 
 function buildGenesisPayloadV2(chainId, founder, treasury) {
   return (
@@ -77,7 +82,8 @@ function buildGenesisPayloadV2(chainId, founder, treasury) {
     `|max_supply_micro=${MAX_SUPPLY_MICRO}` +
     `|genesis_time_ms=${GENESIS_TIME_MS}` +
     `|founder_cliff_ms=${FOUNDER_CLIFF_MS}` +
-    `|validators=${GENESIS_VALIDATORS_DIGEST}`
+    `|validators=${GENESIS_VALIDATORS_DIGEST}` +
+    `|leader_mode=${LEADER_MODE}`
   );
 }
 

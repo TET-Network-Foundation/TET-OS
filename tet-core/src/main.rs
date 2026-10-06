@@ -302,12 +302,13 @@ async fn main() -> Result<(), AnyErr> {
     // node cannot name, rather than panic on the first request.
     match crate::genesis::GenesisParams::from_env() {
         Ok(g) => log::info!(
-            "[startup] genesis {} chain_id={} genesis_time_ms={} founder_cliff_ms={} validators={}",
+            "[startup] genesis {} chain_id={} genesis_time_ms={} founder_cliff_ms={} validators={} leader_mode={}",
             g.hash(),
             g.chain_id,
             g.genesis_time_ms,
             g.founder_cliff_ms,
-            g.validators.len()
+            g.validators.len(),
+            g.leader_mode.as_str()
         ),
         Err(e) => {
             eprintln!("[startup] FATAL: invalid genesis configuration: {e}");

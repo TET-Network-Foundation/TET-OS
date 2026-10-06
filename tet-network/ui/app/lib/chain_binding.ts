@@ -41,6 +41,7 @@ function envText(name: string): string {
     NEXT_PUBLIC_TET_GENESIS_TIME_MS: process.env.NEXT_PUBLIC_TET_GENESIS_TIME_MS,
     NEXT_PUBLIC_TET_FOUNDER_CLIFF_MS: process.env.NEXT_PUBLIC_TET_FOUNDER_CLIFF_MS,
     NEXT_PUBLIC_TET_GENESIS_VALIDATORS_DIGEST: process.env.NEXT_PUBLIC_TET_GENESIS_VALIDATORS_DIGEST,
+    NEXT_PUBLIC_TET_CONSENSUS_LEADER_MODE: process.env.NEXT_PUBLIC_TET_CONSENSUS_LEADER_MODE,
   };
   return map[name]?.trim() ?? "";
 }
@@ -131,6 +132,19 @@ export function publicGenesisValidatorsDigest(): string {
   return v;
 }
 
+export type LeaderMode = "hash" | "caac";
+
+/**
+ * Mirrors tet-core `genesis::leader_mode_from_env`: `hash` when unset, otherwise `hash` or `caac`
+ * (case-insensitive). Anything else is an error, as it is on the node.
+ */
+export function publicLeaderMode(): LeaderMode {
+  const v = envText("NEXT_PUBLIC_TET_CONSENSUS_LEADER_MODE").toLowerCase();
+  if (!v) return "hash";
+  if (v === "hash" || v === "caac") return v;
+  throw new Error("NEXT_PUBLIC_TET_CONSENSUS_LEADER_MODE must be `hash` or `caac`");
+}
+
 export type GenesisBindingInputs = {
   chainId: string;
   founderWalletId: string;
@@ -138,6 +152,7 @@ export type GenesisBindingInputs = {
   genesisTimeMs: bigint;
   founderCliffMs: bigint;
   validatorsDigest: string;
+  leaderMode: LeaderMode;
 };
 
 /**
@@ -160,7 +175,8 @@ export function buildGenesisPayloadV2(inputs: GenesisBindingInputs): string {
     `|max_supply_micro=${MAX_SUPPLY_MICRO}` +
     `|genesis_time_ms=${inputs.genesisTimeMs}` +
     `|founder_cliff_ms=${inputs.founderCliffMs}` +
-    `|validators=${inputs.validatorsDigest}`
+    `|validators=${inputs.validatorsDigest}` +
+    `|leader_mode=${inputs.leaderMode}`
   );
 }
 
@@ -206,6 +222,7 @@ export async function expectedChainBinding(baseUrl?: string): Promise<{
     genesisTimeMs: publicGenesisTimeMs(),
     founderCliffMs: publicFounderCliffMs(),
     validatorsDigest: publicGenesisValidatorsDigest(),
+    leaderMode: publicLeaderMode(),
   });
   return { chainId, genesisHash };
 }

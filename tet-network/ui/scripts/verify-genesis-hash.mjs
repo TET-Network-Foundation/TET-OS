@@ -32,6 +32,7 @@ function buildGenesisPayloadV2({
   genesisTimeMs,
   founderCliffMs,
   validatorsDigest,
+  leaderMode,
 }) {
   const founder = founderWalletId.trim().toLowerCase();
   const treasury = treasuryWalletId.trim().toLowerCase();
@@ -48,7 +49,8 @@ function buildGenesisPayloadV2({
     `|max_supply_micro=${MAX_SUPPLY_MICRO}` +
     `|genesis_time_ms=${genesisTimeMs}` +
     `|founder_cliff_ms=${founderCliffMs}` +
-    `|validators=${validatorsDigest}`
+    `|validators=${validatorsDigest}` +
+    `|leader_mode=${leaderMode}`
   );
 }
 
@@ -65,6 +67,7 @@ const inputs = {
   genesisTimeMs: 0n,
   founderCliffMs: 365n * 86_400_000n,
   validatorsDigest: EMPTY_GENESIS_VALIDATORS_DIGEST,
+  leaderMode: "hash",
 };
 
 const { payload, hash } = deterministicGenesisHashHex(inputs);
@@ -95,7 +98,7 @@ if (!payload.includes("|treasury=") || payload.includes("|ecosystem=")) {
   process.exit(1);
 }
 const GOLDEN_DEV =
-  "0xf73ff1043163a2d5237d38dc708807a440705e4e29f7d603cc5217921b764de7";
+  "0x56a7e9b9b8dee98a4b453a13c34c4ea7fbafceef95978cf2826df72c4f2a90f6";
 if (hash !== GOLDEN_DEV) {
   console.error(`FAIL: hash ${hash} !== golden ${GOLDEN_DEV}`);
   process.exit(1);

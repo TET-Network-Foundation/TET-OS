@@ -646,6 +646,215 @@ async fn remote_block_rejects_non_leader_producer() {
     ));
 }
 
+// --- Phase 1 item 6: the leader mode is a genesis parameter --------------------------------------
+//
+// `TET_CONSENSUS_LEADER_MODE` decides which validator a node expects to produce each height. It was
+// a per-node setting: read at each validation, outside the genesis hash, and any value but `caac`
+// silently meant `hash`. Two nodes configured differently expected different leaders for the same
+// height and each refused the other's blocks, with nothing naming the cause. Now it is in the genesis
+// hash, parsed strictly, and every acceptance site reads it through `genesis::leader_mode_from_env`,
+// the same function the hash reads.
+
+/// Validators `alice` and `bob`, with a CAAC record that makes the `caac` leader for height 1 the
+/// validator the `hash` election does not pick. Returns `(ledger, hash_leader, caac_leader)`.
+fn leader_mode_fixture() -> (std::sync::Arc<crate::ledger::Ledger>, String, String) {
+    use crate::consensus::LeaderElection as _;
+    set_test_genesis_validators(&["alice", "bob"]);
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let validators = crate::consensus::ValidatorSet::new(["alice", "bob"]);
+    let hash_leader = crate::consensus::HashLeaderElection
+        .leader_for_height(1, &validators)
+        .unwrap()
+        .as_str()
+        .to_string();
+    let other = if hash_leader == "alice" { "bob" } else { "alice" };
+    // POC at 1 ms latency weighs 1100 against the unregistered 10 the hash leader keeps.
+    ledger
+        .caac_put_worker_record(
+            other,
+            &crate::ledger::CaacWorkerRecord {
+                role: "POC".to_string(),
+                latency_ms: 1,
+                seed_hex: "seed".to_string(),
+                server_wall_ms: 1,
+            },
+        )
+        .unwrap();
+    let caac_leader = crate::consensus::leader_for_height_with_mode(
+        1,
+        &validators,
+        crate::consensus::LeaderElectionMode::Caac,
+        ledger.clone(),
+    )
+    .unwrap()
+    .as_str()
+    .to_string();
+    assert_ne!(
+        hash_leader, caac_leader,
+        "precondition: the two modes must elect different leaders, or no case below can tell them apart"
+    );
+    (ledger, hash_leader, caac_leader)
+}
+
+/// An empty, correctly signed block 1 by `producer` against `ledger`: valid in every respect the
+/// acceptance sites check, so the leader check is the only thing that can refuse it.
+fn empty_block_one(
+    ledger: &crate::ledger::Ledger,
+    producer: &str,
+) -> crate::consensus::ProducerVerifiedBlock {
+    let reward = crate::consensus::reward_for_block(&[]).unwrap();
+    let ts_ms = test_block_ts(ledger);
+    let state_root = ledger
+        .compute_state_root_after_remote_block(&[], producer, reward.total_reward_micro, ts_ms)
+        .unwrap();
+    let block_id = crate::consensus::block_id_for_block(1, "", &state_root, &[], producer, ts_ms);
+    sign_as_producer(crate::consensus::RemoteBlockGossip {
+        block_height: 1,
+        block_id,
+        parent_block_id: None,
+        producer_id: producer.to_string(),
+        base_reward_micro: reward.base_reward_micro,
+        compute_reward_micro: reward.compute_reward_micro,
+        total_reward_micro: reward.total_reward_micro,
+        state_root,
+        txs: Vec::new(),
+        ts_ms,
+        producer_sig: unsigned_block_sig(),
+    })
+}
+
+fn assert_invalid_leader<T: std::fmt::Debug>(
+    res: Result<T, crate::consensus::RemoteBlockApplyError>,
+    what: &str,
+) {
+    match res {
+        Err(crate::consensus::RemoteBlockApplyError::Rejected(msg)) => assert!(
+            msg.starts_with("invalid leader for height=1"),
+            "{what}: refused, but not by the leader check: {msg}"
+        ),
+        other => panic!("{what}: must be refused as the wrong leader, got {other:?}"),
+    }
+}
+
+/// The leader mode moves the genesis hash, so a node configured with another mode names another
+/// chain. Spelling is canonicalised: `HASH` and unset are the same chain.
+#[test]
+fn leader_mode_is_in_the_genesis_hash() {
+    let _g = env_lock();
+    set_test_env_base();
+    let hash_mode = crate::genesis::GenesisParams::from_env().unwrap();
+    assert_eq!(hash_mode.leader_mode, crate::consensus::LeaderElectionMode::Hash);
+    assert!(hash_mode.payload().ends_with("|leader_mode=hash"));
+
+    let _m = EnvVarGuard::set("TET_CONSENSUS_LEADER_MODE", "caac");
+    let caac_mode = crate::genesis::GenesisParams::from_env().unwrap();
+    assert_eq!(caac_mode.leader_mode, crate::consensus::LeaderElectionMode::Caac);
+    assert_ne!(caac_mode.hash(), hash_mode.hash(), "the leader mode must be in the genesis hash");
+
+    let _m2 = EnvVarGuard::set("TET_CONSENSUS_LEADER_MODE", " HASH ");
+    assert_eq!(crate::genesis::GenesisParams::from_env().unwrap().hash(), hash_mode.hash());
+}
+
+/// A value that is neither `hash` nor `caac` refuses the genesis and refuses blocks; it no longer
+/// becomes `hash` without a word.
+#[tokio::test]
+async fn unknown_leader_mode_refuses_the_genesis() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (ledger, hash_leader, _caac_leader) = leader_mode_fixture();
+    let _m = EnvVarGuard::set("TET_CONSENSUS_LEADER_MODE", "caak");
+
+    let err = crate::genesis::GenesisParams::from_env().unwrap_err();
+    assert!(err.starts_with("TET_CONSENSUS_LEADER_MODE:"), "{err}");
+
+    // Under the old fallback this block, by the `hash` leader, would have been accepted.
+    let state = rest_state_for_tests(ledger.clone());
+    let res = crate::consensus::apply_remote_block_from_gossip(
+        ledger.clone(),
+        state.mempool.clone(),
+        empty_block_one(&ledger, &hash_leader),
+    )
+    .await;
+    match res {
+        Err(crate::consensus::RemoteBlockApplyError::Rejected(msg)) => {
+            assert!(msg.starts_with("TET_CONSENSUS_LEADER_MODE:"), "{msg}")
+        }
+        other => panic!("an unknown leader mode must refuse the block, got {other:?}"),
+    }
+    assert_eq!(ledger.block_height().unwrap(), 0);
+}
+
+/// Gossip / catch-up (`apply_remote_block_from_gossip`) expects the leader the genesis mode elects:
+/// for each mode, the other mode's leader is refused by the leader check and this mode's leader is
+/// applied. Both directions, so a site hard-wired to either mode fails one of them.
+#[tokio::test]
+async fn gossip_validates_the_leader_under_the_genesis_leader_mode() {
+    let _g = env_lock();
+    set_test_env_base();
+    for mode in [crate::consensus::LeaderElectionMode::Hash, crate::consensus::LeaderElectionMode::Caac] {
+        let _m = EnvVarGuard::set("TET_CONSENSUS_LEADER_MODE", mode.as_str());
+        assert_eq!(crate::genesis::GenesisParams::from_env().unwrap().leader_mode, mode);
+        let (ledger, hash_leader, caac_leader) = leader_mode_fixture();
+        let (leader, wrong) = match mode {
+            crate::consensus::LeaderElectionMode::Hash => (hash_leader, caac_leader),
+            crate::consensus::LeaderElectionMode::Caac => (caac_leader, hash_leader),
+        };
+        let state = rest_state_for_tests(ledger.clone());
+
+        let res = crate::consensus::apply_remote_block_from_gossip(
+            ledger.clone(),
+            state.mempool.clone(),
+            empty_block_one(&ledger, &wrong),
+        )
+        .await;
+        assert_invalid_leader(res, &format!("mode={} producer={wrong}", mode.as_str()));
+        assert_eq!(ledger.block_height().unwrap(), 0);
+
+        let res = crate::consensus::apply_remote_block_from_gossip(
+            ledger.clone(),
+            state.mempool.clone(),
+            empty_block_one(&ledger, &leader),
+        )
+        .await;
+        assert!(
+            matches!(res, Ok(crate::consensus::RemoteBlockApplyOutcome::Applied { block_height: 1, .. })),
+            "mode={} producer={leader}: the genesis mode's leader must be applied, got {res:?}",
+            mode.as_str()
+        );
+    }
+}
+
+/// The by-id backfill site (`validate_and_record_backfill_candidate`) checks the leader under the
+/// same genesis mode. Separate from the gossip guard so each site is broken one at a time (C4).
+#[test]
+fn backfill_validates_the_leader_under_the_genesis_leader_mode() {
+    let _g = env_lock();
+    set_test_env_base();
+    for mode in [crate::consensus::LeaderElectionMode::Hash, crate::consensus::LeaderElectionMode::Caac] {
+        let _m = EnvVarGuard::set("TET_CONSENSUS_LEADER_MODE", mode.as_str());
+        let (ledger, hash_leader, caac_leader) = leader_mode_fixture();
+        let (leader, wrong) = match mode {
+            crate::consensus::LeaderElectionMode::Hash => (hash_leader, caac_leader),
+            crate::consensus::LeaderElectionMode::Caac => (caac_leader, hash_leader),
+        };
+        assert_invalid_leader(
+            crate::consensus::validate_and_record_backfill_candidate(&ledger, empty_block_one(&ledger, &wrong)),
+            &format!("backfill mode={} producer={wrong}", mode.as_str()),
+        );
+        let rec = crate::consensus::validate_and_record_backfill_candidate(
+            &ledger,
+            empty_block_one(&ledger, &leader),
+        );
+        assert!(
+            matches!(&rec, Ok(r) if r.producer_id == leader),
+            "backfill mode={} producer={leader}: the genesis mode's leader must be recorded, got {rec:?}",
+            mode.as_str()
+        );
+    }
+}
+
 #[tokio::test]
 async fn auto_miner_skips_when_local_node_is_not_leader() {
     let _g = env_lock();
