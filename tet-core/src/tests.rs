@@ -133,6 +133,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         genesis_1k_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         log_tx,
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        demo_sponsor: None,
     }
 }
 
@@ -12855,4 +12856,281 @@ async fn public_mode_limits_ipv6_per_slash_64() {
     assert_eq!(last, StatusCode::TOO_MANY_REQUESTS, "rotating addresses within one /64 escaped the limit");
     let (other, _) = public_call_for_tests(&router, "GET", "/status", Some("2001:db8:1:3::1")).await;
     assert_ne!(other, StatusCode::TOO_MANY_REQUESTS, "another /64 is another client");
+}
+
+// ---------------------------------------------------------------------------
+// The demo node's file-fee sponsor (docs/DEMO_NODE.md "File fees", src/demo_sponsor.rs).
+// Driven through the real router in public mode, with a real peer address, so the allow-list, the
+// client identity and the handler are all on the path.
+// ---------------------------------------------------------------------------
+
+struct SponsorFixture {
+    router: axum::Router,
+    state: crate::rest::RestState,
+    sponsor: std::sync::Arc<crate::demo_sponsor::DemoSponsor>,
+    _env: (EnvVarGuard, EnvVarGuard),
+}
+
+fn sponsor_fixture(caps: crate::demo_sponsor::Caps, fund_tet: u64) -> SponsorFixture {
+    let env = (
+        EnvVarGuard::set("TET_PUBLIC_API", "1"),
+        EnvVarGuard::set("TET_PUBLIC_TRUSTED_PROXIES", "172.30.77.0/24"),
+    );
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let words = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let sponsor = std::sync::Arc::new(
+        crate::demo_sponsor::DemoSponsor::new(&ledger.sled_db(), &words, caps).expect("sponsor"),
+    );
+    if fund_tet > 0 {
+        ledger
+            .admin_rest_faucet(sponsor.wallet_id(), fund_tet * crate::ledger::STEVEMON, "ip", true, 1, 1)
+            .unwrap();
+    }
+    let mut state = rest_state_for_tests(ledger);
+    state.demo_sponsor = Some(sponsor.clone());
+    SponsorFixture { router: crate::rest::routes::build_router(state.clone()), state, sponsor, _env: env }
+}
+
+fn sponsor_caps(per_client: u32, per_wallet: u32, global: u32, floor_tet: u64) -> crate::demo_sponsor::Caps {
+    crate::demo_sponsor::Caps { per_client, per_wallet, global, floor_micro: floor_tet * crate::ledger::STEVEMON }
+}
+
+/// A file `sender` uploaded through this node: stored, and recorded the way `/files/upload` does.
+fn sponsor_upload(f: &SponsorFixture, sender: &FileTestWallet) -> String {
+    let blob = b"ciphertext".to_vec();
+    let env = build_signed_file_envelope(sender, &file_test_wallet().wallet_id, &blob, file_now_ms());
+    f.state.files.store_with_blob(&env, &blob).unwrap();
+    f.sponsor.record_upload(&env.file_id.to_string(), &env.sender_wallet_id);
+    env.file_id.to_string()
+}
+
+fn sponsor_request(signer: &FileTestWallet, sender_id: &str, file_id: &str, at_ms: u64) -> serde_json::Value {
+    let msg = crate::demo_sponsor::sponsor_request_auth_message_bytes(file_id, sender_id, at_ms, &signer.mldsa_pub_b64);
+    let s = file_sign_hybrid(signer, &msg);
+    serde_json::json!({
+        "file_id": file_id,
+        "sender_wallet_id": sender_id,
+        "requested_at_ms": at_ms,
+        "hybrid_sig": {
+            "ed25519_pubkey_hex": s.ed25519_pubkey_hex,
+            "ed25519_sig_b64": s.ed25519_sig_b64,
+            "mldsa_pubkey_b64": s.mldsa_pubkey_b64,
+            "mldsa_sig_b64": s.mldsa_sig_b64,
+        },
+    })
+}
+
+async fn sponsor_post(f: &SponsorFixture, body: &serde_json::Value, peer: &str) -> (StatusCode, serde_json::Value) {
+    use tower::ServiceExt as _;
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/demo/files/sponsor-fee")
+        .extension(axum::extract::ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let resp = f.router.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+}
+
+async fn sponsored_fee_txs(f: &SponsorFixture) -> Vec<(String, String)> {
+    f.state
+        .mempool
+        .lock()
+        .await
+        .iter()
+        .filter_map(|e| match &e.tx {
+            crate::protocol::TxV1::FileFee { from_wallet, file_id, .. } => Some((from_wallet.clone(), file_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// **SECURITY REGRESSION GUARD: the sponsor pays once, for a file uploaded here, when its sender
+/// asks, and with nothing but a `FileFee` from the sponsor wallet.** A second request for the same
+/// file, a file this node never stored, and a request signed by someone other than the file's
+/// sender are all refused, and none of them queues a transaction. So is a file this node holds but
+/// did not receive by upload (cached from a peer).
+/// Negative controls: skip the "uploaded here" check → FAILED; skip the "already sponsored" check →
+/// FAILED; accept any signer → FAILED.
+#[tokio::test]
+async fn demo_sponsor_pays_once_for_its_own_upload_and_only_for_the_sender() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = sponsor_fixture(sponsor_caps(50, 50, 500, 10), 100);
+    let alice = file_test_wallet();
+    let mallory = file_test_wallet();
+    let now = file_now_ms();
+    let peer = "203.0.113.7:5000";
+
+    let fid = sponsor_upload(&f, &alice);
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(sponsored_fee_txs(&f).await, vec![(f.sponsor.wallet_id().to_string(), fid.clone())]);
+
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid twice");
+
+    let never_here = uuid::Uuid::new_v4().to_string();
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &never_here, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid for a file not stored here");
+
+    // Held by this node but not uploaded through it (a blob cached from a peer, say): not ours to pay.
+    let blob = b"fetched from a peer".to_vec();
+    let cached = build_signed_file_envelope(&alice, &file_test_wallet().wallet_id, &blob, file_now_ms());
+    f.state.files.store_with_blob(&cached, &blob).unwrap();
+    let cached_id = cached.file_id.to_string();
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &cached_id, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid for a file only cached here");
+
+    let fid2 = sponsor_upload(&f, &alice);
+    let (st, body) = sponsor_post(&f, &sponsor_request(&mallory, &mallory.wallet_id, &fid2, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid at a non-sender's request");
+    let (st, body) = sponsor_post(&f, &sponsor_request(&mallory, &alice.wallet_id, &fid2, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::UNAUTHORIZED, Some("bad_signature")), "accepted a request signed by someone else");
+
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid2, now - 10 * 60_000), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::BAD_REQUEST, Some("stale_request")));
+
+    assert_eq!(sponsored_fee_txs(&f).await.len(), 1, "a refused request queued a transaction");
+}
+
+/// **SECURITY REGRESSION GUARD: every cap is a refusal, never a queue** — per client per day, per
+/// sender wallet per day, for everyone per day, and the balance floor (402). Clients are told apart
+/// by address, so a second address gets its own allowance but not the wallet's.
+/// Negative controls: drop the per-client cap → FAILED; drop the floor → FAILED.
+#[tokio::test]
+async fn demo_sponsor_caps_refuse_rather_than_queue() {
+    let _g = env_lock();
+    set_test_env_base();
+    let now = file_now_ms();
+
+    // Per client: 2 per address.
+    let f = sponsor_fixture(sponsor_caps(2, 50, 500, 10), 100);
+    let alice = file_test_wallet();
+    for i in 0..2 {
+        let fid = sponsor_upload(&f, &alice);
+        let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), "198.51.100.1:1").await;
+        assert_eq!(st, StatusCode::ACCEPTED, "request {i}: {b}");
+    }
+    let fid = sponsor_upload(&f, &alice);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), "198.51.100.1:2").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("daily_cap_ip")));
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), "198.51.100.2:1").await;
+    assert_eq!(st, StatusCode::ACCEPTED, "another address is another client: {b}");
+
+    // Per wallet: 1 per sender, whatever the address.
+    let f = sponsor_fixture(sponsor_caps(50, 1, 500, 10), 100);
+    let bob = file_test_wallet();
+    let fid = sponsor_upload(&f, &bob);
+    assert_eq!(sponsor_post(&f, &sponsor_request(&bob, &bob.wallet_id, &fid, now), "198.51.100.3:1").await.0, StatusCode::ACCEPTED);
+    let fid = sponsor_upload(&f, &bob);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&bob, &bob.wallet_id, &fid, now), "198.51.100.4:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("daily_cap_wallet")));
+
+    // Global: 1 for everyone.
+    let f = sponsor_fixture(sponsor_caps(50, 50, 1, 10), 100);
+    let (c, d) = (file_test_wallet(), file_test_wallet());
+    let fid = sponsor_upload(&f, &c);
+    assert_eq!(sponsor_post(&f, &sponsor_request(&c, &c.wallet_id, &fid, now), "198.51.100.5:1").await.0, StatusCode::ACCEPTED);
+    let fid = sponsor_upload(&f, &d);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&d, &d.wallet_id, &fid, now), "198.51.100.6:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("daily_cap_global")));
+
+    // Floor: funded at the floor, so one fee would take it below.
+    let f = sponsor_fixture(sponsor_caps(50, 50, 500, 10), 10);
+    let e = file_test_wallet();
+    let fid = sponsor_upload(&f, &e);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&e, &e.wallet_id, &fid, now), "198.51.100.7:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::PAYMENT_REQUIRED, Some("sponsor_low")));
+    assert!(sponsored_fee_txs(&f).await.is_empty(), "a refusal queued a transaction");
+}
+
+/// **SECURITY REGRESSION GUARD: the sponsor signs nothing but file fees, and stores no address.**
+/// Read from the source: the only `TxV1` variant `demo_sponsor.rs` constructs is `FileFee`, and it
+/// has one signing call. Then from storage: after sponsoring from a known address, no stored key or
+/// value contains that address.
+/// Negative controls: add a `TxV1::Transfer` path → FAILED; key the client counter by the raw
+/// client key → FAILED.
+#[tokio::test]
+async fn demo_sponsor_signs_nothing_but_file_fees_and_stores_no_address() {
+    let _g = env_lock();
+    set_test_env_base();
+    let src = include_str!("demo_sponsor.rs");
+    let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    let variants: std::collections::BTreeSet<&str> = code
+        .match_indices("TxV1::")
+        .map(|(i, _)| code[i + 6..].split(|c: char| !c.is_alphanumeric()).next().unwrap_or(""))
+        .collect();
+    assert_eq!(variants, ["FileFee"].into_iter().collect(), "the sponsor constructs {variants:?}");
+    assert_eq!(code.matches("sign_agent_message_bytes(").count(), 1, "more than one signing call");
+
+    let f = sponsor_fixture(sponsor_caps(50, 50, 500, 10), 100);
+    let alice = file_test_wallet();
+    let fid = sponsor_upload(&f, &alice);
+    let ip = "192.0.2.123";
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, file_now_ms()), &format!("{ip}:9")).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{b}");
+    let db = f.state.ledger.sled_db();
+    for name in ["demo_sponsor_uploaded_v1", "demo_sponsor_sponsored_v1", "demo_sponsor_counts_v1"] {
+        for (k, v) in db.open_tree(name).unwrap().iter().flatten() {
+            for bytes in [k.as_ref(), v.as_ref()] {
+                assert!(
+                    !String::from_utf8_lossy(bytes).contains(ip),
+                    "{name} stores the client address"
+                );
+            }
+        }
+    }
+}
+
+/// Without a sponsor the route answers `no_sponsor` (it is on the public allow-list, so the gate
+/// lets it through, and the seeds never configure one).
+#[tokio::test]
+async fn demo_sponsor_is_off_without_a_mnemonic() {
+    let _g = env_lock();
+    set_test_env_base();
+    let mut f = sponsor_fixture(sponsor_caps(5, 5, 500, 10), 0);
+    f.state.demo_sponsor = None;
+    f.router = crate::rest::routes::build_router(f.state.clone());
+    let alice = file_test_wallet();
+    let fid = sponsor_upload(&f, &alice);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, file_now_ms()), "203.0.113.9:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::NOT_FOUND, Some("no_sponsor")));
+    let _u = EnvVarGuard::unset("TET_DEMO_SPONSOR_MNEMONIC_FILE");
+    assert!(crate::demo_sponsor::DemoSponsor::from_env(&f.state.ledger.sled_db()).unwrap().is_none());
+}
+
+const UI_SPONSOR_REQUEST: &str = include_str!("testdata/demo_sponsor_request_v1.json");
+
+/// **The try page signs sponsorship requests the node accepts.** The fixture is the page's own
+/// output (`files_fee.ts`): tet-core rebuilds the pre-image from its fields and must get the same
+/// bytes, then must accept both signatures, and refuse them once the file id changes.
+#[test]
+fn ui_signed_sponsor_request_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_SPONSOR_REQUEST).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let req: crate::demo_sponsor::SponsorFeeRequestV1 =
+        serde_json::from_value(doc["request"].clone()).expect("the page's request must deserialize");
+    let ours = crate::demo_sponsor::sponsor_request_auth_message_bytes(
+        &req.file_id,
+        &req.sender_wallet_id,
+        req.requested_at_ms,
+        &req.hybrid_sig.mldsa_pubkey_b64,
+    );
+    assert_eq!(
+        String::from_utf8(ours).unwrap(),
+        doc["preimage_utf8"].as_str().unwrap(),
+        "the page and the node build different sponsorship pre-images"
+    );
+    crate::demo_sponsor::verify_request_signature(&req).expect("the node must accept the page's signature");
+    let mut other = req.clone();
+    other.file_id = uuid::Uuid::new_v4().to_string();
+    assert!(crate::demo_sponsor::verify_request_signature(&other).is_err(), "a signature must not carry to another file");
 }

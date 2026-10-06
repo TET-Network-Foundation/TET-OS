@@ -49,7 +49,8 @@
 		({method} == "POST" && {path}.matches("^/tet-node-api/files/upload$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/files/inbox/[^/%]+$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/files/fetch/[^/%]+$")) ||
-		({method} == "DELETE" && {path}.matches("^/tet-node-api/files/item/[^/%]+$"))`
+		({method} == "DELETE" && {path}.matches("^/tet-node-api/files/item/[^/%]+$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/demo/files/sponsor-fee$"))`
 
 	@page path /try /_next/static/* /pqc/* /favicon.ico
 

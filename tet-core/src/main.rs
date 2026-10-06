@@ -7,6 +7,7 @@ mod attestation;
 mod chaos;
 mod conductor;
 mod consensus;
+mod demo_sponsor;
 mod e2ee;
 mod executor;
 mod files;
@@ -669,6 +670,19 @@ async fn main() -> Result<(), AnyErr> {
 
     let (log_tx, _log_rx) = broadcast::channel::<String>(100);
 
+    // The "Try TET" demo node's file-fee sponsor; off unless TET_DEMO_SPONSOR_MNEMONIC_FILE is set.
+    // Configured but unusable is fatal: an operator who set it must not get a node without one.
+    let demo_sponsor = match crate::demo_sponsor::DemoSponsor::from_env(&ledger.sled_db()) {
+        Ok(Some(s)) => {
+            log::info!("[demo-sponsor] on; sponsor wallet {}", s.wallet_id());
+            Some(Arc::new(s))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(2);
+        }
+    };
     let state = RestState {
         ledger,
         wallet_id: config.initial_wallet.clone(),
@@ -690,6 +704,7 @@ async fn main() -> Result<(), AnyErr> {
         genesis_1k_lock: Arc::new(tokio::sync::Mutex::new(())),
         log_tx,
         log_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        demo_sponsor,
     };
 
     // Pending txs this node admitted over REST are re-published on a timer until they are mined.

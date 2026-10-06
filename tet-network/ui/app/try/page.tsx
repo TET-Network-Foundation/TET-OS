@@ -2,21 +2,55 @@
 
 /**
  * Try TET — one page on today's testnet (docs/DEMO_NODE.md), in the desktop's Win95 look. The
- * disposable wallet (part 0c) and the anonymous board (part 1); the other panels are placeholders that
- * already state their limits, and fill in with their parts.
+ * disposable wallet (part 0c), Tmail and Files (parts 2, 3), the anonymous board (part 1) and verify
+ * anything (part 4); the last panel is a placeholder that already states its limits.
  *
  * Talks only to this site's `/tet-node-api` proxy, which reaches a tet-core in public mode (an
  * allow-list of routes, rate-limited per visitor). The wallet is made and kept in this tab only.
  */
 import { useEffect, useState } from "react";
+import MessagesPanel from "../os/MessagesPanel";
+import FilesPanel from "../os/tabs/FilesPanel";
 import Win95Button from "../os/components/Win95Button";
 import Win95Panel from "../os/components/Win95Panel";
+import { bevel, buttonBevel } from "../os/components/tokens";
 import { generateDisposableWords, wordsFileText } from "../lib/disposable_wallet.mjs";
 import { activateTryWallet, forgetTryWallet } from "../lib/try_session";
 import BoardPanel from "./BoardPanel";
 import VerifyPanel from "./VerifyPanel";
 
 const BASE = "/tet-node-api";
+
+/** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
+const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
+  ? (process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase()
+  : "";
+
+const TMAIL_LIMITS = [
+  "Key exchange is Kyber round 3, not the final ML-KEM standard (FIPS 203).",
+  "Burn-after-read is best-effort: cooperating nodes delete the message; others may keep the ciphertext.",
+  "Scheduled release is the nodes withholding a message, not cryptographic enforcement.",
+  "A conversation keeps only its newest 5 messages, and messages expire after 7 days.",
+  "Contents are end-to-end encrypted; the demo node still sees which wallets write to which, and when.",
+  "To receive, register your messaging keys (the button below). Registering is public.",
+];
+
+const FILES_LIMITS = [
+  "Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days.",
+  "The 1,000 µTET fee is paid by the demo's sponsor, for up to 5 files per connection and per wallet a day. Past that, or if the sponsor is low, the file still arrives and its fee shows as unpaid.",
+  "The node a file is stored on is only a hint: fetching asks the peers this node is connected to.",
+  "The demo node sees sender, recipient, size and time; not the contents or the file name.",
+];
+
+function Limits(props: { items: string[] }) {
+  return (
+    <ul className="mt-2 list-disc pl-5 text-[11px] text-black/70">
+      {props.items.map((l) => (
+        <li key={l}>{l}</li>
+      ))}
+    </ul>
+  );
+}
 
 type NodeStatus =
   | { state: "checking" }
@@ -26,25 +60,6 @@ type NodeStatus =
 type Wallet = { words: string; walletId: string; shown: boolean };
 
 const PANELS: { title: string; part: number; what: string; limits: string[] }[] = [
-  {
-    title: "Tmail",
-    part: 2,
-    what: "End-to-end encrypted messages between keys.",
-    limits: [
-      "Key exchange is Kyber round 3, not the final ML-KEM standard.",
-      "Burn-after-read is best-effort; scheduled release is withheld by nodes, not enforced.",
-      "A conversation keeps its newest 5 messages.",
-    ],
-  },
-  {
-    title: "Files",
-    part: 3,
-    what: "Send a file, encrypted, peer to peer; the fee is sponsored for the demo.",
-    limits: [
-      "The demo sponsors a few file fees per visitor per day; past that the file still arrives.",
-      "Files are stored on the demo node with a size cap and an expiry.",
-    ],
-  },
   {
     title: "AI asks a human",
     part: 5,
@@ -166,6 +181,49 @@ export default function TryPage() {
             {err ? <p className="mt-2 text-[#8a1f1f]">{err}</p> : null}
           </Win95Panel>
         </div>
+
+        <Win95Panel title="Tmail" className="p-2">
+          {wallet ? (
+            <MessagesPanel
+              key={wallet.walletId}
+              outset={bevel.outset}
+              inset={bevel.inset}
+              winBtn={buttonBevel}
+              baseUrl={BASE}
+              myWalletId={wallet.walletId}
+              quickRecipients={[
+                ...(DEMO_CONTACT ? [{ label: "Message the demo", walletId: DEMO_CONTACT }] : []),
+                { label: "Message yourself", walletId: wallet.walletId },
+              ]}
+            />
+          ) : (
+            <p>Create a disposable wallet above to send and receive end-to-end encrypted messages.</p>
+          )}
+          {!DEMO_CONTACT ? (
+            <p className="mt-1 text-[12px] text-black/60">
+              No demo inbox on this node: message yourself, or open this page in a second tab with another wallet.
+            </p>
+          ) : null}
+          <Limits items={TMAIL_LIMITS} />
+        </Win95Panel>
+
+        <Win95Panel title="Files" className="p-2">
+          {wallet ? (
+            <FilesPanel
+              key={wallet.walletId}
+              baseUrl={BASE}
+              myWalletId={wallet.walletId}
+              feeMode="demo-sponsor"
+              contacts={[
+                ...(DEMO_CONTACT ? [{ label: "The demo", address: DEMO_CONTACT }] : []),
+                { label: "Yourself", address: wallet.walletId },
+              ]}
+            />
+          ) : (
+            <p>Create a disposable wallet above to send and receive encrypted files.</p>
+          )}
+          <Limits items={FILES_LIMITS} />
+        </Win95Panel>
 
         <BoardPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
 
