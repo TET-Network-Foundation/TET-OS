@@ -4,8 +4,10 @@
 //
 // - An extensionless relative import (`./tmail`, as Next resolves it) tries `.ts`, `.tsx`, `.mjs`
 //   and `.js`, in that order.
-// - `/pqc/tet_pqc_wasm.js`, which `lib/pqc.ts` imports from the site root, is served as a shim over
-//   `public/pqc/` whose init reads the WASM from disk instead of fetching `/pqc/…`.
+// - `/pqc/tet_pqc_wasm.js`, which `lib/pqc.ts` imports from the site root, is served as a shim whose
+//   init reads the WASM from disk instead of fetching `/pqc/…`. It uses `public/pqc/` when that has
+//   been built, else the repository's one committed copy of the same signer, `tet-agent-sdk/vendor/`
+//   (CI's wasm job checks the two are the same build; the ui job has only the committed one).
 //
 // Use: `import { register } from "node:module"; register("./lib/ts_hooks.mjs", import.meta.url);`
 // then import the modules dynamically.
@@ -13,7 +15,9 @@
 import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PUBLIC_PQC = new URL("../../public/pqc/", import.meta.url);
+const BUILT_PQC = new URL("../../public/pqc/", import.meta.url);
+const VENDOR_PQC = new URL("../../../../tet-agent-sdk/vendor/", import.meta.url);
+const PUBLIC_PQC = existsSync(fileURLToPath(new URL("tet_pqc_wasm.js", BUILT_PQC))) ? BUILT_PQC : VENDOR_PQC;
 const PQC_SHIM = "tet-try-shim:pqc";
 
 export async function resolve(specifier, context, next) {
