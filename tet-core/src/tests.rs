@@ -13134,3 +13134,45 @@ fn ui_signed_sponsor_request_verifies_in_rust() {
     other.file_id = uuid::Uuid::new_v4().to_string();
     assert!(crate::demo_sponsor::verify_request_signature(&other).is_err(), "a signature must not carry to another file");
 }
+
+const SDK_QUESTION_ENVELOPE: &str = include_str!("testdata/agent_question_envelope_v1.json");
+
+/// **The agent SDK's questions are Tmail the node accepts.** `postQuestion` (tet-agent-sdk
+/// `src/questions.ts`) ports the UI's encryption and envelope pre-image; this fixture is its output.
+/// tet-core must verify it as an ordinary named envelope from the agent's key, and refuse it once a
+/// signed field changes.
+#[test]
+fn sdk_question_envelope_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(SDK_QUESTION_ENVELOPE).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let env: crate::tmail::envelope::TmailEnvelopeV1 =
+        serde_json::from_value(doc["envelope"].clone()).expect("the SDK's envelope must deserialize");
+    crate::tmail::envelope::verify_tmail_envelope_v1(&env).expect("the node must accept the SDK's question");
+    let mut other = env.clone();
+    other.receiver_wallet_id = "ab".repeat(32);
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&other).is_err(),
+        "a question must not verify for another receiver"
+    );
+}
+
+const UI_ANSWER_ENVELOPE: &str = include_str!("testdata/ui_answer_envelope_v1.json");
+
+/// **The try page's answers are Tmail the node accepts**: the questions window's answer (the page's
+/// own builder, `make_answer_fixture.mjs`) verifies as a named envelope to the asking agent, and not
+/// once its receiver changes. The agent SDK reads the same fixture (`tests/questions.test.ts`).
+#[test]
+fn ui_answer_envelope_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_ANSWER_ENVELOPE).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let env: crate::tmail::envelope::TmailEnvelopeV1 =
+        serde_json::from_value(doc["envelope"].clone()).expect("the page's envelope must deserialize");
+    crate::tmail::envelope::verify_tmail_envelope_v1(&env).expect("the node must accept the page's answer");
+    let mut other = env.clone();
+    other.receiver_wallet_id = "cd".repeat(32);
+    assert!(crate::tmail::envelope::verify_tmail_envelope_v1(&other).is_err());
+}

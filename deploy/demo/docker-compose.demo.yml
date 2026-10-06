@@ -27,6 +27,8 @@ services:
       args:
         # A wallet the operator reads in the desktop: the try page's "message the demo".
         NEXT_PUBLIC_TET_DEMO_CONTACT: "${TET_DEMO_CONTACT:-}"
+        # The public questions board's invite (its read key is public by design): "AI asks a human".
+        NEXT_PUBLIC_TET_QUESTIONS_INVITE: "${TET_QUESTIONS_INVITE:-}"
 
   caddy:
     image: caddy:2.8

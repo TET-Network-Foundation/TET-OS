@@ -24,3 +24,16 @@ export {
   type TetChainBinding,
 } from "./agent.js";
 export { buildAgentPayloadHeaders, hybridSigHeaders } from "./hybrid_infer.js";
+export {
+  ANSWERED_KIND,
+  ANSWER_KIND,
+  QUESTION_KIND,
+  buildNamedTmailEnvelope,
+  deriveTmailKeys,
+  markAnswered,
+  postQuestion,
+  readAnswers,
+  registerAgentInbox,
+  type Answer,
+  type TmailKeys,
+} from "./questions.js";

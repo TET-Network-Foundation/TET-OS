@@ -299,6 +299,8 @@ jobs:
             demo_sponsor_caps_refuse_rather_than_queue
             demo_sponsor_signs_nothing_but_file_fees_and_stores_no_address
             ui_signed_sponsor_request_verifies_in_rust
+            sdk_question_envelope_verifies_in_rust
+            ui_answer_envelope_verifies_in_rust
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block
@@ -427,6 +429,13 @@ jobs:
         name: try page — file fees are sponsored or unpaid, never the visitor's
         run: node --experimental-strip-types scripts/try_files_fee_guard.mjs
 
+      # Try TET part 5: an agent's owner is shown only from a manifest that vouches for both keys that
+      # signed the question; "answered" only from the asking key; answers go to the signed sender.
+      # Runs on the SDK-built question tet-core verifies (sdk_question_envelope_verifies_in_rust).
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — AI asks a human shows only the owner a manifest proves
+        run: node --experimental-strip-types scripts/try_questions_guard.mjs
+
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --
       # which would cost another billed minute per push AND have to be mirrored in
@@ -478,8 +487,8 @@ jobs:
           # jest exits 0 when a filter matches nothing, so the counts are asserted rather than the
           # exit code. The skipped suite is tests/slashing_audit.test.ts, which posts to a route the
           # September clean-up removed; the reason is recorded in the file.
-          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 49 passed, 50 total' || {
-            echo "::error::the agent SDK guards did not run — expected 49 passed and 1 skipped"
+          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 52 passed, 53 total' || {
+            echo "::error::the agent SDK guards did not run — expected 52 passed and 1 skipped"
             exit 1
           }
 
