@@ -314,6 +314,12 @@ pub enum CatchUpDriverEvent {
         applied: usize,
         failed: bool,
     },
+    /// This node could not queue the batch for application (its own apply queue was full). Not
+    /// the peer's fault: no blacklist. The driver goes idle and the next tick asks again, since the
+    /// catch-up trigger is still set.
+    LocalBackpressure {
+        peer_id: String,
+    },
 }
 
 /// Side effect for the swarm loop to execute (send RR, clear latch).
@@ -440,6 +446,16 @@ impl CatchUpDriver {
                     return CatchUpAction::ClearCatchUpTriggered;
                 }
                 self.start_request(registry, local_height)
+            }
+            CatchUpDriverEvent::LocalBackpressure { peer_id } => {
+                log::warn!("[sync] catch-up batch from {peer_id} not queued: local apply queue full");
+                if matches!(
+                    &self.phase,
+                    CatchUpPhase::Requesting { peer_id: active } if active == &peer_id
+                ) {
+                    self.phase = CatchUpPhase::Idle;
+                }
+                CatchUpAction::None
             }
             CatchUpDriverEvent::RangeFailed { peer_id, reason } => {
                 log::warn!("[sync] catch-up range failed peer={peer_id} reason={reason}");

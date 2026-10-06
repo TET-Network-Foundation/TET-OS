@@ -97,6 +97,34 @@ pub async fn get_metrics(State(state): State<RestState>) -> impl IntoResponse {
     );
     prom_line(
         &mut out,
+        "tet_p2p_apply_queue_depth",
+        "Block-apply jobs queued for or in the apply worker.",
+        "gauge",
+        crate::metrics::apply_queue_depth(),
+    );
+    prom_line(
+        &mut out,
+        "tet_p2p_apply_dropped_total",
+        "Gossip blocks and backfill reorgs dropped because the apply queue was full (re-fetched by catch-up).",
+        "counter",
+        crate::metrics::apply_dropped_total(),
+    );
+    prom_line(
+        &mut out,
+        "tet_p2p_tx_admission_dropped_total",
+        "Gossiped transactions dropped because the admission queue was full.",
+        "counter",
+        crate::metrics::tx_admission_dropped_total(),
+    );
+    prom_line(
+        &mut out,
+        "tet_p2p_loop_lookups_refused_total",
+        "Disk lookups and chain_hello builds the swarm loop declined to start (too many in flight).",
+        "counter",
+        crate::metrics::loop_lookups_refused_total(),
+    );
+    prom_line(
+        &mut out,
         "tet_zk_prover_seconds",
         "Total local ZK prover wall-clock seconds.",
         "counter",
