@@ -53,10 +53,16 @@ These are token buckets, separate for reads and writes:
 | Class | Default | Env |
 |---|---|---|
 | Reads (GET) | 10/s, burst 40 | `TET_PUBLIC_READ_PER_SEC`, `TET_PUBLIC_READ_BURST` |
-| Writes (POST/PUT/DELETE) | 20/min, burst 10 | `TET_PUBLIC_WRITE_PER_MIN`, `TET_PUBLIC_WRITE_BURST` |
+| Writes (POST/PUT/DELETE) | 20/min, burst 10 (**30 on the demo node**) | `TET_PUBLIC_WRITE_PER_MIN`, `TET_PUBLIC_WRITE_BURST` |
 | Tracked clients | 50,000; idle clients are dropped first, then new clients share one overflow bucket | `TET_PUBLIC_MAX_CLIENTS` |
 
 An over-limit request gets `429` with `Retry-After: 5`.
+
+**The demo node's write burst is 30** (`deploy/demo/docker-compose.demo.yml`). Each page action
+costs a few writes: registering keys, a message, a file upload and its sponsored fee. In the local
+run, a burst of 10 was used up by someone sending three files in quick succession, before any
+sponsor cap applied. The refill rate is unchanged at 20 a minute, so sustained use is limited
+exactly as before; only a short burst is larger.
 
 ### Client identity
 The client is the **TCP peer**, except when the peer is a configured trusted proxy
