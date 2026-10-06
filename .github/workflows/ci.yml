@@ -294,6 +294,7 @@ jobs:
             public_mode_is_off_by_default
             public_mode_ignores_forwarded_for_from_an_untrusted_peer
             public_mode_limits_ipv6_per_slash_64
+            ui_signed_agent_manifest_is_byte_identical_in_rust
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block
@@ -408,6 +409,13 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — the board's invite stays secret and anonymous never turns named
         run: node --experimental-strip-types scripts/try_board_guard.mjs
+
+      # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
+      # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
+      # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — verify anything grades only what it proves
+        run: node --experimental-strip-types scripts/try_verify_guard.mjs
 
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --

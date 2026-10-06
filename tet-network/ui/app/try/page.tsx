@@ -14,6 +14,7 @@ import Win95Panel from "../os/components/Win95Panel";
 import { generateDisposableWords, wordsFileText } from "../lib/disposable_wallet.mjs";
 import { activateTryWallet, forgetTryWallet } from "../lib/try_session";
 import BoardPanel from "./BoardPanel";
+import VerifyPanel from "./VerifyPanel";
 
 const BASE = "/tet-node-api";
 
@@ -42,15 +43,6 @@ const PANELS: { title: string; part: number; what: string; limits: string[] }[] 
     limits: [
       "The demo sponsors a few file fees per visitor per day; past that the file still arrives.",
       "Files are stored on the demo node with a size cap and an expiry.",
-    ],
-  },
-  {
-    title: "Verify anything",
-    part: 4,
-    what: "Drop a file or text and its .sig.json; see who signed it.",
-    limits: [
-      "A valid signature proves which key signed, not who holds it, unless a manifest or pin says so.",
-      "It can't prove when something was written.",
     ],
   },
   {
@@ -176,6 +168,8 @@ export default function TryPage() {
         </div>
 
         <BoardPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
+
+        <VerifyPanel baseUrl={BASE} />
 
         <div className="grid gap-3 sm:grid-cols-2">
           {PANELS.map((p) => (
