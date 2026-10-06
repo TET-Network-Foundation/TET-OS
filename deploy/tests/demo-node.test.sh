@@ -51,6 +51,8 @@ if env.get("TET_PUBLIC_API") != "1":
     bad.append("public mode is off")
 if env.get("TET_AUTO_MINE") != "0":
     bad.append("the demo node would mine")
+if env.get("TET_PUBLIC_WRITE_BURST") != "30":
+    bad.append(f"write burst is {env.get('TET_PUBLIC_WRITE_BURST')}, the decision was 30")
 # The sponsor's words come in read-only from the host's /etc/tet-demo, never from .env.
 mounts = [v for v in s["tet-core"].get("volumes", []) if v.get("source") == "/etc/tet-demo"]
 if len(mounts) != 1 or not mounts[0].get("read_only") or mounts[0].get("target") != "/run/tet-demo":
