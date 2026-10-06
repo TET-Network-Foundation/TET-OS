@@ -230,7 +230,59 @@ Where the implementation differs from the text above, or the text left a choice 
 
 - **The by-id backfill site has no network-level guard.** The type-state covers it, but it lacks a
   two-swarm test like gossip's.
-- **Leader mode is still a per-node setting** (item 6).
+- ~~**Leader mode is still a per-node setting** (item 6).~~ Done; see "As built — item 6" below.
+
+### As built — item 6, leader mode as a genesis parameter (2026-10-06, branch `phase1-item-6-leader-mode-genesis`)
+
+The inventory above names `TET_CONSENSUS_LEADER_MODE` as "the same class with a different input".
+It now goes the way of the founder cliff:
+
+- **In the genesis hash.** `GenesisParams` gains `leader_mode`, and the payload gains
+  `|leader_mode=hash` or `|leader_mode=caac` as its **last** field. A node configured with the other
+  mode names another chain. The dev golden vector moves from `0xf73ff104…764de7` to
+  `0x56a7e9b9…2a90f6` (recomputed independently with Python `hashlib`, which also reproduces the old
+  value). Every mirror is updated: `chain_binding.ts` (`NEXT_PUBLIC_TET_CONSENSUS_LEADER_MODE`),
+  `verify-genesis-hash.mjs`, `debug-transfer-binding.mjs`, and the eight interop step scripts
+  (`TET_CONSENSUS_LEADER_MODE`, default `hash`).
+- **The payload tag stays `tet-genesis-v2`.** v2 exists only on `phase1` and has never named a
+  running chain, so a field added before the ceremony does not need a new tag. If a v2 chain is ever
+  started before the ceremony, this choice is wrong and the tag should move to v3.
+- **One reader.** `genesis::leader_mode_from_env` is the only function that reads the variable. The
+  hash, the gossip / catch-up acceptance site, the by-id backfill site and the auto-miner all call
+  it, so the mode a node validates under is the mode its hash names. `consensus::leader_election_mode_from_env`
+  is removed; `LeaderElectionMode` moved to `genesis.rs` (the lib crate) and is re-exported from
+  `consensus`.
+- **Strict.** Unset or empty means `hash`, as before. `hash` / `caac` are accepted
+  case-insensitively and canonicalised, so `HASH` and unset are one chain. Anything else is an error:
+  the node refuses to start (`main` already exits on an invalid genesis), and an acceptance site
+  that somehow sees one refuses the block rather than guessing. Before, `caak` silently meant
+  `hash`.
+- **Default on mainnet: still `hash`.** Unlike `TET_GENESIS_TIME_MS` it is not made required on
+  mainnet. That would be a new rule this item's row does not ask for; see the open questions.
+- **The variable keeps its name.** It is a genesis input now, like `TET_FOUNDER_CLIFF_MS`, which also
+  kept its name.
+
+Guards: `leader_mode_is_in_the_genesis_hash`, `unknown_leader_mode_refuses_the_genesis`,
+`gossip_validates_the_leader_under_the_genesis_leader_mode`,
+`backfill_validates_the_leader_under_the_genesis_leader_mode`. The two site guards run under both
+modes with a CAAC record that makes the modes elect different leaders, so a site hard-wired to
+either mode fails one direction; each site is broken separately (C4).
+
+**Open, for whoever reviews this:**
+
+- **`caac` mode is not deterministic across nodes, whatever genesis says.** Its weights come from
+  `caac_get_worker_record`, a `meta` row written by `POST /v1/vision/caac/complete`
+  (`rest/handlers/vision.rs`) and by `TET_DEV_FORCE_POC` at startup (`main.rs`) — directly, not
+  through a consensus tx. Two nodes holding different CAAC rows elect different leaders under
+  `caac` even with identical genesis. Putting the mode in genesis makes the *choice* uniform; it does
+  not make `caac` safe to choose. Until CAAC records are consensus-applied (§2.3, §2.5), the ceremony
+  should pick `hash`, even though `install.sh` writes `caac` today (the docs also say `.env.mainnet.example` does; no such file is committed).
+- **Should mainnet require the variable explicitly**, as it does `TET_GENESIS_TIME_MS`, so the
+  ceremony cannot inherit `hash` by omission?
+- **Nothing compares the stored genesis hash with the computed one at startup.** A node that
+  restarts on the same database with a different mode (or cliff, or validator set) signs and
+  verifies against the new hash while its `genesis_hash_v1` meta row still names the old one. This
+  is not new with item 6, but item 6 adds one more input that can drift that way.
 
 ### Migration — this is a new genesis
 

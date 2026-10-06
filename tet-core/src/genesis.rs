@@ -89,6 +89,51 @@ pub fn genesis_time_ms_from_env() -> Result<u64, String> {
     }
 }
 
+/// How the expected leader for a height is chosen. A genesis parameter since Phase 1 (item 6): it is
+/// in the genesis hash and read through [`leader_mode_from_env`], so a node running
+/// another mode is on another chain rather than silently expecting another leader.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaderElectionMode {
+    Hash,
+    Caac,
+}
+
+impl LeaderElectionMode {
+    /// The token in the genesis hash payload (`|leader_mode=…`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LeaderElectionMode::Hash => "hash",
+            LeaderElectionMode::Caac => "caac",
+        }
+    }
+
+    /// Strict: `hash` or `caac` (case-insensitive, trimmed). Anything else is an error, never a
+    /// silent `hash` — a typo must not put a node on a different leader schedule.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let v = raw.trim();
+        if v.eq_ignore_ascii_case("hash") {
+            Ok(LeaderElectionMode::Hash)
+        } else if v.eq_ignore_ascii_case("caac") {
+            Ok(LeaderElectionMode::Caac)
+        } else {
+            Err(format!("leader mode must be `hash` or `caac`, got {v:?}"))
+        }
+    }
+}
+
+/// The leader-election mode, from `TET_CONSENSUS_LEADER_MODE`: `hash` (the default when unset) or
+/// `caac`. A genesis parameter since Phase 1 (item 6): it is in the genesis hash, and every
+/// consensus site reads it through this function, so the mode a node validates under is the mode
+/// its genesis hash names. Strict: any other value is an error, where it used to fall back to
+/// `hash` without a word.
+pub fn leader_mode_from_env() -> Result<LeaderElectionMode, String> {
+    match std::env::var("TET_CONSENSUS_LEADER_MODE") {
+        Ok(v) if !v.trim().is_empty() => LeaderElectionMode::parse(&v)
+            .map_err(|e| format!("TET_CONSENSUS_LEADER_MODE: {e}")),
+        _ => Ok(LeaderElectionMode::Hash),
+    }
+}
+
 /// One entry of the genesis validator set: who may produce, and the key their blocks must verify
 /// under. Changing the set changes the genesis hash, i.e. it is a new chain. A rotation mechanism
 /// is Phase 1.1 (`docs/QUEUE.md`).
@@ -187,11 +232,12 @@ pub struct GenesisParams {
     pub genesis_time_ms: u64,
     pub founder_cliff_ms: u64,
     pub validators: Vec<GenesisValidator>,
+    pub leader_mode: LeaderElectionMode,
 }
 
 impl GenesisParams {
-    /// Founder + treasury given; chain id, genesis time, cliff and validator set from the
-    /// environment.
+    /// Founder + treasury given; chain id, genesis time, cliff, validator set and leader mode from
+    /// the environment.
     pub fn from_env_with(founder_wallet_id: &str, treasury_wallet_id: &str) -> Result<Self, String> {
         Ok(Self {
             chain_id: chain_id_from_env(),
@@ -200,6 +246,7 @@ impl GenesisParams {
             genesis_time_ms: genesis_time_ms_from_env()?,
             founder_cliff_ms: founder_cliff_ms_from_env(),
             validators: genesis_validators_from_env()?,
+            leader_mode: leader_mode_from_env()?,
         })
     }
 
@@ -219,7 +266,7 @@ impl GenesisParams {
     /// `tet-network/ui/app/lib/chain_binding.ts` (`buildGenesisPayloadV2`).
     pub fn payload(&self) -> String {
         format!(
-            "tet-genesis-v2|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|treasury={}|treasury_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}|genesis_time_ms={}|founder_cliff_ms={}|validators={}",
+            "tet-genesis-v2|chain_id={}|founder={}|founder_micro={}|worker_pool={}|worker_pool_micro={}|treasury={}|treasury_micro={}|reserve={}|reserve_micro={}|max_supply_micro={}|genesis_time_ms={}|founder_cliff_ms={}|validators={}|leader_mode={}",
             self.chain_id,
             self.founder_wallet_id,
             GENESIS_FOUNDER_SHARE_MICRO,
@@ -233,6 +280,7 @@ impl GenesisParams {
             self.genesis_time_ms,
             self.founder_cliff_ms,
             validators_digest_hex(&self.validators),
+            self.leader_mode.as_str(),
         )
     }
 
@@ -306,6 +354,7 @@ mod tests {
             genesis_time_ms: 0,
             founder_cliff_ms: 365 * 86_400_000,
             validators: vec![],
+            leader_mode: LeaderElectionMode::Hash,
         }
     }
 
@@ -319,7 +368,7 @@ mod tests {
             validators_digest_hex(&p.validators),
             "48026ca38ababf8c4f25aa286b5fafa47914cabd5026b7ea9c4fba9ee3b9dd38"
         );
-        assert_eq!(p.hash(), "0xf73ff1043163a2d5237d38dc708807a440705e4e29f7d603cc5217921b764de7");
+        assert_eq!(p.hash(), "0x56a7e9b9b8dee98a4b453a13c34c4ea7fbafceef95978cf2826df72c4f2a90f6");
     }
 
     /// Every genesis parameter moves the hash, so changing any of them is a different chain.
@@ -334,6 +383,10 @@ mod tests {
             ("genesis_time_ms", GenesisParams { genesis_time_ms: 1, ..dev_params() }),
             ("founder_cliff_ms", GenesisParams { founder_cliff_ms: 0, ..dev_params() }),
             ("validators", GenesisParams { validators: vec![v], ..dev_params() }),
+            (
+                "leader_mode",
+                GenesisParams { leader_mode: LeaderElectionMode::Caac, ..dev_params() },
+            ),
         ] {
             assert_ne!(p.hash(), base, "{name} must be in the genesis hash");
         }
