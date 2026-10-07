@@ -38,7 +38,7 @@ const TOOLS = [
   { id: "questions", label: "Questions for humans", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
   { id: "files", label: "files", group: "tools" },
-  { id: "mail", label: "mail", group: "tools" },
+  { id: "mail", label: "DM", group: "tools" },
 ] as const;
 type ToolId = (typeof TOOLS)[number]["id"] | "new";
 /** What the middle column shows: a board (by invite) or a tool. */
@@ -250,6 +250,7 @@ function TryApp() {
   const [dirErr, setDirErr] = useState("");
   /** The 12 words of boards this tab created (to list them again); kept in memory only. */
   const [boardWords, setBoardWords] = useState<Record<string, string>>({});
+  const [dmTarget, setDmTarget] = useState<{ walletId: string; at: number } | null>(null);
 
   const refreshDirectory = useCallback(async (d: OpenBoard) => {
     try {
@@ -389,6 +390,10 @@ function TryApp() {
                 boardWords={boardWords[b.boardWalletId]}
                 directory={directory}
                 onListed={() => directory && void refreshDirectory(directory)}
+                onDm={(walletId) => {
+                  setDmTarget({ walletId, at: Date.now() });
+                  go({ tool: "mail" });
+                }}
               />,
             ),
           )}
@@ -397,7 +402,7 @@ function TryApp() {
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
-          {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} />)}
+          {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
             Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.
           </p>

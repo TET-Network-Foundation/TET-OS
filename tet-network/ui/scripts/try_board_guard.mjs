@@ -14,6 +14,9 @@
 //    and shows its sender; an anonymous post is VERIFIED only on the node's verified verdict.
 // 4. An invite that doesn't derive the board's registered keys is refused.
 // 5. Creating a board does not replace the visitor's own wallet session.
+// 7. An anonymous post never yields an author, so the page can never offer a DM for it (the DM
+//    link is drawn only from `postLabel(row).author`), even if a row carries a sender id.
+//    Control: a label that falls back to the row's sender → FAILED.
 // 6. Joining the anonymity set and sending anonymously never happen in the same action: a post fired
 //    the moment a (public) join takes effect would point back at the join. Checked in the page's
 //    sources: only `wallet.tsx`'s `joinAnon` registers, it sends nothing, and no block that calls
@@ -299,6 +302,26 @@ await check("control: the join/post check catches join-then-post, a stray regist
   };
   for (const [f, src] of Object.entries(cases)) assert.ok(joinPostProblems({ [f]: src }).length >= 1, `${f} was not caught`);
   assert.deepEqual(joinPostProblems({ "ok2.tsx": `<B onClick={() => { void joinAnon(); }} /> <C onClick={() => void onPost()} />` }), []);
+});
+
+/** The property in (7), run against a label function. */
+function anonymousHasNoDmTarget(label) {
+  const rows = [
+    { flags: { anonymous: true }, sender_wallet_id: "ab".repeat(32), anon_verdict: { state: "verified" } },
+    { flags: { anonymous: true }, sender_wallet_id: "ab".repeat(32), anon_verdict: { state: "failed", reason: "x" } },
+    { flags: { anonymous: true }, sender_wallet_id: "ab".repeat(32) },
+  ];
+  for (const r of rows) assert.equal(label(r).author, null, `an anonymous row (${r.anon_verdict?.state ?? "pending"}) gave an author`);
+  assert.equal(label({ sender_wallet_id: "cd".repeat(32) }).author, "cd".repeat(32), "a named post lost its author");
+}
+
+await check("SECURITY: an anonymous post never yields an author, so it never offers a DM", () => {
+  anonymousHasNoDmTarget(board.postLabel);
+});
+
+await check("control: a label that falls back to the row's sender is caught", () => {
+  const leaky = (row) => ({ ...board.postLabel(row), author: board.postLabel(row).author ?? row.sender_wallet_id ?? null });
+  assert.throws(() => anonymousHasNoDmTarget(leaky));
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

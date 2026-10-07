@@ -12,6 +12,7 @@
  * set is a separate tap that never posts (see `wallet.tsx`: a post fired the moment a join takes
  * effect would point back at the join). Rules in `lib/board.mjs`, node calls in `lib/try_board.ts`.
  *
+ * A named post's short id opens a DM with its wallet; an anonymous post has no author, so no DM.
  * #18 (follows, profiles, notifications) is later: `Author` is where a profile link would attach.
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -51,14 +52,30 @@ function badgeFor(label: Label): { tone: Tone; text: string } {
   return { tone: "pending", text: "anonymous · checking proof" };
 }
 
-/** Who wrote a post. #18 hook: a profile or follow control attaches here. */
-function Author(props: { walletId: string | null }) {
-  return props.walletId ? (
-    <span translate="no" className={INK.named} data-author={props.walletId}>
-      {props.walletId.slice(0, 8)}
-    </span>
+/**
+ * Who wrote a post. A named post's short id opens a DM with that wallet; an anonymous post has no
+ * author (`postLabel` never gives one), so there is nothing to message. #18 hook: a profile or
+ * follow control attaches here.
+ */
+function Author(props: { walletId: string | null; onDm?: (walletId: string) => void }) {
+  if (!props.walletId) return <span title="No DM: an anonymous post doesn't say who wrote it.">anonymous</span>;
+  const id = props.walletId;
+  return props.onDm ? (
+    <button
+      type="button"
+      translate="no"
+      data-author={id}
+      title={`DM ${id}`}
+      aria-label={`Send a DM to ${id.slice(0, 8)}`}
+      onClick={() => props.onDm?.(id)}
+      className={cx(FOCUS, "rounded-sm underline decoration-dotted underline-offset-2", INK.named)}
+    >
+      {id.slice(0, 8)}
+    </button>
   ) : (
-    <span>anonymous</span>
+    <span translate="no" className={INK.named} data-author={id}>
+      {id.slice(0, 8)}
+    </span>
   );
 }
 
@@ -103,6 +120,7 @@ export const BOARD_NOTICE = (members: number | null) => [
   "The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title.",
   "Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time.",
   "The node and the first relaying peer see your IP. Posts are not on the chain.",
+  "Tap a named post's id to DM its wallet. Anonymous posts have no DM: nothing in them says who wrote them.",
   "Anyone with the invite link can read every post. An invite cannot be revoked: start a new board.",
   TMAIL_ANON_DISCLOSURE,
 ];
@@ -117,6 +135,8 @@ export default function BoardPanel(props: {
   boardWords?: string;
   directory: OpenBoard | null;
   onListed: () => void;
+  /** Open a DM with a named post's wallet. */
+  onDm?: (walletId: string) => void;
 }) {
   const { board } = props;
   const [relist, setRelist] = useState<"closed" | "open" | "busy" | "done">("closed");
@@ -491,7 +511,7 @@ export default function BoardPanel(props: {
                     className={cx("-mx-2 border-b border-[#eceef1] px-2 py-2.5 transition-colors", highlight === n && "bg-[#fff6dc]")}
                   >
                     <Meta n={n}>
-                      <Author walletId={p.label.author} />
+                      <Author walletId={p.label.author} onDm={props.onDm} />
                       <span>{fmtWhen(p.sentAtMs, now)}</span>
                       <Badge tone={b.tone} title={p.label.detail}>
                         {b.text}
