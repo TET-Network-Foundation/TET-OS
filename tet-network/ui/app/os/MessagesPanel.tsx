@@ -110,6 +110,8 @@ export default function MessagesPanel(props: {
   myWalletId: string;
   /** One-click recipients shown under the field (the try page's "message the demo"). */
   quickRecipients?: ReadonlyArray<{ label: string; walletId: string }>;
+  /** The try page's layout: no inner title, and the keys step first (what to do before anything else). */
+  compact?: boolean;
 }) {
   const { outset, inset, winBtn, baseUrl } = props;
   const myWalletId = normalizeWalletId64(props.myWalletId);
@@ -520,8 +522,10 @@ export default function MessagesPanel(props: {
   const shortId = (id: string) => (id.length > 16 ? `${id.slice(0, 10)}…${id.slice(-6)}` : id);
 
   return (
-    <div className={`${outset} bg-[#DAD8D2] p-3 space-y-3`}>
-      <div className="text-sm font-semibold text-black">Messages — End-to-End Encrypted (Tmail)</div>
+    <div className={props.compact ? `flex flex-col gap-2 font-mono` : `${outset} bg-[#DAD8D2] p-3 space-y-3`}>
+      {props.compact ? null : (
+        <div className="text-sm font-semibold text-black">Messages — End-to-End Encrypted (Tmail)</div>
+      )}
 
       {/* A. Compose */}
       <div className={`${inset} bg-[#F9F9F6] p-2 space-y-2`}>
@@ -823,8 +827,8 @@ export default function MessagesPanel(props: {
       </div>
 
       {/* C. Status */}
-      <div className={`${inset} bg-[#F9F9F6] p-2 space-y-2`}>
-        <div className="text-xs font-semibold text-black">Messaging Keys</div>
+      <div className={`${inset} bg-[#F9F9F6] p-2 space-y-2 ${props.compact ? "order-first" : ""}`}>
+        <div className="text-xs font-semibold text-black">{props.compact ? "1. Your messaging keys" : "Messaging Keys"}</div>
         {keyStatus.state === "loading" ? (
           <div className="text-[11px] text-black/60">Checking registration…</div>
         ) : keyStatus.state === "registered" ? (

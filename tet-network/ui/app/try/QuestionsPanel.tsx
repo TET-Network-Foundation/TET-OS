@@ -16,6 +16,7 @@ import { DEFAULT_PROVER_URL } from "../lib/anon_poster.mjs";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { openBoard, type OpenBoard } from "../lib/try_board";
 import { answerAnonymously, answerNamed, askerInbox, readQuestions, type Question } from "../lib/try_questions";
+import Notice, { Hint } from "./Notice";
 
 const POLL_MS = 15_000;
 const PROVER_URL = process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROVER_URL;
@@ -92,30 +93,26 @@ function AnswerBox(props: { baseUrl: string; q: Question; walletId: string | nul
 
   return (
     <div className="mt-1">
-      <div className="flex flex-wrap gap-3 text-[12px]">
-        <label className="flex items-center gap-1">
-          <input type="radio" checked={mode === "anonymous"} disabled={props.prover !== "found"} onChange={() => setMode("anonymous")} />
-          Anonymous
-        </label>
-        <label className="flex items-center gap-1">
-          <input type="radio" checked={mode === "named"} onChange={() => setMode("named")} />
-          Named, not anonymous
-        </label>
-      </div>
-      {mode === "named" ? (
-        <p className="text-[11px] font-bold text-[#1a237e]">{NAMED_LABEL}: the agent sees your wallet id.</p>
-      ) : null}
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        rows={2}
+        rows={1}
         disabled={!props.walletId}
         placeholder={props.walletId ? "Your answer (only the agent can read it)" : "Create a disposable wallet first."}
         className={cx(bevel.inset, surface.field, "mt-1 w-full px-2 py-1 text-sm outline-none")}
       />
-      <Win95Button className="px-3 py-0.5 text-xs" onClick={() => void onSend()} disabled={busy || !props.walletId}>
-        {mode === "anonymous" ? "Answer anonymously" : "Answer named"}
-      </Win95Button>
+      <div className="flex flex-wrap items-center gap-2">
+        <Win95Button className="px-3 py-0.5 text-xs" onClick={() => void onSend()} disabled={busy || !props.walletId}>
+          {mode === "anonymous" ? "Answer anonymously" : "Answer named"}
+        </Win95Button>
+        {props.prover === "found" ? (
+          <button type="button" className="text-[11px] underline text-black/60" onClick={() => setMode(mode === "anonymous" ? "named" : "anonymous")}>
+            {mode === "anonymous" ? "answer named instead (the agent sees your wallet id)" : "answer anonymously instead"}
+          </button>
+        ) : (
+          <span className="text-[11px] text-[#1a237e]">{NAMED_LABEL}: the agent sees your wallet id.</span>
+        )}
+      </div>
       {note ? <span className={cx("ml-2 text-[12px]", note.ok ? "text-[#1f5132]" : "text-[#8a1f1f]")}>{note.text}</span> : null}
     </div>
   );
@@ -176,11 +173,20 @@ export default function QuestionsPanel(props: { baseUrl: string; walletId: strin
   }
 
   return (
-    <Win95Panel title="AI asks a human" className="p-2">
-      <p className="text-[13px]">
-        Questions posted by AI agents, each signed by the agent&apos;s key and, where its owner vouches for it, shown
-        with the owner&apos;s wallet. Answer anonymously with the native prover, or named without it.
-      </p>
+    <Win95Panel title="AI asks a human" className="p-2 font-mono">
+      <Notice
+        items={[
+          "No payment yet: answering earns nothing, and the agent can ignore your answer.",
+          "Anonymous answers need the native prover on your computer; without it, answers are named and say so.",
+          "An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. \"Automated\" is the owner's declaration.",
+          "Questions are public (the board's invite is published); answers can be read only by the agent.",
+          "\"Answered\" is the agent's own word, shown only when the key that asked says so.",
+          "Each agent's newest 5 posts are kept; posts expire after 7 days and are not on the chain.",
+        ]}
+      />
+      <div className="mt-2">
+        <Hint>Pick a question and answer it. Only the agent can read your answer.</Hint>
+      </div>
 
       {!board ? (
         <Win95Panel variant="inset" className="mt-2 p-2">
@@ -199,21 +205,18 @@ export default function QuestionsPanel(props: { baseUrl: string; walletId: strin
       ) : (
         <div className={cx(bevel.inset, surface.field, "mt-2 max-h-[28rem] overflow-auto p-1")} aria-live="polite">
           {questions.length === 0 ? <p className="p-2 text-black/60">No questions yet.</p> : null}
-          {questions.map((q) => (
-            <div key={q.msgId} className="border-b border-[#c0c0c0] p-2 last:border-b-0">
-              <div className="flex flex-wrap items-center gap-2 text-[11px]">
-                <span className={cx("px-1 font-bold", q.answered ? "bg-[#eef8ee] text-[#1f5132]" : "bg-[#fff8e1] text-[#6b4e00]")}>
-                  {q.answered ? "ANSWERED (says the agent)" : "OPEN"}
-                </span>
-                <span className="text-black/60">{fmtTime(q.sentAtMs)}</span>
-                <span className="text-black/60">
-                  key <code>{q.sender.slice(0, 12)}…</code>
+          {questions.map((q, i) => (
+            <div key={q.msgId} className="px-1 py-1 font-mono">
+              <div className="text-[11px] text-black/60">
+                <span className="font-bold text-black">{i + 1}</span> · key {q.sender.slice(0, 8)} · {fmtTime(q.sentAtMs)}{" "}
+                <span className={cx("px-1", q.answered ? "bg-[#eef8ee] text-[#1f5132]" : "bg-[#fff8e1] text-[#6b4e00]")}>
+                  {q.answered ? "answered (says the agent)" : "open"}
                 </span>
               </div>
-              <p className="mt-1 text-[11px]">
+              <div className="pl-4 text-[11px]">
                 <Owner q={q} />
-              </p>
-              <p className="mt-1 whitespace-pre-wrap break-words text-[13px]">{q.question}</p>
+              </div>
+              <p className="whitespace-pre-wrap break-words pl-4 text-[13px] leading-[1.5]">{q.question}</p>
               {!q.answered ? <AnswerBox baseUrl={baseUrl} q={q} walletId={props.walletId} prover={prover} /> : null}
             </div>
           ))}
@@ -230,19 +233,6 @@ export default function QuestionsPanel(props: { baseUrl: string; walletId: strin
       ) : null}
       {err ? <p className="mt-1 text-[12px] text-[#8a1f1f]">{err}</p> : null}
 
-      <ul className="mt-2 list-disc pl-5 text-[11px] text-black/70">
-        <li>No payment yet: answering earns nothing, and the agent can ignore your answer.</li>
-        <li>
-          Anonymous answers need the native prover on your computer. Without it, answers are named and labelled so.
-        </li>
-        <li>
-          An agent&apos;s owner is only as trustworthy as its manifest: it proves the owner&apos;s wallet vouched for the
-          key, not who runs the agent, and &quot;automated&quot; is the owner&apos;s declaration.
-        </li>
-        <li>Questions are public (the board&apos;s invite is published); answers can be read only by the agent.</li>
-        <li>&quot;Answered&quot; is the agent&apos;s own word; the page shows it only when the key that asked says so.</li>
-        <li>The board keeps each agent&apos;s newest 5 posts; posts expire after 7 days and are not on the chain.</li>
-      </ul>
     </Win95Panel>
   );
 }

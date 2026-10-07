@@ -17,6 +17,7 @@ import { bevel, buttonBevel } from "../os/components/tokens";
 import { generateDisposableWords, wordsFileText } from "../lib/disposable_wallet.mjs";
 import { activateTryWallet, forgetTryWallet } from "../lib/try_session";
 import BoardPanel from "./BoardPanel";
+import Notice, { Hint } from "./Notice";
 import VerifyPanel from "./VerifyPanel";
 import QuestionsPanel from "./QuestionsPanel";
 
@@ -29,29 +30,19 @@ const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CON
 
 const TMAIL_LIMITS = [
   "Key exchange is Kyber round 3, not the final ML-KEM standard (FIPS 203).",
-  "Burn-after-read is best-effort: cooperating nodes delete the message; others may keep the ciphertext.",
-  "Scheduled release is the nodes withholding a message, not cryptographic enforcement.",
-  "A conversation keeps only its newest 5 messages, and messages expire after 7 days.",
-  "Contents are end-to-end encrypted; the demo node still sees which wallets write to which, and when.",
-  "To receive, register your messaging keys (the button below). Registering is public.",
+  "Burn-after-read is best-effort: cooperating nodes delete; others may keep the ciphertext.",
+  "Scheduled release is nodes withholding a message, not cryptographic enforcement.",
+  "A conversation keeps its newest 5 messages; messages expire after 7 days.",
+  "Contents are end-to-end encrypted; the node still sees who writes to whom, and when.",
+  "Registering your keys is public.",
 ];
 
 const FILES_LIMITS = [
-  "Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days.",
-  "The 1,000 µTET fee is paid by the demo's sponsor, for up to 5 files per connection and per wallet a day. Past that, or if the sponsor is low, the file still arrives and its fee shows as unpaid.",
-  "The node a file is stored on is only a hint: fetching asks the peers this node is connected to.",
-  "The demo node sees sender, recipient, size and time; not the contents or the file name.",
+  "Encrypted in this tab, stored on the demo node: at most 5 MB, kept 30 days.",
+  "The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that, the file still arrives and its fee shows as unpaid.",
+  "The storage node is only a hint: fetching asks this node's peers.",
+  "The node sees sender, recipient, size and time; not the contents or the file name.",
 ];
-
-function Limits(props: { items: string[] }) {
-  return (
-    <ul className="mt-2 list-disc pl-5 text-[11px] text-black/70">
-      {props.items.map((l) => (
-        <li key={l}>{l}</li>
-      ))}
-    </ul>
-  );
-}
 
 type NodeStatus =
   | { state: "checking" }
@@ -114,116 +105,108 @@ export default function TryPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#D6D4CE] font-mono text-sm text-black">
-      <div className="bg-[#000080] px-2 py-1 text-sm font-bold text-white">Try TET — testnet</div>
+    <main className="min-h-screen bg-[#D6D4CE] text-sm text-black">
+      <div className="bg-[#000080] px-2 py-1 font-mono text-sm font-bold text-white">Try TET — testnet</div>
       <div className="mx-auto max-w-5xl space-y-3 p-3">
-        <Win95Panel variant="inset" className="bg-[#fff8e1] p-2 text-[13px]">
+        <Win95Panel variant="inset" className="bg-[#fff8e1] p-2 font-mono text-[12px]">
           Testnet. The demo node sees your IP address and when you make requests; it is run by one
           person. Nothing here is audited. The wallet you make lives in this tab.
         </Win95Panel>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Win95Panel title="Node" className="p-2">
-            {node.state === "checking" ? <p>Checking the demo node…</p> : null}
-            {node.state === "up" ? (
-              <p>
-                Connected · chain <code>{node.chainId}</code> · height {node.height ?? "?"}
-              </p>
-            ) : null}
-            {node.state === "down" ? (
-              <p className="text-[#8a1f1f]">The demo node isn&apos;t answering ({node.reason}).</p>
-            ) : null}
-          </Win95Panel>
-
-          <Win95Panel title="Your disposable wallet" className="p-2">
+        <Win95Panel title="Your disposable wallet" className="p-2 font-mono text-[12px]">
+          <div className="flex flex-wrap items-center gap-2">
             {!wallet ? (
               <>
-                <p>Made in this tab from 12 random words. They are never sent anywhere, not even to the demo node.</p>
-                <Win95Button className="mt-2 px-3 py-0.5 text-sm" onClick={() => void onCreate()}>
+                <Win95Button variant="primary" className="px-3 py-0.5 text-sm" onClick={() => void onCreate()}>
                   Create a wallet
                 </Win95Button>
+                <span className="text-black/70">12 random words, made in this tab and never sent anywhere. Every panel below needs it.</span>
               </>
             ) : (
               <>
-                <p>
-                  Wallet id <code className="break-all">{wallet.walletId}</code>
-                </p>
-                <p className="mt-2">
-                  {wallet.shown ? (
-                    <code className="break-words">{wallet.words}</code>
-                  ) : (
-                    <Win95Button className="px-2 py-0.5 text-xs" onClick={() => setWallet({ ...wallet, shown: true })}>
-                      Show the 12 words
-                    </Win95Button>
-                  )}
-                </p>
-                <p className="mt-2 flex gap-2">
-                  <Win95Button className="px-2 py-0.5 text-xs" onClick={onDownload}>
-                    Download the words
-                  </Win95Button>
-                  <Win95Button className="px-2 py-0.5 text-xs" variant="danger" onClick={onForget}>
-                    Forget this wallet
-                  </Win95Button>
-                </p>
-                <p className="mt-2 text-[12px] text-black/60">
-                  Close this tab and the wallet is gone unless you saved the words. They open the same wallet in
-                  the TET desktop.
-                </p>
+                <span>
+                  wallet <code className="break-all">{wallet.walletId}</code>
+                </span>
+                <Win95Button className="px-2 py-0 text-[11px]" onClick={() => setWallet({ ...wallet, shown: !wallet.shown })}>
+                  {wallet.shown ? "Hide the words" : "Show the 12 words"}
+                </Win95Button>
+                <Win95Button className="px-2 py-0 text-[11px]" onClick={onDownload}>
+                  Download the words
+                </Win95Button>
+                <Win95Button className="px-2 py-0 text-[11px]" variant="danger" onClick={onForget}>
+                  Forget
+                </Win95Button>
               </>
             )}
-            {err ? <p className="mt-2 text-[#8a1f1f]">{err}</p> : null}
-          </Win95Panel>
-        </div>
-
-        <Win95Panel title="Tmail" className="p-2">
+            <span className="ml-auto text-black/60">
+              {node.state === "checking" ? "node: checking…" : null}
+              {node.state === "up" ? `node: ${node.chainId} · height ${node.height ?? "?"}` : null}
+              {node.state === "down" ? <span className="text-[#8a1f1f]">node not answering ({node.reason})</span> : null}
+            </span>
+          </div>
+          {wallet?.shown ? <p className="mt-1 break-words">{wallet.words}</p> : null}
           {wallet ? (
-            <MessagesPanel
-              key={wallet.walletId}
-              outset={bevel.outset}
-              inset={bevel.inset}
-              winBtn={buttonBevel}
-              baseUrl={BASE}
-              myWalletId={wallet.walletId}
-              quickRecipients={[
-                ...(DEMO_CONTACT ? [{ label: "Message the demo", walletId: DEMO_CONTACT }] : []),
-                { label: "Message yourself", walletId: wallet.walletId },
-              ]}
-            />
-          ) : (
-            <p>Create a disposable wallet above to send and receive end-to-end encrypted messages.</p>
-          )}
-          {!DEMO_CONTACT ? (
-            <p className="mt-1 text-[12px] text-black/60">
-              No demo inbox on this node: message yourself, or open this page in a second tab with another wallet.
+            <p className="mt-1 text-[11px] text-black/60">
+              Close this tab and the wallet is gone unless you saved the words. They open the same wallet in the TET desktop.
             </p>
           ) : null}
-          <Limits items={TMAIL_LIMITS} />
-        </Win95Panel>
-
-        <Win95Panel title="Files" className="p-2">
-          {wallet ? (
-            <FilesPanel
-              key={wallet.walletId}
-              baseUrl={BASE}
-              myWalletId={wallet.walletId}
-              feeMode="demo-sponsor"
-              contacts={[
-                ...(DEMO_CONTACT ? [{ label: "The demo", address: DEMO_CONTACT }] : []),
-                { label: "Yourself", address: wallet.walletId },
-              ]}
-            />
-          ) : (
-            <p>Create a disposable wallet above to send and receive encrypted files.</p>
-          )}
-          <Limits items={FILES_LIMITS} />
+          {err ? <p className="mt-1 text-[#8a1f1f]">{err}</p> : null}
         </Win95Panel>
 
         <BoardPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
 
         <VerifyPanel baseUrl={BASE} />
 
-        <QuestionsPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
+        <Win95Panel title="Tmail" className="p-2">
+          <Notice items={TMAIL_LIMITS} />
+          <div className="mt-2">
+            <Hint>
+              Register your keys (1), then pick a recipient, write, and send.
+              {!DEMO_CONTACT ? " This node has no demo inbox: message yourself, or a second tab." : ""}
+            </Hint>
+            {wallet ? (
+              <MessagesPanel
+                key={wallet.walletId}
+                compact
+                outset={bevel.outset}
+                inset={bevel.inset}
+                winBtn={buttonBevel}
+                baseUrl={BASE}
+                myWalletId={wallet.walletId}
+                quickRecipients={[
+                  ...(DEMO_CONTACT ? [{ label: "Message the demo", walletId: DEMO_CONTACT }] : []),
+                  { label: "Message yourself", walletId: wallet.walletId },
+                ]}
+              />
+            ) : (
+              <p className="font-mono text-[12px] text-black/60">Create a wallet first (top of the page).</p>
+            )}
+          </div>
+        </Win95Panel>
 
+        <Win95Panel title="Files" className="p-2">
+          <Notice items={FILES_LIMITS} />
+          <div className="mt-2">
+            <Hint>Register your keys (1), drop a file, pick a recipient, and send. The fee is the demo&apos;s.</Hint>
+            {wallet ? (
+              <FilesPanel
+                key={wallet.walletId}
+                compact
+                baseUrl={BASE}
+                myWalletId={wallet.walletId}
+                feeMode="demo-sponsor"
+                contacts={[
+                  ...(DEMO_CONTACT ? [{ label: "The demo", address: DEMO_CONTACT }] : []),
+                  { label: "Yourself", address: wallet.walletId },
+                ]}
+              />
+            ) : (
+              <p className="font-mono text-[12px] text-black/60">Create a wallet first (top of the page).</p>
+            )}
+          </div>
+        </Win95Panel>
+
+        <QuestionsPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
       </div>
     </main>
   );

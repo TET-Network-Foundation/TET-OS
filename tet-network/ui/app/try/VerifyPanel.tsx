@@ -12,6 +12,7 @@ import Win95Panel from "../os/components/Win95Panel";
 import { bevel, cx, surface } from "../os/components/tokens";
 import { gradedVerdict } from "../lib/verify_anything.mjs";
 import { mldsa44Verify } from "../lib/pqc";
+import Notice, { Hint } from "./Notice";
 
 type Step = { n: 1 | 2 | 3; status: "ok" | "failed" | "skipped"; text: string };
 type Verdict = { level: 0 | 1 | 2 | 3; steps: Step[]; chainLabel: string };
@@ -145,11 +146,20 @@ export default function VerifyPanel(props: { baseUrl: string }) {
   }
 
   return (
-    <Win95Panel title="Verify anything" className="p-2">
-      <p className="text-[13px]">
-        Drop a file or paste text, with its <code>.sig.json</code>, and see what the signature proves. Checked in
-        this tab; nothing you add here is uploaded.
-      </p>
+    <Win95Panel title="Verify anything" className="p-2 font-mono">
+      <Notice
+        items={[
+          "A valid signature proves which key signed, not who holds it. Without a manifest or a pin, the verdict stops at step 1.",
+          "The two keys (Ed25519, ML-DSA-44) are tied to each other only by the signatures in the sidecar; the wallet-level binding is Phase 1 work (SECURITY.md).",
+          "A signature cannot prove when something was written: there is no timestamping.",
+          "\"Automated\" in a manifest is the owner's declaration, not a proof; a manifest cannot be revoked before it expires.",
+          "The chain is part of what was signed: a signature for another chain fails here unless you choose that chain.",
+          "Everything is checked in this tab; nothing you add is uploaded.",
+        ]}
+      />
+      <div className="mt-2">
+        <Hint>Add the file (or paste the text) and its .sig.json, then Verify. A manifest and a pin are optional.</Hint>
+      </div>
 
       <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <Win95Panel variant="inset" className="p-2">
@@ -230,22 +240,6 @@ export default function VerifyPanel(props: { baseUrl: string }) {
         </div>
       ) : null}
 
-      <ul className="mt-2 list-disc pl-5 text-[11px] text-black/70">
-        <li>
-          A valid signature proves which key signed, not who holds it. Without a manifest or a pin, the verdict stops
-          at step 1.
-        </li>
-        <li>
-          The two keys (Ed25519 and ML-DSA-44) are tied to each other only by the signatures in the sidecar; the
-          wallet-level binding is Phase 1 work. See SECURITY.md.
-        </li>
-        <li>A signature can&apos;t prove when something was written: there is no timestamping.</li>
-        <li>
-          A manifest&apos;s &quot;automated&quot; flag is the owner&apos;s declaration, not a proof, and a manifest
-          can&apos;t be revoked before it expires.
-        </li>
-        <li>The chain is part of what was signed. A signature made for another chain fails here unless you choose it.</li>
-      </ul>
     </Win95Panel>
   );
 }
