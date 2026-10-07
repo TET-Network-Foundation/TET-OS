@@ -8,17 +8,15 @@
  * `lib/try_questions.ts`.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PROVER_DOCS_URL, probeProver } from "../lib/board.mjs";
-import { DEFAULT_PROVER_URL } from "../lib/anon_poster.mjs";
+import { PROVER_DOCS_URL } from "../lib/board.mjs";
 import { secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { openBoard, type OpenBoard } from "../lib/try_board";
 import { answerAnonymously, answerNamed, askerInbox, readQuestions, type Question } from "../lib/try_questions";
-import { Badge, Button, INK, Input, PinnedNotice, TextArea, cx, fmtDate, fmtSeconds, fmtWhen, type Tone } from "./ui";
-import { BASE, useTryWallet } from "./wallet";
+import { Badge, Button, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, cx, fmtDate, fmtSeconds, fmtWhen, type Tone } from "./ui";
+import { BASE, PROVER_URL, useTryWallet } from "./wallet";
 
 const POLL_MS = 15_000;
-const PROVER_URL = process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROVER_URL;
 /** The demo's public questions board (deploy/demo/README.md); empty when not set. */
 const QUESTIONS_INVITE = (process.env.NEXT_PUBLIC_TET_QUESTIONS_INVITE ?? "").trim();
 
@@ -35,8 +33,8 @@ function OwnerLine(props: { q: Question }) {
   const o = props.q.owner;
   if (o.state === "verified") {
     return (
-      <p className="text-[14px] text-neutral-600">
-        <span className="font-semibold text-neutral-800">{o.agentId}</span> · owner{" "}
+      <p className="text-[14px] text-[#3d434a]">
+        <span className="font-semibold text-[#1c1f23]">{o.agentId}</span> · owner{" "}
         <span translate="no" className={cx("font-mono", INK.named)}>{o.owner.slice(0, 8)}</span> · manifest valid to {fmtDate(o.expiresAtMs)}
         {o.declaredAutomated ? " · declared automated" : ""}
       </p>
@@ -130,7 +128,7 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
         ) : null}
       </div>
       {needsJoin ? (
-        <p className="text-[14px] text-neutral-500">
+        <p className="text-[14px] text-[#5d646d]">
           {anon?.joined
             ? "Joined (public). Your answer stays here; nothing is sent until you tap Answer. Waiting longer hides you among more members."
             : "To answer anonymously, join the set first: a separate, public step that sends nothing."}
@@ -141,7 +139,7 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
         {result ? <Badge tone={result.tone}>{result.text}</Badge> : null}
       </div>
       {props.prover === "missing" ? (
-        <p className="text-[14px] text-neutral-500">
+        <p className="text-[14px] text-[#5d646d]">
           No native prover on this computer, so answers are named (the agent sees your wallet id).{" "}
           <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
             Run the prover
@@ -158,7 +156,7 @@ export default function QuestionsPanel() {
   const [invite, setInvite] = useState("");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [err, setErr] = useState("");
-  const [prover, setProver] = useState<"unknown" | "found" | "missing">("unknown");
+  const { prover } = useTryWallet();
   const [answering, setAnswering] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const mounted = useRef(true);
@@ -166,7 +164,6 @@ export default function QuestionsPanel() {
   useEffect(() => {
     mounted.current = true;
     const tick = setInterval(() => setNow(Date.now()), 30_000);
-    void probeProver({ url: PROVER_URL }).then((p) => mounted.current && setProver(p));
     if (QUESTIONS_INVITE) {
       void openBoard(BASE, QUESTIONS_INVITE)
         .then((b) => mounted.current && setBoard(b))
@@ -211,12 +208,14 @@ export default function QuestionsPanel() {
   }
 
   return (
-    <section className="space-y-3">
+    <section aria-label="Questions for humans">
+      <PanelHead title="Questions for humans" sub="agents ask · you answer" todo="Pick a question and answer it. Only the agent that asked can read your answer." />
+      <div className="max-w-[46rem] px-4 pb-6 md:px-5">
       <PinnedNotice lines={LIMITS} />
       {!board ? (
-        <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
+        <div className="space-y-2">
           {QUESTIONS_INVITE ? (
-            <p className="text-base text-neutral-600">Opening the questions board…</p>
+            <p className="text-base text-[#3d434a]">Opening the questions board…</p>
           ) : (
             <>
               <Input label="This node has no public questions board. Open one by its invite:" value={invite} onChange={setInvite} mono placeholder="…/try#board=tetboard1…" />
@@ -227,14 +226,14 @@ export default function QuestionsPanel() {
           )}
         </div>
       ) : (
-        <ol className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white" aria-live="polite">
-          {questions.length === 0 ? <li className="p-3 text-base text-neutral-500">No questions yet.</li> : null}
+        <ol aria-live="polite">
+          {questions.length === 0 ? <li className="py-3 text-base text-[#5d646d]">No questions yet.</li> : null}
           {questions.map((q, i) => (
-            <li key={q.msgId} className="p-3">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                <span className="font-mono text-[14px] font-semibold text-neutral-500">{i + 1}</span>
-                <span translate="no" className={cx("font-mono text-[14px]", INK.named)}>{q.sender.slice(0, 8)}</span>
-                <span className="text-[14px] text-neutral-400">{fmtWhen(q.sentAtMs, now)}</span>
+            <li key={q.msgId} className="border-b border-[#eceef1] py-2.5">
+              <div className={cx(MONO, "flex flex-wrap gap-x-2 text-[13px] text-[#5d646d]")}>
+                <span className="font-bold text-[#1c1f23]">{i + 1}</span>
+                <span translate="no" className={INK.named}>{q.sender.slice(0, 8)}</span>
+                <span>{fmtWhen(q.sentAtMs, now)}</span>
                 <Badge tone={q.answered ? "ok" : "pending"}>{q.answered ? "answered (says the agent)" : "open"}</Badge>
               </div>
               <OwnerLine q={q} />
@@ -251,6 +250,7 @@ export default function QuestionsPanel() {
         </ol>
       )}
       {err ? <p role="alert" className={cx("text-[15px]", INK.bad)}>{err}</p> : null}
+      </div>
     </section>
   );
 }

@@ -3,8 +3,8 @@
 /**
  * Try TET, part 3: Files on /try. One action: send a file, encrypted in this tab. Its fee goes to
  * the demo's sponsor (`settleFileFee` in "demo-sponsor" mode, never the visitor's wallet); when the
- * sponsor declines, the file is still delivered and the page says why. Messaging keys are published
- * on first use.
+ * sponsor declines, the file is still delivered and the page says why. Receiving needs messaging
+ * keys, published from one inline banner when the visitor taps it (publishing is public).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { buildFileEnvelopeV1, type FileEnvelopeV1 } from "../lib/files";
@@ -13,7 +13,7 @@ import { settleFileFee } from "../lib/files_fee";
 import { getTmailKeySession } from "../lib/tmail_session";
 import { b64ToBytes } from "../lib/encoding";
 import { getFilesFetch, getFilesInbox, getTmailKeys, normalizeWalletId64, postFilesUpload } from "../lib/tet_core_http";
-import { Badge, Button, Chips, FilePick, INK, Input, PinnedNotice, cx, fmtWhen } from "./ui";
+import { Badge, Button, Chips, FilePick, INK, Input, KeysBanner, PanelHead, PinnedNotice, cx, fmtWhen } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 
 const POLL_MS = 8_000;
@@ -30,7 +30,9 @@ const LIMITS = [
 ];
 
 export default function FilesTryPanel(props: { demoContact: string }) {
-  const { wallet, ensureWallet, ensureMessagingKeys } = useTryWallet();
+  const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
+  const [publishing, setPublishing] = useState(false);
+  const [publishErr, setPublishErr] = useState("");
   const [to, setTo] = useState("self");
   const [other, setOther] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -80,13 +82,13 @@ export default function FilesTryPanel(props: { demoContact: string }) {
 
   useEffect(() => {
     if (!wallet) return;
-    const first = setTimeout(() => void ensureMessagingKeys().then(refresh).catch(() => {}), 0);
+    const first = setTimeout(() => void checkKeys().then(refresh).catch(() => {}), 0);
     const t = setInterval(() => void refresh(), POLL_MS);
     return () => {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [wallet, ensureMessagingKeys, refresh]);
+  }, [wallet, checkKeys, refresh]);
 
   async function onSend() {
     if (!file) return;
@@ -95,12 +97,13 @@ export default function FilesTryPanel(props: { demoContact: string }) {
       if (file.size > MAX_BYTES) throw new Error("The file is larger than 5 MB.");
       setBusy("Encrypting…");
       const me = await ensureWallet();
-      await ensureMessagingKeys();
       const recipient = to === "self" ? me : to === "demo" ? props.demoContact : normalizeWalletId64(other);
       if (!recipient) throw new Error("The recipient must be a 64-character wallet id.");
       const keys = await getTmailKeys(BASE, recipient);
       if (!keys.ok) throw new Error(keys.text || `could not look up the recipient (HTTP ${keys.status})`);
-      if (!keys.registration) throw new Error("That wallet has not published messaging keys yet, so it cannot receive.");
+      if (!keys.registration) {
+        throw new Error(recipient === me ? "Publish your keys first (the banner above), then you can send files to yourself." : "That wallet has not published messaging keys yet, so it cannot receive.");
+      }
       const built = await buildFileEnvelopeV1({
         senderWalletId: me,
         receiverWalletId: recipient,
@@ -171,15 +174,32 @@ export default function FilesTryPanel(props: { demoContact: string }) {
   ];
 
   return (
-    <section className="space-y-3">
+    <section aria-label="Files">
+      <PanelHead title="Files" sub="encrypted · up to 5 MB" todo="Choose a file and who gets it, then send it." />
+      {keys !== "published" ? (
+        <KeysBanner
+          what="To receive files, publish your messaging keys."
+          busy={publishing}
+          error={publishErr}
+          onPublish={() => {
+            setPublishErr("");
+            setPublishing(true);
+            void ensureMessagingKeys()
+              .then(refresh)
+              .catch((e: unknown) => setPublishErr(e instanceof Error ? e.message : String(e)))
+              .finally(() => setPublishing(false));
+          }}
+        />
+      ) : null}
+      <div className="max-w-[46rem] space-y-3 px-4 pb-6 md:px-5">
       <PinnedNotice lines={LIMITS} />
-      <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
+      <div className="space-y-2">
         <Chips options={options} value={to} onChange={setTo} />
         {to === "other" ? <Input ariaLabel="Recipient wallet id" value={other} onChange={setOther} mono placeholder="64 hex characters, e.g. 3f9a…" /> : null}
         <FilePick
           ref={inputRef}
           onFile={setFile}
-          className="flex min-h-20 items-center justify-center rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-3 text-center text-base text-neutral-600 hover:border-neutral-500"
+          className="flex min-h-20 items-center justify-center rounded-md border border-dashed border-[#c9ced4] bg-[#fafbfc] px-3 text-center text-base text-[#3d434a] hover:border-[#8b9198]"
         >
           <span className="break-all">{file ? `${file.name} · ${KB.format(file.size / 1024)} KB` : "Choose a file (up to 5 MB)"}</span>
         </FilePick>
@@ -190,14 +210,14 @@ export default function FilesTryPanel(props: { demoContact: string }) {
       </div>
 
       <div>
-        <h2 className="mb-1 text-[15px] font-semibold text-neutral-600">Received</h2>
-        {!wallet ? <p className="text-[15px] text-neutral-500">Send something first: that makes your wallet and its inbox.</p> : null}
-        {wallet && items.length === 0 ? <p className="text-[15px] text-neutral-500">Nothing yet. Try sending yourself a file.</p> : null}
-        <ol className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white empty:hidden">
+        <h3 className="mb-1 text-[15px] font-semibold">Received</h3>
+        {!wallet ? <p className="text-[15px] text-[#5d646d]">Send something first: that makes your wallet and its inbox.</p> : null}
+        {wallet && items.length === 0 ? <p className="text-[15px] text-[#5d646d]">Nothing yet. Try sending yourself a file.</p> : null}
+        <ol className="border-t border-[#eceef1] empty:hidden">
           {items.map((it) => (
-            <li key={it.env.file_id} className="flex flex-wrap items-center gap-2 p-3">
+            <li key={it.env.file_id} className="flex flex-wrap items-center gap-2 border-b border-[#eceef1] py-2.5">
               <span className="min-w-0 flex-1 break-all text-base">{it.filename}</span>
-              <span className="text-[14px] text-neutral-500">
+              <span className="text-[14px] text-[#5d646d]">
                 {KB.format(it.env.file_size / 1024)} KB · from{" "}
                 <span translate="no" className={cx("font-mono", INK.named)}>{it.env.sender_wallet_id === wallet?.walletId ? "you" : it.env.sender_wallet_id.slice(0, 8)}</span> ·{" "}
                 {fmtWhen(it.env.created_at_ms, now)}
@@ -209,6 +229,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
             </li>
           ))}
         </ol>
+      </div>
       </div>
     </section>
   );

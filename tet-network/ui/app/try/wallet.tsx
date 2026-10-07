@@ -3,8 +3,8 @@
 /**
  * The tab's disposable wallet, shared by every panel. Made on the first action that needs it, so
  * posting, sending or answering is one tap; the page then shows a "save your words" bar. Messaging
- * keys are registered on first use for the same reason. Registering is public, which the notices
- * say. Nothing is stored: forget the tab and the wallet is gone unless the words were saved.
+ * keys are published only from the explicit banner in Mail and Files: publishing is public, so the
+ * visitor chooses it. Nothing is stored: forget the tab and the wallet is gone unless the words were saved.
  *
  * Joining the anonymity set is its own step, never folded into a post: a join is public, and a post
  * sent automatically the moment the join takes effect would point straight back at it. So `joinAnon`
@@ -17,6 +17,10 @@ import { getTmailKeySession } from "../lib/tmail_session";
 import { buildTmailKeyRegistrationV1 } from "../lib/tmail_keys";
 import { getTmailKeys, putTmailKeys } from "../lib/tet_core_http";
 import { anonMembership, registerForAnon } from "../lib/try_board";
+import { probeProver } from "../lib/board.mjs";
+import { DEFAULT_PROVER_URL } from "../lib/anon_poster.mjs";
+
+export const PROVER_URL = process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROVER_URL;
 
 export const BASE = "/tet-node-api";
 
@@ -36,6 +40,11 @@ type Ctx = {
   ensureWallet: () => Promise<string>;
   /** Publish this wallet's messaging keys once (needed to receive Tmail and files). */
   ensureMessagingKeys: () => Promise<void>;
+  /** Whether this wallet's messaging keys are published ("unknown" until checked or with no wallet). */
+  keys: "unknown" | "none" | "published";
+  checkKeys: () => Promise<void>;
+  /** Whether the native prover answers on this computer (checked once per tab). */
+  prover: "unknown" | "found" | "missing";
   forget: () => void;
 };
 
@@ -43,6 +52,7 @@ const WalletCtx = createContext<Ctx | null>(null);
 
 export function WalletProvider(props: { children: ReactNode }) {
   const [wallet, setWallet] = useState<Wallet | null>(null);
+  const [keys, setKeys] = useState<"unknown" | "none" | "published">("unknown");
   // The one wallet of this tab. Kept in a ref so a callback from an earlier render never makes a
   // second one: every caller awaits the same promise until `forget`.
   const current = useRef<Promise<Wallet> | null>(null);
@@ -73,9 +83,26 @@ export function WalletProvider(props: { children: ReactNode }) {
       if (!r.ok) throw new Error(r.text || `could not publish your messaging keys (HTTP ${r.status})`);
     }
     keysFor.current = id;
+    setKeys("published");
   }, [ensureWallet]);
 
   const [anon, setAnon] = useState<AnonState>(null);
+  const [prover, setProver] = useState<"unknown" | "found" | "missing">("unknown");
+
+  useEffect(() => {
+    let live = true;
+    void probeProver({ url: PROVER_URL }).then((p: "found" | "missing") => live && setProver(p));
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const checkKeys = useCallback(async () => {
+    if (!current.current) return;
+    const id = (await current.current).walletId;
+    const r = await getTmailKeys(BASE, id);
+    if (r.ok) setKeys(r.registration ? "published" : "none");
+  }, []);
   const joined = useRef(false);
 
   const refreshAnon = useCallback(async () => {
@@ -103,6 +130,7 @@ export function WalletProvider(props: { children: ReactNode }) {
   const forget = useCallback(() => {
     joined.current = false;
     setAnon(null);
+    setKeys("unknown");
     forgetTryWallet();
     current.current = null;
     keysFor.current = null;
@@ -110,8 +138,8 @@ export function WalletProvider(props: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, forget }),
-    [wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, forget],
+    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, keys, checkKeys, prover, forget }),
+    [wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, keys, checkKeys, prover, forget],
   );
   return <WalletCtx.Provider value={value}>{props.children}</WalletCtx.Provider>;
 }

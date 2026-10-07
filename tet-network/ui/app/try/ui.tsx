@@ -1,41 +1,33 @@
 "use client";
 
 /**
- * The /try look: a modern, mobile-first entrance (the desktop at /os keeps Win95). Text first,
- * readable type (16 px and up), one obvious action per panel, and TET's verdict colours for badges.
- * No marketing copy.
+ * The /try look ("Ledger", design pass 2): a light three-column shell, text first. Posts are
+ * hairline-separated rows with a dense monospace meta line; badges are plain text in TET's verdict
+ * colours; no cards, gradients, avatars or emoji. The desktop at /os keeps Win95.
  */
-import type { ReactNode, Ref } from "react";
+import { useState, type ReactNode, type Ref } from "react";
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(" ");
 
-/** The TET verdict colours. A badge reads on its own: no legend needed. */
-export const TONE = {
-  ok: "bg-[#e7f5ea] text-[#1f5132] border-[#b9dfc2]",
-  pending: "bg-[#fff6dc] text-[#6b4e00] border-[#ecd79a]",
-  bad: "bg-[#fdecec] text-[#8a1f1f] border-[#efbcbc]",
-  named: "bg-[#eceefb] text-[#1a237e] border-[#c5cbef]",
-  neutral: "bg-neutral-100 text-neutral-700 border-neutral-200",
-} as const;
-export type Tone = keyof typeof TONE;
-
-/** Text in the verdict colours (wallet ids, errors, confirmations). */
+/** Text in the verdict colours (wallet ids, badges, errors, confirmations). */
 export const INK = {
   ok: "text-[#1f5132]",
   bad: "text-[#8a1f1f]",
   named: "text-[#1a237e]",
   pending: "text-[#6b4e00]",
+  neutral: "text-[#5d646d]",
 } as const;
+export type Tone = keyof typeof INK;
 
 /** Visible keyboard focus, shared by every control on /try. */
 export const FOCUS = "outline-none focus-visible:ring-2 focus-visible:ring-[#1a237e] focus-visible:ring-offset-2";
 
+export const MONO = "font-mono [font-family:ui-monospace,'SF_Mono',Menlo,Consolas,monospace]";
+
+/** A badge is plain text in a verdict colour. It reads on its own: no legend, no pill. */
 export function Badge(props: { tone: Tone; children: ReactNode; title?: string }) {
   return (
-    <span
-      title={props.title}
-      className={cx("inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[13px] font-medium", TONE[props.tone])}
-    >
+    <span title={props.title} className={cx(MONO, "text-[13px]", INK[props.tone])}>
       {props.children}
     </span>
   );
@@ -58,10 +50,10 @@ export function Button(props: {
       className={cx(
         FOCUS,
         "transition-[background-color,transform] motion-safe:active:scale-[0.98] disabled:opacity-40",
-        kind !== "quiet" && "min-h-11 rounded-xl px-4 text-base font-semibold",
-        kind === "primary" && "bg-neutral-900 text-white hover:bg-neutral-800",
-        kind === "secondary" && "border border-neutral-300 bg-white text-neutral-900 hover:bg-neutral-50",
-        kind === "quiet" && "rounded py-1 text-[15px] font-medium text-neutral-600 underline underline-offset-2 hover:text-neutral-900",
+        kind !== "quiet" && "min-h-11 rounded-md px-4 text-[15px] font-semibold",
+        kind === "primary" && "bg-[#1c1f23] text-white hover:bg-[#33383e]",
+        kind === "secondary" && "border border-[#c9ced4] bg-white text-[#1c1f23] hover:border-[#8b9198]",
+        kind === "quiet" && "rounded py-1 text-[14px] text-[#3d434a] underline underline-offset-2 hover:text-[#1c1f23]",
         props.className,
       )}
     >
@@ -79,6 +71,7 @@ export function TextArea(props: {
   maxLength?: number;
   /** Read by screen readers; the placeholder is not a label. */
   label: string;
+  className?: string;
 }) {
   return (
     <textarea
@@ -90,7 +83,7 @@ export function TextArea(props: {
       rows={props.rows ?? 3}
       disabled={props.disabled}
       maxLength={props.maxLength}
-      className={cx(FOCUS, "w-full resize-y rounded-xl border border-neutral-300 bg-white px-3 py-2 text-base leading-relaxed disabled:bg-neutral-50")}
+      className={cx(FOCUS, "w-full resize-y rounded-md border border-[#c9ced4] bg-white px-3 py-2 text-base leading-relaxed disabled:bg-[#f6f7f8]", props.className)}
     />
   );
 }
@@ -103,11 +96,13 @@ export function Input(props: {
   /** Shown above the field; without it, `ariaLabel` names the field. */
   label?: string;
   ariaLabel?: string;
+  type?: string;
 }) {
   return (
     <label className="block">
-      {props.label ? <span className="mb-1 block text-[15px] text-neutral-600">{props.label}</span> : null}
+      {props.label ? <span className="mb-1 block text-[14px] text-[#3d434a]">{props.label}</span> : null}
       <input
+        type={props.type ?? "text"}
         aria-label={props.label ? undefined : props.ariaLabel}
         autoComplete="off"
         spellCheck={props.mono ? false : undefined}
@@ -115,17 +110,13 @@ export function Input(props: {
         value={props.value}
         onChange={(e) => props.onChange(e.target.value)}
         placeholder={props.placeholder}
-        className={cx(
-          FOCUS,
-          "min-h-11 w-full rounded-xl border border-neutral-300 bg-white px-3 text-base",
-          props.mono && "font-mono text-[15px]",
-        )}
+        className={cx(FOCUS, "min-h-11 w-full rounded-md border border-[#c9ced4] bg-white px-3 text-base", props.mono && cx(MONO, "text-[14px]"))}
       />
     </label>
   );
 }
 
-/** Pick-one chips (recipients, modes). */
+/** Pick-one options (recipients, modes), as small outlined toggles. */
 export function Chips(props: { options: { label: string; value: string }[]; value: string; onChange: (v: string) => void }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -137,8 +128,8 @@ export function Chips(props: { options: { label: string; value: string }[]; valu
           aria-pressed={props.value === o.value}
           className={cx(
             FOCUS,
-            "min-h-9 rounded-full border px-3 text-[15px]",
-            props.value === o.value ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 bg-white text-neutral-800 hover:border-neutral-500",
+            "min-h-9 rounded-md border px-3 text-[14px]",
+            props.value === o.value ? "border-[#1c1f23] bg-[#1c1f23] text-white" : "border-[#c9ced4] bg-white text-[#1c1f23] hover:border-[#8b9198]",
           )}
         >
           {o.label}
@@ -148,28 +139,82 @@ export function Chips(props: { options: { label: string; value: string }[]; valu
   );
 }
 
+/** A small on/off toggle for the composer ("burn after read", "schedule"). */
+export function Toggle(props: { on: boolean; onChange: (on: boolean) => void; children: ReactNode }) {
+  return (
+    <button
+      type="button"
+      aria-pressed={props.on}
+      onClick={() => props.onChange(!props.on)}
+      className={cx(
+        FOCUS,
+        "inline-flex min-h-8 items-center gap-1.5 rounded-full border px-3 text-[13.5px]",
+        props.on ? "border-[#1a237e] bg-[#f3f4fd] text-[#1a237e]" : "border-[#c9ced4] text-[#3d434a] hover:border-[#8b9198]",
+      )}
+    >
+      <span aria-hidden="true" className={MONO}>
+        {props.on ? "✓" : "○"}
+      </span>
+      {props.children}
+    </button>
+  );
+}
+
 /**
- * The honest limits, as the pinned first post (`0`). Always there; the first line shows, the rest
- * opens with one tap so a phone screen is not all notice.
+ * The honest limits, as the pinned rules post `0 · notice`. The first rule always shows; the rest
+ * open with one tap, so a phone screen is not all notice.
  */
-export function PinnedNotice(props: { lines: ReactNode[]; title?: string }) {
+export function PinnedNotice(props: { lines: ReactNode[] }) {
+  const [open, setOpen] = useState(false);
   const [first, ...rest] = props.lines;
   return (
-    <details className="group rounded-xl border border-[#ecd79a] bg-[#fffbeb] px-3 py-2 text-[15px] leading-relaxed text-neutral-800">
-      <summary className={cx(FOCUS, "cursor-pointer list-none rounded")}>
-        <span className="flex items-baseline gap-2">
-          <span className="font-mono text-[13px] font-semibold text-[#6b4e00]">0</span>
-          <span className="text-[14px] font-semibold text-[#6b4e00]">{props.title ?? "Limits"}</span>
-          <span className="ml-auto text-[13px] text-[#6b4e00] underline group-open:hidden">{rest.length} more</span>
+    <div className="my-3 border-l-[3px] border-[#c9a227] bg-[#fffbea] px-3 py-2 text-[14.5px] leading-relaxed text-[#1c1f23]">
+      <div className={cx(MONO, "text-[13px] font-semibold text-[#6b4e00]")}>0 · notice</div>
+      <p className="mt-0.5">{first}</p>
+      {open
+        ? rest.map((l, i) => (
+            <p key={i} className="mt-1">
+              {l}
+            </p>
+          ))
+        : null}
+      {rest.length ? (
+        <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={cx(FOCUS, "mt-1 rounded text-[13px] text-[#6b4e00] underline")}>
+          {open ? "fewer rules" : `${rest.length} more rules`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/** The top of every panel: its name, a mono sub-line, an optional action, and what to do first. */
+export function PanelHead(props: { title: ReactNode; sub?: ReactNode; action?: ReactNode; todo: ReactNode }) {
+  return (
+    <>
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-[#e3e5e8] px-4 py-3 md:px-5">
+        <h2 className="text-[17px] font-bold">{props.title}</h2>
+        {props.sub ? <span className={cx(MONO, "text-[13px] text-[#5d646d]")}>{props.sub}</span> : null}
+        {props.action ? <span className="ml-auto">{props.action}</span> : null}
+      </div>
+      <p className="border-b border-[#e3e5e8] bg-[#fafbfc] px-4 py-2 text-[15px] md:px-5">{props.todo}</p>
+    </>
+  );
+}
+
+/** One inline line asking to publish messaging keys (public), instead of a whole panel. */
+export function KeysBanner(props: { what: string; onPublish: () => void; busy: boolean; error?: string }) {
+  return (
+    <div className="mx-4 my-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-[#c5cbef] bg-[#f3f4fd] px-3 py-2 text-[14.5px] md:mx-5">
+      <span>{props.what} Publishing them is public: it shows this wallet can receive.</span>
+      <Button className="min-h-9 px-3 text-[14px]" disabled={props.busy} onClick={props.onPublish}>
+        {props.busy ? "Publishing…" : "Publish keys"}
+      </Button>
+      {props.error ? (
+        <span role="alert" className={INK.bad}>
+          {props.error}
         </span>
-        <span className="mt-1 block">{first}</span>
-      </summary>
-      {rest.map((l, i) => (
-        <p key={i} className="mt-1">
-          {l}
-        </p>
-      ))}
-    </details>
+      ) : null}
+    </div>
   );
 }
 

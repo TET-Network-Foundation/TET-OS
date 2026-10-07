@@ -9,7 +9,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { gradedVerdict } from "../lib/verify_anything.mjs";
 import { mldsa44Verify } from "../lib/pqc";
-import { Badge, Button, FOCUS, FilePick, INK, Input, PinnedNotice, TextArea, cx } from "./ui";
+import { Badge, Button, FOCUS, FilePick, INK, Input, PanelHead, PinnedNotice, TextArea, cx } from "./ui";
 
 type Step = { n: 1 | 2 | 3; status: "ok" | "failed" | "skipped"; text: string };
 type Verdict = { level: 0 | 1 | 2 | 3; steps: Step[]; chainLabel: string };
@@ -22,8 +22,8 @@ const STEP_TITLE = {
 } as const;
 
 const STATUS = {
-  ok: { tone: "ok", text: "✓ proven" },
-  failed: { tone: "bad", text: "✗ failed" },
+  ok: { tone: "ok", text: "proven" },
+  failed: { tone: "bad", text: "failed" },
   skipped: { tone: "neutral", text: "not checked" },
 } as const;
 
@@ -52,20 +52,20 @@ function FileOrPaste(props: {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[15px] font-semibold text-neutral-700">{props.label}</span>
+        <span className="text-[15px] font-semibold text-[#3d434a]">{props.label}</span>
         {props.file ? (
-          <button type="button" className={cx(FOCUS, "rounded text-[14px] text-neutral-500 underline hover:text-neutral-900")} onClick={() => props.onFile(null)}>
+          <button type="button" className={cx(FOCUS, "rounded text-[14px] text-[#5d646d] underline hover:text-[#1c1f23]")} onClick={() => props.onFile(null)}>
             paste instead
           </button>
         ) : null}
       </div>
       {props.file ? (
-        <div className="break-all rounded-xl border border-neutral-300 bg-neutral-50 px-3 py-2 text-base">{props.file.name}</div>
+        <div className="break-all rounded-md border border-[#c9ced4] bg-[#fafbfc] px-3 py-2 text-base">{props.file.name}</div>
       ) : (
         <>
           <FilePick
             onFile={props.onFile}
-            className="block rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-center text-[15px] text-neutral-600 hover:border-neutral-500"
+            className="block rounded-md border border-dashed border-[#c9ced4] bg-[#fafbfc] px-3 py-2 text-center text-[15px] text-[#3d434a] hover:border-[#8b9198]"
           >
             Choose a file
           </FilePick>
@@ -155,22 +155,24 @@ export default function VerifyPanel(props: { baseUrl: string }) {
 
   const slot = (label: ReactNode, node: ReactNode) => (
     <div className="space-y-1">
-      <span className="text-[15px] font-semibold text-neutral-700">{label}</span>
+      <span className="text-[15px] font-semibold text-[#3d434a]">{label}</span>
       {node}
     </div>
   );
 
   return (
-    <section className="space-y-3">
+    <section aria-label="Verify">
+      <PanelHead title="Verify" sub="checked in this tab" todo="Add a file (or text) and its .sig.json, then press Verify." />
+      <div className="max-w-[46rem] space-y-3 px-4 pb-6 md:px-5">
       <PinnedNotice lines={LIMITS} />
-      <div className="space-y-3 rounded-xl border border-neutral-200 bg-white p-3">
+      <div className="space-y-3">
         <FileOrPaste label="1. The file or text" text={contentText} onText={setContentText} file={contentFile} onFile={setContentFile} placeholder="…or paste the exact text that was signed" />
         <FileOrPaste label="2. Its .sig.json" text={sigText} onText={setSigText} file={sigFile} onFile={setSigFile} placeholder='…or paste {"payloadType": …, "signatures": […], "tet": {…}}' />
-        <button type="button" aria-expanded={showMore} className={cx(FOCUS, "rounded text-[15px] text-neutral-600 underline hover:text-neutral-900")} onClick={() => setShowMore(!showMore)}>
+        <button type="button" aria-expanded={showMore} className={cx(FOCUS, "rounded text-[15px] text-[#3d434a] underline hover:text-[#1c1f23]")} onClick={() => setShowMore(!showMore)}>
           {showMore ? "Hide the optional checks" : "Add an owner's manifest, a pinned key, or another chain (optional)"}
         </button>
         {showMore ? (
-          <div className="space-y-3 rounded-xl bg-neutral-50 p-3">
+          <div className="space-y-3 rounded-md bg-[#fafbfc] p-3">
             <FileOrPaste label="Owner's manifest" text={manText} onText={setManText} file={manFile} onFile={setManFile} placeholder='…or paste {"kind": "tet_agent_manifest_v1", …}' />
             {slot("Pinned key", <Input ariaLabel="Pinned key" value={pin} onChange={setPin} mono placeholder="ed25519 hex, tet-mldsa44 key id, or pin.json…" />)}
             {slot(
@@ -201,20 +203,21 @@ export default function VerifyPanel(props: { baseUrl: string }) {
       </div>
 
       {verdict ? (
-        <ol className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white" aria-live="polite">
+        <ol className="border-t border-[#eceef1]" aria-live="polite">
           {verdict.steps.map((st) => (
-            <li key={st.n} className="p-3">
+            <li key={st.n} className="border-b border-[#eceef1] py-2.5">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-[14px] font-semibold text-neutral-500">{st.n}</span>
+                <span className="font-mono text-[14px] font-semibold text-[#5d646d]">{st.n}</span>
                 <span className="text-base font-semibold">{STEP_TITLE[st.n]}</span>
                 <Badge tone={STATUS[st.status].tone}>{STATUS[st.status].text}</Badge>
               </div>
-              <p className={cx("mt-1 break-words text-[15px] leading-relaxed", st.status === "skipped" ? "text-neutral-500" : "text-neutral-800")}>{st.text}</p>
+              <p className={cx("mt-1 break-words text-[15px] leading-relaxed", st.status === "skipped" ? "text-[#5d646d]" : "text-[#1c1f23]")}>{st.text}</p>
             </li>
           ))}
-          <li className="p-3 text-[14px] text-neutral-500">Checked against chain {verdict.chainLabel}.</li>
+          <li className="py-2.5 text-[14px] text-[#5d646d]">Checked against chain {verdict.chainLabel}.</li>
         </ol>
       ) : null}
+      </div>
     </section>
   );
 }
