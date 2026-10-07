@@ -366,4 +366,13 @@ export const ZH_HK: Record<string, string> = {
   "Release signing: check that a download is, byte for byte, the build its maintainer's key signed.": "發佈簽署：確認你下載的檔案與維護者鑰匙所簽署的建置版本逐位元組相同。",
   "Bot output: check that a message or report came from a particular agent's key and, with its manifest, which owner vouched for that agent.": "機械人輸出：確認某訊息或報告來自某個代理人的鑰匙；配合清單，亦可知道哪位擁有者為該代理人作保。",
   "Lab result: check that a result file is the one the lab's key signed, unchanged.": "化驗結果：確認結果檔案就是化驗所鑰匙所簽署的那一個，未經改動。",
+  "Photos, PDFs and short videos, up to 100 MB each, kept 7 days. Encrypted in this tab before upload.": "相片、PDF 及短片，每個最多 100 MB，保留 7 日。上載前會在此分頁加密。",
+  "Why not more: the demo node stores every file itself, on its own disk, for everyone. There is no storage market yet that pays nodes to keep files, so this one keeps the limits small.": "為何不能更多：示範節點把所有人的檔案都存放在自己的硬碟上。目前還沒有付錢給節點保存檔案的儲存市場，所以這裡把上限設得較小。",
+  "Files over 5 MB stay on the demo node only: other nodes accept up to 5 MB, so they neither relay nor keep a copy.": "超過 5 MB 的檔案只會留在示範節點：其他節點只接受最多 5 MB，所以不會轉發亦不會保留副本。",
+  "Each connection can upload up to 200 MB a day, and the demo keeps up to 10 GB in all; when it is full, uploads wait for older files to expire.": "每個連線每日最多上載 200 MB，示範節點合共最多保存 10 GB；滿了之後，要等較舊的檔案過期才能再上載。",
+  "The node sees sender, recipient, size and time; not the contents or the file name. The page offers photos, PDFs and videos, but the node can't check what a file is.": "節點看得到寄件人、收件人、大小及時間；看不到內容或檔案名稱。此頁只讓你選相片、PDF 及影片，但節點無法核實檔案是甚麼。",
+  "The file is larger than 100 MB.": "檔案大於 100 MB。",
+  "encrypted · up to 100 MB · 7 days": "已加密 · 最大 100 MB · 7 日",
+  "Choose a photo, PDF or short video (up to 100 MB)": "選擇相片、PDF 或短片（最大 100 MB）",
+  "Daily upload limit for this connection: {left} MB left today.": "已達此連線的每日上載上限：今日尚餘 {left} MB。",
 };

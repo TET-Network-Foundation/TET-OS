@@ -112,6 +112,13 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
 
     match state.files.store_with_blob(&env, &body) {
         Ok(_) => {}
+        Err(crate::files::storage::FileStoreError::StorageFull { .. }) => {
+            return (
+                StatusCode::INSUFFICIENT_STORAGE,
+                "this node's file storage is full; try again after older files expire",
+            )
+                .into_response();
+        }
         Err(e) => {
             return (StatusCode::BAD_REQUEST, format!("{e}")).into_response();
         }
@@ -121,7 +128,10 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
         sponsor.record_upload(&env.file_id.to_string(), &env.sender_wallet_id);
     }
 
-    state.broadcast_file_announce(&env).await;
+    // Larger than the network-wide cap: kept here only (peers at the default would reject it).
+    if crate::files::announces_over_network(&env) {
+        state.broadcast_file_announce(&env).await;
+    }
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
@@ -468,3 +478,10 @@ pub async fn delete_files(
     )
         .into_response()
 }
+
+/// `GET /files/upload-budget` — off public mode there is no per-address budget (in public mode the
+/// gate answers this itself, for the caller's address: `public_api::public_api_gate`).
+pub async fn get_files_upload_budget() -> Response {
+    Json(serde_json::json!({ "per_day_bytes": null, "remaining_bytes": null })).into_response()
+}
+

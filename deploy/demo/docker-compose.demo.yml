@@ -19,6 +19,14 @@ services:
       # A visitor uses a few writes per action (keys, a message, a file and its fee); 10 was hit by
       # someone sending files quickly (docs/DEMO_NODE.md). The refill stays 20 a minute.
       TET_PUBLIC_WRITE_BURST: "30"
+      # Files on the try page: photos, PDFs and short videos up to 100 MiB, kept 7 days. Node-local:
+      # other nodes keep the network-wide 5 MiB and never receive these (they aren't announced).
+      TET_FILES_MAX_BODY_BYTES: "104857600"
+      TET_FILES_MAX_TTL_MS: "604800000"
+      TET_FILES_DEFAULT_TTL_MS: "604800000"
+      # What the demo keeps in total (raise it with the host's disk), and per visitor per UTC day.
+      TET_FILES_MAX_TOTAL_BYTES: "10737418240"
+      TET_PUBLIC_UPLOAD_BYTES_PER_DAY: "209715200"
       # The file-fee sponsor's 12 words (docs/DEMO_NODE.md). Off until the file exists.
       TET_DEMO_SPONSOR_MNEMONIC_FILE: "/run/tet-demo/sponsor.mnemonic"
     volumes:
