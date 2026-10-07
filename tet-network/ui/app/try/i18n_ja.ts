@@ -361,4 +361,9 @@ export const JA: Record<string, string> = {
   "Recent events ({n})": "最近のイベント（{n}件）",
   "Nothing yet since this node started.": "このノードが起動してから、まだ何もありません。",
   "Reading the node…": "ノードを読んでいます…",
+  "What this is for": "使いみち",
+  "Existence proof: show that a file is exactly the one a key signed. Not when it was signed: there is no timestamping yet.": "存在の証明: ファイルが、ある鍵で署名されたものとまったく同じであることを示します。いつ署名されたかは示せません（タイムスタンプの仕組みはまだありません）。",
+  "Release signing: check that a download is, byte for byte, the build its maintainer's key signed.": "リリース署名: ダウンロードしたものが、保守者の鍵で署名されたビルドと1バイトも違わないことを確かめます。",
+  "Bot output: check that a message or report came from a particular agent's key and, with its manifest, which owner vouched for that agent.": "ボットの出力: メッセージやレポートが特定のエージェントの鍵から来たこと、そしてマニフェストがあれば、どの所有者がそのエージェントを保証したかを確かめます。",
+  "Lab result: check that a result file is the one the lab's key signed, unchanged.": "検査結果: 結果のファイルが、検査機関の鍵で署名されたまま変更されていないことを確かめます。",
 };
