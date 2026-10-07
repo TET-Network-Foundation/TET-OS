@@ -22,8 +22,27 @@ pub const FILE_E2EE_SCHEME: &str = "tet-file-hybrid-v1";
 /// HKDF `info` used when deriving the per-file symmetric key (spec §3 / §9).
 pub const FILE_HKDF_INFO: &[u8] = b"tet-file-v1";
 
-/// Phase 0 hard cap on the encrypted body size (5 MiB).
+/// The network-wide cap on an encrypted body (5 MiB): what every node accepts by default, and the
+/// largest file a node announces over gossip (`announces_over_network`).
 pub const MAX_FILE_BODY_BYTES: u64 = 5 * 1024 * 1024;
+
+/// This node's cap on an encrypted body: `TET_FILES_MAX_BODY_BYTES`, or [`MAX_FILE_BODY_BYTES`].
+/// Node-local policy (files are off-chain): a node may keep larger files for its own users, and
+/// keeps them to itself — see [`announces_over_network`].
+pub fn max_file_body_bytes() -> u64 {
+    std::env::var("TET_FILES_MAX_BODY_BYTES")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(MAX_FILE_BODY_BYTES)
+}
+
+/// Whether this file is announced over gossip. Only files within the network-wide cap: a peer at the
+/// default would reject a larger announce, and gossipsub penalises the node that relayed a rejected
+/// message. A larger file stays on the node that took it.
+pub fn announces_over_network(env: &FileEnvelopeV1) -> bool {
+    env.file_size <= MAX_FILE_BODY_BYTES
+}
 
 /// libp2p gossip topic carrying the announce envelope (envelope only, no body).
 pub const FILES_ANNOUNCE_TOPIC: &str = "/tet/v1/files/announce";
@@ -160,11 +179,9 @@ pub fn verify_file_envelope_v1(env: &FileEnvelopeV1) -> Result<(), FileEnvelopeE
     if env.kind != FILE_ENVELOPE_KIND {
         return Err(FileEnvelopeError::Kind(env.kind.clone()));
     }
-    if env.file_size == 0 || env.file_size > MAX_FILE_BODY_BYTES {
-        return Err(FileEnvelopeError::SizeOutOfRange {
-            got: env.file_size,
-            max: MAX_FILE_BODY_BYTES,
-        });
+    let max = max_file_body_bytes();
+    if env.file_size == 0 || env.file_size > max {
+        return Err(FileEnvelopeError::SizeOutOfRange { got: env.file_size, max });
     }
     if !is_sha256_64hex(&env.file_sha256) {
         return Err(FileEnvelopeError::InvalidSha256);

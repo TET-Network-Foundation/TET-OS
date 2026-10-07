@@ -246,16 +246,19 @@ export function FilePick({
   onFile,
   className,
   ref,
+  accept,
 }: {
   children: ReactNode;
   onFile: (f: File | null) => void;
   className?: string;
   ref?: Ref<HTMLInputElement>;
+  /** File types the picker offers (a hint to the picker, not a check). */
+  accept?: string;
 }) {
   return (
     <label className={cx("cursor-pointer focus-within:ring-2 focus-within:ring-[#1a237e] focus-within:ring-offset-2", className)}>
       {children}
-      <input ref={ref} type="file" className="sr-only" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
+      <input ref={ref} type="file" accept={accept} className="sr-only" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
     </label>
   );
 }

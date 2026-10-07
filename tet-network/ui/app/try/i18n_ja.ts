@@ -366,4 +366,12 @@ export const JA: Record<string, string> = {
   "Release signing: check that a download is, byte for byte, the build its maintainer's key signed.": "リリース署名: ダウンロードしたものが、保守者の鍵で署名されたビルドと1バイトも違わないことを確かめます。",
   "Bot output: check that a message or report came from a particular agent's key and, with its manifest, which owner vouched for that agent.": "ボットの出力: メッセージやレポートが特定のエージェントの鍵から来たこと、そしてマニフェストがあれば、どの所有者がそのエージェントを保証したかを確かめます。",
   "Lab result: check that a result file is the one the lab's key signed, unchanged.": "検査結果: 結果のファイルが、検査機関の鍵で署名されたまま変更されていないことを確かめます。",
+  "Photos, PDFs and short videos, up to 100 MB each, kept 7 days. Encrypted in this tab before upload.": "写真・PDF・短い動画を、1つ100 MBまで、7日間保管します。アップロード前にこのタブで暗号化されます。",
+  "Why not more: the demo node stores every file itself, on its own disk, for everyone. There is no storage market yet that pays nodes to keep files, so this one keeps the limits small.": "これ以上にしない理由: デモノードは全員のファイルを自分のディスクに自分で保存しています。ファイルを保管するノードに報酬を払うストレージ市場はまだないので、上限を小さくしています。",
+  "Files over 5 MB stay on the demo node only: other nodes accept up to 5 MB, so they neither relay nor keep a copy.": "5 MBを超えるファイルはデモノードにだけ置かれます。他のノードは5 MBまでしか受け付けないので、中継もコピーの保管もしません。",
+  "Each connection can upload up to 200 MB a day, and the demo keeps up to 10 GB in all; when it is full, uploads wait for older files to expire.": "アップロードは接続ごとに1日200 MBまで、デモ全体の保管は合計10 GBまでです。いっぱいのときは、古いファイルの期限切れを待ってからになります。",
+  "The node sees sender, recipient, size and time; not the contents or the file name. The page offers photos, PDFs and videos, but the node can't check what a file is.": "ノードに見えるのは送信者・受信者・サイズ・時刻で、中身やファイル名は見えません。このページで選べるのは写真・PDF・動画ですが、ファイルの種類をノードが確かめることはできません。",
+  "The file is larger than 100 MB.": "ファイルが100 MBを超えています。",
+  "encrypted · up to 100 MB · 7 days": "暗号化 · 最大100 MB · 7日間",
+  "Choose a photo, PDF or short video (up to 100 MB)": "写真・PDF・短い動画を選ぶ（最大100 MB）",
 };

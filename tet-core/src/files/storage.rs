@@ -106,6 +106,25 @@ impl FileStore {
         env_u64("TET_FILES_MAX_BODY_BYTES", MAX_FILE_BODY_BYTES)
     }
 
+    /// The most bytes of file bodies this node keeps in total (`TET_FILES_MAX_TOTAL_BYTES`); `None`
+    /// (the default) means no cap beyond the entry count. A node taking large files sets it.
+    pub fn max_total_bytes() -> Option<u64> {
+        std::env::var("TET_FILES_MAX_TOTAL_BYTES").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|v| *v > 0)
+    }
+
+    /// The bytes of file bodies stored now.
+    pub fn total_blob_bytes(&self) -> u64 {
+        self.blob.iter().values().filter_map(|v| v.ok()).map(|v| v.len() as u64).sum()
+    }
+
+    /// Whether `incoming` more bytes fit under [`Self::max_total_bytes`].
+    pub fn has_room_for(&self, incoming: u64) -> bool {
+        match Self::max_total_bytes() {
+            None => true,
+            Some(cap) => self.total_blob_bytes().saturating_add(incoming) <= cap,
+        }
+    }
+
     fn max_entries() -> usize {
         env_usize("TET_FILES_MAX_ENTRIES", DEFAULT_MAX_ENTRIES)
     }

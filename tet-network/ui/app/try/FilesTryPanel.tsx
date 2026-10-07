@@ -18,16 +18,23 @@ import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 
 const POLL_MS = 8_000;
-const MAX_BYTES = 5 * 1024 * 1024;
+/** The demo node's cap (deploy/demo: TET_FILES_MAX_BODY_BYTES). */
+const MAX_BYTES = 100 * 1024 * 1024;
+/** Kept 7 days (the demo node also caps it there). */
+const TTL_MS = 7 * 24 * 60 * 60 * 1000;
+/** What the picker offers: photos, PDFs and short videos. The node can't see what a file is. */
+const ACCEPT = "image/*,application/pdf,video/*";
 const KB = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
 type Item = { env: FileEnvelopeV1; filename: string; mimeType: string };
 
 const LIMITS = (t: (en: string) => string) => [
-  t("Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days."),
+  t("Photos, PDFs and short videos, up to 100 MB each, kept 7 days. Encrypted in this tab before upload."),
+  t("Why not more: the demo node stores every file itself, on its own disk, for everyone. There is no storage market yet that pays nodes to keep files, so this one keeps the limits small."),
+  t("Files over 5 MB stay on the demo node only: other nodes accept up to 5 MB, so they neither relay nor keep a copy."),
+  t("Each connection can upload up to 200 MB a day, and the demo keeps up to 10 GB in all; when it is full, uploads wait for older files to expire."),
   t("The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid."),
-  t("The node sees sender, recipient, size and time; not the contents or the file name."),
-  t("The storage node is only a hint: fetching asks this node's peers."),
+  t("The node sees sender, recipient, size and time; not the contents or the file name. The page offers photos, PDFs and videos, but the node can't check what a file is."),
 ];
 
 export default function FilesTryPanel(props: { demoContact: string }) {
@@ -96,7 +103,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
     if (!file) return;
     setNote(null);
     try {
-      if (file.size > MAX_BYTES) throw new Error(t("The file is larger than 5 MB."));
+      if (file.size > MAX_BYTES) throw new Error(t("The file is larger than 100 MB."));
       setBusy(t("Encrypting…"));
       const me = await ensureWallet();
       const recipient = to === "self" ? me : to === "demo" ? props.demoContact : normalizeWalletId64(other);
@@ -112,6 +119,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
         fileBytes: new Uint8Array(await file.arrayBuffer()),
         filename: file.name,
         mimeType: file.type || "application/octet-stream",
+        ttlMs: TTL_MS,
         receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
         receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
         baseUrl: BASE,
@@ -177,7 +185,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
 
   return (
     <section aria-label={t("Files")}>
-      <PanelHead title={t("Files")} sub={t("encrypted · up to 5 MB")} todo={t("Choose a file and who gets it, then send it.")} />
+      <PanelHead title={t("Files")} sub={t("encrypted · up to 100 MB · 7 days")} todo={t("Choose a file and who gets it, then send it.")} />
       {keys !== "published" ? (
         <KeysBanner
           what={t("To receive files, publish your messaging keys.")}
@@ -201,9 +209,10 @@ export default function FilesTryPanel(props: { demoContact: string }) {
         <FilePick
           ref={inputRef}
           onFile={setFile}
+          accept={ACCEPT}
           className="flex min-h-20 items-center justify-center rounded-md border border-dashed border-[#c9ced4] bg-[#fafbfc] px-3 text-center text-base text-[#3d434a] hover:border-[#8b9198]"
         >
-          <span className="break-all">{file ? `${file.name} · ${KB.format(file.size / 1024)} KB` : t("Choose a file (up to 5 MB)")}</span>
+          <span className="break-all">{file ? `${file.name} · ${KB.format(file.size / 1024)} KB` : t("Choose a photo, PDF or short video (up to 100 MB)")}</span>
         </FilePick>
         <Button className="w-full sm:w-auto" disabled={!file || !!busy} onClick={() => void onSend()}>
           {busy || t("Send the file")}

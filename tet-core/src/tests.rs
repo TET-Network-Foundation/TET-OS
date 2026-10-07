@@ -12919,7 +12919,12 @@ async fn public_call_from_for_tests(
         b = b.header("x-forwarded-for", x);
     }
     let body = if method == "GET" || method == "DELETE" { "" } else { "{}" };
-    let req = b.header("content-type", "application/json").body(axum::body::Body::from(body)).unwrap();
+    // As a real client does (browsers and curl always send it); the gate charges uploads by it.
+    let req = b
+        .header("content-type", "application/json")
+        .header("content-length", body.len().to_string())
+        .body(axum::body::Body::from(body))
+        .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     let gate = resp.headers().get(crate::rest::public_api::GATE_HEADER).is_some();
     (resp.status(), gate)
@@ -13465,3 +13470,105 @@ async fn status_live_answers_in_public_mode_with_real_numbers_and_no_addresses()
     assert!(!text.contains(peer), "a whole peer id leaked");
     assert!(!text.contains("203.0.113.77"), "the client address leaked");
 }
+
+// ---- larger files on one node (the demo): size cap, local-only storage, storage cap, budget ----------
+
+/// A node's own file cap follows `TET_FILES_MAX_BODY_BYTES` (default: the network-wide 5 MiB): a 6 MiB
+/// envelope is out of range by default and in range when the node allows 100 MiB.
+/// Negative control: the envelope check uses the constant again → the 100 MiB half FAILS.
+#[test]
+fn file_size_cap_is_the_nodes_own_setting_defaulting_to_the_network_cap() {
+    let _g = env_lock();
+    set_test_env_base();
+    let w = file_test_wallet();
+    let mut env = build_signed_file_envelope(&w, &"cd".repeat(32), b"x", file_now_ms());
+    env.file_size = 6 * 1024 * 1024;
+    let size_err = |e: &crate::files::FileEnvelopeV1| {
+        matches!(crate::files::verify_file_envelope_v1(e), Err(crate::files::FileEnvelopeError::SizeOutOfRange { .. }))
+    };
+    {
+        let _u = EnvVarGuard::unset("TET_FILES_MAX_BODY_BYTES");
+        assert!(size_err(&env), "6 MiB must be out of range at the default");
+    }
+    let _m = EnvVarGuard::set("TET_FILES_MAX_BODY_BYTES", &(100u64 * 1024 * 1024).to_string());
+    assert!(!size_err(&env), "6 MiB must be in range when the node allows 100 MiB");
+}
+
+/// **SECURITY REGRESSION GUARD: a file over the network-wide cap is never announced over gossip** —
+/// peers at the default would reject it, and gossipsub penalises the node that relayed a rejected
+/// message. It stays on the node that took it, whatever that node's own cap.
+/// Negative control: compare against the node's own cap → FAILED.
+#[test]
+fn files_over_the_network_cap_stay_on_the_node_that_took_them() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _m = EnvVarGuard::set("TET_FILES_MAX_BODY_BYTES", &(100u64 * 1024 * 1024).to_string());
+    let w = file_test_wallet();
+    let mut env = build_signed_file_envelope(&w, &"cd".repeat(32), b"x", file_now_ms());
+    env.file_size = crate::files::MAX_FILE_BODY_BYTES;
+    assert!(crate::files::announces_over_network(&env), "a file at the network cap is announced");
+    env.file_size = crate::files::MAX_FILE_BODY_BYTES + 1;
+    assert!(!crate::files::announces_over_network(&env), "a larger file must stay local");
+}
+
+/// `TET_FILES_MAX_TOTAL_BYTES` bounds what the node stores in total; without it there is no cap.
+/// Negative control: `has_room_for` always true → FAILED.
+#[test]
+fn file_storage_total_cap_refuses_what_would_not_fit() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (_l, store) = new_file_store();
+    let w = file_test_wallet();
+    let blob = vec![7u8; 1000];
+    let env = build_signed_file_envelope(&w, &"cd".repeat(32), &blob, file_now_ms());
+    store.store_with_blob(&env, &blob).expect("store");
+    {
+        let _u = EnvVarGuard::unset("TET_FILES_MAX_TOTAL_BYTES");
+        assert!(store.has_room_for(10_000_000), "no cap without the setting");
+    }
+    let _c = EnvVarGuard::set("TET_FILES_MAX_TOTAL_BYTES", "1500");
+    assert_eq!(store.total_blob_bytes(), 1000);
+    assert!(store.has_room_for(500));
+    assert!(!store.has_room_for(501), "1000 + 501 bytes must not fit under 1500");
+}
+
+/// **SECURITY REGRESSION GUARD: in public mode, uploads are charged per client per UTC day** — so one
+/// address can't fill the node's disk inside the write-token burst — and an upload without a length
+/// is refused before its body is read. Another client, and the next day, start fresh.
+/// Negative controls: `charge_upload` always true → FAILED; the gate skipping the length check →
+/// FAILED (the length-less upload reaches the handler).
+#[tokio::test]
+async fn public_mode_charges_uploads_per_client_per_day_and_needs_a_length() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _b = EnvVarGuard::set("TET_PUBLIC_UPLOAD_BYTES_PER_DAY", "1000");
+    let gate = crate::rest::public_api::PublicGate::new(crate::rest::public_api::Limits::from_env());
+    assert!(gate.charge_upload("a", 600, 10));
+    assert!(gate.charge_upload("a", 400, 10));
+    assert!(!gate.charge_upload("a", 1, 10), "the 1001st byte of the day is refused");
+    assert!(gate.charge_upload("b", 1000, 10), "another client has its own budget");
+    assert!(gate.charge_upload("a", 1000, 11), "the next day starts fresh");
+
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "1000");
+    let (router, _e) = public_router_for_tests(true);
+    let send = |len: Option<&str>| {
+        let mut b = axum::http::Request::builder()
+            .method("POST")
+            .uri("/files/upload")
+            .extension(axum::extract::ConnectInfo(TEST_PROXY_PEER.parse::<std::net::SocketAddr>().unwrap()))
+            .header("x-forwarded-for", "203.0.113.90")
+            .header("content-type", "multipart/form-data; boundary=x");
+        if let Some(l) = len {
+            b = b.header("content-length", l);
+        }
+        b.body(axum::body::Body::from("--x--\r\n")).unwrap()
+    };
+    let r = router.clone().oneshot(send(None)).await.unwrap();
+    assert_eq!(r.status(), StatusCode::LENGTH_REQUIRED, "an upload without a length must be refused");
+    let r = router.clone().oneshot(send(Some("900"))).await.unwrap();
+    assert_ne!(r.status(), StatusCode::TOO_MANY_REQUESTS, "900 bytes fit the budget");
+    let r = router.clone().oneshot(send(Some("200"))).await.unwrap();
+    assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS, "900 + 200 bytes exceed 1000 for this client");
+}
+

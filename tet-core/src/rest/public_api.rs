@@ -212,11 +212,25 @@ pub struct PublicGate {
     limits: Limits,
     trusted: Vec<String>,
     buckets: Mutex<HashMap<(String, bool), Bucket>>,
+    /// Bytes each client has uploaded today (UTC day number, bytes).
+    uploads: Mutex<HashMap<String, (u64, u64)>>,
+}
+
+/// The most bytes one client may upload to `/files/upload` per UTC day in public mode
+/// (`TET_PUBLIC_UPLOAD_BYTES_PER_DAY`, default 200 MiB): with large files allowed, the write-token
+/// bucket alone would let one address fill the node's disk.
+pub fn upload_bytes_per_day() -> u64 {
+    env_f64("TET_PUBLIC_UPLOAD_BYTES_PER_DAY", 200.0 * 1024.0 * 1024.0) as u64
 }
 
 impl PublicGate {
     pub fn new(limits: Limits) -> Arc<Self> {
-        Arc::new(Self { limits, trusted: trusted_proxies_from_env(), buckets: Mutex::new(HashMap::new()) })
+        Arc::new(Self {
+            limits,
+            trusted: trusted_proxies_from_env(),
+            buckets: Mutex::new(HashMap::new()),
+            uploads: Mutex::new(HashMap::new()),
+        })
     }
 
     /// Spend one token for `client` in its class. `false` means over the limit.
@@ -238,6 +252,27 @@ impl PublicGate {
         map.entry(key)
             .or_insert(Bucket { tokens: burst, at: now })
             .take(now, rate, burst)
+    }
+}
+
+impl PublicGate {
+    /// Charge `bytes` to `client`'s upload budget for UTC day `day`. `false`: over the budget (and
+    /// nothing is charged). Clients from earlier days are forgotten once the map grows.
+    pub fn charge_upload(&self, client: &str, bytes: u64, day: u64) -> bool {
+        let cap = upload_bytes_per_day();
+        let mut map = self.uploads.lock().unwrap_or_else(|p| p.into_inner());
+        if map.len() >= self.limits.max_clients {
+            map.retain(|_, (d, _)| *d == day);
+        }
+        let e = map.entry(client.to_string()).or_insert((day, 0));
+        if e.0 != day {
+            *e = (day, 0);
+        }
+        if e.1.saturating_add(bytes) > cap {
+            return false;
+        }
+        e.1 += bytes;
+        true
     }
 }
 
@@ -266,6 +301,26 @@ pub async fn public_api_gate(
             "rate limit exceeded for this address",
         )
             .into_response();
+    }
+    // Uploads are charged by size, before the body is read: a length is required.
+    if req.method() == Method::POST && req.uri().path() == "/files/upload" {
+        let len = req
+            .headers()
+            .get(axum::http::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u64>().ok());
+        let Some(len) = len else {
+            return (StatusCode::LENGTH_REQUIRED, [(GATE_HEADER, "refused")], "an upload needs a Content-Length").into_response();
+        };
+        let day = crate::swarm_health::now_ms() / 86_400_000;
+        if !gate.charge_upload(&client, len, day) {
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(GATE_HEADER, "upload-budget")],
+                "daily upload limit reached for this address",
+            )
+                .into_response();
+        }
     }
     next.run(req).await
 }

@@ -110,6 +110,13 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
         return (envelope_error_status(&e), format!("{e}")).into_response();
     }
 
+    if !state.files.has_room_for(body.len() as u64) {
+        return (
+            StatusCode::INSUFFICIENT_STORAGE,
+            "this node's file storage is full; try again after older files expire",
+        )
+            .into_response();
+    }
     match state.files.store_with_blob(&env, &body) {
         Ok(_) => {}
         Err(e) => {
@@ -121,7 +128,10 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
         sponsor.record_upload(&env.file_id.to_string(), &env.sender_wallet_id);
     }
 
-    state.broadcast_file_announce(&env).await;
+    // Larger than the network-wide cap: kept here only (peers at the default would reject it).
+    if crate::files::announces_over_network(&env) {
+        state.broadcast_file_announce(&env).await;
+    }
     (
         StatusCode::ACCEPTED,
         Json(serde_json::json!({

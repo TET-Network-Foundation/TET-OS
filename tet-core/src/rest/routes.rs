@@ -272,8 +272,11 @@ pub fn build_router(state: RestState) -> axum::Router {
         .route(
             "/files/upload",
             axum::routing::post(super::handlers::files::post_files_upload)
-                // Allow the 5 MiB encrypted body (+multipart overhead); overrides the global limit.
-                .layer(axum::extract::DefaultBodyLimit::max(8 * 1024 * 1024)),
+                // The node's file cap (5 MiB unless TET_FILES_MAX_BODY_BYTES) + multipart overhead;
+                // overrides the global limit.
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    (crate::files::max_file_body_bytes() + 3 * 1024 * 1024) as usize,
+                )),
         )
         .route(
             "/files/announce",
