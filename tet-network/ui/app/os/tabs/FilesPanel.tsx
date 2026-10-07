@@ -23,17 +23,16 @@ import {
   getFilesFetch,
   getTmailKeys,
   normalizeWalletId64,
-  postFilesFee,
   postFilesUpload,
   putTmailKeys,
 } from "../../lib/tet_core_http";
 import {
   buildFileEnvelopeV1,
-  buildFileFeeEnvelopeV1,
   FILE_FEE_MICRO,
   MAX_FILE_BODY_BYTES,
   type FileEnvelopeV1,
 } from "../../lib/files";
+import { settleFileFee, type FeeMode } from "../../lib/files_fee";
 import { buildTmailKeyRegistrationV1 } from "../../lib/tmail_keys";
 import { decryptFileForReceiver, decryptFileMeta } from "../../lib/files_e2ee";
 import { getTmailKeySession } from "../../lib/tmail_session";
@@ -123,7 +122,16 @@ function AddressBookPicker(props: { contacts: ReadonlyArray<Contact>; onPick: (a
   );
 }
 
-export default function FilesPanel(props: { baseUrl: string; myWalletId: string; contacts: ReadonlyArray<Contact> }) {
+export default function FilesPanel(props: {
+  baseUrl: string;
+  myWalletId: string;
+  contacts: ReadonlyArray<Contact>;
+  /**
+   * How a sent file's fee is settled (`lib/files_fee.ts`). The desktop pays with the sender's own
+   * wallet; the try page asks the demo node's sponsor and never signs a fee with the visitor's.
+   */
+  feeMode?: FeeMode;
+}) {
   const { baseUrl, contacts } = props;
   const myWalletId = normalizeWalletId64(props.myWalletId);
 
@@ -330,21 +338,14 @@ export default function FilesPanel(props: { baseUrl: string; myWalletId: string;
         // Step 4 fee settlement: 1000 µTET sender → consensus (25% treasury / 50% storage / 25% burn).
         // The file is already delivered at this point, so a fee failure degrades to a warning.
         setSendPhase("fee");
-        let feeText = "";
-        try {
-          const feeEnv = await buildFileFeeEnvelopeV1({
-            senderWalletId: myWalletId,
-            storageWallet: up.storageWallet ?? "",
-            fileId: up.fileId ?? built.envelope.file_id,
-            baseUrl,
-          });
-          const feeRes = await postFilesFee(baseUrl, feeEnv);
-          feeText = feeRes.ok
-            ? ` Fee ${FILE_FEE_MICRO} µTET queued for settlement.`
-            : ` Fee settlement failed: ${feeRes.text ?? `HTTP ${feeRes.status}`}.`;
-        } catch (feeErr: unknown) {
-          feeText = ` Fee settlement failed: ${feeErr instanceof Error ? feeErr.message : String(feeErr)}.`;
-        }
+        const fee = await settleFileFee({
+          mode: props.feeMode ?? "self",
+          baseUrl,
+          fileId: up.fileId ?? built.envelope.file_id,
+          senderWalletId: myWalletId,
+          storageWallet: up.storageWallet ?? "",
+        });
+        const feeText = ` ${fee.text}`;
         if (!mountedRef.current) return;
         setSendPhase("done");
         setSentCount((n) => n + 1);

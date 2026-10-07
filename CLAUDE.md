@@ -52,6 +52,18 @@ This is not theoretical. Two defects found on 2026-09-24 had both survived for m
 The tell in both cases was the same: a green suite over a code path that had never executed with
 real inputs. When a mock exists, ask what it is standing in for and whether anything tests that.
 
+**Journals: tag every type, round-trip every decode.** A receipt proves which bytes the image
+committed, not which journal type they are. Equal-length journals can decode as each other under
+risc0 serde, as the removed mode-2 journal did with `ZkCourtJournalV1`. So:
+- every journal type carries a kind tag that its decode checks before use (as `journal_kind` on the
+  Tmail membership journal);
+- every decode is re-serialized and compared (`decode_journal_bytes`).
+
+RISC Zero (Bruestle, 2026-10-06) confirmed the tag is required, not a nicety. The same conversation
+confirmed that a receipt's size (~239 KiB) is the cost of STARK security. **Do not shrink receipts
+with a Groth16 wrap:** it rests on elliptic-curve pairings and would break the post-quantum claim.
+Handle size in transport instead (announce-then-pull). See `docs/SPRINT_PLAN.md`, "S8 as built".
+
 ## When a guard passes, ask what else could have made it pass
 
 Caches, fallbacks, retries and default values are the usual culprits. **Disable the fallback inside

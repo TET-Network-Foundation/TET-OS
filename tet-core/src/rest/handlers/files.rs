@@ -116,6 +116,10 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
             return (StatusCode::BAD_REQUEST, format!("{e}")).into_response();
         }
     }
+    // Uploaded through this node: the only files the demo sponsor will pay a fee for.
+    if let Some(sponsor) = &state.demo_sponsor {
+        sponsor.record_upload(&env.file_id.to_string(), &env.sender_wallet_id);
+    }
 
     state.broadcast_file_announce(&env).await;
     (
@@ -352,6 +356,67 @@ pub async fn post_files_fee(
             "queued": true,
             "file_id": file_id,
             "fee_micro": fee_micro,
+        })),
+    )
+        .into_response()
+}
+
+/// `POST /demo/files/sponsor-fee` — the demo node pays a visitor's file fee, under caps
+/// ([`crate::demo_sponsor`]). Body: a [`crate::demo_sponsor::SponsorFeeRequestV1`] signed by the
+/// file's sender. `202 {sponsored: true}`, or a refusal `{ok: false, reason}` that is final for this
+/// request: `no_sponsor` / `not_sponsorable` 404, `bad_request` / `stale_request` 400,
+/// `bad_signature` 401, `sponsor_low` 402, `daily_cap_ip` / `daily_cap_wallet` / `daily_cap_global`
+/// 429. The file was delivered either way.
+pub async fn post_demo_sponsor_fee(
+    State(state): State<RestState>,
+    connect: Option<axum::extract::ConnectInfo<std::net::SocketAddr>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<crate::demo_sponsor::SponsorFeeRequestV1>,
+) -> Response {
+    use crate::demo_sponsor::Refusal;
+    let refuse = |r: Refusal| {
+        if r == Refusal::SponsorLow {
+            log::warn!("[demo-sponsor] balance at or below the floor; refusing sponsorships");
+        }
+        (
+            StatusCode::from_u16(r.status()).unwrap_or(StatusCode::BAD_REQUEST),
+            Json(serde_json::json!({ "ok": false, "reason": r.reason() })),
+        )
+            .into_response()
+    };
+    let Some(sponsor) = state.demo_sponsor.clone() else {
+        return refuse(Refusal::NoSponsor);
+    };
+    let _one_at_a_time = sponsor.decide_lock.lock().await;
+    let client = crate::rest::public_api::client_key(
+        connect.map(|c| c.0.ip()),
+        &headers,
+        &crate::rest::public_api::trusted_proxies_from_env(),
+    );
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let spendable = state.ledger.spendable_balance_micro_now(sponsor.wallet_id()).unwrap_or(0);
+    let file_sender = state.files.get_meta(req.file_id.trim()).map(|e| e.sender_wallet_id);
+    let (env, commit) = match sponsor.decide(&req, &client, now_ms, spendable, file_sender) {
+        Ok(x) => x,
+        Err(r) => return refuse(r),
+    };
+    if let Err(e) = verify_envelope_v1(&env) {
+        return refuse(Refusal::Submit(e));
+    }
+    if let Err(e) = state.submit_local_tx(env).await {
+        return refuse(Refusal::Submit(e.to_string()));
+    }
+    sponsor.commit(commit);
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "ok": true,
+            "sponsored": true,
+            "file_id": req.file_id.trim(),
+            "fee_micro": FILE_FEE_MICRO,
         })),
     )
         .into_response()

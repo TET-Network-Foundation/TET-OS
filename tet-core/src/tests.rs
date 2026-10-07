@@ -201,6 +201,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         log_tx,
         producer_key: Some(std::sync::Arc::new(test_producer_key("alice"))),
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        demo_sponsor: None,
     }
 }
 
@@ -4346,6 +4347,8 @@ mod block_sync {
         boot_multiaddr: String,
         swarm_task: JoinHandle<()>,
         auto_miner: Option<JoinHandle<()>>,
+        /// The node's swarm-loop beacon: stamped on every loop iteration (at least once a second).
+        health: crate::swarm_health::SharedSwarmHealth,
     }
 
     async fn start_block_swarm_on_ledger(
@@ -4359,6 +4362,7 @@ mod block_sync {
         crate::sync::SharedBlockSyncBoard,
         String,
         JoinHandle<()>,
+        crate::swarm_health::SharedSwarmHealth,
     ) {
         let ks = crate::p2p_keystore::P2pKeystore::load_or_create(db_dir).unwrap();
         let keys = ks.plane_keys().unwrap();
@@ -4386,10 +4390,10 @@ mod block_sync {
         }
 
         let mempool = Arc::new(Mutex::new(Vec::new()));
-        let hello_registry = crate::sync::new_hello_registry();
-        let catch_up_driver = crate::sync::new_catch_up_driver();
-        let block_sync_board =
-            crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
+        let sync_state = crate::sync::new_sync_state();
+        let hello_registry = sync_state.clone();
+        let catch_up_driver = sync_state.clone();
+        let block_sync_board = sync_state.clone();
 
         let tmail_store = std::sync::Arc::new(
             crate::tmail::store::TmailStore::open(&ledger.sled_db()).expect("tmail store"),
@@ -4397,6 +4401,7 @@ mod block_sync {
         let file_store = std::sync::Arc::new(
             crate::files::storage::FileStore::open(&ledger.sled_db()).expect("file store"),
         );
+        let health = crate::swarm_health::SwarmHealth::new();
         let (gossip_tx, files_fetch_tx, tx_submit_tx, _anon_register_tx, swarm_task) =
             crate::p2p::start_mdns_ping_swarm(
             ledger.clone(),
@@ -4408,7 +4413,7 @@ mod block_sync {
             block_sync_board.clone(),
             tmail_store,
             file_store,
-            crate::swarm_health::SwarmHealth::new(),
+            health.clone(),
         )
         .expect("block swarm");
 
@@ -4426,7 +4431,7 @@ mod block_sync {
         if post_listen_delay_ms > 0 {
             tokio::time::sleep(Duration::from_millis(post_listen_delay_ms)).await;
         }
-        (state, block_sync_board, boot_multiaddr, swarm_task)
+        (state, block_sync_board, boot_multiaddr, swarm_task, health)
     }
 
     async fn spawn_node(bootnode_of: Option<&str>, is_boot: bool) -> TestNode {
@@ -4437,7 +4442,7 @@ mod block_sync {
         let ledger = Arc::new(crate::ledger::Ledger::open(db.to_str().unwrap()).unwrap());
         ledger.init_genesis_founder_premine_from_env().unwrap();
         let _ = ledger.apply_genesis_allocation("founder");
-        let (state, block_sync_board, boot_multiaddr, swarm_task) =
+        let (state, block_sync_board, boot_multiaddr, swarm_task, health) =
             start_block_swarm_on_ledger(ledger.clone(), &db_dir, bootnode_of, is_boot, 400).await;
         TestNode {
             ledger,
@@ -4447,6 +4452,7 @@ mod block_sync {
             boot_multiaddr,
             swarm_task,
             auto_miner: None,
+            health,
         }
     }
 
@@ -4467,7 +4473,7 @@ mod block_sync {
         }
         node.swarm_task.abort();
         tokio::time::sleep(Duration::from_millis(300)).await;
-        let (state, board, boot, task) = start_block_swarm_on_ledger(
+        let (state, board, boot, task, health) = start_block_swarm_on_ledger(
             node.ledger.clone(),
             &node.db_dir,
             bootnode_of,
@@ -4479,6 +4485,7 @@ mod block_sync {
         node.block_sync_board = board;
         node.boot_multiaddr = boot;
         node.swarm_task = task;
+        node.health = health;
     }
 
     async fn mine_n(state: &crate::rest::RestState, n: u64) {
@@ -4573,7 +4580,7 @@ mod block_sync {
         board: &crate::sync::SharedBlockSyncBoard,
         ledger: &crate::ledger::Ledger,
     ) -> bool {
-        crate::sync::auto_mine_blocked_by_sync(Some(board), ledger).await
+        crate::sync::auto_mine_blocked_by_sync(Some(board), ledger, false).await
     }
 
     fn tip_triplet(ledger: &crate::ledger::Ledger) -> (u64, String, String) {
@@ -4825,9 +4832,9 @@ mod block_sync {
         let ledger2 = Arc::new(crate::ledger::Ledger::open(db2.to_str().unwrap()).unwrap());
         ledger2.init_genesis_founder_premine_from_env().unwrap();
         let _ = ledger2.apply_genesis_allocation("founder");
-        let (state2, board2, _, swarm2) =
+        let (state2, board2, _, swarm2, health2) =
             start_block_swarm_on_ledger(ledger2.clone(), &db_dir2, Some(&boot), false, 0).await;
-        assert_ne!(Arc::as_ptr(&n1.block_sync_board), Arc::as_ptr(&board2));
+        assert!(!n1.block_sync_board.same(&board2), "each node has its own sync state");
         assert!(
             sync_gate_active(&board2, ledger2.as_ref()).await,
             "node2 should gate before first hello (awaiting_first_hello)"
@@ -4841,11 +4848,12 @@ mod block_sync {
             boot_multiaddr: String::new(),
             swarm_task: swarm2,
             auto_miner: None,
+            health: health2,
         };
         let mut n3 = spawn_node(Some(&boot), false).await;
-        assert_ne!(
-            Arc::as_ptr(&n2.block_sync_board),
-            Arc::as_ptr(&n3.block_sync_board),
+        assert!(
+            !n2.block_sync_board.same(&n3.block_sync_board),
+            "each node has its own sync state"
         );
 
         tokio::time::sleep(Duration::from_millis(600)).await;
@@ -5250,6 +5258,227 @@ mod block_sync {
             "the peer's block must settle a tx that gossip never carried"
         );
 
+        rebroadcast.abort();
+        stop(&[n1, n2]);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Accept loop, part B (docs/DESIGN_accept_loop.md): the loop only routes. Its liveness is read
+    // from the swarm-health beacon, which the loop stamps on every iteration and at least once a
+    // second (the catch-up tick). A loop that awaits slow work shows a gap as long as the work.
+    // -----------------------------------------------------------------------------------------
+
+    /// Sample `health` every 50 ms until stopped; the result is the longest gap between two loop
+    /// iterations seen.
+    fn sample_loop_gaps(
+        health: crate::swarm_health::SharedSwarmHealth,
+    ) -> (Arc<std::sync::atomic::AtomicBool>, JoinHandle<u64>) {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop2 = stop.clone();
+        let h = tokio::spawn(async move {
+            let mut max = 0u64;
+            while !stop2.load(Ordering::Relaxed) {
+                if let Some(g) = health.since_last_tick_ms(crate::swarm_health::now_ms()) {
+                    max = max.max(g);
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            max
+        });
+        (stop, h)
+    }
+
+    async fn stop_sampler(s: (Arc<std::sync::atomic::AtomicBool>, JoinHandle<u64>)) -> u64 {
+        s.0.store(true, Ordering::Relaxed);
+        s.1.await.unwrap()
+    }
+
+    /// The test-only delay every apply job sleeps first; reset on drop so a failing test cannot
+    /// leave it set for the next one.
+    struct ApplyDelay;
+    impl ApplyDelay {
+        fn set(ms: u64) -> Self {
+            crate::apply_worker::TEST_APPLY_DELAY_MS.store(ms, Ordering::Relaxed);
+            ApplyDelay
+        }
+    }
+    impl Drop for ApplyDelay {
+        fn drop(&mut self) {
+            crate::apply_worker::TEST_APPLY_DELAY_MS.store(0, Ordering::Relaxed);
+        }
+    }
+
+    async fn synced_pair() -> (TestNode, TestNode) {
+        unsafe {
+            std::env::set_var("TET_CHAIN_HELLO_INTERVAL_SEC", "1");
+            std::env::remove_var("TET_PRODUCER_PEERS");
+        }
+        let n1 = spawn_node(None, true).await;
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        mine_n(&n1.state, 2).await;
+        wait_height_convergence(&[n1.ledger.clone(), n2.ledger.clone()], 0, Duration::from_secs(40)).await;
+        (n1, n2)
+    }
+
+    /// **G3 (accept loop B): the loop keeps draining while a block apply is slow.** The follower's
+    /// apply sleeps 10 s per block. Meanwhile its loop must keep iterating (no gap near 10 s) and keep
+    /// taking in what the producer says: the producer's new height reaches the follower's registry
+    /// while the follower's own ledger has not moved.
+    /// Negative control: await the apply result in the loop again → a gap of ~10 s → FAILED.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn loop_keeps_draining_while_apply_is_slow() {
+        let _g = env_lock();
+        block_sync_env();
+        let (n1, n2) = synced_pair().await;
+        let h0 = n2.ledger.block_height().unwrap();
+
+        let delay = ApplyDelay::set(10_000);
+        let sampler = sample_loop_gaps(n2.health.clone());
+        let started = Instant::now();
+        mine_n(&n1.state, 4).await;
+        let n1_h = n1.ledger.block_height().unwrap();
+        loop {
+            let seen = n2
+                .block_sync_board
+                .with(|s| s.registry.heights_snapshot().iter().map(|r| r.1).max().unwrap_or(0));
+            if seen >= n1_h {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(9),
+                "the follower's loop did not take in the producer's height {n1_h} (saw {seen}) while its apply slept"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(
+            n2.ledger.block_height().unwrap(),
+            h0,
+            "test premise: the follower's apply is still asleep"
+        );
+        tokio::time::sleep(Duration::from_secs(9).saturating_sub(started.elapsed())).await;
+        let gap = stop_sampler(sampler).await;
+        drop(delay);
+        assert!(gap < 3_000, "the swarm loop stalled for {gap} ms while a block apply was slow");
+
+        wait_height_convergence(&[n1.ledger.clone(), n2.ledger.clone()], 0, Duration::from_secs(90)).await;
+        stop(&[n1, n2]);
+    }
+
+    /// **G4 (accept loop B): the loop keeps draining under 1000 queued blocks, with bounded memory.**
+    /// The producer floods the follower with 1000 gossip blocks while each apply takes 2 s. The
+    /// follower's loop keeps iterating (no gap over 1.5 s), its apply queue never holds more than its
+    /// cap, the overflow is dropped and counted, and once the flood is over it syncs the real chain.
+    /// Negative controls: an apply queue that never refuses (unbounded) → depth far past the cap →
+    /// FAILED; awaiting the queue in the loop → stall → FAILED.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn loop_keeps_draining_under_1000_queued_blocks() {
+        let _g = env_lock();
+        block_sync_env();
+        let (n1, n2) = synced_pair().await;
+        let h = n2.ledger.block_height().unwrap();
+        let tip = block_id_at_height(n2.ledger.as_ref(), h).expect("tip");
+        let dropped0 = crate::metrics::apply_dropped_total();
+
+        let delay = ApplyDelay::set(2_000);
+        let gaps = sample_loop_gaps(n2.health.clone());
+        let depth_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let depth_max = {
+            let stop = depth_stop.clone();
+            tokio::spawn(async move {
+                let mut max = 0u64;
+                while !stop.load(Ordering::Relaxed) {
+                    max = max.max(crate::metrics::apply_queue_depth());
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                max
+            })
+        };
+        let gossip = n1.state.gossip_tx.clone().expect("publish channel");
+        let salt = crate::swarm_health::now_ms();
+        for i in 0..1000u32 {
+            let ev = crate::models::NetworkEvent::BlockMined {
+                block_height: h + 1,
+                block_id: format!("flood-{salt}-{i:04}"),
+                parent_block_id: Some(tip.clone()),
+                producer_id: "alice".into(),
+                base_reward_micro: 0,
+                compute_reward_micro: 0,
+                total_reward_micro: 0,
+                state_root: "not-a-real-root".into(),
+                txs: vec![],
+            };
+            gossip.send(serde_json::to_string(&ev).unwrap()).await.unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while crate::metrics::apply_dropped_total() - dropped0 < 500 {
+            assert!(
+                Instant::now() < deadline,
+                "backpressure never engaged: {} dropped",
+                crate::metrics::apply_dropped_total() - dropped0
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let gap = stop_sampler(gaps).await;
+        depth_stop.store(true, Ordering::Relaxed);
+        let max_depth = depth_max.await.unwrap();
+        drop(delay);
+        let dropped = crate::metrics::apply_dropped_total() - dropped0;
+        assert!(gap < 1_500, "the swarm loop stalled for {gap} ms under a flood of blocks");
+        assert!(
+            max_depth as usize <= crate::apply_worker::APPLY_QUEUE_CAP_DEFAULT,
+            "the apply queue grew to {max_depth}, past its cap: memory is not bounded"
+        );
+        assert!(dropped >= 500, "only {dropped} of 1000 flood blocks were dropped");
+
+        // The flood is over: the follower still follows the real chain.
+        mine_n(&n1.state, 2).await;
+        wait_height_convergence(&[n1.ledger.clone(), n2.ledger.clone()], 0, Duration::from_secs(120)).await;
+        stop(&[n1, n2]);
+    }
+
+    /// **G6 (accept loop B): the loop drains while the mempool is held.** The test holds the
+    /// producer's mempool lock for 8 s, as a miner building a block does, while the follower sends
+    /// it a transaction (gossip and direct submit). The producer's loop keeps iterating, and the
+    /// transaction is admitted once the lock is released.
+    /// Negative control: await the admission result in the loop again → stall → FAILED.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn loop_drains_while_mempool_is_held() {
+        let _g = env_lock();
+        block_sync_env();
+        unsafe {
+            std::env::set_var("TET_TX_REBROADCAST_SEC", "1");
+        }
+        let (n1, n2) = synced_pair().await;
+        let rebroadcast = crate::rest::RestState::spawn_mempool_rebroadcast(n2.state.clone()).expect("retry loop");
+
+        let held = n1.state.mempool.lock().await;
+        let gaps = sample_loop_gaps(n1.health.clone());
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let words = w.mnemonic_12.clone().unwrap();
+        let wallet_id = w.address_hex.to_ascii_lowercase();
+        let env = signed_env_for_tests(
+            crate::protocol::TxV1::InitialAirdrop { wallet_id: wallet_id.clone() },
+            &words,
+            &wallet_id,
+        );
+        let resp = crate::rest::handlers::ledger::post_initial_airdrop_claim(
+            axum::extract::State(n2.state.clone()),
+            axum::Json(env),
+        )
+        .await;
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
+        tokio::time::sleep(Duration::from_secs(8)).await;
+        let gap = stop_sampler(gaps).await;
+        drop(held);
+        assert!(gap < 3_000, "the producer's swarm loop stalled for {gap} ms while its mempool was held");
+
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while n1.state.mempool.lock().await.len() != 1 {
+            assert!(Instant::now() < deadline, "the transaction was never admitted after the lock was released");
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
         rebroadcast.abort();
         stop(&[n1, n2]);
     }
@@ -12591,6 +12820,41 @@ fn agent_fixture_doc() -> serde_json::Value {
     doc
 }
 
+const UI_AGENT_MANIFEST: &str = include_str!("testdata/agent_manifest_v1.json");
+
+/// **The browser signs manifests the node accepts, byte for byte.** The try page's verifier checks
+/// manifests in the browser (`tet-network/ui/app/lib/verify_anything.mjs`) and the UI signs them
+/// (`agent_manifest.ts`); this fixture is the UI's output. The node re-signs it from the same
+/// mnemonic and must produce the same signature bytes, then must accept the UI's manifest, and must
+/// refuse it once one signed field changes.
+#[test]
+fn ui_signed_agent_manifest_is_byte_identical_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_AGENT_MANIFEST).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let ui: crate::agent::AgentManifestV1 =
+        serde_json::from_value(doc["manifest"].clone()).expect("the UI's manifest must deserialize");
+    let now = doc["verify_at_ms"].as_u64().unwrap();
+
+    let mut ours = ui.clone();
+    crate::agent::sign_agent_manifest(doc["owner_mnemonic"].as_str().unwrap(), &mut ours)
+        .expect("rust could not sign the manifest");
+    assert_eq!(ours.hybrid_sig.ed25519_pubkey_hex, ui.hybrid_sig.ed25519_pubkey_hex, "owner id differs");
+    assert_eq!(ours.hybrid_sig.mldsa_pubkey_b64, ui.hybrid_sig.mldsa_pubkey_b64, "owner ML-DSA key differs");
+    assert_eq!(ours.hybrid_sig.ed25519_sig_b64, ui.hybrid_sig.ed25519_sig_b64, "Ed25519 bytes differ between the UI and the node");
+    assert_eq!(ours.hybrid_sig.mldsa_sig_b64, ui.hybrid_sig.mldsa_sig_b64, "ML-DSA-44 bytes differ between the UI and the node");
+
+    crate::agent::verify_agent_manifest_v1(&ui, now).expect("the node must accept the UI's manifest");
+
+    let mut altered = ui.clone();
+    altered.agent_id.push('!');
+    assert!(
+        crate::agent::verify_agent_manifest_v1(&altered, now).is_err(),
+        "a manifest with a changed agent_id must not verify"
+    );
+}
+
 /// **The SDK and the node produce the same bytes.** Not "both verify" — the same bytes.
 #[test]
 fn sdk_agent_payload_signatures_are_byte_identical_in_rust() {
@@ -13114,4 +13378,921 @@ fn follower_producer_pin_is_stated_consistently() {
         "provision-seed.sh must write it empty for the producer"
     );
     assert!(provision.contains("TET_PRODUCER_PEERS=$PRODUCER_PEERS"), "and must write the line at all");
+}
+
+
+// ---------------------------------------------------------------------------
+// #21 — a wedged block plane exits the process instead of waiting for a systemd that isn't there.
+// ---------------------------------------------------------------------------
+
+/// Drive the real watchdog loop with a fake clock: the beacon ticks once at `t0`, the clock reads
+/// `t0 + age_ms`, and paused tokio time runs the 20 s ticker. Returns what the exit hook received
+/// and whether the task ended within `ticks` ticker periods.
+async fn run_watchdog_for_tests(age_ms: u64, ticks: u64) -> (Vec<String>, bool) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let health = crate::swarm_health::SwarmHealth::new();
+    let t0 = 1_700_000_000_000u64;
+    health.tick(t0);
+    let clock_ms = std::sync::Arc::new(AtomicU64::new(t0 + age_ms));
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let hook_seen = seen.clone();
+    let clock_read = clock_ms.clone();
+    let task = crate::swarm_health::spawn_watchdog_with(
+        health,
+        crate::swarm_health::DEFAULT_STALL_THRESHOLD_MS,
+        crate::swarm_health::DEFAULT_EXIT_AFTER_MS,
+        std::sync::Arc::new(move |evidence: String| hook_seen.lock().unwrap().push(evidence)),
+        std::sync::Arc::new(move || clock_read.load(Ordering::Relaxed)),
+    );
+    let ended = tokio::time::timeout(std::time::Duration::from_secs(20 * ticks), task)
+        .await
+        .is_ok();
+    let got = seen.lock().unwrap().clone();
+    (got, ended)
+}
+
+/// **SECURITY REGRESSION GUARD (#21): a block plane stalled past the hard threshold exits the
+/// process.** On 2026-10-04 the watchdog only withheld a systemd ping that nothing in Docker
+/// receives, and Helsinki sat wedged for 33 h. The real loop, at 181 s stalled, must call the exit
+/// hook (production: log + `process::exit(70)`) with the evidence, and stop.
+/// Negative controls: the `Exit` arm only logs → FAILED; `watchdog_action` never returns `Exit`
+/// → FAILED.
+#[tokio::test(start_paused = true)]
+async fn stalled_block_plane_exits_the_process_past_the_hard_threshold() {
+    let (calls, ended) = run_watchdog_for_tests(181_000, 3).await;
+    assert_eq!(calls.len(), 1, "the exit hook must run exactly once: {calls:?}");
+    assert!(
+        calls[0].contains("age_ms=181000") && calls[0].contains("exiting with status 70"),
+        "the exit must carry its evidence: {}",
+        calls[0]
+    );
+    assert!(ended, "the watchdog stops after handing over to the exit hook");
+}
+
+/// The companion: stalled past the 90 s stall threshold but not the 180 s hard one, the watchdog
+/// withholds the ping and keeps watching. Exiting here would turn a slow-but-alive loop into a
+/// restart loop.
+/// Negative control: exit at the stall threshold instead of the hard one → FAILED.
+#[tokio::test(start_paused = true)]
+async fn stalled_block_plane_below_the_hard_threshold_keeps_running() {
+    let (calls, ended) = run_watchdog_for_tests(120_000, 5).await;
+    assert!(calls.is_empty(), "no exit below the hard threshold: {calls:?}");
+    assert!(!ended, "the watchdog keeps running");
+}
+
+#[test]
+fn watchdog_action_boundaries() {
+    use crate::swarm_health::{watchdog_action, SwarmHealth, WatchdogAction};
+    let h = SwarmHealth::default();
+    assert_eq!(watchdog_action(&h, 10_000_000, 90_000, 180_000), WatchdogAction::Wait);
+    h.tick(1_000);
+    assert_eq!(watchdog_action(&h, 1_000 + 90_000, 90_000, 180_000), WatchdogAction::Pet);
+    assert_eq!(
+        watchdog_action(&h, 1_000 + 180_000, 90_000, 180_000),
+        WatchdogAction::Withhold { age_ms: 180_000 }
+    );
+    assert_eq!(
+        watchdog_action(&h, 1_000 + 180_001, 90_000, 180_000),
+        WatchdogAction::Exit { age_ms: 180_001 }
+    );
+    assert_eq!(
+        watchdog_action(&h, 1_000 + 10_000_000, 90_000, 0),
+        WatchdogAction::Withhold { age_ms: 10_000_000 },
+        "TET_SWARM_EXIT_AFTER_MS=0 never exits"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #28 — the sole validator keeps mining when its last peer leaves.
+// ---------------------------------------------------------------------------
+
+/// A producer as Helsinki runs: `TET_BOOTNODES` set (so the "awaiting first hello" rule applies),
+/// not a bootnode, a chain of `height` blocks mined as `alice`, and an empty sync board.
+async fn sole_producer_fixture_for_tests(
+    height: u64,
+) -> (
+    std::sync::Arc<crate::ledger::Ledger>,
+    crate::sync::SharedBlockSyncBoard,
+    crate::sync::SharedHelloRegistry,
+) {
+    set_test_env_base();
+    unsafe {
+        std::env::set_var("TET_VALIDATOR_IDS", "alice");
+        std::env::set_var("TET_SYNC_STABLE_SEC", "1");
+        std::env::set_var(
+            "TET_BOOTNODES",
+            "/ip4/127.0.0.1/tcp/1/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM",
+        );
+        std::env::remove_var("TET_IS_BOOTNODE");
+        std::env::remove_var("TET_AUTO_MINE_IGNORE_SYNC");
+        std::env::remove_var("TET_SOLO_PRODUCER_GRACE_SEC");
+    }
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    let _ = ledger.apply_genesis_allocation("founder");
+    let state = rest_state_for_tests(ledger.clone());
+    for _ in 0..height {
+        crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
+            .await
+            .expect("mine");
+    }
+    let board = crate::sync::new_sync_state();
+    let registry = board.clone();
+    (ledger, board, registry)
+}
+
+/// A peer at our own tip, as Nuremberg is in steady state.
+async fn add_peer_at_our_tip_for_tests(
+    registry: &crate::sync::SharedHelloRegistry,
+    ledger: &crate::ledger::Ledger,
+    peer: &str,
+    ahead_by: u64,
+) {
+    let h = ledger.block_height().unwrap();
+    let hello = crate::sync::ChainHello {
+        chain_id: crate::ledger::chain_id_from_env(),
+        block_height: h + ahead_by,
+        tip_block_id: if ahead_by == 0 {
+            ledger.chain_tip().unwrap().map(|t| t.block_id).unwrap_or_default()
+        } else {
+            "0xahead".into()
+        },
+        state_root: if ahead_by == 0 { ledger.compute_state_root().unwrap() } else { "0xahead".into() },
+    };
+    registry.with(|s| s.registry.record_peer_hello(peer, hello, h));
+}
+
+/// Pass the gate (including the 1 s stability window), as the producer does every block.
+async fn gate_opens_for_tests(
+    board: &crate::sync::SharedBlockSyncBoard,
+    ledger: &crate::ledger::Ledger,
+    sole: bool,
+) -> bool {
+    for _ in 0..4 {
+        if !crate::sync::auto_mine_blocked_by_sync(Some(board), ledger, sole).await {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+    }
+    false
+}
+
+/// **SECURITY REGRESSION GUARD (#28): the sole validator keeps mining after its last peer leaves.**
+/// On 2026-10-04 stopping Nuremberg (Helsinki's only peer) closed the sync gate ("auto-mine gated:
+/// synced=false") and halted the chain for 13 minutes. The real gate, after the producer has
+/// mined with a peer and that peer is removed, must stay open.
+/// Control in the test: a node that is NOT the sole validator still gates on the same state.
+/// Negative control: `peerless_mining_allowed` always false → FAILED.
+#[tokio::test]
+async fn sole_validator_keeps_mining_after_its_last_peer_leaves() {
+    let _g = env_lock();
+    let (ledger, board, registry) = sole_producer_fixture_for_tests(3).await;
+    add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
+    assert!(gate_opens_for_tests(&board, &ledger, true).await, "mines with its follower connected");
+
+    registry.with(|s| s.registry.remove_peer("nuremberg"));
+    assert!(
+        !crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
+        "the sole validator must keep mining when its only peer disconnects"
+    );
+    assert!(
+        crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, false).await,
+        "control: a node that is not the sole validator still waits for a peer"
+    );
+}
+
+/// The fork guard the gate exists for is kept: a peer that is **ahead** still stops the sole
+/// validator, so a restarted producer that is behind catches up instead of forking.
+/// Negative control: `peerless_ok` also lifts the peer-ahead condition → FAILED. (Without clearing
+/// `catch_up_triggered` this control passed: the guard was measuring the wrong condition.)
+#[tokio::test]
+async fn sole_validator_still_gates_on_a_peer_ahead() {
+    let _g = env_lock();
+    let (ledger, board, registry) = sole_producer_fixture_for_tests(3).await;
+    add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
+    assert!(gate_opens_for_tests(&board, &ledger, true).await);
+    add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 5).await;
+    // A peer ahead also sets `catch_up_triggered`, which gates by itself. Clear it, as a finished
+    // catch-up does while the peer keeps moving, so only the peer-ahead check can hold the gate.
+    registry.with(|s| s.registry.clear_catch_up_triggered());
+    assert!(
+        crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
+        "a peer ahead must stop the sole validator"
+    );
+}
+
+/// A fresh process with no peer waits out the grace period before mining alone; an empty chain
+/// never mines peerless.
+/// Negative control: drop `local_height > 0` → FAILED; drop the grace (`|| true`) → FAILED.
+#[test]
+fn peerless_mining_allowed_boundaries() {
+    use crate::sync::peerless_mining_allowed as ok;
+    use std::time::Duration as D;
+    let g = D::from_secs(120);
+    assert!(ok(true, 10, true, D::ZERO, g), "synced once in this process → mine peerless");
+    assert!(!ok(true, 10, false, D::from_secs(119), g), "fresh process inside the grace → wait");
+    assert!(ok(true, 10, false, D::from_secs(120), g), "fresh process past the grace → mine");
+    assert!(!ok(true, 0, true, D::from_secs(9_999), g), "empty chain → never peerless");
+    assert!(!ok(false, 10, true, D::from_secs(9_999), g), "not the sole validator → never peerless");
+}
+
+/// **SECURITY REGRESSION GUARD (#28): only an explicitly configured sole validator mines peerless.**
+/// With `TET_VALIDATOR_IDS` unset every node's set defaults to `[self]`; counting that as "sole"
+/// would let any partitioned follower started with `TET_AUTO_MINE=1` fork. Found by the commit
+/// security review of the first #28 change.
+/// Negative control: drop the `explicit` requirement → FAILED.
+#[test]
+fn defaulted_validator_set_is_not_a_sole_validator() {
+    use crate::consensus::{is_explicit_sole_validator as sole, ValidatorSet};
+    let me = ValidatorSet::new(["local-wallet"]);
+    assert!(!sole(None, &me, "local-wallet"), "unset TET_VALIDATOR_IDS: defaulted, not sole");
+    assert!(!sole(Some("  "), &me, "local-wallet"), "blank TET_VALIDATOR_IDS: defaulted, not sole");
+    assert!(sole(Some("local-wallet"), &me, "local-wallet"), "explicit [self]: sole");
+    let two = ValidatorSet::new(["local-wallet", "nbg"]);
+    assert!(!sole(Some("local-wallet,nbg"), &two, "local-wallet"), "two validators: not sole");
+    assert!(!sole(Some("other"), &ValidatorSet::new(["other"]), "local-wallet"), "set names another node");
+}
+// The ML-DSA half of a hybrid signature is not bound to the wallet (found by the item-5 nightly, #30).
+// ---------------------------------------------------------------------------
+
+/// **RED BY DESIGN until the Phase 1 genesis binds the ML-DSA key to the wallet id** (QUEUE item 5,
+/// options D + A). This is the guard the fix must turn green; today it fails, which is the point.
+///
+/// A transfer is signed by the wallet's own Ed25519 key and by an ML-DSA key from an **unrelated**
+/// mnemonic. `verify_envelope_v1` checks each signature against the public key the envelope itself
+/// carries, and nothing relates the ML-DSA key to the wallet id, so the envelope is accepted: the
+/// post-quantum half proves nothing about who sent it, and identity rests on Ed25519 alone.
+///
+/// The companion assertion (the same transfer with the wallet's own ML-DSA key verifies) is the
+/// control that this test fails for the binding and not for a malformed envelope.
+#[test]
+#[ignore = "RED until the Phase 1 genesis binds the ML-DSA key to the wallet id (QUEUE item 5) — run with --ignored to confirm it still fails"]
+fn mldsa_key_unrelated_to_the_wallet_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (words, wallet) = tmail_party_for_tests();
+    let (other_words, _other_wallet) = tmail_party_for_tests();
+    let (_tw, to) = tmail_party_for_tests();
+    let tx = crate::protocol::TxV1::Transfer {
+        from_wallet: wallet.clone(),
+        to_wallet: to,
+        amount_micro: 1_000,
+        fee_bps: 100,
+    };
+
+    // Control: the wallet's own keys verify, so the envelope shape is sound.
+    let own = signed_env_for_tests(tx.clone(), &words, &wallet);
+    assert!(
+        crate::rest::helpers::verify_envelope_v1(&own).is_ok(),
+        "control: an envelope signed with the wallet's own two keys must verify"
+    );
+
+    // The wallet's Ed25519 key, an unrelated mnemonic's ML-DSA key.
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(&words).unwrap();
+    let foreign = crate::wallet::mldsa_keypair_from_mnemonic(&other_words).unwrap();
+    let foreign_pk_b64 = base64::engine::general_purpose::STANDARD.encode(foreign.public_key());
+    let msg = crate::wallet::tx_v1_auth_message_bytes(&tx, &foreign_pk_b64).unwrap();
+    let mut mixed = own.clone();
+    mixed.sig.ed25519_sig_b64 =
+        base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    mixed.sig.mldsa_pubkey_b64 = foreign_pk_b64;
+    mixed.sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD
+        .encode(crate::wallet::mldsa_sign_deterministic(&foreign, msg.as_slice()).unwrap());
+
+    assert!(
+        crate::rest::helpers::verify_envelope_v1(&mixed).is_err(),
+        "verify_envelope_v1 accepted an ML-DSA key unrelated to wallet {wallet}: the post-quantum \
+         half of the signature is not bound to the sender"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// DESIGN_accept_loop § A — one sync lock (the 2026-10-03 deadlock).
+// ---------------------------------------------------------------------------
+
+/// **SECURITY REGRESSION GUARD G1: the swarm loop's catch-up step, the auto-mine gate and REST status
+/// never deadlock.** On 2026-10-03 the loop held `catch_up_driver` waiting for `hello_registry` while
+/// the gate held `hello_registry` waiting for `catch_up_driver`; mining, the loop and `/ledger/state`
+/// all stopped for 33 h. This drives the real `catch_up_trigger_action` (what the loop's 1 s tick runs),
+/// peer add/remove (the hello and disconnect handlers), the real `auto_mine_blocked_by_sync` and the
+/// real `ledger_sync_status` concurrently on four threads; all must finish.
+/// Negative control: the pre-fix two-lock code (`main` at `c940b0c`) with the same interleaving pinned
+/// → `loop_got_registry=false gate_finished=false rest_answered=false` (2026-10-05). A one-line mutation
+/// cannot restore the bug: with one lock there is no order to invert, which is the point of the fix.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn catch_up_tick_and_sync_gate_never_deadlock() {
+    let _g = env_lock();
+    let (ledger, sync, _) = sole_producer_fixture_for_tests(3).await;
+    let h = ledger.block_height().unwrap();
+    add_peer_at_our_tip_for_tests(&sync, &ledger, "nuremberg", 0).await;
+
+    let (s1, l1) = (sync.clone(), ledger.clone());
+    let gate = tokio::spawn(async move {
+        for _ in 0..40 {
+            let _ = crate::sync::auto_mine_blocked_by_sync(Some(&s1), &l1, true).await;
+        }
+    });
+    let (s2, l2) = (sync.clone(), ledger.clone());
+    let rest = tokio::spawn(async move {
+        for _ in 0..40 {
+            let _ = crate::sync::ledger_sync_status(&s2, &l2).await;
+        }
+    });
+    let s3 = sync.clone();
+    let loop_side = tokio::spawn(async move {
+        for i in 0..4000u64 {
+            // A peer ahead sets catch_up_triggered, so the trigger step takes the driver path too.
+            let hello = crate::sync::ChainHello {
+                chain_id: crate::ledger::chain_id_from_env(),
+                block_height: h + (i % 3),
+                tip_block_id: format!("0x{i}"),
+                state_root: format!("0x{i}"),
+            };
+            s3.with(|s| s.registry.record_peer_hello("p", hello, h));
+            let _ = crate::p2p::catch_up_trigger_action(&s3, h);
+            s3.with(|s| s.registry.remove_peer("p"));
+            if i % 64 == 0 {
+                tokio::task::yield_now().await;
+            }
+        }
+    });
+    let all = async {
+        gate.await.unwrap();
+        rest.await.unwrap();
+        loop_side.await.unwrap();
+    };
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(60), all).await.is_ok(),
+        "the loop's catch-up step, the auto-mine gate and REST status did not all finish: deadlock"
+    );
+}
+
+/// **G2: the sync lock cannot be held across an await.** Structural, so it is checked against the
+/// source: `SyncState` is reachable only through `SyncHandle::with` (a synchronous closure), the
+/// mutex is a private field, nothing returns a guard, and nothing outside `with` locks it. A
+/// `std::sync::MutexGuard` is also `!Send`, so holding one across an `.await` in a spawned task does
+/// not compile.
+/// Negative control: add `pub fn guard(&self) -> std::sync::MutexGuard<'_, SyncState>` → FAILED.
+#[test]
+fn sync_state_lock_is_never_held_across_an_await() {
+    let src = include_str!("sync.rs");
+    let start = src.find("pub struct SyncHandle(").expect("SyncHandle exists");
+    let decl = &src[start..src[start..].find(';').map(|e| start + e).unwrap()];
+    assert!(!decl.contains("pub Arc"), "the mutex inside SyncHandle must stay private: {decl}");
+    assert!(!src.contains("MutexGuard<'_, SyncState>"), "nothing may hand out a SyncState guard");
+    assert_eq!(src.matches(".0.lock()").count(), 1, "the lock is taken only inside SyncHandle::with");
+    for file in [include_str!("p2p.rs"), include_str!("consensus.rs"), include_str!("main.rs")] {
+        for needle in ["hello_registry.lock()", "catch_up_driver.lock()", "block_sync_board.lock()", "board.lock()"] {
+            assert!(!file.contains(needle), "sync state locked outside SyncHandle::with: {needle}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public-API mode — the "Try TET" demo node (docs/DEMO_NODE.md).
+// ---------------------------------------------------------------------------
+
+/// Every route the router defines, as `(METHOD, path)`, parsed from `rest/routes.rs`, so a route added
+/// later is covered by the 404 guard without anyone remembering to list it.
+fn all_defined_routes_for_tests() -> Vec<(String, String)> {
+    let src = include_str!("rest/routes.rs");
+    let mut out = Vec::new();
+    let mut rest = src;
+    while let Some(i) = rest.find(".route(") {
+        rest = &rest[i + 7..];
+        let q1 = rest.find('"').unwrap();
+        let q2 = q1 + 1 + rest[q1 + 1..].find('"').unwrap();
+        let path = rest[q1 + 1..q2].to_string();
+        let end = rest.find(".route(").unwrap_or(rest.len());
+        let chain = &rest[q2..end];
+        for m in ["get", "post", "put", "delete", "patch"] {
+            if chain.contains(&format!("routing::{m}(")) || chain.contains(&format!(".{m}(")) {
+                out.push((m.to_ascii_uppercase(), path.clone()));
+            }
+        }
+    }
+    out
+}
+
+/// A concrete path for a route pattern (`:x` → a 64-hex value).
+fn concrete_path_for_tests(pattern: &str) -> String {
+    pattern
+        .split('/')
+        .map(|s| if s.starts_with(':') { "ab".repeat(32) } else { s.to_string() })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The trusted proxy the public-mode tests stand behind (the demo compose subnet).
+const TEST_PROXY_PEER: &str = "172.30.77.10:40000";
+
+async fn public_call_for_tests(
+    router: &axum::Router,
+    method: &str,
+    path: &str,
+    xff: Option<&str>,
+) -> (StatusCode, bool) {
+    public_call_from_for_tests(router, method, path, xff, TEST_PROXY_PEER).await
+}
+
+async fn public_call_from_for_tests(
+    router: &axum::Router,
+    method: &str,
+    path: &str,
+    xff: Option<&str>,
+    peer: &str,
+) -> (StatusCode, bool) {
+    use tower::ServiceExt as _;
+    let mut b = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .extension(axum::extract::ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()));
+    if let Some(x) = xff {
+        b = b.header("x-forwarded-for", x);
+    }
+    let body = if method == "GET" || method == "DELETE" { "" } else { "{}" };
+    let req = b.header("content-type", "application/json").body(axum::body::Body::from(body)).unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    let gate = resp.headers().get(crate::rest::public_api::GATE_HEADER).is_some();
+    (resp.status(), gate)
+}
+
+fn public_router_for_tests(on: bool) -> (axum::Router, (EnvVarGuard, EnvVarGuard)) {
+    let guard = (
+        EnvVarGuard::set("TET_PUBLIC_API", if on { "1" } else { "0" }),
+        EnvVarGuard::set("TET_PUBLIC_TRUSTED_PROXIES", "172.30.77.0/24"),
+    );
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    (crate::rest::routes::build_router(rest_state_for_tests(ledger)), guard)
+}
+
+/// **SECURITY REGRESSION GUARD: in public mode every route not on the allow-list is a 404 from the gate**
+/// — including mining, `/execute`, logs, admin, founder, the server-side mnemonic generator and the
+/// wallet-keyed anonymity path — and so are near-miss spellings that a looser matcher would let through.
+/// Negative controls: put `POST /ledger/mine` on the allow-list → FAILED; build the router with public
+/// mode off → FAILED (the routes exist and answer).
+#[tokio::test]
+async fn public_mode_refuses_every_route_off_the_allowlist() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (router, _e) = public_router_for_tests(true);
+    let routes = all_defined_routes_for_tests();
+    assert!(routes.len() > 100, "parsed only {} routes", routes.len());
+    let mut refused = 0;
+    for (m, p) in &routes {
+        let path = concrete_path_for_tests(p);
+        let method = axum::http::Method::from_bytes(m.as_bytes()).unwrap();
+        if crate::rest::public_api::is_allowed(&method, &path) {
+            continue;
+        }
+        let (status, gate) = public_call_for_tests(&router, m, &path, Some("203.0.113.7")).await;
+        assert!(status == StatusCode::NOT_FOUND && gate, "{m} {p} is reachable in public mode ({status})");
+        refused += 1;
+    }
+    assert!(refused > 80, "only {refused} routes were checked as refused");
+    for (m, p) in [
+        ("POST", "/ledger/mine"),
+        ("POST", "/execute"),
+        ("GET", "/logs"),
+        ("POST", "/admin/gossip"),
+        ("POST", "/founder/withdraw_treasury"),
+        ("POST", "/wallet/mnemonic/new"),
+        ("POST", "/ledger/initial_airdrop/claim"),
+        ("GET", "/metrics"),
+        ("POST", "/files/fee"),
+        ("GET", "/tmail/anon/path/abababababababababababababababababababababababababababababababab"),
+        // near misses of allowed routes
+        ("GET", "/ledger/state/"),
+        ("GET", "//ledger/state"),
+        ("GET", "/tmail/inbox/a/b"),
+        ("GET", "/tmail/inbox/a%2Fb"),
+        ("GET", "/tmail/inbox/.."),
+        ("GET", "/tmail/inbox/."),
+        ("GET", "/files/fetch/%2e%2e"),
+        ("POST", "/ledger/state"),
+    ] {
+        let (status, gate) = public_call_for_tests(&router, m, p, Some("203.0.113.7")).await;
+        assert!(status == StatusCode::NOT_FOUND && gate, "{m} {p} is reachable in public mode ({status})");
+    }
+}
+
+/// Every allow-listed route reaches its handler: the gate does not refuse it. (The handler may well
+/// answer 400 or 404 for the dummy input; only the gate's own refusal counts as failure.)
+#[tokio::test]
+async fn public_mode_lets_every_allowlisted_route_through() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "1000");
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "1000");
+    let (router, _e) = public_router_for_tests(true);
+    for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
+        let (status, gate) =
+            public_call_for_tests(&router, m, &concrete_path_for_tests(p), Some("203.0.113.8")).await;
+        assert!(!gate, "{m} {p} is on the allow-list but the gate refused it ({status})");
+        assert_ne!(status, StatusCode::TOO_MANY_REQUESTS, "{m} {p}");
+    }
+}
+
+/// **SECURITY REGRESSION GUARD: the per-client limit fires, per client, and cannot be dodged by
+/// prepending a forged `X-Forwarded-For` entry.** One client exhausts its read burst and gets 429; a
+/// second client is unaffected; the first client adding a fake left-most address is still the same
+/// client (Caddy's right-most entry decides). Writes have their own, tighter bucket.
+/// Negative controls: `PublicGate::allow` always true → FAILED; `client_key` takes the left-most
+/// entry → FAILED (the forged prefix escapes the bucket).
+#[tokio::test]
+async fn public_mode_rate_limit_fires_per_client() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "5");
+    let _rs = EnvVarGuard::set("TET_PUBLIC_READ_PER_SEC", "0.001");
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "2");
+    let _wm = EnvVarGuard::set("TET_PUBLIC_WRITE_PER_MIN", "0.001");
+    let (router, _e) = public_router_for_tests(true);
+    for i in 0..5 {
+        let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.1")).await;
+        assert_ne!(s, StatusCode::TOO_MANY_REQUESTS, "request {i} is inside the burst");
+    }
+    let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.1")).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "the 6th read from one client must be limited");
+    let (s, _) =
+        public_call_for_tests(&router, "GET", "/status", Some("192.0.2.99, 198.51.100.1")).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "a forged left-most entry must not escape the bucket");
+    let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.2")).await;
+    assert_ne!(s, StatusCode::TOO_MANY_REQUESTS, "another client is not limited");
+    for _ in 0..2 {
+        let (s, _) = public_call_for_tests(&router, "POST", "/tmail/send", Some("198.51.100.3")).await;
+        assert_ne!(s, StatusCode::TOO_MANY_REQUESTS);
+    }
+    let (s, _) = public_call_for_tests(&router, "POST", "/tmail/send", Some("198.51.100.3")).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "writes have their own, tighter limit");
+}
+
+/// Public mode is opt-in: without `TET_PUBLIC_API` the router is unchanged (the seeds' behaviour).
+#[tokio::test]
+async fn public_mode_is_off_by_default() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (router, _e) = public_router_for_tests(false);
+    let (status, gate) = public_call_for_tests(&router, "GET", "/metrics", None).await;
+    assert!(!gate && status != StatusCode::NOT_FOUND, "/metrics must exist when public mode is off");
+}
+
+
+/// **SECURITY REGRESSION GUARD: `X-Forwarded-For` is believed only from a trusted proxy.** A client
+/// that reaches tet-core directly and invents a new header value on every request is still one
+/// client, keyed by its own address. (Commit security review of #36: trust boundary.)
+/// Negative control: treat every peer as trusted → FAILED.
+#[tokio::test]
+async fn public_mode_ignores_forwarded_for_from_an_untrusted_peer() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "3");
+    let _rs = EnvVarGuard::set("TET_PUBLIC_READ_PER_SEC", "0.001");
+    let (router, _e) = public_router_for_tests(true);
+    let mut last = StatusCode::OK;
+    for i in 0..4 {
+        let fake = format!("203.0.113.{i}");
+        (last, _) =
+            public_call_from_for_tests(&router, "GET", "/status", Some(&fake), "198.51.100.50:5555").await;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS, "rotating X-Forwarded-For from a direct peer escaped the limit");
+}
+
+/// **SECURITY REGRESSION GUARD: IPv6 clients are limited per /64.** Rotating addresses inside one /64
+/// is still one client. (Commit security review of #36: rate-limit bypass.)
+/// Negative control: key IPv6 by the full address → FAILED.
+#[tokio::test]
+async fn public_mode_limits_ipv6_per_slash_64() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "3");
+    let _rs = EnvVarGuard::set("TET_PUBLIC_READ_PER_SEC", "0.001");
+    let (router, _e) = public_router_for_tests(true);
+    let mut last = StatusCode::OK;
+    for i in 1..=4 {
+        let addr = format!("2001:db8:1:2::{i:x}");
+        (last, _) = public_call_for_tests(&router, "GET", "/status", Some(&addr)).await;
+    }
+    assert_eq!(last, StatusCode::TOO_MANY_REQUESTS, "rotating addresses within one /64 escaped the limit");
+    let (other, _) = public_call_for_tests(&router, "GET", "/status", Some("2001:db8:1:3::1")).await;
+    assert_ne!(other, StatusCode::TOO_MANY_REQUESTS, "another /64 is another client");
+}
+
+// ---------------------------------------------------------------------------
+// The demo node's file-fee sponsor (docs/DEMO_NODE.md "File fees", src/demo_sponsor.rs).
+// Driven through the real router in public mode, with a real peer address, so the allow-list, the
+// client identity and the handler are all on the path.
+// ---------------------------------------------------------------------------
+
+struct SponsorFixture {
+    router: axum::Router,
+    state: crate::rest::RestState,
+    sponsor: std::sync::Arc<crate::demo_sponsor::DemoSponsor>,
+    _env: (EnvVarGuard, EnvVarGuard),
+}
+
+fn sponsor_fixture(caps: crate::demo_sponsor::Caps, fund_tet: u64) -> SponsorFixture {
+    let env = (
+        EnvVarGuard::set("TET_PUBLIC_API", "1"),
+        EnvVarGuard::set("TET_PUBLIC_TRUSTED_PROXIES", "172.30.77.0/24"),
+    );
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let words = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let sponsor = std::sync::Arc::new(
+        crate::demo_sponsor::DemoSponsor::new(&ledger.sled_db(), &words, caps).expect("sponsor"),
+    );
+    if fund_tet > 0 {
+        ledger
+            .admin_rest_faucet(sponsor.wallet_id(), fund_tet * crate::ledger::STEVEMON, "ip", true, 1, 1)
+            .unwrap();
+    }
+    let mut state = rest_state_for_tests(ledger);
+    state.demo_sponsor = Some(sponsor.clone());
+    SponsorFixture { router: crate::rest::routes::build_router(state.clone()), state, sponsor, _env: env }
+}
+
+fn sponsor_caps(per_client: u32, per_wallet: u32, global: u32, floor_tet: u64) -> crate::demo_sponsor::Caps {
+    crate::demo_sponsor::Caps { per_client, per_wallet, global, floor_micro: floor_tet * crate::ledger::STEVEMON }
+}
+
+/// A file `sender` uploaded through this node: stored, and recorded the way `/files/upload` does.
+fn sponsor_upload(f: &SponsorFixture, sender: &FileTestWallet) -> String {
+    let blob = b"ciphertext".to_vec();
+    let env = build_signed_file_envelope(sender, &file_test_wallet().wallet_id, &blob, file_now_ms());
+    f.state.files.store_with_blob(&env, &blob).unwrap();
+    f.sponsor.record_upload(&env.file_id.to_string(), &env.sender_wallet_id);
+    env.file_id.to_string()
+}
+
+fn sponsor_request(signer: &FileTestWallet, sender_id: &str, file_id: &str, at_ms: u64) -> serde_json::Value {
+    let msg = crate::demo_sponsor::sponsor_request_auth_message_bytes(file_id, sender_id, at_ms, &signer.mldsa_pub_b64);
+    let s = file_sign_hybrid(signer, &msg);
+    serde_json::json!({
+        "file_id": file_id,
+        "sender_wallet_id": sender_id,
+        "requested_at_ms": at_ms,
+        "hybrid_sig": {
+            "ed25519_pubkey_hex": s.ed25519_pubkey_hex,
+            "ed25519_sig_b64": s.ed25519_sig_b64,
+            "mldsa_pubkey_b64": s.mldsa_pubkey_b64,
+            "mldsa_sig_b64": s.mldsa_sig_b64,
+        },
+    })
+}
+
+async fn sponsor_post(f: &SponsorFixture, body: &serde_json::Value, peer: &str) -> (StatusCode, serde_json::Value) {
+    use tower::ServiceExt as _;
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/demo/files/sponsor-fee")
+        .extension(axum::extract::ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()))
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(body.to_string()))
+        .unwrap();
+    let resp = f.router.clone().oneshot(req).await.unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    (status, serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null))
+}
+
+async fn sponsored_fee_txs(f: &SponsorFixture) -> Vec<(String, String)> {
+    f.state
+        .mempool
+        .lock()
+        .await
+        .iter()
+        .filter_map(|e| match &e.tx {
+            crate::protocol::TxV1::FileFee { from_wallet, file_id, .. } => Some((from_wallet.clone(), file_id.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// **SECURITY REGRESSION GUARD: the sponsor pays once, for a file uploaded here, when its sender
+/// asks, and with nothing but a `FileFee` from the sponsor wallet.** A second request for the same
+/// file, a file this node never stored, and a request signed by someone other than the file's
+/// sender are all refused, and none of them queues a transaction. So is a file this node holds but
+/// did not receive by upload (cached from a peer).
+/// Negative controls: skip the "uploaded here" check → FAILED; skip the "already sponsored" check →
+/// FAILED; accept any signer → FAILED.
+#[tokio::test]
+async fn demo_sponsor_pays_once_for_its_own_upload_and_only_for_the_sender() {
+    let _g = env_lock();
+    set_test_env_base();
+    let f = sponsor_fixture(sponsor_caps(50, 50, 500, 10), 100);
+    let alice = file_test_wallet();
+    let mallory = file_test_wallet();
+    let now = file_now_ms();
+    let peer = "203.0.113.7:5000";
+
+    let fid = sponsor_upload(&f, &alice);
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(sponsored_fee_txs(&f).await, vec![(f.sponsor.wallet_id().to_string(), fid.clone())]);
+
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid twice");
+
+    let never_here = uuid::Uuid::new_v4().to_string();
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &never_here, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid for a file not stored here");
+
+    // Held by this node but not uploaded through it (a blob cached from a peer, say): not ours to pay.
+    let blob = b"fetched from a peer".to_vec();
+    let cached = build_signed_file_envelope(&alice, &file_test_wallet().wallet_id, &blob, file_now_ms());
+    f.state.files.store_with_blob(&cached, &blob).unwrap();
+    let cached_id = cached.file_id.to_string();
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &cached_id, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid for a file only cached here");
+
+    let fid2 = sponsor_upload(&f, &alice);
+    let (st, body) = sponsor_post(&f, &sponsor_request(&mallory, &mallory.wallet_id, &fid2, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid at a non-sender's request");
+    let (st, body) = sponsor_post(&f, &sponsor_request(&mallory, &alice.wallet_id, &fid2, now), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::UNAUTHORIZED, Some("bad_signature")), "accepted a request signed by someone else");
+
+    let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid2, now - 10 * 60_000), peer).await;
+    assert_eq!((st, body["reason"].as_str()), (StatusCode::BAD_REQUEST, Some("stale_request")));
+
+    assert_eq!(sponsored_fee_txs(&f).await.len(), 1, "a refused request queued a transaction");
+}
+
+/// **SECURITY REGRESSION GUARD: every cap is a refusal, never a queue** — per client per day, per
+/// sender wallet per day, for everyone per day, and the balance floor (402). Clients are told apart
+/// by address, so a second address gets its own allowance but not the wallet's.
+/// Negative controls: drop the per-client cap → FAILED; drop the floor → FAILED.
+#[tokio::test]
+async fn demo_sponsor_caps_refuse_rather_than_queue() {
+    let _g = env_lock();
+    set_test_env_base();
+    let now = file_now_ms();
+
+    // Per client: 2 per address.
+    let f = sponsor_fixture(sponsor_caps(2, 50, 500, 10), 100);
+    let alice = file_test_wallet();
+    for i in 0..2 {
+        let fid = sponsor_upload(&f, &alice);
+        let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), "198.51.100.1:1").await;
+        assert_eq!(st, StatusCode::ACCEPTED, "request {i}: {b}");
+    }
+    let fid = sponsor_upload(&f, &alice);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), "198.51.100.1:2").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("daily_cap_ip")));
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), "198.51.100.2:1").await;
+    assert_eq!(st, StatusCode::ACCEPTED, "another address is another client: {b}");
+
+    // Per wallet: 1 per sender, whatever the address.
+    let f = sponsor_fixture(sponsor_caps(50, 1, 500, 10), 100);
+    let bob = file_test_wallet();
+    let fid = sponsor_upload(&f, &bob);
+    assert_eq!(sponsor_post(&f, &sponsor_request(&bob, &bob.wallet_id, &fid, now), "198.51.100.3:1").await.0, StatusCode::ACCEPTED);
+    let fid = sponsor_upload(&f, &bob);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&bob, &bob.wallet_id, &fid, now), "198.51.100.4:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("daily_cap_wallet")));
+
+    // Global: 1 for everyone.
+    let f = sponsor_fixture(sponsor_caps(50, 50, 1, 10), 100);
+    let (c, d) = (file_test_wallet(), file_test_wallet());
+    let fid = sponsor_upload(&f, &c);
+    assert_eq!(sponsor_post(&f, &sponsor_request(&c, &c.wallet_id, &fid, now), "198.51.100.5:1").await.0, StatusCode::ACCEPTED);
+    let fid = sponsor_upload(&f, &d);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&d, &d.wallet_id, &fid, now), "198.51.100.6:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("daily_cap_global")));
+
+    // Floor: funded at the floor, so one fee would take it below.
+    let f = sponsor_fixture(sponsor_caps(50, 50, 500, 10), 10);
+    let e = file_test_wallet();
+    let fid = sponsor_upload(&f, &e);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&e, &e.wallet_id, &fid, now), "198.51.100.7:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::PAYMENT_REQUIRED, Some("sponsor_low")));
+    assert!(sponsored_fee_txs(&f).await.is_empty(), "a refusal queued a transaction");
+}
+
+/// **SECURITY REGRESSION GUARD: the sponsor signs nothing but file fees, and stores no address.**
+/// Read from the source: the only `TxV1` variant `demo_sponsor.rs` constructs is `FileFee`, and it
+/// has one signing call. Then from storage: after sponsoring from a known address, no stored key or
+/// value contains that address.
+/// Negative controls: add a `TxV1::Transfer` path → FAILED; key the client counter by the raw
+/// client key → FAILED.
+#[tokio::test]
+async fn demo_sponsor_signs_nothing_but_file_fees_and_stores_no_address() {
+    let _g = env_lock();
+    set_test_env_base();
+    let src = include_str!("demo_sponsor.rs");
+    let code: String = src.lines().filter(|l| !l.trim_start().starts_with("//")).collect::<Vec<_>>().join("\n");
+    let variants: std::collections::BTreeSet<&str> = code
+        .match_indices("TxV1::")
+        .map(|(i, _)| code[i + 6..].split(|c: char| !c.is_alphanumeric()).next().unwrap_or(""))
+        .collect();
+    assert_eq!(variants, ["FileFee"].into_iter().collect(), "the sponsor constructs {variants:?}");
+    assert_eq!(code.matches("sign_agent_message_bytes(").count(), 1, "more than one signing call");
+
+    let f = sponsor_fixture(sponsor_caps(50, 50, 500, 10), 100);
+    let alice = file_test_wallet();
+    let fid = sponsor_upload(&f, &alice);
+    let ip = "192.0.2.123";
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, file_now_ms()), &format!("{ip}:9")).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{b}");
+    let db = f.state.ledger.sled_db();
+    for name in ["demo_sponsor_uploaded_v1", "demo_sponsor_sponsored_v1", "demo_sponsor_counts_v1"] {
+        for (k, v) in db.open_tree(name).unwrap().iter().flatten() {
+            for bytes in [k.as_ref(), v.as_ref()] {
+                assert!(
+                    !String::from_utf8_lossy(bytes).contains(ip),
+                    "{name} stores the client address"
+                );
+            }
+        }
+    }
+}
+
+/// Without a sponsor the route answers `no_sponsor` (it is on the public allow-list, so the gate
+/// lets it through, and the seeds never configure one).
+#[tokio::test]
+async fn demo_sponsor_is_off_without_a_mnemonic() {
+    let _g = env_lock();
+    set_test_env_base();
+    let mut f = sponsor_fixture(sponsor_caps(5, 5, 500, 10), 0);
+    f.state.demo_sponsor = None;
+    f.router = crate::rest::routes::build_router(f.state.clone());
+    let alice = file_test_wallet();
+    let fid = sponsor_upload(&f, &alice);
+    let (st, b) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, file_now_ms()), "203.0.113.9:1").await;
+    assert_eq!((st, b["reason"].as_str()), (StatusCode::NOT_FOUND, Some("no_sponsor")));
+    let _u = EnvVarGuard::unset("TET_DEMO_SPONSOR_MNEMONIC_FILE");
+    assert!(crate::demo_sponsor::DemoSponsor::from_env(&f.state.ledger.sled_db()).unwrap().is_none());
+}
+
+const UI_SPONSOR_REQUEST: &str = include_str!("testdata/demo_sponsor_request_v1.json");
+
+/// **The try page signs sponsorship requests the node accepts.** The fixture is the page's own
+/// output (`files_fee.ts`): tet-core rebuilds the pre-image from its fields and must get the same
+/// bytes, then must accept both signatures, and refuse them once the file id changes.
+#[test]
+fn ui_signed_sponsor_request_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_SPONSOR_REQUEST).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let req: crate::demo_sponsor::SponsorFeeRequestV1 =
+        serde_json::from_value(doc["request"].clone()).expect("the page's request must deserialize");
+    let ours = crate::demo_sponsor::sponsor_request_auth_message_bytes(
+        &req.file_id,
+        &req.sender_wallet_id,
+        req.requested_at_ms,
+        &req.hybrid_sig.mldsa_pubkey_b64,
+    );
+    assert_eq!(
+        String::from_utf8(ours).unwrap(),
+        doc["preimage_utf8"].as_str().unwrap(),
+        "the page and the node build different sponsorship pre-images"
+    );
+    crate::demo_sponsor::verify_request_signature(&req).expect("the node must accept the page's signature");
+    let mut other = req.clone();
+    other.file_id = uuid::Uuid::new_v4().to_string();
+    assert!(crate::demo_sponsor::verify_request_signature(&other).is_err(), "a signature must not carry to another file");
+}
+
+const SDK_QUESTION_ENVELOPE: &str = include_str!("testdata/agent_question_envelope_v1.json");
+
+/// **The agent SDK's questions are Tmail the node accepts.** `postQuestion` (tet-agent-sdk
+/// `src/questions.ts`) ports the UI's encryption and envelope pre-image; this fixture is its output.
+/// tet-core must verify it as an ordinary named envelope from the agent's key, and refuse it once a
+/// signed field changes.
+#[test]
+fn sdk_question_envelope_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(SDK_QUESTION_ENVELOPE).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let env: crate::tmail::envelope::TmailEnvelopeV1 =
+        serde_json::from_value(doc["envelope"].clone()).expect("the SDK's envelope must deserialize");
+    crate::tmail::envelope::verify_tmail_envelope_v1(&env).expect("the node must accept the SDK's question");
+    let mut other = env.clone();
+    other.receiver_wallet_id = "ab".repeat(32);
+    assert!(
+        crate::tmail::envelope::verify_tmail_envelope_v1(&other).is_err(),
+        "a question must not verify for another receiver"
+    );
+}
+
+const UI_ANSWER_ENVELOPE: &str = include_str!("testdata/ui_answer_envelope_v1.json");
+
+/// **The try page's answers are Tmail the node accepts**: the questions window's answer (the page's
+/// own builder, `make_answer_fixture.mjs`) verifies as a named envelope to the asking agent, and not
+/// once its receiver changes. The agent SDK reads the same fixture (`tests/questions.test.ts`).
+#[test]
+fn ui_answer_envelope_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_ANSWER_ENVELOPE).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let env: crate::tmail::envelope::TmailEnvelopeV1 =
+        serde_json::from_value(doc["envelope"].clone()).expect("the page's envelope must deserialize");
+    crate::tmail::envelope::verify_tmail_envelope_v1(&env).expect("the node must accept the page's answer");
+    let mut other = env.clone();
+    other.receiver_wallet_id = "cd".repeat(32);
+    assert!(crate::tmail::envelope::verify_tmail_envelope_v1(&other).is_err());
 }

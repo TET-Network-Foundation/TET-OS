@@ -52,6 +52,19 @@ is enough for a new node to join and sync. Only Helsinki produces blocks, so liv
 machine: if it is down, the network stops making blocks. It is also a single point of censorship and a
 single operator's machine. There is no committee and no failover.
 
+**The producer can wedge, and it did for 33 hours.** On 2026-10-03 the producer's block-plane
+event loop stopped, and the network made no blocks for 32 h 53 m. Monitoring went red at once;
+nothing restarted the node and nobody saw the alert. The node now exits after 180 s of stall so its
+supervisor restarts it, the host probe restarts a producer it cannot read, and alerts go to a phone.
+The wedge's cause is not yet fixed. See
+[the postmortem](docs/postmortems/2026-10-04-producer-wedge-33h.md).
+
+**Hybrid signatures: identity binding currently rests on Ed25519 alone.** Until the Phase 1
+genesis, the ML-DSA key is not bound to the wallet id, so a signature's post-quantum half does not
+tie it to the sender. Each signature is still verified, and the Ed25519 half authenticates the
+wallet. The fix (the wallet id commits to both public keys, ML-DSA level pinned at 44) changes every
+wallet id and is scheduled for Phase 1.
+
 **Blocks are authenticated by the producer's PeerId, not yet by a producer signature.** Followers pin
 the producer's PeerId by default; the full producer signature lands at Phase 1.
 

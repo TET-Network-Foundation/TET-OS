@@ -9,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 
 /// libp2p request-response protocol name (hello / status exchange).
 pub const CHAIN_SYNC_HELLO_PROTOCOL: &str = "/tet/v1/chain-sync/hello/json";
@@ -134,7 +133,7 @@ pub struct PeerHelloRecord {
     pub catch_up_pending: bool,
 }
 
-/// In-memory registry of peer chain heads (B.3a). Thread-safe via [`SharedHelloRegistry`].
+/// In-memory registry of peer chain heads (B.3a). Lives inside [`SyncState`].
 #[derive(Debug, Default)]
 pub struct SyncHelloRegistry {
     peers: HashMap<String, PeerHelloRecord>,
@@ -142,11 +141,9 @@ pub struct SyncHelloRegistry {
     pub catch_up_triggered: bool,
 }
 
-pub type SharedHelloRegistry = Arc<Mutex<SyncHelloRegistry>>;
-
-pub fn new_hello_registry() -> SharedHelloRegistry {
-    Arc::new(Mutex::new(SyncHelloRegistry::default()))
-}
+/// All three names are the **same** handle (DESIGN_accept_loop § A). They are kept so the call
+/// sites read as before; [`new_sync_state`] is the only constructor, so they cannot diverge.
+pub type SharedHelloRegistry = SyncHandle;
 
 impl SyncHelloRegistry {
     pub fn peer_count(&self) -> usize {
@@ -322,6 +319,12 @@ pub enum CatchUpDriverEvent {
         /// the peer's fault: go idle without blacklisting, and the 1 s catch-up tick retries.
         held: bool,
     },
+    /// This node could not queue the batch for application (its own apply queue was full). Not
+    /// the peer's fault: no blacklist. The driver goes idle and the next tick asks again, since the
+    /// catch-up trigger is still set.
+    LocalBackpressure {
+        peer_id: String,
+    },
 }
 
 /// Side effect for the swarm loop to execute (send RR, clear latch).
@@ -358,13 +361,14 @@ pub struct CatchUpDriver {
     blacklist_ttl_ms: u64,
 }
 
-pub type SharedCatchUpDriver = Arc<Mutex<CatchUpDriver>>;
+/// See [`SharedHelloRegistry`]: the same handle.
+pub type SharedCatchUpDriver = SyncHandle;
 
-pub fn new_catch_up_driver() -> SharedCatchUpDriver {
-    Arc::new(Mutex::new(CatchUpDriver {
+fn new_catch_up_driver_state() -> CatchUpDriver {
+    CatchUpDriver {
         blacklist_ttl_ms: blacklist_ttl_sec_from_env().saturating_mul(1000),
         ..Default::default()
-    }))
+    }
 }
 
 impl CatchUpDriver {
@@ -451,6 +455,16 @@ impl CatchUpDriver {
                     return CatchUpAction::ClearCatchUpTriggered;
                 }
                 self.start_request(registry, local_height)
+            }
+            CatchUpDriverEvent::LocalBackpressure { peer_id } => {
+                log::warn!("[sync] catch-up batch from {peer_id} not queued: local apply queue full");
+                if matches!(
+                    &self.phase,
+                    CatchUpPhase::Requesting { peer_id: active } if active == &peer_id
+                ) {
+                    self.phase = CatchUpPhase::Idle;
+                }
+                CatchUpAction::None
             }
             CatchUpDriverEvent::RangeFailed { peer_id, reason } => {
                 log::warn!("[sync] catch-up range failed peer={peer_id} reason={reason}");
@@ -624,10 +638,37 @@ pub fn compute_ledger_sync_status_with_local_tip_and_bootnodes(
     in_progress: Option<&InProgressRangeRequest>,
     has_bootnodes: bool,
 ) -> LedgerSyncStatus {
+    compute_ledger_sync_status_full(
+        local_height,
+        local_state_root,
+        local_tip_block_id,
+        registry,
+        driver,
+        in_progress,
+        has_bootnodes,
+        false,
+    )
+}
+
+/// The sync gate with every input explicit. `peerless_ok` lifts only the "no peer has said hello"
+/// condition; a peer that is ahead, a tip conflict or a catch-up in flight still gate (#28).
+#[allow(clippy::too_many_arguments)]
+pub fn compute_ledger_sync_status_full(
+    local_height: u64,
+    local_state_root: &str,
+    local_tip_block_id: &str,
+    registry: &SyncHelloRegistry,
+    driver: &CatchUpDriver,
+    in_progress: Option<&InProgressRangeRequest>,
+    has_bootnodes: bool,
+    peerless_ok: bool,
+) -> LedgerSyncStatus {
     let active = !driver.is_idle();
     let catch_up_triggered = registry.catch_up_triggered();
-    let awaiting_first_hello =
-        has_bootnodes && registry.peer_count() == 0 && !is_bootnode_from_env();
+    let awaiting_first_hello = has_bootnodes
+        && registry.peer_count() == 0
+        && !is_bootnode_from_env()
+        && !peerless_ok;
     let tip_conflict =
         peer_tip_conflicts_with_local(local_height, local_state_root, local_tip_block_id, registry);
     let (best_peer_id, best_peer_height) = registry
@@ -659,6 +700,38 @@ fn stable_sync_sec_from_env() -> u64 {
         .max(1)
 }
 
+/// How long a sole validator that started with no peers waits for one before mining on its own
+/// chain (#28). `TET_SOLO_PRODUCER_GRACE_SEC`, default 120.
+pub fn solo_producer_grace_from_env() -> Duration {
+    Duration::from_secs(
+        std::env::var("TET_SOLO_PRODUCER_GRACE_SEC")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(120),
+    )
+}
+
+/// May a node mine with zero peers (#28)?
+///
+/// Only the **sole validator**: nobody else can produce a competing chain, so "no peer has said
+/// hello" cannot mean "someone is ahead of me". Losing every peer must not halt the chain; on
+/// 2026-10-04 stopping the one follower stopped Helsinki for 13 minutes.
+///
+/// Two limits keep the fork guard that the gate exists for (`provision-seed.sh`: a fresh node must
+/// not mine before it hears the real chain):
+/// - an **empty chain never mines peerless**: a node at height 0 waits for a hello, however long;
+/// - a node that has **not yet passed the gate in this process** waits `grace` for a peer first,
+///   so a restarted producer gives the network a chance to tell it it is behind.
+pub fn peerless_mining_allowed(
+    sole_validator: bool,
+    local_height: u64,
+    synced_once: bool,
+    since_start: Duration,
+    grace: Duration,
+) -> bool {
+    sole_validator && local_height > 0 && (synced_once || since_start >= grace)
+}
+
 /// True when auto-mine must pause for chain catch-up (B.4).
 pub fn should_gate_auto_mine(status: &LedgerSyncStatus) -> bool {
     !status.synced || status.sync.active || status.sync.in_progress_request.is_some()
@@ -685,28 +758,58 @@ pub fn is_bootnode_from_env() -> bool {
     )
 }
 
-/// Shared block-plane sync state for REST + auto-mine gate (installed from `main.rs`).
-pub(crate) struct BlockSyncBoard {
-    hello_registry: SharedHelloRegistry,
-    catch_up_driver: SharedCatchUpDriver,
-    in_progress: Option<InProgressRangeRequest>,
+/// Every piece of block-sync state, behind **one** lock (DESIGN_accept_loop § A).
+///
+/// Until 2026-10-05 the hello registry, the catch-up driver and the board each had their own async
+/// mutex, taken in opposite orders by the swarm loop (driver → registry) and by the auto-mine gate and
+/// REST (board → registry → driver). The two deadlocked on 2026-10-03 and the producer stopped for
+/// 33 hours (docs/postmortems/2026-10-04-producer-wedge-33h.md). With one lock there is no order.
+pub struct SyncState {
+    pub registry: SyncHelloRegistry,
+    pub driver: CatchUpDriver,
+    pub in_progress: Option<InProgressRangeRequest>,
     /// When `synced` + tip match + `lag_blocks == 0` were first observed (A.5 stability gate).
     stable_tip_since: Option<std::time::Instant>,
+    /// The auto-miner has passed the gate at least once in this process (#28).
+    synced_once: bool,
+    /// When this state was created, i.e. when the block swarm started (#28 grace period).
+    created_at: std::time::Instant,
 }
 
-pub type SharedBlockSyncBoard = Arc<Mutex<BlockSyncBoard>>;
+/// The only way to reach [`SyncState`]: [`SyncHandle::with`] runs a **synchronous** closure under the
+/// lock and returns its result. A closure cannot `.await`, and the guard never leaves `with`, so the
+/// lock can never be held across an await point: the rule that makes the 2026-10-03 deadlock
+/// impossible is enforced by the type system, not by review (guard G2).
+#[derive(Clone)]
+pub struct SyncHandle(Arc<std::sync::Mutex<SyncState>>);
 
-/// Per-node block-plane sync board (hello registry + catch-up driver + in-flight range RPC).
-pub fn new_block_sync_board(
-    hello_registry: SharedHelloRegistry,
-    catch_up_driver: SharedCatchUpDriver,
-) -> SharedBlockSyncBoard {
-    Arc::new(Mutex::new(BlockSyncBoard {
-        hello_registry,
-        catch_up_driver,
+impl SyncHandle {
+    pub fn with<R>(&self, f: impl FnOnce(&mut SyncState) -> R) -> R {
+        // A panic under the lock poisons it; the state is plain data, so keep using it rather than
+        // turning one panic into a permanently dead sync layer.
+        let mut guard = self.0.lock().unwrap_or_else(|p| p.into_inner());
+        f(&mut guard)
+    }
+
+    /// Whether two handles are the same state (one node), not merely equal contents.
+    pub fn same(&self, other: &SyncHandle) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+/// See [`SharedHelloRegistry`]: the same handle.
+pub type SharedBlockSyncBoard = SyncHandle;
+
+/// Create the node's block-sync state. Call **once** and clone the handle.
+pub fn new_sync_state() -> SyncHandle {
+    SyncHandle(Arc::new(std::sync::Mutex::new(SyncState {
+        registry: SyncHelloRegistry::default(),
+        driver: new_catch_up_driver_state(),
         in_progress: None,
         stable_tip_since: None,
-    }))
+        synced_once: false,
+        created_at: std::time::Instant::now(),
+    })))
 }
 
 /// Update in-flight range request (called from `p2p.rs` when sending/completing range RPC).
@@ -714,7 +817,7 @@ pub async fn set_in_progress_range(
     board: &SharedBlockSyncBoard,
     req: Option<InProgressRangeRequest>,
 ) {
-    board.lock().await.in_progress = req;
+    board.with(|s| s.in_progress = req);
 }
 
 /// Current ledger sync status for REST and consensus auto-mine gate.
@@ -745,23 +848,23 @@ pub async fn ledger_sync_status_with_state_root(
         .flatten()
         .map(|t| t.block_id)
         .unwrap_or_default();
-    let board = board.lock().await;
-    let reg = board.hello_registry.lock().await;
-    let driver = board.catch_up_driver.lock().await;
-    compute_ledger_sync_status_with_local_tip(
-        local_height,
-        local_state_root,
-        &local_tip_block_id,
-        &reg,
-        &driver,
-        board.in_progress.as_ref(),
-    )
+    board.with(|s| {
+        compute_ledger_sync_status_with_local_tip(
+            local_height,
+            local_state_root,
+            &local_tip_block_id,
+            &s.registry,
+            &s.driver,
+            s.in_progress.as_ref(),
+        )
+    })
 }
 
 /// Whether the auto-miner should skip this tick (B.4 + A.5 tip/stability gate).
 pub async fn auto_mine_blocked_by_sync(
     board: Option<&SharedBlockSyncBoard>,
     ledger: &crate::ledger::Ledger,
+    sole_validator: bool,
 ) -> bool {
     if auto_mine_ignore_sync_from_env() {
         return false;
@@ -782,36 +885,44 @@ pub async fn auto_mine_blocked_by_sync(
         .map(|t| t.block_id)
         .unwrap_or_default();
 
-    let status = {
-        let board_g = board.lock().await;
-        let reg = board_g.hello_registry.lock().await;
-        let driver = board_g.catch_up_driver.lock().await;
-        compute_ledger_sync_status_with_local_tip(
+    let has_bootnodes = !crate::vision::fluid_net::bootnode_addrs_from_env().is_empty();
+    let grace = solo_producer_grace_from_env();
+    let stable_sec = stable_sync_sec_from_env();
+    // One acquisition decides the whole gate: status, stability window and bookkeeping see the
+    // same instant of state, and nothing awaits while the lock is held.
+    board.with(|s| {
+        let peerless_ok = peerless_mining_allowed(
+            sole_validator,
+            local_height,
+            s.synced_once,
+            s.created_at.elapsed(),
+            grace,
+        );
+        let status = compute_ledger_sync_status_full(
             local_height,
             &local_state_root,
             &local_tip_block_id,
-            &reg,
-            &driver,
-            board_g.in_progress.as_ref(),
-        )
-    };
-
-    if should_gate_auto_mine(&status) {
-        board.lock().await.stable_tip_since = None;
-        return true;
-    }
-
-    let stable_sec = stable_sync_sec_from_env();
-    let mut board_g = board.lock().await;
-    let now = std::time::Instant::now();
-    match board_g.stable_tip_since {
-        None => {
-            board_g.stable_tip_since = Some(now);
-            true
+            &s.registry,
+            &s.driver,
+            s.in_progress.as_ref(),
+            has_bootnodes,
+            peerless_ok,
+        );
+        if should_gate_auto_mine(&status) {
+            s.stable_tip_since = None;
+            return true;
         }
-        Some(since) if now.duration_since(since) < Duration::from_secs(stable_sec) => true,
-        Some(_) => false,
-    }
+        s.synced_once = true;
+        let now = std::time::Instant::now();
+        match s.stable_tip_since {
+            None => {
+                s.stable_tip_since = Some(now);
+                true
+            }
+            Some(since) if now.duration_since(since) < Duration::from_secs(stable_sec) => true,
+            Some(_) => false,
+        }
+    })
 }
 
 /// Local chain status for hello request/response.

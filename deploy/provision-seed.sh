@@ -102,6 +102,22 @@ ok()   { printf '    \033[32mok\033[0m %s\n' "$*"; }
 warn() { printf '    \033[33mwarn\033[0m %s\n' "$*"; }
 die()  { printf '\n\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Node role (docs/DEMO_NODE.md). `seed` is the default and changes nothing below. `demo` is a
+# follower that also serves the /try page: REST in public mode behind Caddy on 443. It shares
+# nothing with the seeds; it only dials them. Checked before anything touches the host.
+ROLE="${TET_NODE_ROLE:-seed}"
+DEMO_DOMAIN="${TET_DEMO_DOMAIN:-}"
+case "$ROLE" in
+  seed) ;;
+  demo)
+    [ -n "$BOOTNODES" ]   || die "a demo node follows the seeds: set TET_BOOTNODES"
+    [ -n "$DEMO_DOMAIN" ] || die "set TET_DEMO_DOMAIN (the name Caddy gets a certificate for)"
+    [ -n "${TET_DEMO_ACME_EMAIL:-}" ] || die "set TET_DEMO_ACME_EMAIL (Let's Encrypt contact; Caddy will not start without it)"
+    [ "$AUTO_MINE" = 0 ]  || die "a demo node never produces blocks: TET_AUTO_MINE must be 0"
+    ;;
+  *) die "TET_NODE_ROLE must be seed or demo (got '$ROLE')" ;;
+esac
+
 [ "$(id -u)" -eq 0 ] || die "run as root"
 
 # --- 1. host preflight ------------------------------------------------------
@@ -256,6 +272,15 @@ RUST_LOG=info
 RISC0_SKIP_BUILD=$RISC0_SKIP
 TET_BUILD_FEATURES=$BUILD_FEATURES
 EOF
+if [ "$ROLE" = demo ]; then
+  {
+    echo
+    echo "# --- demo node (docs/DEMO_NODE.md) ------------------------------------------"
+    echo "TET_PUBLIC_API=1"
+    echo "TET_DEMO_DOMAIN=$DEMO_DOMAIN"
+    echo "TET_DEMO_ACME_EMAIL=${TET_DEMO_ACME_EMAIL:-}"
+  } >> "$SEED_DIR/.env"
+fi
 chmod 600 "$SEED_DIR/.env"
 ok "profile=$PROFILE  p2p=$P2P_PORT  chain=$CHAIN_ID"
 
@@ -273,6 +298,10 @@ ufw default deny incoming  >/dev/null
 ufw default allow outgoing >/dev/null
 ufw allow "${SSH_PORT}/tcp"  >/dev/null   # keep this first — enabling without it locks you out
 ufw allow "${P2P_PORT}/tcp"  >/dev/null   # block plane; all swarms are TCP-only
+if [ "$ROLE" = demo ]; then
+  ufw allow 80/tcp  >/dev/null   # ACME challenge and the redirect to 443
+  ufw allow 443/tcp >/dev/null   # Caddy: the /try page
+fi
 ufw --force enable >/dev/null
 systemctl enable ufw >/dev/null 2>&1 || true
 ok "$(ufw status | tr '\n' ' ')"
@@ -282,9 +311,34 @@ log "docker compose up -d tet-core  (profile=$PROFILE)"
 cd "$SEED_DIR"
 COMPOSE=(docker compose -f docker-compose.yml)
 [ "$PROFILE" = quickstart ] && COMPOSE+=(-f docker-compose.dev.yml)
-COMPOSE+=(-f deploy/docker-compose.seed.yml)
-printf '    %s\n' "${COMPOSE[*]} up -d --build tet-core"
-"${COMPOSE[@]}" up -d --build tet-core
+SERVICES=(tet-core)
+if [ "$ROLE" = demo ]; then
+  COMPOSE+=(-f deploy/demo/docker-compose.demo.yml)
+  SERVICES+=(ui)
+  # The file-fee sponsor's words go here later (deploy/demo/README.md, section 6). Root only; the
+  # demo overlay mounts it read-only. Nothing in it comes from, or goes to, the seeds.
+  install -d -m 700 /etc/tet-demo
+else
+  COMPOSE+=(-f deploy/docker-compose.seed.yml)
+fi
+printf '    %s\n' "${COMPOSE[*]} up -d --build ${SERVICES[*]}"
+"${COMPOSE[@]}" up -d --build "${SERVICES[@]}"
+
+# A demo node faces the internet only through Caddy, and Caddy starts only once tet-core has
+# PROVED it is in public mode: a route off the allow-list must come back as the gate's own 404.
+# An image without public mode would otherwise sit behind Caddy with every route open.
+if [ "$ROLE" = demo ]; then
+  log "Public mode check (before Caddy)"
+  gate=""
+  for _ in $(seq 1 60); do
+    gate=$(curl -s -o /dev/null -D - -m 5 http://127.0.0.1:5010/metrics 2>/dev/null | tr -d '\r' | grep -i '^x-tet-public-gate: refused' || true)
+    [ -n "$gate" ] && break
+    sleep 5
+  done
+  [ -n "$gate" ] || die "tet-core is not in public mode (/metrics was not refused by the gate); NOT starting Caddy"
+  ok "tet-core refuses off-list routes; starting Caddy"
+  "${COMPOSE[@]}" up -d caddy
+fi
 
 # --- 8b. monitoring ---------------------------------------------------------
 # A systemd timer rather than cron: it survives reboots, logs to the journal,
@@ -299,6 +353,8 @@ install -m 0755 "$SEED_DIR/deploy/seed-healthcheck.sh" /usr/local/bin/tet-health
 mkdir -p /etc/tet
 if [ -n "${TET_HC_URL:-}" ]; then
   printf 'TET_HC_URL=%s\n' "$TET_HC_URL" > /etc/tet/healthcheck.env
+  # A follower must not restart itself on a stalled height (the producer is what stopped).
+  if [ "$AUTO_MINE" = 0 ]; then printf 'TET_HC_ALLOW_RESTART=0\n' >> /etc/tet/healthcheck.env; fi
   chmod 600 /etc/tet/healthcheck.env
   ok "healthchecks.io URL written to /etc/tet/healthcheck.env"
 elif [ -f /etc/tet/healthcheck.env ]; then
@@ -309,31 +365,11 @@ else
   warn "no TET_HC_URL set — probe will run but not report. Add it to /etc/tet/healthcheck.env"
 fi
 
-cat > /etc/systemd/system/tet-healthcheck.service <<EOF
-[Unit]
-Description=TET seed liveness probe
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-EnvironmentFile=/etc/tet/healthcheck.env
-Environment=TET_HC_COMPOSE_DIR=$SEED_DIR
-ExecStart=/usr/local/bin/tet-healthcheck
-EOF
-
-cat > /etc/systemd/system/tet-healthcheck.timer <<'EOF'
-[Unit]
-Description=Run the TET seed liveness probe every minute
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=60s
-AccuracySec=5s
-
-[Install]
-WantedBy=timers.target
-EOF
+# The units are repository files (deploy/systemd/), so a deploy can refresh them from the same tree
+# it refreshes the probe from. The service names the seed directory; the file says /opt/TET-OS.
+sed "s#/opt/TET-OS#$SEED_DIR#g" "$SEED_DIR/deploy/systemd/tet-healthcheck.service" \
+  > /etc/systemd/system/tet-healthcheck.service
+install -m 0644 "$SEED_DIR/deploy/systemd/tet-healthcheck.timer" /etc/systemd/system/tet-healthcheck.timer
 
 systemctl daemon-reload
 systemctl enable --now tet-healthcheck.timer >/dev/null 2>&1
