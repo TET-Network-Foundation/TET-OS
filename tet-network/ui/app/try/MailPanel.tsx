@@ -19,6 +19,7 @@ import { b64ToBytes } from "../lib/encoding";
 import { getTmailInbox, getTmailKeys, normalizeWalletId64, postTmailReadReceipt, postTmailSend } from "../lib/tet_core_http";
 import { Button, FOCUS, INK, Input, KeysBanner, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtWhen } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
+import { useLang } from "./i18n";
 
 const POLL_MS = 8_000;
 const ANON = "anonymous";
@@ -37,12 +38,12 @@ type Received = {
 type Sent = { id: string; to: string; at: number; text: string; burn: boolean; releaseAtMs: number | null };
 type Bubble = { id: string; mine: boolean; at: number; text: string | null; burn: boolean; releaseAtMs: number | null; lockedNote?: string };
 
-const LIMITS = [
-  "Messages are end-to-end encrypted in this tab. The node still sees who writes to whom, and when.",
-  "Key exchange is Kyber round 3, not the final ML-KEM standard (FIPS 203).",
-  "Your own messages show from this tab only: what you send is encrypted to the recipient, so the node can't give it back to you. Close the tab and they are gone from this view.",
-  "A conversation keeps its newest 5 messages; messages expire after 7 days.",
-  "Publishing your messaging keys is public: it shows this wallet can receive.",
+const limits = (t: (en: string) => string) => [
+  t("Messages are end-to-end encrypted in this tab. The node still sees who writes to whom, and when."),
+  t("Key exchange is Kyber round 3, not the final ML-KEM standard (FIPS 203)."),
+  t("Your own messages show from this tab only: what you send is encrypted to the recipient, so the node can't give it back to you. Close the tab and they are gone from this view."),
+  t("A conversation keeps its newest 5 messages; messages expire after 7 days."),
+  t("Publishing your messaging keys is public: it shows this wallet can receive."),
 ];
 
 function toLocalInput(ms: number): string {
@@ -55,6 +56,7 @@ export default function MailPanel(props: {
   /** A DM someone started from a named post: open that conversation (`at` makes repeats count). */
   dmTarget?: { walletId: string; at: number } | null;
 }) {
+  const { t, locale } = useLang();
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
   const me = wallet?.walletId ?? "";
   const [received, setReceived] = useState<Received[]>([]);
@@ -150,8 +152,8 @@ export default function MailPanel(props: {
   }, [wallet, checkKeys, refresh]);
 
   const name = useCallback(
-    (id: string) => (id === ANON ? "anonymous senders" : id === "self" || (me && id === me) ? "you (notes to self)" : id === props.demoContact ? "demo inbox" : id.slice(0, 8)),
-    [me, props.demoContact],
+    (id: string) => (id === ANON ? t("anonymous senders") : id === "self" || (me && id === me) ? t("you (notes to self)") : id === props.demoContact ? t("demo inbox") : id.slice(0, 8)),
+    [me, props.demoContact, t],
   );
 
   // Conversations, newest first; the demo inbox and notes-to-self are always there.
@@ -161,15 +163,15 @@ export default function MailPanel(props: {
       const prev = last.get(k);
       if (!prev || at >= prev.at) last.set(k, { at, preview, unread: unread || !!prev?.unread });
     };
-    for (const m of received) touch(m.from === me ? "self" : m.from, m.at, m.lockedUntilMs ? "scheduled message" : m.burn ? "burn after read" : (m.text ?? "…"), m.from !== me);
+    for (const m of received) touch(m.from === me ? "self" : m.from, m.at, m.lockedUntilMs ? t("scheduled message") : m.burn ? t("burn after read") : (m.text ?? "…"), m.from !== me);
     for (const m of sent) touch(m.to === me ? "self" : m.to, m.at, m.text, false);
     const keysList = [...last.keys()];
     if (props.demoContact && !last.has(props.demoContact)) keysList.push(props.demoContact);
     if (!last.has("self")) keysList.push("self");
     return keysList
-      .map((k) => ({ key: k, ...(last.get(k) ?? { at: 0, preview: k === "self" ? "Write to yourself to try it." : "Write to the person running this node.", unread: false }) }))
+      .map((k) => ({ key: k, ...(last.get(k) ?? { at: 0, preview: k === "self" ? t("Write to yourself to try it.") : t("Write to the person running this node."), unread: false }) }))
       .sort((a, b) => b.at - a.at);
-  }, [received, sent, me, props.demoContact]);
+  }, [received, sent, me, props.demoContact, t]);
 
   const thread: Bubble[] = useMemo(() => {
     const key = current === "self" ? me : current;
@@ -207,17 +209,17 @@ export default function MailPanel(props: {
     try {
       const myId = await ensureWallet();
       const to = current === "self" ? myId : normalizeWalletId64(current);
-      if (!to) throw new Error("That is not a 64-character wallet id.");
+      if (!to) throw new Error(t("That is not a 64-character wallet id."));
       let releaseAtMs: number | undefined;
       if (schedule) {
         releaseAtMs = new Date(releaseAt).getTime();
         const mins = (releaseAtMs - Date.now()) / 60_000;
-        if (!(mins >= TMAIL_MIN_SCHEDULE_MINUTES && mins <= TMAIL_MAX_SCHEDULE_MINUTES)) throw new Error("Pick a release time between 1 minute and 30 days from now.");
+        if (!(mins >= TMAIL_MIN_SCHEDULE_MINUTES && mins <= TMAIL_MAX_SCHEDULE_MINUTES)) throw new Error(t("Pick a release time between 1 minute and 30 days from now."));
       }
       const k = await getTmailKeys(BASE, to);
       if (!k.ok) throw new Error(k.text || `could not look up the recipient (HTTP ${k.status})`);
       if (!k.registration) {
-        throw new Error(to === myId ? "Publish your keys first (the banner above), then you can write to yourself." : "That wallet has not published messaging keys yet, so it cannot receive.");
+        throw new Error(to === myId ? t("Publish your keys first (the banner above), then you can write to yourself.") : t("That wallet has not published messaging keys yet, so it cannot receive."));
       }
       const env = await buildTmailEnvelopeV1({
         senderWalletId: myId,
@@ -256,7 +258,7 @@ export default function MailPanel(props: {
   function startConvo() {
     const id = normalizeWalletId64(newTo);
     if (!id) {
-      setNote({ ok: false, text: "That is not a 64-character wallet id." });
+      setNote({ ok: false, text: t("That is not a 64-character wallet id.") });
       return;
     }
     setNewTo("");
@@ -266,21 +268,21 @@ export default function MailPanel(props: {
   }
 
   return (
-    <section className="flex flex-col md:min-h-[calc(100vh-3.25rem)]" aria-label="DM">
+    <section className="flex flex-col md:min-h-[calc(100vh-3.25rem)]" aria-label={t("DM")}>
       <PanelHead
-        title="DM"
-        sub="Tmail · end-to-end encrypted"
+        title={t("DM")}
+        sub={t("Tmail · end-to-end encrypted")}
         action={
           <Button kind="quiet" className="md:hidden" onClick={() => setView(view === "list" ? "thread" : "list")}>
-            {view === "list" ? "back to the conversation" : "‹ conversations"}
+            {view === "list" ? t("back to the conversation") : t("‹ conversations")}
           </Button>
         }
-        todo="Pick a conversation, write a message and send it. To DM someone from a board, tap their id on a named post."
+        todo={t("Pick a conversation, write a message and send it. To DM someone from a board, tap their id on a named post.")}
       />
-      {keys !== "published" ? <KeysBanner what="To receive DMs, publish your messaging keys." onPublish={() => void onPublish()} busy={publishing} error={publishErr} /> : null}
+      {keys !== "published" ? <KeysBanner what={t("To receive DMs, publish your messaging keys.")} onPublish={() => void onPublish()} busy={publishing} error={publishErr} /> : null}
 
       <div className="grid flex-1 md:grid-cols-[16rem_minmax(0,1fr)]">
-        <nav aria-label="Conversations" className={cx("border-[#e3e5e8] md:border-r", view === "thread" && "hidden md:block")}>
+        <nav aria-label={t("Conversations")} className={cx("border-[#e3e5e8] md:border-r", view === "thread" && "hidden md:block")}>
           <ul>
             {convos.map((c) => (
               <li key={c.key}>
@@ -296,8 +298,8 @@ export default function MailPanel(props: {
                 >
                   <span className="flex items-baseline gap-2 text-[15px]">
                     <b className="font-semibold">{name(c.key)}</b>
-                    {c.unread && c.key !== current ? <span aria-label="new" className="inline-block size-2 rounded-full bg-[#1a237e]" /> : null}
-                    <span className={cx(MONO, "ml-auto text-[12px] text-[#5d646d]")}>{c.at ? fmtWhen(c.at, now) : ""}</span>
+                    {c.unread && c.key !== current ? <span aria-label={t("new")} className="inline-block size-2 rounded-full bg-[#1a237e]" /> : null}
+                    <span className={cx(MONO, "ml-auto text-[12px] text-[#5d646d]")}>{c.at ? fmtWhen(c.at, now, locale) : ""}</span>
                   </span>
                   <span className="block truncate text-[14px] text-[#5d646d]">{c.preview}</span>
                 </button>
@@ -305,9 +307,9 @@ export default function MailPanel(props: {
             ))}
           </ul>
           <div className="space-y-2 px-4 py-3">
-            <Input ariaLabel="Write to a wallet id" value={newTo} onChange={setNewTo} mono placeholder="New: 64-character wallet id…" />
+            <Input ariaLabel={t("Write to a wallet id")} value={newTo} onChange={setNewTo} mono placeholder={t("New: 64-character wallet id…")} />
             <Button kind="secondary" className="min-h-9 px-3 text-[14px]" disabled={!newTo.trim()} onClick={startConvo}>
-              Start a conversation
+              {t("Start a conversation")}
             </Button>
           </div>
         </nav>
@@ -322,10 +324,10 @@ export default function MailPanel(props: {
             ) : null}
           </div>
           <div className="px-4">
-            <PinnedNotice lines={LIMITS} />
+            <PinnedNotice lines={limits(t)} />
           </div>
           <div className="flex flex-1 flex-col gap-1.5 px-4 pb-3" aria-live="polite">
-            {thread.length === 0 ? <p className="text-[15px] text-[#5d646d]">No messages yet.</p> : null}
+            {thread.length === 0 ? <p className="text-[15px] text-[#5d646d]">{t("No messages yet.")}</p> : null}
             {thread.map((m) => {
               const state = opened[m.id];
               const hiddenBurn = !m.mine && m.burn && !state;
@@ -339,20 +341,20 @@ export default function MailPanel(props: {
                 >
                   {m.releaseAtMs && !m.mine ? (
                     <span>
-                      Scheduled message, released {fmtWhen(m.releaseAtMs, now)}. <span className="text-[13.5px]">{m.lockedNote}</span>
+                      {t("Scheduled message, released {when}.", { when: fmtWhen(m.releaseAtMs, now, locale) })} <span className="text-[13.5px]">{t(m.lockedNote ?? "")}</span>
                     </span>
                   ) : hiddenBurn ? (
                     <button type="button" onClick={() => void onOpenBurn(m.id)} className={cx(FOCUS, "rounded text-left underline")}>
-                      Burn after read: open it (this deletes it from cooperating nodes)
+                      {t("Burn after read: open it (this deletes it from cooperating nodes)")}
                     </button>
                   ) : (
-                    <span className="whitespace-pre-wrap break-words">{m.text ?? "Can't be read with this tab's keys."}</span>
+                    <span className="whitespace-pre-wrap break-words">{m.text ?? t("Can't be read with this tab's keys.")}</span>
                   )}
                   <span className={cx(MONO, "mt-0.5 block text-[11.5px] opacity-75")}>
-                    {fmtWhen(m.at, now)}
-                    {m.burn ? " · burn after read" : ""}
-                    {m.mine && m.releaseAtMs ? ` · scheduled · ${fmtWhen(m.releaseAtMs, now)}` : ""}
-                    {state === "burned" ? " · burned on this node" : state && state !== "open" ? ` · ${state}` : ""}
+                    {fmtWhen(m.at, now, locale)}
+                    {m.burn ? ` · ${t("burn after read")}` : ""}
+                    {m.mine && m.releaseAtMs ? ` · ${t("scheduled")} · ${fmtWhen(m.releaseAtMs, now, locale)}` : ""}
+                    {state === "burned" ? ` · ${t("burned on this node")}` : state && state !== "open" ? ` · ${state}` : ""}
                   </span>
                 </div>
               );
@@ -362,42 +364,42 @@ export default function MailPanel(props: {
 
           <div className="sticky bottom-0 border-t border-[#e3e5e8] bg-white px-4 pb-3.5 pt-2.5">
             {current === ANON ? (
-              <p className="text-[14px] text-[#5d646d]">Anonymous senders can&apos;t be replied to: the message doesn&apos;t say who sent it.</p>
+              <p className="text-[14px] text-[#5d646d]">{t("Anonymous senders can't be replied to: the message doesn't say who sent it.")}</p>
             ) : (
               <>
                 <div className="flex items-end gap-2">
                   <TextArea
-                    label={`Message to ${name(current)}`}
+                    label={t("Message to {name}", { name: name(current) })}
                     value={text}
                     onChange={setText}
                     rows={text ? 3 : 1}
                     maxLength={TMAIL_MAX_PLAINTEXT_CHARS}
-                    placeholder={`Message ${name(current)}…`}
+                    placeholder={t("Message {name}…", { name: name(current) })}
                     className="rounded-2xl"
                   />
-                  <Button disabled={busy || !text.trim()} onClick={() => void onSend()}>
-                    {busy ? "Sending…" : "Send"}
+                  <Button className="shrink-0 whitespace-nowrap" disabled={busy || !text.trim()} onClick={() => void onSend()}>
+                    {busy ? t("Sending…") : t("Send")}
                   </Button>
                 </div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <Toggle on={burn} onChange={setBurn}>
-                    burn after read
+                    {t("burn after read")}
                   </Toggle>
                   <Toggle on={schedule} onChange={setSchedule}>
-                    schedule
+                    {t("schedule")}
                   </Toggle>
                   {schedule ? (
                     <input
                       type="datetime-local"
-                      aria-label="Release time"
+                      aria-label={t("Release time")}
                       value={releaseAt}
                       onChange={(e) => setReleaseAt(e.target.value)}
                       className={cx(FOCUS, "min-h-8 rounded-md border border-[#c9ced4] px-2 text-[14px]")}
                     />
                   ) : null}
                 </div>
-                {burn ? <p className="mt-1.5 text-[13px] text-[#5d646d]">{TMAIL_BURN_DISCLOSURE}</p> : null}
-                {schedule ? <p className="mt-1.5 text-[13px] text-[#5d646d]">{TMAIL_TIME_LOCK_DISCLOSURE}</p> : null}
+                {burn ? <p className="mt-1.5 text-[13px] text-[#5d646d]">{t(TMAIL_BURN_DISCLOSURE)}</p> : null}
+                {schedule ? <p className="mt-1.5 text-[13px] text-[#5d646d]">{t(TMAIL_TIME_LOCK_DISCLOSURE)}</p> : null}
                 {note ? (
                   <p role="alert" className={cx("mt-1.5 text-[14.5px]", note.ok ? INK.ok : INK.bad)}>
                     {note.text}

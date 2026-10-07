@@ -15,6 +15,7 @@ import { b64ToBytes } from "../lib/encoding";
 import { getFilesFetch, getFilesInbox, getTmailKeys, normalizeWalletId64, postFilesUpload } from "../lib/tet_core_http";
 import { Badge, Button, Chips, FilePick, INK, Input, KeysBanner, PanelHead, PinnedNotice, cx, fmtWhen } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
+import { useLang } from "./i18n";
 
 const POLL_MS = 8_000;
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -22,14 +23,15 @@ const KB = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
 type Item = { env: FileEnvelopeV1; filename: string; mimeType: string };
 
-const LIMITS = [
-  "Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days.",
-  "The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid.",
-  "The node sees sender, recipient, size and time; not the contents or the file name.",
-  "The storage node is only a hint: fetching asks this node's peers.",
+const LIMITS = (t: (en: string) => string) => [
+  t("Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days."),
+  t("The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid."),
+  t("The node sees sender, recipient, size and time; not the contents or the file name."),
+  t("The storage node is only a hint: fetching asks this node's peers."),
 ];
 
 export default function FilesTryPanel(props: { demoContact: string }) {
+  const { t, locale } = useLang();
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
   const [publishing, setPublishing] = useState(false);
   const [publishErr, setPublishErr] = useState("");
@@ -94,15 +96,15 @@ export default function FilesTryPanel(props: { demoContact: string }) {
     if (!file) return;
     setNote(null);
     try {
-      if (file.size > MAX_BYTES) throw new Error("The file is larger than 5 MB.");
-      setBusy("Encrypting…");
+      if (file.size > MAX_BYTES) throw new Error(t("The file is larger than 5 MB."));
+      setBusy(t("Encrypting…"));
       const me = await ensureWallet();
       const recipient = to === "self" ? me : to === "demo" ? props.demoContact : normalizeWalletId64(other);
-      if (!recipient) throw new Error("The recipient must be a 64-character wallet id.");
+      if (!recipient) throw new Error(t("The recipient must be a 64-character wallet id."));
       const keys = await getTmailKeys(BASE, recipient);
       if (!keys.ok) throw new Error(keys.text || `could not look up the recipient (HTTP ${keys.status})`);
       if (!keys.registration) {
-        throw new Error(recipient === me ? "Publish your keys first (the banner above), then you can send files to yourself." : "That wallet has not published messaging keys yet, so it cannot receive.");
+        throw new Error(recipient === me ? t("Publish your keys first (the banner above), then you can send files to yourself.") : t("That wallet has not published messaging keys yet, so it cannot receive."));
       }
       const built = await buildFileEnvelopeV1({
         senderWalletId: me,
@@ -114,10 +116,10 @@ export default function FilesTryPanel(props: { demoContact: string }) {
         receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
         baseUrl: BASE,
       });
-      setBusy("Uploading…");
+      setBusy(t("Uploading…"));
       const up = await postFilesUpload(BASE, built.envelope, built.bodyCiphertext);
       if (!up.ok) throw new Error(up.text || `not sent (HTTP ${up.status})`);
-      setBusy("Settling the fee…");
+      setBusy(t("Settling the fee…"));
       const fee = await settleFileFee({
         mode: "demo-sponsor",
         baseUrl: BASE,
@@ -125,7 +127,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
         senderWalletId: me,
         storageWallet: up.storageWallet ?? "",
       });
-      setNote({ ok: true, text: fee.state === "sponsored" ? `Sent "${file.name}". ${fee.text}` : fee.text });
+      setNote({ ok: true, text: fee.state === "sponsored" ? `${t("Sent “{name}”.", { name: file.name })} ${fee.text}` : fee.text });
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
       void refresh();
@@ -168,17 +170,17 @@ export default function FilesTryPanel(props: { demoContact: string }) {
   }
 
   const options = [
-    { label: "Yourself", value: "self" },
-    ...(props.demoContact ? [{ label: "The demo inbox", value: "demo" }] : []),
-    { label: "Another wallet", value: "other" },
+    { label: t("Yourself"), value: "self" },
+    ...(props.demoContact ? [{ label: t("The demo inbox"), value: "demo" }] : []),
+    { label: t("Another wallet"), value: "other" },
   ];
 
   return (
-    <section aria-label="Files">
-      <PanelHead title="Files" sub="encrypted · up to 5 MB" todo="Choose a file and who gets it, then send it." />
+    <section aria-label={t("Files")}>
+      <PanelHead title={t("Files")} sub={t("encrypted · up to 5 MB")} todo={t("Choose a file and who gets it, then send it.")} />
       {keys !== "published" ? (
         <KeysBanner
-          what="To receive files, publish your messaging keys."
+          what={t("To receive files, publish your messaging keys.")}
           busy={publishing}
           error={publishErr}
           onPublish={() => {
@@ -192,39 +194,39 @@ export default function FilesTryPanel(props: { demoContact: string }) {
         />
       ) : null}
       <div className="max-w-[46rem] space-y-3 px-4 pb-6 md:px-5">
-      <PinnedNotice lines={LIMITS} />
+      <PinnedNotice lines={LIMITS(t)} />
       <div className="space-y-2">
         <Chips options={options} value={to} onChange={setTo} />
-        {to === "other" ? <Input ariaLabel="Recipient wallet id" value={other} onChange={setOther} mono placeholder="64 hex characters, e.g. 3f9a…" /> : null}
+        {to === "other" ? <Input ariaLabel={t("Recipient wallet id")} value={other} onChange={setOther} mono placeholder={t("64 hex characters, e.g. 3f9a…")} /> : null}
         <FilePick
           ref={inputRef}
           onFile={setFile}
           className="flex min-h-20 items-center justify-center rounded-md border border-dashed border-[#c9ced4] bg-[#fafbfc] px-3 text-center text-base text-[#3d434a] hover:border-[#8b9198]"
         >
-          <span className="break-all">{file ? `${file.name} · ${KB.format(file.size / 1024)} KB` : "Choose a file (up to 5 MB)"}</span>
+          <span className="break-all">{file ? `${file.name} · ${KB.format(file.size / 1024)} KB` : t("Choose a file (up to 5 MB)")}</span>
         </FilePick>
         <Button className="w-full sm:w-auto" disabled={!file || !!busy} onClick={() => void onSend()}>
-          {busy || "Send the file"}
+          {busy || t("Send the file")}
         </Button>
         <p aria-live="polite" className={cx("text-[15px] empty:hidden", note?.ok ? INK.ok : INK.bad)}>{note?.text ?? ""}</p>
       </div>
 
       <div>
-        <h3 className="mb-1 text-[15px] font-semibold">Received</h3>
-        {!wallet ? <p className="text-[15px] text-[#5d646d]">Send something first: that makes your wallet and its inbox.</p> : null}
-        {wallet && items.length === 0 ? <p className="text-[15px] text-[#5d646d]">Nothing yet. Try sending yourself a file.</p> : null}
+        <h3 className="mb-1 text-[15px] font-semibold">{t("Received")}</h3>
+        {!wallet ? <p className="text-[15px] text-[#5d646d]">{t("Send something first: that makes your wallet and its inbox.")}</p> : null}
+        {wallet && items.length === 0 ? <p className="text-[15px] text-[#5d646d]">{t("Nothing yet. Try sending yourself a file.")}</p> : null}
         <ol className="border-t border-[#eceef1] empty:hidden">
           {items.map((it) => (
             <li key={it.env.file_id} className="flex flex-wrap items-center gap-2 border-b border-[#eceef1] py-2.5">
               <span className="min-w-0 flex-1 break-all text-base">{it.filename}</span>
               <span className="text-[14px] text-[#5d646d]">
-                {KB.format(it.env.file_size / 1024)} KB · from{" "}
-                <span translate="no" className={cx("font-mono", INK.named)}>{it.env.sender_wallet_id === wallet?.walletId ? "you" : it.env.sender_wallet_id.slice(0, 8)}</span> ·{" "}
-                {fmtWhen(it.env.created_at_ms, now)}
+                {KB.format(it.env.file_size / 1024)} KB · {t("from")}{" "}
+                <span translate="no" className={cx("font-mono", INK.named)}>{it.env.sender_wallet_id === wallet?.walletId ? t("you") : it.env.sender_wallet_id.slice(0, 8)}</span> ·{" "}
+                {fmtWhen(it.env.created_at_ms, now, locale)}
               </span>
-              <Badge tone="neutral">encrypted</Badge>
+              <Badge tone="neutral">{t("encrypted")}</Badge>
               <Button kind="secondary" className="min-h-9 px-3 text-[15px]" onClick={() => void onDownload(it)}>
-                Download
+                {t("Download")}
               </Button>
             </li>
           ))}

@@ -431,6 +431,12 @@ jobs:
         name: try page — only a board's own wallet can list it in the directory
         run: node scripts/try_directory_guard.mjs
 
+      # Try TET languages: every string the try page shows has Japanese and Hong Kong Chinese, with
+      # the same {placeholders}; the locked Tmail disclosures stay the English constants. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — every string is translated, placeholders intact
+        run: node --experimental-strip-types scripts/try_i18n_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).

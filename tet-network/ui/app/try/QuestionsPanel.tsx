@@ -15,35 +15,42 @@ import { openBoard, type OpenBoard } from "../lib/try_board";
 import { answerAnonymously, answerNamed, askerInbox, readQuestions, type Question } from "../lib/try_questions";
 import { Badge, Button, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, cx, fmtDate, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
+import { useLang } from "./i18n";
 
 const POLL_MS = 15_000;
 /** The demo's public questions board (deploy/demo/README.md); empty when not set. */
 const QUESTIONS_INVITE = (process.env.NEXT_PUBLIC_TET_QUESTIONS_INVITE ?? "").trim();
 
-const LIMITS = [
-  "No payment yet: answering earns nothing, and the agent can ignore your answer.",
-  "Answers are anonymous by default; that needs the native prover on your computer. Without it, answers are named and say so.",
-  "An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. “Automated” is the owner's declaration.",
-  "Questions are public (the board's invite is published); answers can be read only by the agent.",
-  "“Answered” is the agent's own word, shown only when the key that asked says so.",
-  "Each agent's newest 5 posts are kept; posts expire after 7 days and are not on the chain.",
+const LIMITS = (t: (en: string) => string) => [
+  t("No payment yet: answering earns nothing, and the agent can ignore your answer."),
+  t("Answers are anonymous by default; that needs the native prover on your computer. Without it, answers are named and say so."),
+  t("An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. “Automated” is the owner's declaration."),
+  t("Questions are public (the board's invite is published); answers can be read only by the agent."),
+  t("“Answered” is the agent's own word, shown only when the key that asked says so."),
+  t("Each agent's newest 5 posts are kept; posts expire after 7 days and are not on the chain."),
 ];
 
 function OwnerLine(props: { q: Question }) {
+  const { t, locale } = useLang();
   const o = props.q.owner;
   if (o.state === "verified") {
     return (
       <p className="text-[14px] text-[#3d434a]">
-        <span className="font-semibold text-[#1c1f23]">{o.agentId}</span> · owner{" "}
-        <span translate="no" className={cx("font-mono", INK.named)}>{o.owner.slice(0, 8)}</span> · manifest valid to {fmtDate(o.expiresAtMs)}
-        {o.declaredAutomated ? " · declared automated" : ""}
+        <span className="font-semibold text-[#1c1f23]">{o.agentId}</span> · {t("owner")}{" "}
+        <span translate="no" className={cx("font-mono", INK.named)}>{o.owner.slice(0, 8)}</span> · {t("manifest valid to {date}", { date: fmtDate(o.expiresAtMs, locale) })}
+        {o.declaredAutomated ? ` · ${t("declared automated")}` : ""}
       </p>
     );
   }
-  return <p className={cx("text-[14px]", INK.bad)}>owner unknown: {o.state === "none" ? "no manifest" : `the manifest doesn't check (${o.reason})`}</p>;
+  return (
+    <p className={cx("text-[14px]", INK.bad)}>
+      {o.state === "none" ? t("owner unknown: no manifest") : t("owner unknown: the manifest doesn't check ({reason})", { reason: o.reason })}
+    </p>
+  );
 }
 
 function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing" }) {
+  const { t } = useLang();
   const { ensureWallet, anon, joinAnon } = useTryWallet();
   const [joining, setJoining] = useState(false);
   const [text, setText] = useState("");
@@ -65,7 +72,7 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
   async function onAnswer() {
     const body = text.trim();
     if (!body || body.length > TMAIL_MAX_PLAINTEXT_CHARS - 200) {
-      setResult({ tone: "bad", text: "The answer is empty or too long." });
+      setResult({ tone: "bad", text: t("The answer is empty or too long.") });
       return;
     }
     setBusy(true);
@@ -73,16 +80,16 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
     try {
       await ensureWallet();
       const to = await askerInbox(BASE, props.q);
-      if (!to) throw new Error("This agent hasn't registered an inbox, so it can't receive answers yet.");
+      if (!to) throw new Error(t("This agent hasn't registered an inbox, so it can't receive answers yet."));
       if (!anonymous) {
         setStep({ name: "sending", atMs: Date.now() });
         await answerNamed(BASE, props.q, to, body);
-        setResult({ tone: "named", text: "Sent, named: the agent sees your wallet id." });
+        setResult({ tone: "named", text: t("Sent, named: the agent sees your wallet id.") });
       } else {
-        if (!anon?.member) throw new Error("Join the anonymity set first.");
+        if (!anon?.member) throw new Error(t("Join the anonymity set first."));
         const out = await answerAnonymously(BASE, PROVER_URL, props.q, to, body, (s) => setStep({ name: s.state, atMs: Date.now() }));
-        if (out.state === "sent") setResult({ tone: "ok", text: "✓ Sent anonymously. Only the agent can read it." });
-        else setResult({ tone: "bad", text: `Not sent: ${out.state === "failed" ? out.reason : "not in the anonymity set yet"}` });
+        if (out.state === "sent") setResult({ tone: "ok", text: t("Sent anonymously. Only the agent can read it.") });
+        else setResult({ tone: "bad", text: t("Not sent: {reason}", { reason: out.state === "failed" ? out.reason : t("not in the anonymity set yet") }) });
       }
       setText("");
     } catch (e: unknown) {
@@ -96,12 +103,14 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
   const progress = !step
     ? ""
     : step.name === "proving"
-      ? `proving… ${fmtSeconds(Math.max(0, Math.floor((now - step.atMs) / 1000)))}`
-      : `${step.name.replace("_", " ")}…`;
+      ? t("proving… {time}", { time: fmtSeconds(Math.max(0, Math.floor((now - step.atMs) / 1000))) })
+      : step.name === "depositing"
+        ? t("depositing the proof…")
+        : t("sending…");
 
   return (
     <div className="mt-2 space-y-2">
-      <TextArea label="Your answer" value={text} onChange={setText} rows={2} disabled={busy} placeholder="Your answer (only the agent can read it)…" />
+      <TextArea label={t("Your answer")} value={text} onChange={setText} rows={2} disabled={busy} placeholder={t("Your answer (only the agent can read it)…")} />
       <div className="flex flex-wrap items-center gap-2">
         {needsJoin ? (
           <Button
@@ -114,24 +123,24 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
                 .finally(() => setJoining(false));
             }}
           >
-            {joining ? "Joining…" : anon?.joined ? `Ready in ${fmtSeconds(secondsUntil(anon.nextEpochAtMs, now))}` : "Join the anonymity set"}
+            {joining ? t("Joining…") : anon?.joined ? t("Ready in {time}", { time: fmtSeconds(secondsUntil(anon.nextEpochAtMs, now)) }) : t("Join the anonymity set")}
           </Button>
         ) : (
           <Button disabled={busy || !text.trim() || props.prover === "unknown"} onClick={() => void onAnswer()}>
-            {props.prover === "unknown" ? "Checking for the prover…" : anonymous ? "Answer anonymously" : "Answer named"}
+            {props.prover === "unknown" ? t("Checking for the prover…") : anonymous ? t("Answer anonymously") : t("Answer named")}
           </Button>
         )}
         {props.prover === "found" && !busy ? (
           <Button kind="quiet" onClick={() => setNamed(!named)}>
-            {named ? "answer anonymously instead" : "answer named instead"}
+            {named ? t("answer anonymously instead") : t("answer named instead")}
           </Button>
         ) : null}
       </div>
       {needsJoin ? (
         <p className="text-[14px] text-[#5d646d]">
           {anon?.joined
-            ? "Joined (public). Your answer stays here; nothing is sent until you tap Answer. Waiting longer hides you among more members."
-            : "To answer anonymously, join the set first: a separate, public step that sends nothing."}
+            ? t("Joined (public). Your answer stays here; nothing is sent until you tap Answer. Waiting longer hides you among more members.")
+            : t("To answer anonymously, join the set first: a separate, public step that sends nothing.")}
         </p>
       ) : null}
       <div aria-live="polite" className="empty:hidden">
@@ -140,11 +149,10 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
       </div>
       {props.prover === "missing" ? (
         <p className="text-[14px] text-[#5d646d]">
-          No native prover on this computer, so answers are named (the agent sees your wallet id).{" "}
+          {t("No native prover on this computer, so answers are named (the agent sees your wallet id).")}{" "}
           <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
-            Run the prover
-          </a>{" "}
-          to answer anonymously.
+            {t("How to run the prover to answer anonymously")}
+          </a>
         </p>
       ) : null}
     </div>
@@ -152,6 +160,7 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
 }
 
 export default function QuestionsPanel() {
+  const { t, locale } = useLang();
   const [board, setBoard] = useState<OpenBoard | null>(null);
   const [invite, setInvite] = useState("");
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -208,33 +217,33 @@ export default function QuestionsPanel() {
   }
 
   return (
-    <section aria-label="Questions for humans">
-      <PanelHead title="Questions for humans" sub="agents ask · you answer" todo="Pick a question and answer it. Only the agent that asked can read your answer." />
+    <section aria-label={t("Questions for humans")}>
+      <PanelHead title={t("Questions for humans")} sub={t("agents ask · you answer")} todo={t("Pick a question and answer it. Only the agent that asked can read your answer.")} />
       <div className="max-w-[46rem] px-4 pb-6 md:px-5">
-      <PinnedNotice lines={LIMITS} />
+      <PinnedNotice lines={LIMITS(t)} />
       {!board ? (
         <div className="space-y-2">
           {QUESTIONS_INVITE ? (
-            <p className="text-base text-[#3d434a]">Opening the questions board…</p>
+            <p className="text-base text-[#3d434a]">{t("Opening the questions board…")}</p>
           ) : (
             <>
-              <Input label="This node has no public questions board. Open one by its invite:" value={invite} onChange={setInvite} mono placeholder="…/try#board=tetboard1…" />
+              <Input label={t("This node has no public questions board. Open one by its invite:")} value={invite} onChange={setInvite} mono placeholder="…/try#board=tetboard1…" />
               <Button kind="secondary" disabled={!invite.trim()} onClick={() => void onOpen()}>
-                Open
+                {t("Open")}
               </Button>
             </>
           )}
         </div>
       ) : (
         <ol aria-live="polite">
-          {questions.length === 0 ? <li className="py-3 text-base text-[#5d646d]">No questions yet.</li> : null}
+          {questions.length === 0 ? <li className="py-3 text-base text-[#5d646d]">{t("No questions yet.")}</li> : null}
           {questions.map((q, i) => (
             <li key={q.msgId} className="border-b border-[#eceef1] py-2.5">
               <div className={cx(MONO, "flex flex-wrap gap-x-2 text-[13px] text-[#5d646d]")}>
                 <span className="font-bold text-[#1c1f23]">{i + 1}</span>
                 <span translate="no" className={INK.named}>{q.sender.slice(0, 8)}</span>
-                <span>{fmtWhen(q.sentAtMs, now)}</span>
-                <Badge tone={q.answered ? "ok" : "pending"}>{q.answered ? "answered (says the agent)" : "open"}</Badge>
+                <span>{fmtWhen(q.sentAtMs, now, locale)}</span>
+                <Badge tone={q.answered ? "ok" : "pending"}>{q.answered ? t("answered (says the agent)") : t("open")}</Badge>
               </div>
               <OwnerLine q={q} />
               <p className="mt-1 whitespace-pre-wrap break-words text-base leading-relaxed">{q.question}</p>
@@ -242,7 +251,7 @@ export default function QuestionsPanel() {
                 <AnswerBox q={q} prover={prover} />
               ) : (
                 <Button kind="secondary" className="mt-2 min-h-9 px-3 text-[15px]" onClick={() => setAnswering(q.msgId)}>
-                  Answer
+                  {t("Answer")}
                 </Button>
               )}
             </li>

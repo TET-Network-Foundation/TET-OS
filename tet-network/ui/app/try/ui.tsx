@@ -6,6 +6,7 @@
  * colours; no cards, gradients, avatars or emoji. The desktop at /os keeps Win95.
  */
 import { useState, type ReactNode, type Ref } from "react";
+import { useLang } from "./i18n";
 
 export const cx = (...parts: Array<string | false | null | undefined>) => parts.filter(Boolean).join(" ");
 
@@ -165,11 +166,12 @@ export function Toggle(props: { on: boolean; onChange: (on: boolean) => void; ch
  * open with one tap, so a phone screen is not all notice.
  */
 export function PinnedNotice(props: { lines: ReactNode[] }) {
+  const { t } = useLang();
   const [open, setOpen] = useState(false);
   const [first, ...rest] = props.lines;
   return (
     <div className="my-3 border-l-[3px] border-[#c9a227] bg-[#fffbea] px-3 py-2 text-[14.5px] leading-relaxed text-[#1c1f23]">
-      <div className={cx(MONO, "text-[13px] font-semibold text-[#6b4e00]")}>0 · notice</div>
+      <div className={cx(MONO, "text-[13px] font-semibold text-[#6b4e00]")}>0 · {t("notice")}</div>
       <p className="mt-0.5">{first}</p>
       {open
         ? rest.map((l, i) => (
@@ -180,7 +182,7 @@ export function PinnedNotice(props: { lines: ReactNode[] }) {
         : null}
       {rest.length ? (
         <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={cx(FOCUS, "mt-1 rounded text-[13px] text-[#6b4e00] underline")}>
-          {open ? "fewer rules" : `${rest.length} more rules`}
+          {open ? t("fewer rules") : t("{n} more rules", { n: rest.length })}
         </button>
       ) : null}
     </div>
@@ -203,11 +205,14 @@ export function PanelHead(props: { title: ReactNode; sub?: ReactNode; action?: R
 
 /** One inline line asking to publish messaging keys (public), instead of a whole panel. */
 export function KeysBanner(props: { what: string; onPublish: () => void; busy: boolean; error?: string }) {
+  const { t } = useLang();
   return (
     <div className="mx-4 my-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-[#c5cbef] bg-[#f3f4fd] px-3 py-2 text-[14.5px] md:mx-5">
-      <span>{props.what} Publishing them is public: it shows this wallet can receive.</span>
+      <span>
+        {props.what} {t("Publishing them is public: it shows this wallet can receive.")}
+      </span>
       <Button className="min-h-9 px-3 text-[14px]" disabled={props.busy} onClick={props.onPublish}>
-        {props.busy ? "Publishing…" : "Publish keys"}
+        {props.busy ? t("Publishing…") : t("Publish keys")}
       </Button>
       {props.error ? (
         <span role="alert" className={INK.bad}>
@@ -218,21 +223,21 @@ export function KeysBanner(props: { what: string; onPublish: () => void; busy: b
   );
 }
 
-/** Seconds as "28 s" / "1 min 4 s". */
+/** Seconds as "28 s" / "1 min 4 s" (units read the same in all three languages). */
 export function fmtSeconds(s: number): string {
   return s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`;
 }
 
 /** A short, readable time in the visitor's locale: today as a time, otherwise date and time. */
-export function fmtWhen(ms: number, nowMs: number): string {
+export function fmtWhen(ms: number, nowMs: number, locale?: string): string {
   const d = new Date(ms);
   const sameDay = new Date(nowMs).toDateString() === d.toDateString();
-  return new Intl.DateTimeFormat(undefined, sameDay ? { timeStyle: "short" } : { dateStyle: "short", timeStyle: "short" }).format(d);
+  return new Intl.DateTimeFormat(locale, sameDay ? { timeStyle: "short" } : { dateStyle: "short", timeStyle: "short" }).format(d);
 }
 
 /** A calendar date in the visitor's locale. */
-export function fmtDate(ms: number): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(ms));
+export function fmtDate(ms: number, locale?: string): string {
+  return new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(ms));
 }
 
 /** A file picker that stays reachable by keyboard (the input is visually hidden, not removed). */
