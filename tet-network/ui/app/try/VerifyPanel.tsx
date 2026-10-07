@@ -221,6 +221,15 @@ export default function VerifyPanel(props: { baseUrl: string }) {
           <li className="py-2.5 text-[14px] text-[#5d646d]">{t("Checked against chain {chain}.", { chain: verdict.chainLabel })}</li>
         </ol>
       ) : null}
+      <div className="mt-6">
+        <h3 className="mb-1 text-[15px] font-semibold">{t("What this is for")}</h3>
+        <ul className="list-disc space-y-1 pl-5 text-[15px] leading-relaxed text-[#3d434a]">
+          <li>{t("Existence proof: show that a file is exactly the one a key signed. Not when it was signed: there is no timestamping yet.")}</li>
+          <li>{t("Release signing: check that a download is, byte for byte, the build its maintainer's key signed.")}</li>
+          <li>{t("Bot output: check that a message or report came from a particular agent's key and, with its manifest, which owner vouched for that agent.")}</li>
+          <li>{t("Lab result: check that a result file is the one the lab's key signed, unchanged.")}</li>
+        </ul>
+      </div>
       </div>
     </section>
   );

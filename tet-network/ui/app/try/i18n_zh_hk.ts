@@ -361,4 +361,9 @@ export const ZH_HK: Record<string, string> = {
   "Recent events ({n})": "最近的事件（{n} 個）",
   "Nothing yet since this node started.": "此節點啟動以來暫時未有任何事件。",
   "Reading the node…": "正在讀取節點…",
+  "What this is for": "用途",
+  "Existence proof: show that a file is exactly the one a key signed. Not when it was signed: there is no timestamping yet.": "存在證明：證明某檔案正是某條鑰匙所簽署的那一個。但不能證明何時簽署：暫時未有時間戳記。",
+  "Release signing: check that a download is, byte for byte, the build its maintainer's key signed.": "發佈簽署：確認你下載的檔案與維護者鑰匙所簽署的建置版本逐位元組相同。",
+  "Bot output: check that a message or report came from a particular agent's key and, with its manifest, which owner vouched for that agent.": "機械人輸出：確認某訊息或報告來自某個代理人的鑰匙；配合清單，亦可知道哪位擁有者為該代理人作保。",
+  "Lab result: check that a result file is the one the lab's key signed, unchanged.": "化驗結果：確認結果檔案就是化驗所鑰匙所簽署的那一個，未經改動。",
 };
