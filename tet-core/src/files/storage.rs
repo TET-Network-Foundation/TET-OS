@@ -48,6 +48,10 @@ pub struct FileStore {
     meta: sled::Tree,
     inbox: sled::Tree,
     sizes: sled::Tree,
+    /// Held across "check, then write" for a body: who owns a file id, and whether it fits under the
+    /// total cap, must not change between the check and the write (two uploads racing for one id
+    /// would otherwise both pass, and the second would overwrite the first).
+    write_lock: std::sync::Mutex<()>,
 }
 
 fn now_ms() -> u64 {
@@ -108,6 +112,7 @@ impl FileStore {
             meta: db.open_tree(TREE_META)?,
             inbox: db.open_tree(TREE_INBOX)?,
             sizes: db.open_tree(TREE_SIZES)?,
+            write_lock: std::sync::Mutex::new(()),
         };
         // Blobs stored before the size index existed are measured once, here.
         if store.sizes.is_empty() && !store.blob.is_empty() {
@@ -226,6 +231,7 @@ impl FileStore {
         if actual != expected {
             return Err(FileStoreError::Sha256Mismatch { expected, actual });
         }
+        let _w = self.write_lock.lock().unwrap_or_else(|p| p.into_inner());
         self.insert_blob(env.file_id.to_string().as_bytes(), blob)?;
         Ok(())
     }
@@ -250,6 +256,7 @@ impl FileStore {
         if actual != expected {
             return Err(FileStoreError::Sha256Mismatch { expected, actual });
         }
+        let _w = self.write_lock.lock().unwrap_or_else(|p| p.into_inner());
         // A file id belongs to the first envelope stored under it. Ids can be chosen (a "stamp" derives
         // one from a hash anyone holding the .sig.json can compute), so another envelope under the
         // same id must not overwrite its body. The identical envelope may be uploaded again.

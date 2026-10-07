@@ -13652,3 +13652,30 @@ fn a_file_id_cannot_be_taken_over_by_another_envelope() {
     assert_eq!(store.get_blob(&env.file_id.to_string()).as_deref(), Some(blob.as_slice()), "the first body must be intact");
 }
 
+/// **SECURITY REGRESSION GUARD: two uploads racing for one file id can't both win.** The id check and
+/// the write happen under one lock, so of many concurrent envelopes under the same id exactly one is
+/// stored and its body is the one kept. Negative control: drop the lock → FAILED (more than one
+/// "stored", or a body that doesn't match the winner).
+#[test]
+fn racing_uploads_for_one_file_id_have_exactly_one_winner() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (_l, store) = new_file_store();
+    let store = std::sync::Arc::new(store);
+    let id = uuid::Uuid::new_v4();
+    let mut handles = Vec::new();
+    for i in 0..16u8 {
+        let store = store.clone();
+        handles.push(std::thread::spawn(move || {
+            let w = file_test_wallet();
+            let blob = vec![i; 4096];
+            let mut env = build_signed_file_envelope(&w, &w.wallet_id.clone(), &blob, file_now_ms());
+            env.file_id = id;
+            store.store_with_blob(&env, &blob).ok().map(|_| blob)
+        }));
+    }
+    let winners: Vec<Vec<u8>> = handles.into_iter().filter_map(|h| h.join().unwrap()).collect();
+    assert_eq!(winners.len(), 1, "exactly one envelope may own the id");
+    assert_eq!(store.get_blob(&id.to_string()), Some(winners[0].clone()), "the stored body is the winner's");
+}
+
