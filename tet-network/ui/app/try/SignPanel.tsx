@@ -14,6 +14,8 @@ import { checkStamp, signContent, sigJsonBytes, stampFileId, STAMP_RECEIPT_KIND,
 import { Button, FilePick, INK, KeysBanner, MONO, PanelHead, PinnedNotice, TextArea, cx } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
+import { SigQr } from "./QrPanel";
+import { sigSha256 } from "../lib/tet_qr";
 
 /** What a stamp's upload may be (the demo's file cap); a .sig.json embeds the signed file. */
 const NODE_MAX_BODY = 100 * 1024 * 1024;
@@ -40,7 +42,8 @@ export default function SignPanel() {
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
-  const [signed, setSigned] = useState<{ name: string; env: SigEnvelope; bytes: Uint8Array } | null>(null);
+  const [signed, setSigned] = useState<{ name: string; env: SigEnvelope; bytes: Uint8Array; chain: { chainId: string; genesisHash: string } } | null>(null);
+  const [showQr, setShowQr] = useState(false);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [stamp, setStamp] = useState<StampReceipt | null>(null);
@@ -67,10 +70,12 @@ export default function SignPanel() {
       const content = file ? new Uint8Array(await file.arrayBuffer()) : new TextEncoder().encode(text);
       if (content.length === 0) throw new Error(t("Choose a file or write some text first."));
       const type = file ? file.type || "application/octet-stream" : "text/plain";
-      const env = await signContent(content, type, await chainBinding());
+      const chain = await chainBinding();
+      const env = await signContent(content, type, chain);
       const bytes = sigJsonBytes(env);
       const name = `${file?.name ?? "text.txt"}.sig.json`;
-      setSigned({ name, env, bytes });
+      setSigned({ name, env, bytes, chain });
+      setShowQr(false);
       download(name, bytes, "application/json");
       void checkKeys();
     } catch (e: unknown) {
@@ -187,6 +192,9 @@ export default function SignPanel() {
               <Button kind="secondary" onClick={() => download(signed.name, signed.bytes, "application/json")}>
                 {t("Download again")}
               </Button>
+              <Button kind="secondary" onClick={() => setShowQr((v) => !v)}>
+                {showQr ? t("Hide the QR") : t("Show as a QR")}
+              </Button>
               {stamp ? null : (
                 <Button disabled={!!busy} onClick={() => void onStamp()}>
                   {busy || t("Stamp it on chain (optional)")}
@@ -197,6 +205,19 @@ export default function SignPanel() {
               <p className={INK.ok}>
                 {t("Stamped at block {height}. The receipt (.stamp.json) is downloaded; keep it with the .sig.json.", { height: stamp.block_height.toLocaleString() })}
               </p>
+            ) : null}
+            {showQr ? (
+              <SigQr
+                name={signed.name.replace(/\.sig\.json$/, "")}
+                stampHeight={stamp?.block_height}
+                link={{
+                  sigSha256: sigSha256(signed.bytes),
+                  signerEd25519: signed.env.tet.agent_ed25519_pubkey_hex,
+                  chainId: signed.chain.chainId,
+                  genesisHash: signed.chain.genesisHash,
+                  ...(stamp ? { stampTx: stamp.tx_hash } : {}),
+                }}
+              />
             ) : null}
           </div>
         ) : null}
