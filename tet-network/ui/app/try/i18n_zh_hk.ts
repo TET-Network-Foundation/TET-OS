@@ -374,4 +374,5 @@ export const ZH_HK: Record<string, string> = {
   "The file is larger than 100 MB.": "檔案大於 100 MB。",
   "encrypted · up to 100 MB · 7 days": "已加密 · 最大 100 MB · 7 日",
   "Choose a photo, PDF or short video (up to 100 MB)": "選擇相片、PDF 或短片（最大 100 MB）",
+  "Daily upload limit for this connection: {left} MB left today.": "已達此連線的每日上載上限：今日尚餘 {left} MB。",
 };

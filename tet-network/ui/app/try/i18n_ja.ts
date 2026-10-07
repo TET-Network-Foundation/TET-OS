@@ -374,4 +374,5 @@ export const JA: Record<string, string> = {
   "The file is larger than 100 MB.": "ファイルが100 MBを超えています。",
   "encrypted · up to 100 MB · 7 days": "暗号化 · 最大100 MB · 7日間",
   "Choose a photo, PDF or short video (up to 100 MB)": "写真・PDF・短い動画を選ぶ（最大100 MB）",
+  "Daily upload limit for this connection: {left} MB left today.": "この接続の1日のアップロード上限に達します。今日の残りは {left} MB です。",
 };

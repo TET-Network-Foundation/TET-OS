@@ -127,6 +127,15 @@ export default function FilesTryPanel(props: { demoContact: string }) {
         receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
         baseUrl: BASE,
       });
+      // Ask first: in public mode the node keeps a daily upload budget per address, and a refused
+      // upload is cut off mid-way, so the page checks what's left before sending.
+      const bud = await fetch(`${BASE}/files/upload-budget`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const left = typeof bud?.remaining_bytes === "number" ? (bud.remaining_bytes as number) : null;
+      if (left !== null && built.bodyCiphertext.length + 64 * 1024 > left) {
+        throw new Error(t("Daily upload limit for this connection: {left}\u00a0MB left today.", { left: KB.format(left / 1024 / 1024) }));
+      }
       setBusy(t("Uploading…"));
       const up = await postFilesUpload(BASE, built.envelope, built.bodyCiphertext);
       if (!up.ok) throw new Error(up.text || `not sent (HTTP ${up.status})`);

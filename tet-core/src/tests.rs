@@ -13566,8 +13566,10 @@ fn file_size_index_backfills_blobs_stored_before_it() {
 /// **SECURITY REGRESSION GUARD: in public mode, uploads are charged per client per UTC day** — so one
 /// address can't fill the node's disk inside the write-token burst — and an upload without a length
 /// is refused before its body is read. Another client, and the next day, start fresh.
+/// The page reads `GET /files/upload-budget` first, so a refusal can answer at once (nothing is read
+/// or buffered for it) and a chunked body, which could carry more than a declared length, is refused.
 /// Negative controls: `charge_upload` always true → FAILED; the gate skipping the length check →
-/// FAILED (the length-less upload reaches the handler).
+/// FAILED (the length-less upload reaches the handler); skipping the Transfer-Encoding check → FAILED.
 #[tokio::test]
 async fn public_mode_charges_uploads_per_client_per_day_and_needs_a_length() {
     use tower::ServiceExt as _;
@@ -13595,11 +13597,30 @@ async fn public_mode_charges_uploads_per_client_per_day_and_needs_a_length() {
         }
         b.body(axum::body::Body::from("--x--\r\n")).unwrap()
     };
+    let budget = || async {
+        let req = axum::http::Request::builder()
+            .method("GET")
+            .uri("/files/upload-budget")
+            .extension(axum::extract::ConnectInfo(TEST_PROXY_PEER.parse::<std::net::SocketAddr>().unwrap()))
+            .header("x-forwarded-for", "203.0.113.90")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = router.clone().oneshot(req).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice::<serde_json::Value>(&body).unwrap()["remaining_bytes"].as_u64()
+    };
+    assert_eq!(budget().await, Some(1000));
     let r = router.clone().oneshot(send(None)).await.unwrap();
     assert_eq!(r.status(), StatusCode::LENGTH_REQUIRED, "an upload without a length must be refused");
+    let mut chunked = send(Some("10"));
+    chunked.headers_mut().insert("transfer-encoding", "chunked".parse().unwrap());
+    let r = router.clone().oneshot(chunked).await.unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST, "an upload with Transfer-Encoding must be refused");
     let r = router.clone().oneshot(send(Some("900"))).await.unwrap();
     assert_ne!(r.status(), StatusCode::TOO_MANY_REQUESTS, "900 bytes fit the budget");
+    assert_eq!(budget().await, Some(100), "the budget shows what is left");
     let r = router.clone().oneshot(send(Some("200"))).await.unwrap();
     assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS, "900 + 200 bytes exceed 1000 for this client");
+    assert_eq!(r.headers().get("connection").map(|v| v.to_str().unwrap()), Some("close"), "a refusal closes at once");
 }
 

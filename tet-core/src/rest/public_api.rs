@@ -17,6 +17,7 @@
 //! subscriber usually holds a whole /64, and per-address keys would give each 2^64 buckets.
 
 use axum::http::{HeaderMap, Method, StatusCode};
+use axum::Json;
 use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -49,6 +50,8 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/tmail/anon/receipt/:hash"),
     // Files. `/files/fee` is not here: a visitor's fee goes through the sponsor below.
     ("POST", "/files/upload"),
+    // How much this address may still upload today (the page asks before a large upload).
+    ("GET", "/files/upload-budget"),
     ("GET", "/files/inbox/:wallet_id"),
     ("GET", "/files/fetch/:file_id"),
     ("DELETE", "/files/item/:file_id"),
@@ -274,6 +277,19 @@ impl PublicGate {
         e.1 += bytes;
         true
     }
+
+    /// Bytes `client` may still upload on UTC day `day`.
+    pub fn remaining_upload(&self, client: &str, day: u64) -> u64 {
+        let used = self
+            .uploads
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(client)
+            .filter(|(d, _)| *d == day)
+            .map(|(_, b)| *b)
+            .unwrap_or(0);
+        upload_bytes_per_day().saturating_sub(used)
+    }
 }
 
 fn is_write(method: &Method) -> bool {
@@ -302,26 +318,36 @@ pub async fn public_api_gate(
         )
             .into_response();
     }
-    // Uploads are charged by size, before the body is read: a length is required.
+    let day = crate::swarm_health::now_ms() / 86_400_000;
+    // The page asks before a large upload, so a visitor sees how much is left instead of a refusal.
+    if req.method() == Method::GET && req.uri().path() == "/files/upload-budget" {
+        return Json(serde_json::json!({
+            "per_day_bytes": upload_bytes_per_day(),
+            "remaining_bytes": gate.remaining_upload(&client, day),
+        }))
+        .into_response();
+    }
+    // Uploads are charged by their declared length, before the body is read. A refusal answers at
+    // once and closes the connection: nothing is buffered or read for a request that won't be served.
     if req.method() == Method::POST && req.uri().path() == "/files/upload" {
+        let refuse = |status: StatusCode, msg: &'static str| {
+            (status, [(GATE_HEADER, "upload-refused"), ("connection", "close")], msg).into_response()
+        };
+        // A chunked body could carry more than a declared length; hyper holds a plain body to its
+        // Content-Length, so an upload must have one and no Transfer-Encoding.
+        if req.headers().contains_key(axum::http::header::TRANSFER_ENCODING) {
+            return refuse(StatusCode::BAD_REQUEST, "an upload must not use Transfer-Encoding");
+        }
         let len = req
             .headers()
             .get(axum::http::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
-        // A refusal reads (and drops) the body first, up to the node's cap: answering mid-upload
-        // makes the server reset the connection, and the client would never see why it was refused.
-        let refuse = |req: axum::http::Request<axum::body::Body>, status: StatusCode, tag: &'static str, msg: &'static str| async move {
-            let limit = (crate::files::max_file_body_bytes() + 3 * 1024 * 1024) as usize;
-            let _ = axum::body::to_bytes(req.into_body(), limit).await;
-            (status, [(GATE_HEADER, tag)], msg).into_response()
-        };
         let Some(len) = len else {
-            return refuse(req, StatusCode::LENGTH_REQUIRED, "refused", "an upload needs a Content-Length").await;
+            return refuse(StatusCode::LENGTH_REQUIRED, "an upload needs a Content-Length");
         };
-        let day = crate::swarm_health::now_ms() / 86_400_000;
         if !gate.charge_upload(&client, len, day) {
-            return refuse(req, StatusCode::TOO_MANY_REQUESTS, "upload-budget", "daily upload limit reached for this address").await;
+            return refuse(StatusCode::TOO_MANY_REQUESTS, "daily upload limit reached for this address");
         }
     }
     next.run(req).await

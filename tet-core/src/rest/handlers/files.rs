@@ -478,3 +478,10 @@ pub async fn delete_files(
     )
         .into_response()
 }
+
+/// `GET /files/upload-budget` — off public mode there is no per-address budget (in public mode the
+/// gate answers this itself, for the caller's address: `public_api::public_api_gate`).
+pub async fn get_files_upload_budget() -> Response {
+    Json(serde_json::json!({ "per_day_bytes": null, "remaining_bytes": null })).into_response()
+}
+

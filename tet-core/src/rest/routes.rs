@@ -279,6 +279,10 @@ pub fn build_router(state: RestState) -> axum::Router {
                 )),
         )
         .route(
+            "/files/upload-budget",
+            axum::routing::get(super::handlers::files::get_files_upload_budget),
+        )
+        .route(
             "/files/announce",
             axum::routing::post(super::handlers::files::post_files_announce),
         )

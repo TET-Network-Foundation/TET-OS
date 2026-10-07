@@ -48,6 +48,7 @@
 		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/anon/receipt$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/receipt/[^/%]+$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/files/upload$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/files/upload-budget$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/files/inbox/[^/%]+$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/files/fetch/[^/%]+$")) ||
 		({method} == "DELETE" && {path}.matches("^/tet-node-api/files/item/[^/%]+$")) ||
