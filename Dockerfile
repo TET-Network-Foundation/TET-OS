@@ -38,6 +38,10 @@ RUN if [ "$RISC0_SKIP_BUILD" != "1" ]; then \
     fi
 
 COPY . .
+# The source commit, compiled in for `GET /status/live` (empty: the node reports null). Set here, after
+# the toolchain layers, so a new commit doesn't rebuild them.
+ARG TET_GIT_SHA=""
+ENV TET_GIT_SHA=${TET_GIT_SHA}
 RUN if [ -n "$TET_BUILD_FEATURES" ]; then \
       cargo build --release -p tet-core --bin TET-Core --features "$TET_BUILD_FEATURES"; \
     else \

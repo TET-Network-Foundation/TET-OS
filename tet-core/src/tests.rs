@@ -13404,3 +13404,64 @@ fn ui_answer_envelope_verifies_in_rust() {
     other.receiver_wallet_id = "cd".repeat(32);
     assert!(crate::tmail::envelope::verify_tmail_envelope_v1(&other).is_err());
 }
+
+// ---- the try page's Live channel (`GET /status/live`, `crate::live_feed`) ----------------------
+
+/// **SECURITY REGRESSION GUARD: the Live feed is bounded, newest first, and carries only the last 6
+/// characters of a peer id — never a whole id, an address, or anything from a message.** Other tests'
+/// swarms may record into the same process-wide feed, so this checks our own markers among them.
+/// Negative controls: `short_peer` returns the whole id → FAILED; `record` never pops → FAILED (the
+/// feed grows past `LIVE_EVENTS_KEEP`).
+#[test]
+fn live_feed_is_bounded_newest_first_and_names_peers_by_six_characters() {
+    let peer = "12D3KooWLiveFeedTestPeerAbCdEf";
+    let base = 9_000_000_000u64;
+    for h in 0..(crate::live_feed::LIVE_EVENTS_KEEP as u64 + 5) {
+        crate::live_feed::record("block", Some(base + h), Some(peer));
+    }
+    let snap = crate::live_feed::snapshot();
+    assert!(snap.len() <= crate::live_feed::LIVE_EVENTS_KEEP, "the feed grew to {}", snap.len());
+    let ours: Vec<u64> = snap.iter().filter_map(|e| e.height.filter(|h| *h >= base)).collect();
+    assert!(!ours.is_empty(), "our events are missing");
+    assert!(ours.windows(2).all(|w| w[0] > w[1]), "not newest first: {ours:?}");
+    assert_eq!(ours[0], base + crate::live_feed::LIVE_EVENTS_KEEP as u64 + 4, "the newest event is first");
+    let json = serde_json::to_string(&snap).unwrap();
+    assert!(!json.contains(peer), "a whole peer id leaked: {json}");
+    assert!(json.contains("\"peer\":\"AbCdEf\""), "the short peer label is the last 6 characters");
+    assert_eq!(crate::live_feed::short_peer("abc"), "abc");
+}
+
+/// `/status/live` is on the public allow-list and answers with the node's real numbers: the ledger's
+/// height, the apply-queue depth, the build commit (or null), and the recorded events — with no
+/// whole peer id and no client address in the body.
+#[tokio::test]
+async fn status_live_answers_in_public_mode_with_real_numbers_and_no_addresses() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "1000");
+    let (router, _e) = public_router_for_tests(true);
+    let peer = "12D3KooWStatusLiveRouteTestXyZ987";
+    crate::live_feed::record("tmail", None, Some(peer));
+    let req = axum::http::Request::builder()
+        .method("GET")
+        .uri("/status/live")
+        .extension(axum::extract::ConnectInfo(TEST_PROXY_PEER.parse::<std::net::SocketAddr>().unwrap()))
+        .header("x-forwarded-for", "203.0.113.77")
+        .body(axum::body::Body::empty())
+        .unwrap();
+    let resp = router.oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(resp.headers().get(crate::rest::public_api::GATE_HEADER).is_none(), "the gate refused /status/live");
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(j["height"].is_u64(), "height: {j}");
+    assert!(j["apply_queue_depth"].is_u64(), "apply_queue_depth: {j}");
+    assert!(j["commit"].is_null() || j["commit"].is_string(), "commit: {j}");
+    assert_eq!(j["events_keep"], crate::live_feed::LIVE_EVENTS_KEEP);
+    let events = j["events"].as_array().expect("events");
+    assert!(events.iter().any(|e| e["kind"] == "tmail" && e["peer"] == "XyZ987"), "our event: {j}");
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains(peer), "a whole peer id leaked");
+    assert!(!text.contains("203.0.113.77"), "the client address leaked");
+}

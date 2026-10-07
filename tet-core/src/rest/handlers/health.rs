@@ -48,3 +48,23 @@ pub async fn get_health_swarm(State(state): State<RestState>) -> impl IntoRespon
     };
     (status, Json(body))
 }
+
+/// `GET /status/live`
+///
+/// The try page's "Live" channel: this node's real numbers and the last few things it saw on the
+/// network (`crate::live_feed`). Height from the ledger, connected peers from the swarm beacon,
+/// the apply-queue depth from the same gauge `/metrics` exports, the last
+/// [`crate::live_feed::LIVE_EVENTS_KEEP`] events, and the source commit the binary was built from
+/// (`null` when the build didn't record it). Read-only; nothing here is synthesised.
+pub async fn get_status_live(State(state): State<RestState>) -> impl IntoResponse {
+    let peers = state.swarm_health.as_ref().map(|h| h.connected_peers());
+    Json(json!({
+        "height": state.ledger.block_height().unwrap_or(0),
+        "peers": peers,
+        "apply_queue_depth": crate::metrics::apply_queue_depth(),
+        "commit": crate::live_feed::build_commit(),
+        "events": crate::live_feed::snapshot(),
+        "events_keep": crate::live_feed::LIVE_EVENTS_KEEP,
+        "now_ms": crate::swarm_health::now_ms(),
+    }))
+}

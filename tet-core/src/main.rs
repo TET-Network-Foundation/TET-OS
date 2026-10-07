@@ -17,6 +17,7 @@ mod fips204_vectors;
 mod genesis;
 mod invariant_tests;
 mod ledger;
+mod live_feed;
 mod marketplace;
 mod metrics;
 mod models;

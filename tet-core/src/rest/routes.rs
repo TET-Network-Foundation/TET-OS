@@ -82,6 +82,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::health::get_health_swarm),
         )
         .route(
+            "/status/live",
+            axum::routing::get(super::handlers::health::get_status_live),
+        )
+        .route(
             "/wallet/mnemonic/new",
             axum::routing::get(super::handlers::wallet::get_wallet_mnemonic_new)
                 .post(super::handlers::wallet::post_wallet_new),

@@ -15,6 +15,7 @@ import { wordsFileText } from "../lib/disposable_wallet.mjs";
 import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
 import DirectoryPanel from "./DirectoryPanel";
 import AboutPanel from "./AboutPanel";
+import LivePanel from "./LivePanel";
 import BoardPanel from "./BoardPanel";
 import FilesTryPanel from "./FilesTryPanel";
 import MailPanel from "./MailPanel";
@@ -41,6 +42,7 @@ const TOOLS = [
   { id: "verify", label: "verify", group: "tools" },
   { id: "files", label: "files", group: "tools" },
   { id: "mail", label: "DM", group: "tools" },
+  { id: "live", label: "live", group: "tools" },
   { id: "about", label: "About", group: "footer" },
 ] as const;
 type ToolId = (typeof TOOLS)[number]["id"] | "new";
@@ -184,6 +186,7 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
         {item({ tool: "verify" }, "/", t("verify"))}
         {item({ tool: "files" }, "/", t("files"))}
         {item({ tool: "mail" }, "/", t("DM"))}
+        {item({ tool: "live" }, "/", t("live"))}
       </ul>
       <p className="mx-2 mt-4 text-[13.5px]">
         <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "about" })}>
@@ -349,6 +352,7 @@ function TryApp() {
     mail: t("DM"),
     new: t("start or open a board"),
     about: t("About"),
+    live: t("live"),
   };
   const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || t("Untitled board") : TOOL_LABEL[view.tool];
 
@@ -436,6 +440,7 @@ function TryApp() {
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           {panel({ tool: "about" }, <AboutPanel />)}
+          {panel({ tool: "live" }, <LivePanel />)}
           <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
             {t("Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.")}
           </p>
