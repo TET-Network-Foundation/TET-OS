@@ -3,7 +3,7 @@
 //
 // A thread post's plaintext is
 //
-//     tet-thread v1 <16 hex id>
+//     tet-thread v1 <16 hex id>[ sage]
 //     title: <one line>            (only on the post that opens the thread)
 //
 //     <body>
@@ -16,6 +16,8 @@
 //   ties broken by message id. The sender sets a post's time, so a later post claiming an earlier
 //   time could set the title of a thread whose opener has dropped out. The notice says so.
 // - Posts without a header (from before threads) form one group, "posts without a thread".
+// - **sage** (2ch): a reply whose header ends in " sage" doesn't bump its thread up the list. Only
+//   the header can sage a post; a body saying "sage" is just text.
 //
 // Plain ESM with no I/O, so the guard runs the page's own code (scripts/try_threads_guard.mjs).
 
@@ -23,7 +25,7 @@ export const THREAD_HEADER = "tet-thread v1";
 /** The longest thread title. */
 export const THREAD_TITLE_MAX = 80;
 
-const HEADER_RE = /^tet-thread v1 ([0-9a-f]{16})$/;
+const HEADER_RE = /^tet-thread v1 ([0-9a-f]{16})( sage)?$/;
 const TITLE_RE = /^title: (.*)$/;
 
 /** A new random thread id (8 bytes, hex). */
@@ -45,7 +47,7 @@ export function checkThreadTitle(title) {
 /** The plaintext for a post in a thread; `title` only when opening it. */
 export function encodeThreadPost(o) {
   if (!/^[0-9a-f]{16}$/.test(o.threadId ?? "")) throw new Error("bad thread id");
-  const lines = [`${THREAD_HEADER} ${o.threadId}`];
+  const lines = [`${THREAD_HEADER} ${o.threadId}${o.sage && o.title == null ? " sage" : ""}`];
   if (o.title != null) {
     const c = checkThreadTitle(o.title);
     if (!c.ok) throw new Error(c.reason);
@@ -63,7 +65,7 @@ export function parseThreadPost(text) {
   const nl = s.indexOf("\n");
   const first = nl === -1 ? s : s.slice(0, nl);
   const m = HEADER_RE.exec(first);
-  if (!m) return { threadId: null, title: null, body: s };
+  if (!m) return { threadId: null, title: null, sage: false, body: s };
   let rest = nl === -1 ? "" : s.slice(nl + 1);
   let title = null;
   const nl2 = rest.indexOf("\n");
@@ -76,7 +78,8 @@ export function parseThreadPost(text) {
   }
   // The blank line between the header and the body.
   if (rest.startsWith("\n")) rest = rest.slice(1);
-  return { threadId: m[1], title, body: rest };
+  // A thread's opener can't be sage: it is what the thread starts from.
+  return { threadId: m[1], title, sage: !!m[2] && title === null, body: rest };
 }
 
 const byTime = (a, b) => a.sentAtMs - b.sentAtMs || String(a.msgId).localeCompare(String(b.msgId));
@@ -93,12 +96,37 @@ export function groupThreads(posts) {
     const parsed = parseThreadPost(p.text);
     const id = parsed.threadId ?? "";
     if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push({ ...p, body: parsed.body, title: parsed.title });
+    groups.get(id).push({ ...p, body: parsed.body, title: parsed.title, sage: parsed.sage });
   }
   const threads = [...groups.entries()].map(([threadId, ps]) => {
     ps.sort(byTime);
     const titled = threadId ? ps.find((p) => p.title) : undefined;
-    return { threadId, title: titled ? titled.title : null, posts: ps, count: ps.length, lastAtMs: ps[ps.length - 1].sentAtMs };
+    // The list is ordered by the last post that bumps (sage posts don't); the first post always counts.
+    const bumping = ps.filter((p, i) => i === 0 || !p.sage);
+    return {
+      threadId,
+      title: titled ? titled.title : null,
+      posts: ps,
+      count: ps.length,
+      lastAtMs: ps[ps.length - 1].sentAtMs,
+      bumpAtMs: bumping[bumping.length - 1].sentAtMs,
+    };
   });
-  return threads.sort((a, b) => (a.threadId === "" ? 1 : 0) - (b.threadId === "" ? 1 : 0) || b.lastAtMs - a.lastAtMs);
+  return threads.sort((a, b) => (a.threadId === "" ? 1 : 0) - (b.threadId === "" ? 1 : 0) || b.bumpAtMs - a.bumpAtMs);
 }
+
+/** キリ番: a round post number (100, 200, … 1000, …), marked quietly. */
+export function isKiriban(n) {
+  return Number.isInteger(n) && n >= 100 && n % 100 === 0;
+}
+
+/**
+ * Whether a post looks like ASCII/Shift-JIS art, which needs its spacing kept: two or more lines,
+ * and a line with a run of 3+ spaces (half- or full-width) or box/line drawing characters.
+ */
+export function looksLikeAA(text) {
+  const lines = String(text ?? "").split("\n");
+  if (lines.length < 2) return false;
+  return lines.some((l) => /[ \u3000]{3,}/.test(l) || /[─━│┃┌┐└┘├┤┬┴┼╋▓▒░█▄▀■□◆◇○●∀´｀＿￣ヽﾉ⊂⊃]{2,}|[／＼|]{2,}/.test(l));
+}
+
