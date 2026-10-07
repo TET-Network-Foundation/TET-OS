@@ -22,6 +22,7 @@ import QuestionsPanel from "./QuestionsPanel";
 import VerifyPanel from "./VerifyPanel";
 import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
+import { LangProvider, LangSwitch, useLang } from "./i18n";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -85,6 +86,7 @@ function useNode() {
 }
 
 function WalletLine() {
+  const { t } = useLang();
   const { wallet, forget } = useTryWallet();
   const [shown, setShown] = useState(false);
   // Forgetting can't be undone unless the words were saved: the first tap asks, the second forgets.
@@ -94,7 +96,7 @@ function WalletLine() {
     const t = setTimeout(() => setConfirmForget(false), 5_000);
     return () => clearTimeout(t);
   }, [confirmForget]);
-  if (!wallet) return <p className="text-[13.5px] text-[#5d646d]">No wallet yet: your first post or message makes one in this tab.</p>;
+  if (!wallet) return <p className="text-[13.5px] text-[#5d646d]">{t("No wallet yet: your first post or message makes one in this tab.")}</p>;
   function onDownload() {
     if (!wallet) return;
     const url = URL.createObjectURL(new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" }));
@@ -108,16 +110,16 @@ function WalletLine() {
     <div className="text-[13.5px]">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span>
-          wallet{" "}
+          {t("wallet")}{" "}
           <span translate="no" className={cx(MONO, INK.named)}>
             {wallet.walletId.slice(0, 8)}
           </span>
         </span>
         <Button kind="quiet" className="text-[13.5px]" onClick={() => setShown(!shown)}>
-          {shown ? "hide words" : "12 words"}
+          {shown ? t("hide words") : t("12 words")}
         </Button>
         <Button kind="quiet" className="text-[13.5px]" onClick={onDownload}>
-          save
+          {t("save")}
         </Button>
         <Button
           kind="quiet"
@@ -128,7 +130,7 @@ function WalletLine() {
             forget();
           }}
         >
-          {confirmForget ? <span className={INK.bad}>tap again to forget it</span> : "forget"}
+          {confirmForget ? <span className={INK.bad}>{t("tap again to forget it")}</span> : t("forget")}
         </Button>
       </div>
       {shown ? (
@@ -136,13 +138,14 @@ function WalletLine() {
           {wallet.words}
         </p>
       ) : null}
-      <p className="mt-1 text-[12.5px] text-[#5d646d]">Made in this tab, never sent anywhere. Close the tab without saving the words and it is gone.</p>
+      <p className="mt-1 text-[12.5px] text-[#5d646d]">{t("Made in this tab, never sent anywhere. Close the tab without saving the words and it is gone.")}</p>
     </div>
   );
 }
 
 /** The channel list: the sidebar on wide screens, the switcher menu on a phone. */
 function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => void }) {
+  const { t } = useLang();
   const item = (v: View, prefix: string, label: string) => {
     const on = viewKey(v) === viewKey(props.view);
     return (
@@ -162,25 +165,30 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
     );
   };
   return (
-    <nav aria-label="Channels">
-      <h2 className="mx-2 mb-1 mt-3 text-[13px] font-semibold text-[#5d646d]">boards</h2>
+    <nav aria-label={t("Channels")} data-channels>
+      <h2 className="mx-2 mb-1 mt-3 text-[13px] font-semibold text-[#5d646d]">{t("boards")}</h2>
       <ul>
-        {item({ tool: "directory" }, "/", "Public boards")}
-        {props.boards.map((b) => item({ board: b.invite }, "#", b.name || "Untitled board"))}
-        {item({ tool: "questions" }, "#", "Questions for humans")}
+        {item({ tool: "directory" }, "/", t("Public boards"))}
+        {props.boards.map((b) => item({ board: b.invite }, "#", b.name || t("Untitled board")))}
+        {item({ tool: "questions" }, "#", t("Questions for humans"))}
       </ul>
       <p className="mx-2 mt-1 text-[13.5px]">
         <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "new" })}>
-          start or open a board
+          {t("start or open a board")}
         </button>
       </p>
-      <h2 className="mx-2 mb-1 mt-4 text-[13px] font-semibold text-[#5d646d]">tools</h2>
-      <ul>{TOOLS.filter((t) => t.group === "tools").map((t) => item({ tool: t.id }, "/", t.label))}</ul>
+      <h2 className="mx-2 mb-1 mt-4 text-[13px] font-semibold text-[#5d646d]">{t("tools")}</h2>
+      <ul>
+        {item({ tool: "verify" }, "/", t("verify"))}
+        {item({ tool: "files" }, "/", t("files"))}
+        {item({ tool: "mail" }, "/", t("DM"))}
+      </ul>
     </nav>
   );
 }
 
 function Rail(props: { node: ReturnType<typeof useNode> }) {
+  const { t } = useLang();
   const { wallet, anon, prover } = useTryWallet();
   const { chain, height, down } = props.node;
   const row = (k: string, v: ReactNode) => (
@@ -190,48 +198,45 @@ function Rail(props: { node: ReturnType<typeof useNode> }) {
     </>
   );
   return (
-    <aside aria-label="Node facts" className="hidden border-l border-[#e3e5e8] px-4 py-4 text-[14px] xl:block">
-      <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">This node</h2>
+    <aside aria-label={t("Node facts")} className="hidden border-l border-[#e3e5e8] px-4 py-4 text-[14px] xl:block">
+      <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This node")}</h2>
       <dl className="mb-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        {row("chain", chain?.chainId ?? "…")}
-        {row("genesis", chain ? `${chain.genesis.slice(0, 14)}…` : "…")}
-        {row("height", down ? <span className={INK.bad}>not answering</span> : <span className="tabular-nums">{height?.toLocaleString() ?? "…"}</span>)}
-        {row("api", BASE)}
+        {row(t("chain"), chain?.chainId ?? "…")}
+        {row(t("genesis"), chain ? `${chain.genesis.slice(0, 14)}…` : "…")}
+        {row(t("height"), down ? <span className={INK.bad}>{t("not answering")}</span> : <span className="tabular-nums">{height?.toLocaleString() ?? "…"}</span>)}
+        {row(t("api"), BASE)}
         {row(
-          "you",
+          t("you"),
           wallet ? (
             <span title={wallet.walletId} data-wallet-id={wallet.walletId}>
               {wallet.walletId.slice(0, 8)}
             </span>
           ) : (
-            "no wallet yet"
+            t("no wallet yet")
           ),
         )}
-        {row("anon set", anon ? `${anon.members} members${anon.member ? " · you're in" : ""}` : wallet ? "…" : "shown once you have a wallet")}
-        {row("prover", prover === "found" ? "found (this computer)" : prover === "missing" ? "not found" : "checking…")}
+        {row(
+          t("anon set"),
+          anon ? (anon.member ? t("{n} members · you're in", { n: anon.members }) : t("{n} members", { n: anon.members })) : wallet ? "…" : t("shown once you have a wallet"),
+        )}
+        {row(t("prover"), prover === "found" ? t("found (this computer)") : prover === "missing" ? t("not found") : t("checking…"))}
       </dl>
-      <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">This page</h2>
+      <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This page")}</h2>
       <p className="mb-2 text-[#3d434a]">
         <a className="underline" href={BUILD_SHA ? `${REPO}/tree/${BUILD_SHA}/tet-network/ui` : `${REPO}/tree/main/tet-network/ui`} target="_blank" rel="noreferrer">
-          verify this page
+          {t("verify this page")}
         </a>
         :{" "}
-        {BUILD_SHA ? (
-          <>
-            built from <span className={MONO}>{BUILD_SHA.slice(0, 10)}</span>; rebuild it and compare.
-          </>
-        ) : (
-          <>the source it was built from. This build doesn&apos;t name its commit.</>
-        )}{" "}
-        Builds are not signed yet.
+        {BUILD_SHA ? t("built from {sha}; rebuild it and compare.", { sha: BUILD_SHA.slice(0, 10) }) : t("the source it was built from. This build doesn't name its commit.")}{" "}
+        {t("Builds are not signed yet.")}
       </p>
       <p className="text-[#3d434a]">
         <a className="underline" href={`${REPO}/blob/main/docs/DEMO_NODE.md`} target="_blank" rel="noreferrer">
-          how this demo works
+          {t("how this demo works")}
         </a>{" "}
         ·{" "}
         <a className="underline" href={REPO} target="_blank" rel="noreferrer">
-          source
+          {t("source")}
         </a>
       </p>
     </aside>
@@ -239,6 +244,7 @@ function Rail(props: { node: ReturnType<typeof useNode> }) {
 }
 
 function TryApp() {
+  const { t } = useLang();
   const node = useNode();
   const [boards, setBoards] = useState<OpenBoard[]>([]);
   const [view, setView] = useState<View>({ tool: "new" });
@@ -320,7 +326,15 @@ function TryApp() {
     };
   }, [go]);
 
-  const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || "Untitled board" : view.tool === "new" ? "start or open a board" : TOOLS.find((t) => t.id === view.tool)?.label;
+  const TOOL_LABEL: Record<string, string> = {
+    directory: t("Public boards"),
+    questions: t("Questions for humans"),
+    verify: t("verify"),
+    files: t("files"),
+    mail: t("DM"),
+    new: t("start or open a board"),
+  };
+  const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || t("Untitled board") : TOOL_LABEL[view.tool];
 
   // Once opened, a panel stays mounted (hidden), so switching back keeps its state.
   const panel = (v: View, el: ReactNode) =>
@@ -333,7 +347,7 @@ function TryApp() {
   return (
     <div className="try-root min-h-screen touch-manipulation bg-white text-base text-[#1c1f23] [-webkit-tap-highlight-color:transparent] [font-family:ui-sans-serif,system-ui,-apple-system,'Segoe_UI',Roboto,sans-serif]">
       <a href="#panel" className={cx(FOCUS, "sr-only rounded bg-white px-3 py-2 focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-30")}>
-        Skip to the panel
+        {t("Skip to the panel")}
       </a>
 
       {/* Phone: one top bar with the switcher. */}
@@ -353,14 +367,15 @@ function TryApp() {
             </span>
           </button>
           <span className={cx(MONO, "ml-auto shrink-0 text-[13px] text-[#5d646d]")}>
-            {node.down ? <span className={INK.bad}>node down</span> : <span className="tabular-nums">height {node.height?.toLocaleString() ?? "…"}</span>}
+            {node.down ? <span className={INK.bad}>{t("node down")}</span> : <span className="tabular-nums">{t("height {n}", { n: node.height?.toLocaleString() ?? "…" })}</span>}
           </span>
         </div>
         {menu ? (
           <div id="try-menu" className="max-h-[75vh] overflow-y-auto border-t border-[#e3e5e8] bg-[#f1f2f4] px-2 pb-3">
             <Channels boards={boards} view={view} go={go} />
-            <div className="mx-2 mt-4">
+            <div className="mx-2 mt-4 space-y-3">
               <WalletLine />
+              <LangSwitch />
             </div>
           </div>
         ) : null}
@@ -370,17 +385,18 @@ function TryApp() {
         <aside className="hidden border-r border-[#e3e5e8] bg-[#f1f2f4] px-2.5 py-3.5 md:block">
           <div className="sticky top-3.5">
             <h1 className="mx-2 text-[16px] font-bold">
-              Try TET <span className="text-[14px] font-normal text-[#5d646d]">testnet</span>
+              Try TET <span className="text-[14px] font-normal text-[#5d646d]">{t("testnet")}</span>
             </h1>
             <Channels boards={boards} view={view} go={go} />
-            <div className="mx-2 mt-6 border-t border-[#dcdfe3] pt-3">
+            <div className="mx-2 mt-6 space-y-3 border-t border-[#dcdfe3] pt-3">
               <WalletLine />
+              <LangSwitch />
             </div>
           </div>
         </aside>
 
         <main id="panel" className="flex min-w-0 scroll-mt-16 flex-col">
-          {boardErr ? <p className={cx("px-4 py-2 text-[15px]", INK.bad)}>This invite didn&apos;t open: {boardErr}</p> : null}
+          {boardErr ? <p className={cx("px-4 py-2 text-[15px]", INK.bad)}>{t("This invite didn't open: {reason}", { reason: boardErr })}</p> : null}
           {boards.map((b) =>
             panel(
               { board: b.invite },
@@ -404,7 +420,7 @@ function TryApp() {
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
-            Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.
+            {t("Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.")}
           </p>
         </main>
 
@@ -416,8 +432,10 @@ function TryApp() {
 
 export default function TryPage() {
   return (
-    <WalletProvider>
-      <TryApp />
-    </WalletProvider>
+    <LangProvider>
+      <WalletProvider>
+        <TryApp />
+      </WalletProvider>
+    </LangProvider>
   );
 }

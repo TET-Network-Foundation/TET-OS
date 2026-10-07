@@ -24,6 +24,7 @@ import { tmailBucketIndex } from "../lib/anon_tree.mjs";
 import { announceBoard, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
+import { useLang, type T } from "./i18n";
 
 const FEED_POLL_MS = 8_000;
 /** Room for the thread header inside one Tmail message. */
@@ -45,11 +46,11 @@ type Label = BoardPost["label"];
 type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string };
 type Thread = { threadId: string; title: string | null; posts: ThreadPost[]; count: number; lastAtMs: number };
 
-function badgeFor(label: Label): { tone: Tone; text: string } {
-  if (label.kind === "named") return { tone: "named", text: "named" };
-  if (label.tone === "ok") return { tone: "ok", text: "anonymous · verified" };
-  if (label.tone === "bad") return { tone: "bad", text: "anonymous · proof failed" };
-  return { tone: "pending", text: "anonymous · checking proof" };
+function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
+  if (label.kind === "named") return { tone: "named", text: t("named") };
+  if (label.tone === "ok") return { tone: "ok", text: t("anonymous · verified") };
+  if (label.tone === "bad") return { tone: "bad", text: t("anonymous · proof failed") };
+  return { tone: "pending", text: t("anonymous · checking proof") };
 }
 
 /**
@@ -58,15 +59,16 @@ function badgeFor(label: Label): { tone: Tone; text: string } {
  * follow control attaches here.
  */
 function Author(props: { walletId: string | null; onDm?: (walletId: string) => void }) {
-  if (!props.walletId) return <span title="No DM: an anonymous post doesn't say who wrote it.">anonymous</span>;
+  const { t } = useLang();
+  if (!props.walletId) return <span title={t("No DM: an anonymous post doesn't say who wrote it.")}>{t("anonymous")}</span>;
   const id = props.walletId;
   return props.onDm ? (
     <button
       type="button"
       translate="no"
       data-author={id}
-      title={`DM ${id}`}
-      aria-label={`Send a DM to ${id.slice(0, 8)}`}
+      title={t("DM {id}", { id })}
+      aria-label={t("Send a DM to {id}", { id: id.slice(0, 8) })}
       onClick={() => props.onDm?.(id)}
       className={cx(FOCUS, "rounded-sm underline decoration-dotted underline-offset-2", INK.named)}
     >
@@ -81,6 +83,7 @@ function Author(props: { walletId: string | null; onDm?: (walletId: string) => v
 
 /** Post text with `>>n` as a reference that jumps to and highlights post n of this thread. */
 function Body(props: { text: string; onRef: (n: number) => void }) {
+  const { t } = useLang();
   return (
     <p className="mt-0.5 whitespace-pre-wrap break-words text-base leading-relaxed text-[#1c1f23]">
       {props.text.split(/(>>\d+)/g).map((part, i) => {
@@ -90,7 +93,7 @@ function Body(props: { text: string; onRef: (n: number) => void }) {
             key={i}
             type="button"
             onClick={() => props.onRef(Number(m[1]))}
-            aria-label={`Go to post ${m[1]}`}
+            aria-label={t("Go to post {n}", { n: m[1] })}
             className={cx(FOCUS, MONO, "rounded-sm bg-[#eceefb] px-0.5 text-[14px]", INK.named)}
           >
             {part}
@@ -113,19 +116,17 @@ function Meta(props: { n: number; children: React.ReactNode }) {
   );
 }
 
-export const BOARD_NOTICE = (members: number | null) => [
-  "Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so.",
-  `You are anonymous among the registered members only (${members ?? "?"} on this node). Joining the set is public, and it is a separate step: posting right after you join makes the post easier to link to your join.`,
-  "One anonymous post per board per UTC day (up to 3 around 00:00 UTC).",
-  "The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title.",
-  "Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time.",
-  "The node and the first relaying peer see your IP. Posts are not on the chain.",
-  "Tap a named post's id to DM its wallet. Anonymous posts have no DM: nothing in them says who wrote them.",
-  "Anyone with the invite link can read every post. An invite cannot be revoked: start a new board.",
-  TMAIL_ANON_DISCLOSURE,
+export const BOARD_NOTICE = (members: number | null, t: T) => [
+  t("Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so."),
+  t("You are anonymous among the registered members only ({members} on this node). Joining the set is public, and it is a separate step: posting right after you join makes the post easier to link to your join.", { members: members ?? "?" }),
+  t("One anonymous post per board per UTC day (up to 3 around 00:00 UTC)."),
+  t("The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title."),
+  t("Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time."),
+  t("The node and the first relaying peer see your IP. Posts are not on the chain."),
+  t("Tap a named post's id to DM its wallet. Anonymous posts have no DM: nothing in them says who wrote them."),
+  t("Anyone with the invite link can read every post. An invite cannot be revoked: start a new board."),
+  t(TMAIL_ANON_DISCLOSURE),
 ];
-
-export const PUBLIC_LINE = "This board is public: its invite is listed in the directory, so anyone can read every post.";
 
 export default function BoardPanel(props: {
   board: OpenBoard;
@@ -139,6 +140,7 @@ export default function BoardPanel(props: {
   onDm?: (walletId: string) => void;
 }) {
   const { board } = props;
+  const { t, locale } = useLang();
   const [relist, setRelist] = useState<"closed" | "open" | "busy" | "done">("closed");
   const [relistWords, setRelistWords] = useState("");
   const [relistErr, setRelistErr] = useState("");
@@ -269,11 +271,11 @@ export default function BoardPanel(props: {
       return;
     }
     if (plan.action === "anonymous" && !anon?.member) {
-      setErr("Join the anonymity set first.");
+      setErr(t("Join the anonymity set first."));
       return;
     }
     if (plan.action === "anonymous" && allowance.remaining === 0) {
-      setErr("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC.");
+      setErr(t("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC."));
       return;
     }
     const plaintext = encodeThreadPost({ threadId, title, body });
@@ -309,7 +311,7 @@ export default function BoardPanel(props: {
 
   const today = posts.filter((p) => new Date(p.sentAtMs).toDateString() === new Date(now).toDateString()).length;
   const link = typeof window !== "undefined" ? inviteUrl(window.location.origin, board.invite) : "";
-  const titleOf = (t: Thread | undefined) => (t ? (t.threadId === "" ? "Posts without a thread" : (t.title ?? "Untitled (its first post has dropped out)")) : "");
+  const titleOf = (th: Thread | undefined) => (th ? (th.threadId === "" ? t("Posts without a thread") : (th.title ?? t("Untitled (its first post has dropped out)"))) : "");
   const mine = outgoing.filter((o) => o.threadId === open);
 
   const copyInvite = (
@@ -321,7 +323,7 @@ export default function BoardPanel(props: {
         setTimeout(() => mounted.current && setCopied(false), 1_500);
       }}
     >
-      {copied ? "invite copied" : "copy invite"}
+      {copied ? t("invite copied") : t("copy invite")}
     </Button>
   );
 
@@ -331,16 +333,16 @@ export default function BoardPanel(props: {
       <div className="max-w-[46rem]">
         {open === "new" ? (
           <div className="mb-2">
-            <Input label="Thread title" value={newTitle} onChange={setNewTitle} placeholder={`One line, up to ${THREAD_TITLE_MAX} characters…`} />
+            <Input label={t("Thread title")} value={newTitle} onChange={setNewTitle} placeholder={t("One line, up to {n} characters…", { n: THREAD_TITLE_MAX })} />
           </div>
         ) : null}
         <TextArea
-          label={open === "new" ? "First post" : "Your post"}
+          label={open === "new" ? t("First post") : t("Your post")}
           value={text}
           onChange={setText}
           rows={text || open === "new" ? 3 : 1}
           maxLength={BODY_MAX}
-          placeholder={open === "new" ? "The first post of the thread…" : "Write a post (>>2 replies to post 2)…"}
+          placeholder={open === "new" ? t("The first post of the thread…") : t("Write a post (>>2 replies to post 2)…")}
         />
         <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-[14px] text-[#5d646d]">
           {needsJoin ? (
@@ -354,43 +356,42 @@ export default function BoardPanel(props: {
                   .finally(() => mounted.current && setJoining(false));
               }}
             >
-              {joining ? "Joining…" : anon?.joined ? `Ready in ${fmtSeconds(secondsUntil(anon.nextEpochAtMs, now))}` : "Join the anonymity set"}
+              {joining ? t("Joining…") : anon?.joined ? t("Ready in {time}", { time: fmtSeconds(secondsUntil(anon.nextEpochAtMs, now)) }) : t("Join the anonymity set")}
             </Button>
           ) : (
             <Button disabled={!text.trim() || (open === "new" && !newTitle.trim()) || prover === "unknown"} onClick={() => void onPost()}>
               {prover === "unknown"
-                ? "Checking for the prover…"
+                ? t("Checking for the prover…")
                 : open === "new"
                   ? anonymous
-                    ? "Start the thread anonymously"
-                    : "Start the thread named"
+                    ? t("Start the thread anonymously")
+                    : t("Start the thread named")
                   : anonymous
-                    ? "Post anonymously"
-                    : "Post named"}
+                    ? t("Post anonymously")
+                    : t("Post named")}
             </Button>
           )}
           {prover === "found" ? (
             <Button kind="quiet" onClick={() => setNamed(!named)}>
-              {named ? "post anonymously instead" : "post named instead"}
+              {named ? t("post anonymously instead") : t("post named instead")}
             </Button>
           ) : null}
           <span>
             {prover === "missing" ? (
               <>
-                No prover here, so posts show your wallet id.{" "}
+                {t("No prover here, so posts show your wallet id.")}{" "}
                 <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
-                  Run the prover
-                </a>{" "}
-                to post anonymously.
+                  {t("How to run the prover to post anonymously")}
+                </a>
               </>
             ) : needsJoin && anon?.joined ? (
-              <>Joined (public). Your draft stays here; nothing is posted until you tap Post. Waiting longer hides you among more members.</>
+              <>{t("Joined (public). Your draft stays here; nothing is posted until you tap Post. Waiting longer hides you among more members.")}</>
             ) : needsJoin ? (
-              <>To post anonymously, join the set first: a separate, public step that posts nothing.</>
+              <>{t("To post anonymously, join the set first: a separate, public step that posts nothing.")}</>
             ) : anonymous ? (
-              <span className="tabular-nums">{allowance.remaining} anonymous post left today · about 30 s to prove</span>
+              <span className="tabular-nums">{t("{n} anonymous post left today · about 30 s to prove", { n: allowance.remaining })}</span>
             ) : (
-              <>shows your wallet id</>
+              <>{t("shows your wallet id")}</>
             )}
           </span>
         </div>
@@ -406,37 +407,37 @@ export default function BoardPanel(props: {
   // ---- the thread list ---------------------------------------------------------------------------
   if (open === null) {
     return (
-      <section className="flex flex-col" aria-label={board.name || "Board"}>
+      <section className="flex flex-col" aria-label={board.name || t("Board")}>
         <PanelHead
-          title={board.name || "Untitled board"}
+          title={board.name || t("Untitled board")}
           sub={
             <span className="tabular-nums">
-              {threads.filter((t) => t.threadId).length} threads · {today} posts today · {props.isPublic ? "public" : "invite-only"}
+              {t("{threads} threads · {today} posts today", { threads: threads.filter((th) => th.threadId).length, today })} · {props.isPublic ? t("public") : t("invite-only")}
             </span>
           }
           action={copyInvite}
-          todo={<>Open a thread to read it, or start a new one.</>}
+          todo={t("Open a thread to read it, or start a new one.")}
         />
         <div className="px-4 pb-6 md:px-5">
           <div className="max-w-[46rem]">
-            <PinnedNotice lines={props.isPublic ? [PUBLIC_LINE, ...BOARD_NOTICE(anon?.members ?? null)] : BOARD_NOTICE(anon?.members ?? null)} />
+            <PinnedNotice lines={props.isPublic ? [t("This board is public: its invite is listed in the directory, so anyone can read every post."), ...BOARD_NOTICE(anon?.members ?? null, t)] : BOARD_NOTICE(anon?.members ?? null, t)} />
             {props.isPublic && props.directory ? (
               <div className="mb-3 text-[14px] text-[#5d646d]">
                 {relist === "done" ? (
-                  <span className={INK.ok}>Listed again for 7 days.</span>
+                  <span className={INK.ok}>{t("Listed again for 7 days.")}</span>
                 ) : relist === "closed" ? (
                   <Button kind="quiet" onClick={() => (props.boardWords ? void relistNow(props.boardWords) : setRelist("open"))}>
-                    list this board again (needs the board&apos;s 12 words)
+                    {t("list this board again (needs the board's 12 words)")}
                   </Button>
                 ) : (
                   <div className="flex flex-wrap items-end gap-2">
                     {props.boardWords ? null : (
                       <div className="min-w-[16rem] flex-1">
-                        <Input ariaLabel="The board's 12 words" value={relistWords} onChange={setRelistWords} mono placeholder="The board's 12 words…" />
+                        <Input ariaLabel={t("The board's 12 words")} value={relistWords} onChange={setRelistWords} mono placeholder={t("The board's 12 words…")} />
                       </div>
                     )}
                     <Button className="min-h-9 px-3 text-[14px]" disabled={relist === "busy"} onClick={() => void relistNow(props.boardWords ?? relistWords)}>
-                      {relist === "busy" ? "Listing…" : "List again"}
+                      {relist === "busy" ? t("Listing…") : t("List again")}
                     </Button>
                   </div>
                 )}
@@ -448,26 +449,26 @@ export default function BoardPanel(props: {
               </div>
             ) : null}
             <Button className="mb-2" onClick={() => show("new")}>
-              New thread
+              {t("New thread")}
             </Button>
-            <ol aria-label="Threads" className="border-t border-[#eceef1]">
-              {threads.map((t, i) => (
-                <li key={t.threadId || "none"} className="border-b border-[#eceef1]">
-                  <button type="button" onClick={() => show(t.threadId)} className={cx(FOCUS, "-mx-2 block w-[calc(100%+1rem)] px-2 py-2.5 text-left hover:bg-[#fafbfc]")}>
+            <ol aria-label={t("Threads")} className="border-t border-[#eceef1]">
+              {threads.map((th, i) => (
+                <li key={th.threadId || "none"} className="border-b border-[#eceef1]">
+                  <button type="button" onClick={() => show(th.threadId)} className={cx(FOCUS, "-mx-2 block w-[calc(100%+1rem)] px-2 py-2.5 text-left hover:bg-[#fafbfc]")}>
                     <span className="flex flex-wrap items-baseline gap-x-2">
-                      <span className={cx(MONO, "text-[13px] font-bold")}>{t.threadId ? i + 1 : "–"}</span>
-                      <span className={cx("text-base", t.threadId ? "font-semibold" : "text-[#5d646d]")}>{titleOf(t)}</span>
-                      <span className={cx(MONO, "text-[13px] tabular-nums text-[#5d646d]")}>({t.count})</span>
+                      <span className={cx(MONO, "text-[13px] font-bold")}>{th.threadId ? i + 1 : "–"}</span>
+                      <span className={cx("text-base", th.threadId ? "font-semibold" : "text-[#5d646d]")}>{titleOf(th)}</span>
+                      <span className={cx(MONO, "text-[13px] tabular-nums text-[#5d646d]")}>({th.count})</span>
                     </span>
-                    <span className={cx(MONO, "block text-[12.5px] text-[#5d646d]")}>last post {fmtWhen(t.lastAtMs, now)}</span>
+                    <span className={cx(MONO, "block text-[12.5px] text-[#5d646d]")}>{t("last post {when}", { when: fmtWhen(th.lastAtMs, now, locale) })}</span>
                   </button>
                 </li>
               ))}
             </ol>
-            {threads.length === 0 && !feedErr ? <p className="py-3 text-[15px] text-[#5d646d]">No threads yet. Start the first one.</p> : null}
+            {threads.length === 0 && !feedErr ? <p className="py-3 text-[15px] text-[#5d646d]">{t("No threads yet. Start the first one.")}</p> : null}
             {unreadable ? (
               <p className="py-2 text-[14px] text-[#5d646d]">
-                {unreadable} post{unreadable === 1 ? "" : "s"} can&apos;t be read with this invite.
+                {t("Posts this invite can't read: {n}", { n: unreadable })}
               </p>
             ) : null}
             {feedErr ? <p className={cx("py-2 text-[15px]", INK.bad)}>{feedErr}</p> : null}
@@ -479,7 +480,7 @@ export default function BoardPanel(props: {
 
   // ---- a thread, or the new-thread form ------------------------------------------------------------
   const startingNew = open === "new";
-  const head = startingNew ? "New thread" : titleOf(thread) || "Thread";
+  const head = startingNew ? t("New thread") : titleOf(thread) || t("Thread");
   return (
     <section className="flex flex-col" aria-label={head}>
       <PanelHead
@@ -487,23 +488,23 @@ export default function BoardPanel(props: {
         sub={
           <>
             <button type="button" className={cx(FOCUS, "rounded underline")} onClick={() => show(null)}>
-              ‹ {board.name || "board"}
+              ‹ {board.name || t("board")}
             </button>
-            {thread ? <span className="tabular-nums"> · {thread.count} posts</span> : null}
+            {thread ? <span className="tabular-nums"> · {t("{n} posts", { n: thread.count })}</span> : null}
           </>
         }
         action={copyInvite}
-        todo={startingNew ? "Give the thread a title and write its first post." : open === "" ? "Old posts from before threads. Start a thread to post." : <>Read, or reply below. Reply to a post with &gt;&gt;n.</>}
+        todo={startingNew ? t("Give the thread a title and write its first post.") : open === "" ? t("Old posts from before threads. Start a thread to post.") : t("Read, or reply below. Reply to a post with >>n.")}
       />
       <div className="flex-1 px-4 pb-4 md:px-5">
         <div className="max-w-[46rem]">
           {startingNew ? (
-            <p className="py-3 text-[15px] text-[#5d646d]">Anyone who can read this board can read and reply to the thread.</p>
+            <p className="py-3 text-[15px] text-[#5d646d]">{t("Anyone who can read this board can read and reply to the thread.")}</p>
           ) : (
-            <ol ref={listRef} aria-label="Posts" className="pt-1">
+            <ol ref={listRef} aria-label={t("Posts")} className="pt-1">
               {(thread?.posts ?? []).map((p, i) => {
                 const n = i + 1;
-                const b = badgeFor(p.label);
+                const b = badgeFor(p.label, t);
                 return (
                   <li
                     key={p.msgId}
@@ -512,7 +513,7 @@ export default function BoardPanel(props: {
                   >
                     <Meta n={n}>
                       <Author walletId={p.label.author} onDm={props.onDm} />
-                      <span>{fmtWhen(p.sentAtMs, now)}</span>
+                      <span>{fmtWhen(p.sentAtMs, now, locale)}</span>
                       <Badge tone={b.tone} title={p.label.detail}>
                         {b.text}
                       </Badge>
@@ -524,11 +525,19 @@ export default function BoardPanel(props: {
               {mine.map((o, i) => {
                 const secs = Math.max(0, Math.floor((now - o.stepAtMs) / 1000));
                 const status =
-                  o.step === "proving" ? `proving… ${fmtSeconds(secs)}` : o.step === "failed" ? `not posted: ${o.reason}` : o.step === "sent" ? "sent · waiting for the board" : `${o.step}…`;
+                  o.step === "proving"
+                    ? t("proving… {time}", { time: fmtSeconds(secs) })
+                    : o.step === "failed"
+                      ? t("not posted: {reason}", { reason: o.reason ?? "" })
+                      : o.step === "sent"
+                        ? t("sent · waiting for the board")
+                        : o.step === "depositing"
+                          ? t("depositing the proof…")
+                          : t("sending…");
                 return (
                   <li key={o.id} className="-mx-2 border-b border-[#eceef1] bg-[#fafbfc] px-2 py-2.5" aria-live="polite">
                     <Meta n={(thread?.count ?? 0) + i + 1}>
-                      <span>you · {o.mode}</span>
+                      <span>{o.mode === "anonymous" ? t("you · anonymous") : t("you · named")}</span>
                       <Badge tone={o.step === "failed" ? "bad" : "pending"}>{status}</Badge>
                     </Meta>
                     <p className="mt-0.5 whitespace-pre-wrap break-words text-base leading-relaxed text-[#5d646d]">{o.text}</p>
@@ -537,7 +546,7 @@ export default function BoardPanel(props: {
               })}
             </ol>
           )}
-          {!startingNew && !thread && mine.length === 0 ? <p className="py-3 text-[15px] text-[#5d646d]">This thread has no posts the node still keeps.</p> : null}
+          {!startingNew && !thread && mine.length === 0 ? <p className="py-3 text-[15px] text-[#5d646d]">{t("This thread has no posts the node still keeps.")}</p> : null}
         </div>
       </div>
       {open === "" ? null : composer}
