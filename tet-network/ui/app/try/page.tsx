@@ -12,7 +12,8 @@
  */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { wordsFileText } from "../lib/disposable_wallet.mjs";
-import { openBoard, type OpenBoard } from "../lib/try_board";
+import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
+import DirectoryPanel from "./DirectoryPanel";
 import BoardPanel from "./BoardPanel";
 import FilesTryPanel from "./FilesTryPanel";
 import MailPanel from "./MailPanel";
@@ -29,8 +30,11 @@ const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CON
 /** The commit this UI was built from, when the build passes it in. */
 const BUILD_SHA = /^[0-9a-f]{7,40}$/.test(process.env.NEXT_PUBLIC_TET_BUILD_SHA ?? "") ? (process.env.NEXT_PUBLIC_TET_BUILD_SHA as string) : "";
 const REPO = "https://github.com/TET-Network-Foundation/TET-OS";
+/** The node's public-board directory (deploy/demo/README.md §9): a board whose invite is public. */
+const DIRECTORY_INVITE = (process.env.NEXT_PUBLIC_TET_DIRECTORY_INVITE ?? "").trim();
 
 const TOOLS = [
+  { id: "directory", label: "Public boards", group: "boards" },
   { id: "questions", label: "Questions for humans", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
   { id: "files", label: "files", group: "tools" },
@@ -161,6 +165,7 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
     <nav aria-label="Channels">
       <h2 className="mx-2 mb-1 mt-3 text-[13px] font-semibold text-[#5d646d]">boards</h2>
       <ul>
+        {item({ tool: "directory" }, "/", "Public boards")}
         {props.boards.map((b) => item({ board: b.invite }, "#", b.name || "Untitled board"))}
         {item({ tool: "questions" }, "#", "Questions for humans")}
       </ul>
@@ -240,6 +245,35 @@ function TryApp() {
   const [opened, setOpened] = useState<Set<string>>(() => new Set());
   const [menu, setMenu] = useState(false);
   const [boardErr, setBoardErr] = useState("");
+  const [directory, setDirectory] = useState<OpenBoard | null>(null);
+  const [listings, setListings] = useState<Awaited<ReturnType<typeof readDirectory>> | null>(null);
+  const [dirErr, setDirErr] = useState("");
+  /** The 12 words of boards this tab created (to list them again); kept in memory only. */
+  const [boardWords, setBoardWords] = useState<Record<string, string>>({});
+
+  const refreshDirectory = useCallback(async (d: OpenBoard) => {
+    try {
+      setListings(await readDirectory(BASE, d));
+      setDirErr("");
+    } catch (e: unknown) {
+      setDirErr(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!DIRECTORY_INVITE) return;
+    let live = true;
+    void openBoard(BASE, DIRECTORY_INVITE)
+      .then((d) => {
+        if (!live) return;
+        setDirectory(d);
+        void refreshDirectory(d);
+      })
+      .catch((e: unknown) => live && setDirErr(`The directory didn't open: ${e instanceof Error ? e.message : String(e)}`));
+    return () => {
+      live = false;
+    };
+  }, [refreshDirectory]);
 
   const go = useCallback((v: View) => {
     setView(v);
@@ -254,7 +288,8 @@ function TryApp() {
   }, []);
 
   const addBoard = useCallback(
-    (b: OpenBoard) => {
+    (b: OpenBoard, words?: string) => {
+      if (words) setBoardWords((w) => ({ ...w, [b.boardWalletId]: words }));
       setBoards((bs) => (bs.some((x) => x.invite === b.invite) ? bs : [...bs, b]));
       go({ board: b.invite });
     },
@@ -345,8 +380,20 @@ function TryApp() {
 
         <main id="panel" className="flex min-w-0 scroll-mt-16 flex-col">
           {boardErr ? <p className={cx("px-4 py-2 text-[15px]", INK.bad)}>This invite didn&apos;t open: {boardErr}</p> : null}
-          {boards.map((b) => panel({ board: b.invite }, <BoardPanel board={b} />))}
-          {panel({ tool: "new" }, <NewBoardPanel onOpen={addBoard} />)}
+          {boards.map((b) =>
+            panel(
+              { board: b.invite },
+              <BoardPanel
+                board={b}
+                isPublic={!!listings?.some((l) => l.boardWalletId === b.boardWalletId)}
+                boardWords={boardWords[b.boardWalletId]}
+                directory={directory}
+                onListed={() => directory && void refreshDirectory(directory)}
+              />,
+            ),
+          )}
+          {panel({ tool: "directory" }, <DirectoryPanel directory={directory} listings={listings} error={dirErr} onOpen={addBoard} />)}
+          {panel({ tool: "new" }, <NewBoardPanel directory={directory} onOpen={addBoard} onListed={() => directory && void refreshDirectory(directory)} />)}
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}

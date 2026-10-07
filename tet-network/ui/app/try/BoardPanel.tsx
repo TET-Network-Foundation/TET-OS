@@ -20,7 +20,7 @@ import { checkThreadTitle, encodeThreadPost, groupThreads, newThreadId, THREAD_T
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { tmailBucketIndex } from "../lib/anon_tree.mjs";
-import { postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
+import { announceBoard, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
 
@@ -107,8 +107,21 @@ export const BOARD_NOTICE = (members: number | null) => [
   TMAIL_ANON_DISCLOSURE,
 ];
 
-export default function BoardPanel(props: { board: OpenBoard }) {
+export const PUBLIC_LINE = "This board is public: its invite is listed in the directory, so anyone can read every post.";
+
+export default function BoardPanel(props: {
+  board: OpenBoard;
+  /** Listed in the directory (public), or not (invite-only). */
+  isPublic: boolean;
+  /** The board's own 12 words, when this tab created it (needed to list it again). */
+  boardWords?: string;
+  directory: OpenBoard | null;
+  onListed: () => void;
+}) {
   const { board } = props;
+  const [relist, setRelist] = useState<"closed" | "open" | "busy" | "done">("closed");
+  const [relistWords, setRelistWords] = useState("");
+  const [relistErr, setRelistErr] = useState("");
   const { wallet, anon, refreshAnon, joinAnon, ensureWallet, prover } = useTryWallet();
   const [joining, setJoining] = useState(false);
   const [posts, setPosts] = useState<BoardPost[]>([]);
@@ -174,6 +187,21 @@ export default function BoardPanel(props: { board: OpenBoard }) {
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     listRef.current?.querySelector(`[data-post="${n}"]`)?.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
     setTimeout(() => mounted.current && setHighlight((h) => (h === n ? null : h)), 2_000);
+  }
+
+  async function relistNow(words: string) {
+    if (!props.directory) return;
+    setRelistErr("");
+    setRelist("busy");
+    try {
+      await announceBoard(BASE, props.directory, board, words.trim());
+      setRelist("done");
+      setRelistWords("");
+      props.onListed();
+    } catch (e: unknown) {
+      setRelist("open");
+      setRelistErr(e instanceof Error ? e.message : String(e));
+    }
   }
 
   function show(id: string | null) {
@@ -363,7 +391,7 @@ export default function BoardPanel(props: { board: OpenBoard }) {
           title={board.name || "Untitled board"}
           sub={
             <span className="tabular-nums">
-              {threads.filter((t) => t.threadId).length} threads · {today} posts today · invite-only
+              {threads.filter((t) => t.threadId).length} threads · {today} posts today · {props.isPublic ? "public" : "invite-only"}
             </span>
           }
           action={copyInvite}
@@ -371,7 +399,34 @@ export default function BoardPanel(props: { board: OpenBoard }) {
         />
         <div className="px-4 pb-6 md:px-5">
           <div className="max-w-[46rem]">
-            <PinnedNotice lines={BOARD_NOTICE(anon?.members ?? null)} />
+            <PinnedNotice lines={props.isPublic ? [PUBLIC_LINE, ...BOARD_NOTICE(anon?.members ?? null)] : BOARD_NOTICE(anon?.members ?? null)} />
+            {props.isPublic && props.directory ? (
+              <div className="mb-3 text-[14px] text-[#5d646d]">
+                {relist === "done" ? (
+                  <span className={INK.ok}>Listed again for 7 days.</span>
+                ) : relist === "closed" ? (
+                  <Button kind="quiet" onClick={() => (props.boardWords ? void relistNow(props.boardWords) : setRelist("open"))}>
+                    list this board again (needs the board&apos;s 12 words)
+                  </Button>
+                ) : (
+                  <div className="flex flex-wrap items-end gap-2">
+                    {props.boardWords ? null : (
+                      <div className="min-w-[16rem] flex-1">
+                        <Input ariaLabel="The board's 12 words" value={relistWords} onChange={setRelistWords} mono placeholder="The board's 12 words…" />
+                      </div>
+                    )}
+                    <Button className="min-h-9 px-3 text-[14px]" disabled={relist === "busy"} onClick={() => void relistNow(props.boardWords ?? relistWords)}>
+                      {relist === "busy" ? "Listing…" : "List again"}
+                    </Button>
+                  </div>
+                )}
+                {relistErr ? (
+                  <span role="alert" className={cx("ml-2", INK.bad)}>
+                    {relistErr}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             <Button className="mb-2" onClick={() => show("new")}>
               New thread
             </Button>
