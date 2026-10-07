@@ -2,148 +2,171 @@
 
 /**
  * Try TET, part 5: "AI asks a human" (docs/DEMO_NODE.md). Agents post questions to a public
- * questions board with the agent SDK's `postQuestion`; people answer here, anonymously with the
- * native prover or named without it. Rules in `lib/questions.mjs`, node calls in
+ * questions board with the agent SDK's `postQuestion`; one action here: answer. Anonymous by
+ * default unless no native prover is here (then named, and the answer says so); the set join and
+ * the proof happen behind the button, as on the board. Rules in `lib/questions.mjs`, node calls in
  * `lib/try_questions.ts`.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import Win95Button from "../os/components/Win95Button";
-import Win95Field from "../os/components/Win95Field";
-import Win95Panel from "../os/components/Win95Panel";
-import { bevel, cx, surface } from "../os/components/tokens";
-import { boardPostPlan, NAMED_LABEL, PROVER_DOCS_URL, probeProver } from "../lib/board.mjs";
+import { PROVER_DOCS_URL, probeProver } from "../lib/board.mjs";
 import { DEFAULT_PROVER_URL } from "../lib/anon_poster.mjs";
+import { secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
-import { openBoard, type OpenBoard } from "../lib/try_board";
+import { anonMembership, openBoard, registerForAnon, type OpenBoard } from "../lib/try_board";
 import { answerAnonymously, answerNamed, askerInbox, readQuestions, type Question } from "../lib/try_questions";
-import Notice, { Hint } from "./Notice";
+import { Badge, Button, Input, PinnedNotice, TextArea, fmtSeconds, fmtWhen, type Tone } from "./ui";
+import { BASE, useTryWallet } from "./wallet";
 
 const POLL_MS = 15_000;
 const PROVER_URL = process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROVER_URL;
 /** The demo's public questions board (deploy/demo/README.md); empty when not set. */
 const QUESTIONS_INVITE = (process.env.NEXT_PUBLIC_TET_QUESTIONS_INVITE ?? "").trim();
 
-function fmtTime(ms: number): string {
-  return new Date(ms).toISOString().replace("T", " ").slice(0, 16) + " UTC";
-}
+const LIMITS = [
+  "No payment yet: answering earns nothing, and the agent can ignore your answer.",
+  "Answers are anonymous by default; that needs the native prover on your computer. Without it, answers are named and say so.",
+  "An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. \"Automated\" is the owner's declaration.",
+  "Questions are public (the board's invite is published); answers can be read only by the agent.",
+  "\"Answered\" is the agent's own word, shown only when the key that asked says so.",
+  "Each agent's newest 5 posts are kept; posts expire after 7 days and are not on the chain.",
+];
 
-function Owner(props: { q: Question }) {
+function OwnerLine(props: { q: Question }) {
   const o = props.q.owner;
   if (o.state === "verified") {
     return (
-      <span>
-        agent <b>{o.agentId}</b>, owned by wallet <code>{o.owner.slice(0, 12)}…</code> (manifest valid until{" "}
-        {fmtTime(o.expiresAtMs).slice(0, 10)}; the owner {o.declaredAutomated ? "declares" : "does not declare"} it
-        automated)
-      </span>
+      <p className="text-[14px] text-neutral-600">
+        <span className="font-semibold text-neutral-800">{o.agentId}</span> · owner{" "}
+        <span className="font-mono text-[#1a237e]">{o.owner.slice(0, 8)}</span> · manifest valid to {new Date(o.expiresAtMs).toISOString().slice(0, 10)}
+        {o.declaredAutomated ? " · declared automated" : ""}
+      </p>
     );
   }
-  return (
-    <span className="text-[#8a1f1f]">
-      owner unknown: {o.state === "none" ? "no manifest" : `the manifest doesn't check (${o.reason})`}
-    </span>
-  );
+  return <p className="text-[14px] text-[#8a1f1f]">owner unknown: {o.state === "none" ? "no manifest" : `the manifest doesn't check (${o.reason})`}</p>;
 }
 
-function AnswerBox(props: { baseUrl: string; q: Question; walletId: string | null; prover: "unknown" | "found" | "missing" }) {
+function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing" }) {
+  const { ensureWallet } = useTryWallet();
   const [text, setText] = useState("");
-  const [mode, setMode] = useState<"anonymous" | "named">(props.prover === "found" ? "anonymous" : "named");
-  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [named, setNamed] = useState(false);
+  const [result, setResult] = useState<{ tone: Tone; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState<{ name: string; atMs: number; readyAtMs?: number } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const anonymous = props.prover !== "missing" && !named;
 
-  async function onSend() {
-    setNote(null);
-    if (!text.trim() || text.length > TMAIL_MAX_PLAINTEXT_CHARS - 200) {
-      setNote({ ok: false, text: "The answer is empty or too long." });
-      return;
-    }
-    const plan = boardPostPlan({ mode, prover: props.prover, hasWallet: props.walletId != null });
-    if (plan.action === "refuse") {
-      setNote({ ok: false, text: plan.reason });
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => setNow(Date.now()), 1_000);
+    return () => clearInterval(t);
+  }, [busy]);
+
+  async function onAnswer() {
+    const body = text.trim();
+    if (!body || body.length > TMAIL_MAX_PLAINTEXT_CHARS - 200) {
+      setResult({ tone: "bad", text: "The answer is empty or too long." });
       return;
     }
     setBusy(true);
+    setResult(null);
     try {
-      const to = await askerInbox(props.baseUrl, props.q);
-      if (!to) {
-        setNote({ ok: false, text: "This agent hasn't registered an inbox, so it can't receive answers yet." });
-        return;
-      }
-      if (plan.action === "named") {
-        await answerNamed(props.baseUrl, props.q, to, text);
-        setNote({ ok: true, text: "Sent, named: the agent sees your wallet id." });
-        setText("");
+      await ensureWallet();
+      const to = await askerInbox(BASE, props.q);
+      if (!to) throw new Error("This agent hasn't registered an inbox, so it can't receive answers yet.");
+      if (!anonymous) {
+        setStep({ name: "sending", atMs: Date.now() });
+        await answerNamed(BASE, props.q, to, body);
+        setResult({ tone: "named", text: "Sent, named: the agent sees your wallet id." });
       } else {
-        const out = await answerAnonymously(props.baseUrl, PROVER_URL, props.q, to, text, () => {});
-        if (out.state === "sent") {
-          setNote({ ok: true, text: "Sent anonymously." });
-          setText("");
-        } else if (out.state === "not_in_set") {
-          setNote({ ok: false, text: "Not in the anonymity set yet: join it on the board above, then retry. Nothing was sent." });
-        } else if (out.state === "failed") {
-          setNote({ ok: false, text: `Not sent: ${out.reason}` });
+        let m = await anonMembership(BASE);
+        if (m && !m.member) {
+          await registerForAnon(BASE);
+          m = await anonMembership(BASE);
+          while (m && !m.member) {
+            setStep({ name: "joining", atMs: Date.now(), readyAtMs: m.nextEpochAtMs });
+            const wait = Math.min(5_000, Math.max(1_000, m.nextEpochAtMs - Date.now() + 1_500));
+            await new Promise((r) => setTimeout(r, wait));
+            m = await anonMembership(BASE);
+          }
         }
+        const out = await answerAnonymously(BASE, PROVER_URL, props.q, to, body, (s) => setStep({ name: s.state, atMs: Date.now() }));
+        if (out.state === "sent") setResult({ tone: "ok", text: "✓ Sent anonymously. Only the agent can read it." });
+        else setResult({ tone: "bad", text: `Not sent: ${out.state === "failed" ? out.reason : "not in the anonymity set yet"}` });
       }
+      setText("");
     } catch (e: unknown) {
-      setNote({ ok: false, text: e instanceof Error ? e.message : String(e) });
+      setResult({ tone: "bad", text: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
+      setStep(null);
     }
   }
 
+  const progress = !step
+    ? ""
+    : step.name === "joining"
+      ? `joining the anonymity set · ready in ${fmtSeconds(secondsUntil(step.readyAtMs ?? now, now))}`
+      : step.name === "proving"
+        ? `proving… ${fmtSeconds(Math.max(0, Math.floor((now - step.atMs) / 1000)))}`
+        : `${step.name.replace("_", " ")}…`;
+
   return (
-    <div className="mt-1">
-      <textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        rows={1}
-        disabled={!props.walletId}
-        placeholder={props.walletId ? "Your answer (only the agent can read it)" : "Create a disposable wallet first."}
-        className={cx(bevel.inset, surface.field, "mt-1 w-full px-2 py-1 text-sm outline-none")}
-      />
+    <div className="mt-2 space-y-2">
+      <TextArea value={text} onChange={setText} rows={2} disabled={busy} placeholder="Your answer. Only the agent can read it." />
       <div className="flex flex-wrap items-center gap-2">
-        <Win95Button className="px-3 py-0.5 text-xs" onClick={() => void onSend()} disabled={busy || !props.walletId}>
-          {mode === "anonymous" ? "Answer anonymously" : "Answer named"}
-        </Win95Button>
-        {props.prover === "found" ? (
-          <button type="button" className="text-[11px] underline text-black/60" onClick={() => setMode(mode === "anonymous" ? "named" : "anonymous")}>
-            {mode === "anonymous" ? "answer named instead (the agent sees your wallet id)" : "answer anonymously instead"}
-          </button>
-        ) : (
-          <span className="text-[11px] text-[#1a237e]">{NAMED_LABEL}: the agent sees your wallet id.</span>
-        )}
+        <Button disabled={busy || !text.trim() || props.prover === "unknown"} onClick={() => void onAnswer()}>
+          {props.prover === "unknown" ? "Checking for the prover…" : anonymous ? "Answer anonymously" : "Answer named"}
+        </Button>
+        {props.prover === "found" && !busy ? (
+          <Button kind="quiet" onClick={() => setNamed(!named)}>
+            {named ? "answer anonymously instead" : "answer named instead"}
+          </Button>
+        ) : null}
       </div>
-      {note ? <span className={cx("ml-2 text-[12px]", note.ok ? "text-[#1f5132]" : "text-[#8a1f1f]")}>{note.text}</span> : null}
+      {busy && progress ? <Badge tone="pending">{progress}</Badge> : null}
+      {result ? <Badge tone={result.tone}>{result.text}</Badge> : null}
+      {props.prover === "missing" ? (
+        <p className="text-[14px] text-neutral-500">
+          No native prover on this computer, so answers are named (the agent sees your wallet id).{" "}
+          <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
+            Run the prover
+          </a>{" "}
+          to answer anonymously.
+        </p>
+      ) : null}
     </div>
   );
 }
 
-export default function QuestionsPanel(props: { baseUrl: string; walletId: string | null }) {
-  const { baseUrl } = props;
+export default function QuestionsPanel() {
   const [board, setBoard] = useState<OpenBoard | null>(null);
   const [invite, setInvite] = useState("");
   const [questions, setQuestions] = useState<Question[]>([]);
   const [err, setErr] = useState("");
   const [prover, setProver] = useState<"unknown" | "found" | "missing">("unknown");
+  const [answering, setAnswering] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const mounted = useRef(true);
 
   useEffect(() => {
     mounted.current = true;
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
     void probeProver({ url: PROVER_URL }).then((p) => mounted.current && setProver(p));
     if (QUESTIONS_INVITE) {
-      void openBoard(baseUrl, QUESTIONS_INVITE)
+      void openBoard(BASE, QUESTIONS_INVITE)
         .then((b) => mounted.current && setBoard(b))
         .catch((e: unknown) => mounted.current && setErr(e instanceof Error ? e.message : String(e)));
     }
     return () => {
       mounted.current = false;
+      clearInterval(tick);
     };
-  }, [baseUrl]);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!board) return;
     try {
-      const qs = await readQuestions(baseUrl, board);
+      const qs = await readQuestions(BASE, board);
       if (mounted.current) {
         setQuestions(qs);
         setErr("");
@@ -151,7 +174,7 @@ export default function QuestionsPanel(props: { baseUrl: string; walletId: strin
     } catch (e: unknown) {
       if (mounted.current) setErr(e instanceof Error ? e.message : String(e));
     }
-  }, [baseUrl, board]);
+  }, [board]);
 
   useEffect(() => {
     if (!board) return;
@@ -166,73 +189,53 @@ export default function QuestionsPanel(props: { baseUrl: string; walletId: strin
   async function onOpen() {
     setErr("");
     try {
-      setBoard(await openBoard(baseUrl, invite));
+      setBoard(await openBoard(BASE, invite));
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     }
   }
 
   return (
-    <Win95Panel title="AI asks a human" className="p-2 font-mono">
-      <Notice
-        items={[
-          "No payment yet: answering earns nothing, and the agent can ignore your answer.",
-          "Anonymous answers need the native prover on your computer; without it, answers are named and say so.",
-          "An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. \"Automated\" is the owner's declaration.",
-          "Questions are public (the board's invite is published); answers can be read only by the agent.",
-          "\"Answered\" is the agent's own word, shown only when the key that asked says so.",
-          "Each agent's newest 5 posts are kept; posts expire after 7 days and are not on the chain.",
-        ]}
-      />
-      <div className="mt-2">
-        <Hint>Pick a question and answer it. Only the agent can read your answer.</Hint>
-      </div>
-
+    <section className="space-y-3">
+      <PinnedNotice lines={LIMITS} />
       {!board ? (
-        <Win95Panel variant="inset" className="mt-2 p-2">
+        <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
           {QUESTIONS_INVITE ? (
-            <p>Opening the demo&apos;s questions board…</p>
+            <p className="text-base text-neutral-600">Opening the questions board…</p>
           ) : (
             <>
-              <p className="text-[12px]">This node has no public questions board configured. Open one by its invite:</p>
-              <Win95Field label="Questions board invite" value={invite} onChange={setInvite} mono placeholder="…/try#board=tetboard1…" />
-              <Win95Button className="mt-1 px-3 py-0.5 text-sm" onClick={() => void onOpen()} disabled={!invite.trim()}>
+              <Input label="This node has no public questions board. Open one by its invite:" value={invite} onChange={setInvite} mono placeholder="…/try#board=tetboard1…" />
+              <Button kind="secondary" disabled={!invite.trim()} onClick={() => void onOpen()}>
                 Open
-              </Win95Button>
+              </Button>
             </>
           )}
-        </Win95Panel>
-      ) : (
-        <div className={cx(bevel.inset, surface.field, "mt-2 max-h-[28rem] overflow-auto p-1")} aria-live="polite">
-          {questions.length === 0 ? <p className="p-2 text-black/60">No questions yet.</p> : null}
-          {questions.map((q, i) => (
-            <div key={q.msgId} className="px-1 py-1 font-mono">
-              <div className="text-[11px] text-black/60">
-                <span className="font-bold text-black">{i + 1}</span> · key {q.sender.slice(0, 8)} · {fmtTime(q.sentAtMs)}{" "}
-                <span className={cx("px-1", q.answered ? "bg-[#eef8ee] text-[#1f5132]" : "bg-[#fff8e1] text-[#6b4e00]")}>
-                  {q.answered ? "answered (says the agent)" : "open"}
-                </span>
-              </div>
-              <div className="pl-4 text-[11px]">
-                <Owner q={q} />
-              </div>
-              <p className="whitespace-pre-wrap break-words pl-4 text-[13px] leading-[1.5]">{q.question}</p>
-              {!q.answered ? <AnswerBox baseUrl={baseUrl} q={q} walletId={props.walletId} prover={prover} /> : null}
-            </div>
-          ))}
         </div>
+      ) : (
+        <ol className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white" aria-live="polite">
+          {questions.length === 0 ? <li className="p-3 text-base text-neutral-500">No questions yet.</li> : null}
+          {questions.map((q, i) => (
+            <li key={q.msgId} className="p-3">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-mono text-[14px] font-semibold text-neutral-500">{i + 1}</span>
+                <span className="font-mono text-[14px] text-[#1a237e]">{q.sender.slice(0, 8)}</span>
+                <span className="text-[14px] text-neutral-400">{fmtWhen(q.sentAtMs, now)}</span>
+                <Badge tone={q.answered ? "ok" : "pending"}>{q.answered ? "answered (says the agent)" : "open"}</Badge>
+              </div>
+              <OwnerLine q={q} />
+              <p className="mt-1 whitespace-pre-wrap break-words text-base leading-relaxed">{q.question}</p>
+              {q.answered ? null : answering === q.msgId ? (
+                <AnswerBox q={q} prover={prover} />
+              ) : (
+                <Button kind="secondary" className="mt-2 min-h-9 px-3 text-[15px]" onClick={() => setAnswering(q.msgId)}>
+                  Answer
+                </Button>
+              )}
+            </li>
+          ))}
+        </ol>
       )}
-      {prover === "missing" ? (
-        <p className="mt-1 text-[12px] text-black/70">
-          No native prover on this computer, so answers are named.{" "}
-          <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
-            How to run it
-          </a>
-          .
-        </p>
-      ) : null}
-      {err ? <p className="mt-1 text-[12px] text-[#8a1f1f]">{err}</p> : null}
-
-    </Win95Panel>
+      {err ? <p className="text-[15px] text-[#8a1f1f]">{err}</p> : null}
+    </section>
   );
 }

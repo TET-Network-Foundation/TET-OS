@@ -1,0 +1,211 @@
+"use client";
+
+/**
+ * Try TET, part 3: Files on /try. One action: send a file, encrypted in this tab. Its fee goes to
+ * the demo's sponsor (`settleFileFee` in "demo-sponsor" mode, never the visitor's wallet); when the
+ * sponsor declines, the file is still delivered and the page says why. Messaging keys are published
+ * on first use.
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { buildFileEnvelopeV1, type FileEnvelopeV1 } from "../lib/files";
+import { decryptFileForReceiver, decryptFileMeta } from "../lib/files_e2ee";
+import { settleFileFee } from "../lib/files_fee";
+import { getTmailKeySession } from "../lib/tmail_session";
+import { b64ToBytes } from "../lib/encoding";
+import { getFilesFetch, getFilesInbox, getTmailKeys, normalizeWalletId64, postFilesUpload } from "../lib/tet_core_http";
+import { Badge, Button, Chips, Input, PinnedNotice, fmtWhen } from "./ui";
+import { BASE, useTryWallet } from "./wallet";
+
+const POLL_MS = 8_000;
+const MAX_BYTES = 5 * 1024 * 1024;
+
+type Item = { env: FileEnvelopeV1; filename: string; mimeType: string };
+
+const LIMITS = [
+  "Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days.",
+  "The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid.",
+  "The node sees sender, recipient, size and time; not the contents or the file name.",
+  "The storage node is only a hint: fetching asks this node's peers.",
+];
+
+export default function FilesTryPanel(props: { demoContact: string }) {
+  const { wallet, ensureWallet, ensureMessagingKeys } = useTryWallet();
+  const [to, setTo] = useState("self");
+  const [other, setOther] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [items, setItems] = useState<Item[]>([]);
+  const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState("");
+  const [now, setNow] = useState(() => Date.now());
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const mounted = useRef(true);
+
+  const refresh = useCallback(async () => {
+    const ks = getTmailKeySession();
+    if (!wallet || !ks) return;
+    const r = await getFilesInbox(BASE, wallet.walletId, 50);
+    if (!r.ok || !mounted.current) return;
+    const out: Item[] = [];
+    for (const env of r.files) {
+      try {
+        const meta = await decryptFileMeta(
+          {
+            client_ephemeral_pub: b64ToBytes(env.e2ee.client_ephemeral_pub_b64),
+            mlkem_ciphertext: b64ToBytes(env.e2ee.mlkem_ciphertext_b64),
+            filename_nonce: b64ToBytes(env.e2ee.filename_nonce_b64),
+            mime_nonce: b64ToBytes(env.e2ee.mime_nonce_b64),
+            filename_ciphertext: b64ToBytes(env.filename_encrypted_b64),
+            mime_ciphertext: b64ToBytes(env.mime_type_encrypted_b64),
+          },
+          ks.x25519_sk,
+          ks.mlkem_sk,
+        );
+        out.push({ env, filename: meta.filename, mimeType: meta.mimeType });
+      } catch {
+        /* not for these keys */
+      }
+    }
+    if (mounted.current) setItems(out);
+  }, [wallet]);
+
+  useEffect(() => {
+    mounted.current = true;
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => {
+      mounted.current = false;
+      clearInterval(tick);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!wallet) return;
+    const first = setTimeout(() => void ensureMessagingKeys().then(refresh).catch(() => {}), 0);
+    const t = setInterval(() => void refresh(), POLL_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [wallet, ensureMessagingKeys, refresh]);
+
+  async function onSend() {
+    if (!file) return;
+    setNote(null);
+    try {
+      if (file.size > MAX_BYTES) throw new Error("The file is larger than 5 MB.");
+      setBusy("Encrypting…");
+      const me = await ensureWallet();
+      await ensureMessagingKeys();
+      const recipient = to === "self" ? me : to === "demo" ? props.demoContact : normalizeWalletId64(other);
+      if (!recipient) throw new Error("The recipient must be a 64-character wallet id.");
+      const keys = await getTmailKeys(BASE, recipient);
+      if (!keys.ok) throw new Error(keys.text || `could not look up the recipient (HTTP ${keys.status})`);
+      if (!keys.registration) throw new Error("That wallet has not published messaging keys yet, so it cannot receive.");
+      const built = await buildFileEnvelopeV1({
+        senderWalletId: me,
+        receiverWalletId: recipient,
+        fileBytes: new Uint8Array(await file.arrayBuffer()),
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
+        receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
+        baseUrl: BASE,
+      });
+      setBusy("Uploading…");
+      const up = await postFilesUpload(BASE, built.envelope, built.bodyCiphertext);
+      if (!up.ok) throw new Error(up.text || `not sent (HTTP ${up.status})`);
+      setBusy("Settling the fee…");
+      const fee = await settleFileFee({
+        mode: "demo-sponsor",
+        baseUrl: BASE,
+        fileId: up.fileId ?? built.envelope.file_id,
+        senderWalletId: me,
+        storageWallet: up.storageWallet ?? "",
+      });
+      setNote({ ok: true, text: fee.state === "sponsored" ? `Sent "${file.name}". ${fee.text}` : fee.text });
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = "";
+      void refresh();
+    } catch (e: unknown) {
+      setNote({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function onDownload(it: Item) {
+    const ks = getTmailKeySession();
+    if (!ks) return;
+    try {
+      const blob = await getFilesFetch(BASE, it.env.file_id);
+      if (!blob.ok || !blob.bytes) throw new Error(blob.text || "not available yet; try again shortly");
+      const d = await decryptFileForReceiver(
+        {
+          client_ephemeral_pub: b64ToBytes(it.env.e2ee.client_ephemeral_pub_b64),
+          mlkem_ciphertext: b64ToBytes(it.env.e2ee.mlkem_ciphertext_b64),
+          filename_nonce: b64ToBytes(it.env.e2ee.filename_nonce_b64),
+          mime_nonce: b64ToBytes(it.env.e2ee.mime_nonce_b64),
+          body_nonce: b64ToBytes(it.env.e2ee.body_nonce_b64),
+          filename_ciphertext: b64ToBytes(it.env.filename_encrypted_b64),
+          mime_ciphertext: b64ToBytes(it.env.mime_type_encrypted_b64),
+          body_ciphertext: blob.bytes,
+        },
+        ks.x25519_sk,
+        ks.mlkem_sk,
+      );
+      const url = URL.createObjectURL(new Blob([d.fileBytes.slice()], { type: d.mimeType || "application/octet-stream" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = d.filename || `${it.env.file_id}.bin`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: unknown) {
+      setNote({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  const options = [
+    { label: "Yourself", value: "self" },
+    ...(props.demoContact ? [{ label: "The demo inbox", value: "demo" }] : []),
+    { label: "Another wallet", value: "other" },
+  ];
+
+  return (
+    <section className="space-y-3">
+      <PinnedNotice lines={LIMITS} />
+      <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
+        <Chips options={options} value={to} onChange={setTo} />
+        {to === "other" ? <Input value={other} onChange={setOther} mono placeholder="64-character wallet id" /> : null}
+        <label className="flex min-h-20 cursor-pointer items-center justify-center rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-3 text-center text-base text-neutral-600">
+          {file ? `${file.name} · ${(file.size / 1024).toFixed(1)} KB` : "Choose a file (up to 5 MB)"}
+          <input ref={inputRef} type="file" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+        </label>
+        <Button className="w-full sm:w-auto" disabled={!file || !!busy} onClick={() => void onSend()}>
+          {busy || "Send the file"}
+        </Button>
+        {note ? <p className={note.ok ? "text-[15px] text-[#1f5132]" : "text-[15px] text-[#8a1f1f]"}>{note.text}</p> : null}
+      </div>
+
+      <div>
+        <h3 className="mb-1 text-[15px] font-semibold text-neutral-600">Received</h3>
+        {!wallet ? <p className="text-[15px] text-neutral-500">Send something first: that makes your wallet and its inbox.</p> : null}
+        {wallet && items.length === 0 ? <p className="text-[15px] text-neutral-500">Nothing yet. Try sending yourself a file.</p> : null}
+        <ol className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white empty:hidden">
+          {items.map((it) => (
+            <li key={it.env.file_id} className="flex flex-wrap items-center gap-2 p-3">
+              <span className="min-w-0 flex-1 break-all text-base">{it.filename}</span>
+              <span className="text-[14px] text-neutral-500">
+                {(it.env.file_size / 1024).toFixed(1)} KB · from{" "}
+                <span className="font-mono text-[#1a237e]">{it.env.sender_wallet_id === wallet?.walletId ? "you" : it.env.sender_wallet_id.slice(0, 8)}</span> ·{" "}
+                {fmtWhen(it.env.created_at_ms, now)}
+              </span>
+              <Badge tone="neutral">encrypted</Badge>
+              <Button kind="secondary" className="min-h-9 px-3 text-[15px]" onClick={() => void onDownload(it)}>
+                Download
+              </Button>
+            </li>
+          ))}
+        </ol>
+      </div>
+    </section>
+  );
+}

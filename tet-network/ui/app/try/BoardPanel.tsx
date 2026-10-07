@@ -1,19 +1,20 @@
 "use client";
 
 /**
- * Try TET, part 1: the anonymous board (docs/DEMO_NODE.md), laid out like a classic text board:
- * the rules post at the top (`>>0`), numbered posts oldest first with one line of meta each, and
- * one compose box at the bottom. Rules in `lib/board.mjs`, node calls in `lib/try_board.ts`.
+ * Try TET, part 1: the anonymous board (docs/DEMO_NODE.md). A text board: numbered posts, anonymous
+ * by default, text first, `>>n` replies as plain text. The honest limits are the pinned post `0`.
+ * One tap posts: the wallet, the anonymity-set join and the proof all happen behind one button, and
+ * the post shows at once with its progress. Rules in `lib/board.mjs`, node calls in
+ * `lib/try_board.ts`.
+ *
+ * #18 (follows, profiles, notifications) is later: `Author` is where a profile link would attach.
  */
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import Win95Button from "../os/components/Win95Button";
-import Win95Field from "../os/components/Win95Field";
-import Win95Panel from "../os/components/Win95Panel";
-import { bevel, cx, surface } from "../os/components/tokens";
 import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL, probeProver } from "../lib/board.mjs";
 import { DEFAULT_PROVER_URL } from "../lib/anon_poster.mjs";
-import { TMAIL_ANON_DISCLOSURE, secondsUntil, type AnonSendState } from "../lib/tmail_anon";
+import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
+import { tmailBucketIndex } from "../lib/anon_tree.mjs";
 import {
   anonMembership,
   createBoard,
@@ -25,131 +26,113 @@ import {
   type BoardPost,
   type OpenBoard,
 } from "../lib/try_board";
-import Notice from "./Notice";
+import { Badge, Button, Input, PinnedNotice, TextArea, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
+import { BASE, useTryWallet } from "./wallet";
 
-const FEED_POLL_MS = 10_000;
+const FEED_POLL_MS = 8_000;
 const PROVER_URL = process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROVER_URL;
 
-type Mode = "anonymous" | "named";
-
-/** The TET verdict colours, as a small badge. */
-const BADGE: Record<string, { text: string; cls: string }> = {
-  ok: { text: "verified", cls: "bg-[#eef8ee] text-[#1f5132]" },
-  pending: { text: "pending", cls: "bg-[#fff8e1] text-[#6b4e00]" },
-  bad: { text: "failed", cls: "bg-[#fff1f1] text-[#8a1f1f]" },
-  named: { text: "named", cls: "bg-[#e8eaf6] text-[#1a237e]" },
+/** A post sent from this tab, shown at once and updated until the board has it. */
+type Outgoing = {
+  id: string;
+  text: string;
+  mode: "anonymous" | "named";
+  step: "joining" | "proving" | "depositing" | "sending" | "sent" | "failed";
+  startedAtMs: number;
+  stepAtMs: number;
+  readyAtMs?: number;
+  msgId?: string;
+  reason?: string;
 };
 
-function fmtTime(ms: number): string {
-  return new Date(ms).toISOString().replace("T", " ").slice(0, 16);
+function badgeFor(p: BoardPost): { tone: Tone; text: string } {
+  if (p.label.kind === "named") return { tone: "named", text: "named" };
+  if (p.label.tone === "ok") return { tone: "ok", text: "✓ anonymous · verified" };
+  if (p.label.tone === "bad") return { tone: "bad", text: "anonymous · proof failed" };
+  return { tone: "pending", text: "anonymous · checking proof" };
 }
 
-/** Post text with `>>N` as a jump to post N. Plain text otherwise. */
-function Body(props: { text: string; jump: (n: number) => void }) {
-  const parts = props.text.split(/(>>\d+)/g);
-  return (
-    <div className="whitespace-pre-wrap break-words pl-4 text-[13px] leading-[1.5]">
-      {parts.map((p, i) => {
-        const m = /^>>(\d+)$/.exec(p);
-        return m ? (
-          <button key={i} type="button" className="text-[#1a237e] underline" onClick={() => props.jump(Number(m[1]))}>
-            {p}
-          </button>
-        ) : (
-          <Fragment key={i}>{p}</Fragment>
-        );
-      })}
-    </div>
+/** Who wrote a post. #18 hook: a profile or follow control attaches here. */
+function Author(props: { walletId: string | null }) {
+  return props.walletId ? (
+    <span className="font-mono text-[14px] text-[#1a237e]" data-author={props.walletId}>
+      {props.walletId.slice(0, 8)}
+    </span>
+  ) : (
+    <span className="text-[14px] text-neutral-500">anonymous</span>
   );
 }
 
-export default function BoardPanel(props: { baseUrl: string; walletId: string | null }) {
-  const { baseUrl, walletId } = props;
+/** Post text with `>>n` as a tappable reference that highlights post n. */
+function Body(props: { text: string; onRef: (n: number) => void }) {
+  return (
+    <p className="mt-1 whitespace-pre-wrap break-words text-base leading-relaxed text-neutral-900">
+      {props.text.split(/(>>\d+)/g).map((part, i) => {
+        const m = /^>>(\d+)$/.exec(part);
+        return m ? (
+          <button key={i} type="button" onClick={() => props.onRef(Number(m[1]))} className="rounded bg-[#eceefb] px-1 font-mono text-[15px] text-[#1a237e]">
+            {part}
+          </button>
+        ) : (
+          <Fragment key={i}>{part}</Fragment>
+        );
+      })}
+    </p>
+  );
+}
+
+export default function BoardPanel() {
+  const { ensureWallet } = useTryWallet();
   const [board, setBoard] = useState<OpenBoard | null>(null);
   const [newName, setNewName] = useState("");
   const [inviteText, setInviteText] = useState("");
   const [posts, setPosts] = useState<BoardPost[]>([]);
+  const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
   const [feedErr, setFeedErr] = useState("");
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
   const [prover, setProver] = useState<"unknown" | "found" | "missing">("unknown");
-  const [mode, setMode] = useState<Mode>("anonymous");
+  const [named, setNamed] = useState(false);
   const [text, setText] = useState("");
-  const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
-  const [anonState, setAnonState] = useState<AnonSendState>({ state: "idle" });
-  const [member, setMember] = useState<{ member: boolean; members: number; nextEpochAtMs: number } | null>(null);
-  const [joining, setJoining] = useState(false);
+  const [members, setMembers] = useState<number | null>(null);
   const [postedBuckets, setPostedBuckets] = useState<number[]>([]);
+  const [highlight, setHighlight] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const mounted = useRef(true);
-  const feedRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLOListElement | null>(null);
 
   useEffect(() => {
     mounted.current = true;
+    const t = setInterval(() => setNow(Date.now()), 1_000);
+    void probeProver({ url: PROVER_URL }).then((p) => mounted.current && setProver(p));
+    const h = typeof window !== "undefined" ? window.location.hash : "";
+    if (h.startsWith("#board=")) {
+      void openBoard(BASE, h)
+        .then((b) => mounted.current && setBoard(b))
+        .catch((e: unknown) => mounted.current && setErr(e instanceof Error ? e.message : String(e)));
+    }
     return () => {
       mounted.current = false;
+      clearInterval(t);
     };
   }, []);
-
-  // An invite in the URL fragment opens its board. The fragment never reaches a server.
-  useEffect(() => {
-    const h = typeof window !== "undefined" ? window.location.hash : "";
-    if (!h.startsWith("#board=")) return;
-    void openBoard(baseUrl, h)
-      .then((b) => mounted.current && setBoard(b))
-      .catch((e: unknown) => mounted.current && setErr(e instanceof Error ? e.message : String(e)));
-  }, [baseUrl]);
-
-  useEffect(() => {
-    void probeProver({ url: PROVER_URL }).then((p) => {
-      if (mounted.current) {
-        setProver(p);
-        if (p === "missing") setMode("named");
-      }
-    });
-    const t = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(t);
-  }, []);
-
-  const refreshMembership = useCallback(async () => {
-    try {
-      const m = await anonMembership(baseUrl);
-      if (mounted.current) setMember(m);
-    } catch {
-      /* the countdown line just stays as it was */
-    }
-  }, [baseUrl]);
-
-  // Membership: on wallet change, and every 5 s while waiting for the next epoch after joining.
-  useEffect(() => {
-    if (!walletId) return;
-    const first = setTimeout(() => void refreshMembership(), 0);
-    return () => clearTimeout(first);
-  }, [walletId, refreshMembership]);
-  useEffect(() => {
-    if (!joining) return;
-    const t = setInterval(() => void refreshMembership(), 5_000);
-    return () => clearInterval(t);
-  }, [joining, refreshMembership]);
-  useEffect(() => {
-    if (joining && member?.member) {
-      const done = setTimeout(() => setJoining(false), 0);
-      return () => clearTimeout(done);
-    }
-  }, [joining, member]);
 
   const refresh = useCallback(async () => {
     if (!board) return;
     try {
-      const p = await readBoard(baseUrl, board);
-      if (mounted.current) {
-        setPosts([...p].sort((a, b) => a.sentAtMs - b.sentAtMs || a.msgId.localeCompare(b.msgId)));
-        setFeedErr("");
-      }
+      const p = await readBoard(BASE, board);
+      if (!mounted.current) return;
+      const sorted = [...p].sort((a, b) => a.sentAtMs - b.sentAtMs || a.msgId.localeCompare(b.msgId));
+      setPosts(sorted);
+      setFeedErr("");
+      // An outgoing post the board now shows is done.
+      const ids = new Set(sorted.map((x) => x.msgId));
+      setOutgoing((o) => o.filter((x) => !(x.msgId && ids.has(x.msgId))));
     } catch (e: unknown) {
       if (mounted.current) setFeedErr(e instanceof Error ? e.message : String(e));
     }
-  }, [baseUrl, board]);
+  }, [board]);
 
   useEffect(() => {
     if (!board) return;
@@ -161,8 +144,10 @@ export default function BoardPanel(props: { baseUrl: string; walletId: string | 
     };
   }, [board, refresh]);
 
-  function jump(n: number) {
-    feedRef.current?.querySelector(`[data-post="${n}"]`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  function onRef(n: number) {
+    setHighlight(n);
+    listRef.current?.querySelector(`[data-post="${n}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    setTimeout(() => mounted.current && setHighlight((h) => (h === n ? null : h)), 2_000);
   }
 
   async function open(make: () => Promise<OpenBoard>) {
@@ -180,204 +165,194 @@ export default function BoardPanel(props: { baseUrl: string; walletId: string | 
     }
   }
 
-  function onLeave() {
-    setBoard(null);
-    setPosts([]);
-    window.history.replaceState(null, "", window.location.pathname);
-  }
-
-  async function onJoin() {
-    setNotice(null);
-    try {
-      await registerForAnon(baseUrl);
-      if (mounted.current) setJoining(true);
-      void refreshMembership();
-    } catch (e: unknown) {
-      if (mounted.current) setNotice({ kind: "err", text: e instanceof Error ? e.message : String(e) });
-    }
-  }
+  const patch = (id: string, p: Partial<Outgoing>) =>
+    mounted.current && setOutgoing((o) => o.map((x) => (x.id === id ? { ...x, ...p, stepAtMs: p.step ? Date.now() : x.stepAtMs } : x)));
 
   const allowance = anonAllowance({ nowMs: now, postedBuckets });
+  // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
+  const anonymous = prover !== "missing" && !named;
 
   async function onPost() {
     if (!board) return;
-    setNotice(null);
-    const body = text;
-    if (!body.trim() || body.length > TMAIL_MAX_PLAINTEXT_CHARS) {
-      setNotice({ kind: "err", text: "The post is empty or too long." });
-      return;
-    }
-    const plan = boardPostPlan({ mode, prover, hasWallet: walletId != null });
+    const body = text.trim();
+    if (!body || body.length > TMAIL_MAX_PLAINTEXT_CHARS) return;
+    setErr("");
+    await ensureWallet();
+    const plan = boardPostPlan({ mode: anonymous ? "anonymous" : "named", prover, hasWallet: true });
     if (plan.action === "refuse") {
-      setNotice({ kind: "err", text: plan.reason });
+      setErr(plan.reason);
       return;
     }
     if (plan.action === "anonymous" && allowance.remaining === 0) {
-      setNotice({ kind: "err", text: "Today's anonymous post on this board is used. Post named, or wait for 00:00 UTC." });
+      setErr("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC.");
       return;
     }
-    setBusy(true);
+    const id = `${Date.now()}-${Math.random()}`;
+    const t0 = Date.now();
+    setOutgoing((o) => [...o, { id, text: body, mode: plan.action === "anonymous" ? "anonymous" : "named", step: "sending", startedAtMs: t0, stepAtMs: t0 }]);
+    setText("");
     try {
       if (plan.action === "named") {
-        await postNamed(baseUrl, board, body);
-        if (mounted.current) setText("");
+        const msgId = await postNamed(BASE, board, body);
+        patch(id, { step: "sent", msgId });
       } else {
-        const out = await postAnonymous(baseUrl, PROVER_URL, board, body, (s) => mounted.current && setAnonState(s));
-        if (!mounted.current) return;
+        // Join the anonymity set if needed, and wait for the epoch that admits us.
+        let m = await anonMembership(BASE);
+        if (m && !m.member) {
+          await registerForAnon(BASE);
+          m = await anonMembership(BASE);
+          while (m && !m.member && mounted.current) {
+            patch(id, { step: "joining", readyAtMs: m.nextEpochAtMs });
+            const wait = Math.min(5_000, Math.max(1_000, m.nextEpochAtMs - Date.now() + 1_500));
+            await new Promise((r) => setTimeout(r, wait));
+            m = await anonMembership(BASE);
+          }
+        }
+        if (m) setMembers(m.members);
+        const out = await postAnonymous(BASE, PROVER_URL, board, body, (s) => {
+          if (s.state === "proving") patch(id, { step: "proving" });
+          else if (s.state === "depositing") patch(id, { step: "depositing" });
+          else if (s.state === "sending") patch(id, { step: "sending" });
+        });
         if (out.state === "sent") {
-          setPostedBuckets((b) => [...b, allowance.bucket]);
-          setText("");
-        } else if (out.state === "not_in_set") {
-          setNotice({ kind: "err", text: "Not in the anonymity set yet. Nothing was sent." });
-          setJoining(true);
-        } else if (out.state === "failed") {
-          setNotice({ kind: "err", text: `Not posted: ${out.reason}` });
+          setPostedBuckets((b) => [...b, tmailBucketIndex(t0)]);
+          patch(id, { step: "sent", msgId: out.msgId });
+        } else {
+          patch(id, { step: "failed", reason: out.state === "failed" ? out.reason : "not in the anonymity set yet" });
         }
       }
       void refresh();
     } catch (e: unknown) {
-      if (mounted.current) setNotice({ kind: "err", text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      if (mounted.current) setBusy(false);
+      patch(id, { step: "failed", reason: e instanceof Error ? e.message : String(e) });
     }
   }
 
+  const today = posts.filter((p) => new Date(p.sentAtMs).toDateString() === new Date(now).toDateString()).length;
   const link = board && typeof window !== "undefined" ? inviteUrl(window.location.origin, board.invite) : "";
-  const proving = busy && mode === "anonymous" && anonState.state !== "idle";
 
-  /** The one line above the compose box: what anonymous posting needs right now. */
-  function joinLine() {
-    if (prover === "missing") {
-      return (
-        <>
-          No native prover here, so posts are named.{" "}
-          <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
-            Run the prover
-          </a>{" "}
-          to post anonymously.
-        </>
-      );
-    }
-    if (!walletId) return <>Create a wallet first (top of the page).</>;
-    if (member?.member) {
-      return (
-        <>
-          In the anonymity set ({member.members} member{member.members === 1 ? "" : "s"}) · {allowance.remaining} anonymous post
-          left today
-        </>
-      );
-    }
-    if (joining) {
-      const s = member ? secondsUntil(member.nextEpochAtMs, now) : null;
-      return <>Joined · ready in {s ?? "…"} s (the next epoch)</>;
-    }
+  const notice = [
+    "Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so.",
+    `You are anonymous among the registered members only (${members ?? "?"} on this node). Joining the set is public.`,
+    "One anonymous post per board per UTC day (up to 3 around 00:00 UTC).",
+    "The node and the first relaying peer see your IP. Posts expire with their TTL and are not on the chain.",
+    "Anyone with the invite link can read every post. An invite cannot be revoked: start a new board.",
+    TMAIL_ANON_DISCLOSURE,
+  ];
+
+  if (!board) {
     return (
-      <>
-        <button type="button" className="underline" onClick={() => void onJoin()}>
-          Join the anonymity set
-        </button>{" "}
-        to post anonymously. Joining is public: it shows this wallet is a member, not what it posts.
-      </>
+      <section className="space-y-3">
+        <PinnedNotice lines={notice} />
+        <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
+          <Input label="Start a board (name optional)" value={newName} onChange={setNewName} />
+          <Button className="w-full" disabled={busy} onClick={() => void open(async () => (await createBoard(BASE, newName)).board)}>
+            Start a board
+          </Button>
+        </div>
+        <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
+          <Input label="Or open an invite link" value={inviteText} onChange={setInviteText} mono placeholder="…/try#board=tetboard1…" />
+          <Button kind="secondary" className="w-full" disabled={busy || !inviteText.trim()} onClick={() => void open(() => openBoard(BASE, inviteText))}>
+            Open
+          </Button>
+        </div>
+        {err ? <p className="text-[15px] text-[#8a1f1f]">{err}</p> : null}
+      </section>
     );
   }
 
   return (
-    <Win95Panel title={board ? `Anonymous board · ${board.name || "untitled"}` : "Anonymous board"} className="p-2 font-mono">
-      <Notice
-        items={[
-          "Anonymous posts need the native prover on your computer. Without it you post named, and the post says so.",
-          `You are anonymous among the registered members only (${member?.members ?? "?"} on this node). Joining is public.`,
-          "One anonymous post per board per UTC day (up to 3 around 00:00 UTC).",
-          "The node and the first relaying peer see your IP. Posts expire with their TTL and are not on the chain.",
-          "Anyone with the invite link can read every post. An invite cannot be revoked: start a new board.",
-          TMAIL_ANON_DISCLOSURE,
-        ]}
-      />
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <h2 className="text-lg font-semibold">{board.name || "Untitled board"}</h2>
+        <span className="text-[15px] text-neutral-500">{today} posts today ·</span>
+        <Button
+          kind="quiet"
+          onClick={() => {
+            void navigator.clipboard?.writeText(link);
+            setCopied(true);
+            setTimeout(() => mounted.current && setCopied(false), 1_500);
+          }}
+        >
+          {copied ? "invite copied" : "copy invite"}
+        </Button>
+      </div>
 
-      {!board ? (
-        <div className="mt-2 grid gap-2 font-mono text-[12px] sm:grid-cols-2">
-          <div className="flex items-end gap-1">
-            <Win95Field className="flex-1" label="New board (name optional)" value={newName} onChange={setNewName} maxLength={40} />
-            <Win95Button className="px-2 py-1 text-xs" onClick={() => void open(async () => (await createBoard(baseUrl, newName)).board)} disabled={busy}>
-              Create
-            </Win95Button>
-          </div>
-          <div className="flex items-end gap-1">
-            <Win95Field className="flex-1" label="Or open an invite link" value={inviteText} onChange={setInviteText} mono placeholder="…/try#board=tetboard1…" />
-            <Win95Button className="px-2 py-1 text-xs" onClick={() => void open(() => openBoard(baseUrl, inviteText))} disabled={busy || !inviteText.trim()}>
-              Open
-            </Win95Button>
-          </div>
+      <ol ref={listRef} className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white">
+        <li className="p-3">
+          <PinnedNotice lines={notice} />
+        </li>
+        {posts.map((p, i) => {
+          const n = i + 1;
+          const b = badgeFor(p);
+          return (
+            <li key={p.msgId} data-post={n} className={cx("p-3 transition-colors", highlight === n && "bg-[#fff6dc]")}>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-mono text-[14px] font-semibold text-neutral-500">{n}</span>
+                <Author walletId={p.label.author} />
+                <span className="text-[14px] text-neutral-400">{fmtWhen(p.sentAtMs, now)}</span>
+                <Badge tone={b.tone} title={p.label.detail}>
+                  {b.text}
+                </Badge>
+              </div>
+              {p.state === "open" ? <Body text={p.text} onRef={onRef} /> : <p className="mt-1 text-[15px] text-neutral-400">Cannot be read with this invite.</p>}
+            </li>
+          );
+        })}
+        {outgoing.map((o) => {
+          const secs = Math.max(0, Math.floor((now - o.stepAtMs) / 1000));
+          const status =
+            o.step === "joining"
+              ? `joining the anonymity set · ready in ${fmtSeconds(secondsUntil(o.readyAtMs ?? now, now))}`
+              : o.step === "proving"
+                ? `proving… ${fmtSeconds(secs)}`
+                : o.step === "failed"
+                  ? `not posted: ${o.reason}`
+                  : o.step === "sent"
+                    ? "sent · waiting for the board"
+                    : `${o.step}…`;
+          return (
+            <li key={o.id} className="bg-neutral-50 p-3">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-mono text-[14px] font-semibold text-neutral-400">{posts.length + 1}</span>
+                <span className="text-[14px] text-neutral-500">you · {o.mode}</span>
+                <Badge tone={o.step === "failed" ? "bad" : "pending"}>{status}</Badge>
+              </div>
+              <p className="mt-1 whitespace-pre-wrap break-words text-base leading-relaxed text-neutral-500">{o.text}</p>
+            </li>
+          );
+        })}
+      </ol>
+      {feedErr ? <p className="text-[15px] text-[#8a1f1f]">{feedErr}</p> : null}
+
+      <div className="sticky bottom-0 space-y-2 rounded-xl border border-neutral-200 bg-white/95 p-3 backdrop-blur">
+        <TextArea value={text} onChange={setText} rows={text ? 3 : 1} maxLength={TMAIL_MAX_PLAINTEXT_CHARS} placeholder="Write a post (>>2 replies to post 2)" />
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Button disabled={!text.trim() || prover === "unknown"} onClick={() => void onPost()}>
+            {prover === "unknown" ? "Checking for the prover…" : anonymous ? "Post anonymously" : "Post named"}
+          </Button>
+          {prover === "found" ? (
+            <Button kind="quiet" onClick={() => setNamed(!named)}>
+              {named ? "post anonymously instead" : "post named instead"}
+            </Button>
+          ) : null}
+          <span className="text-[14px] text-neutral-500">
+            {prover === "missing" ? (
+              <>
+                No prover here, so posts show your wallet id.{" "}
+                <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
+                  Run the prover
+                </a>{" "}
+                to post anonymously.
+              </>
+            ) : anonymous ? (
+              <>{allowance.remaining} anonymous post left today · about 30 s to prove</>
+            ) : (
+              <>shows your wallet id</>
+            )}
+          </span>
         </div>
-      ) : (
-        <>
-          <div className="mt-1 flex flex-wrap items-center justify-between gap-1 font-mono text-[11px] text-black/70">
-            <span>
-              board {board.boardWalletId.slice(0, 8)} · the invite link is the read key; it sits after the #, so the node never sees
-              it
-            </span>
-            <span className="flex gap-1">
-              <Win95Button className="px-2 py-0 text-[11px]" onClick={() => void navigator.clipboard?.writeText(link)}>
-                Copy invite link
-              </Win95Button>
-              <Win95Button className="px-2 py-0 text-[11px]" onClick={onLeave}>
-                Leave
-              </Win95Button>
-            </span>
-          </div>
-
-          <div ref={feedRef} className={cx(bevel.inset, surface.field, "mt-1 max-h-96 overflow-auto px-2 py-1 font-mono")} aria-live="polite">
-            {posts.length === 0 ? <p className="py-1 text-[12px] text-black/50">No posts yet.</p> : null}
-            {posts.map((p, i) => {
-              const b = BADGE[p.label.tone];
-              return (
-                <div key={p.msgId} data-post={i + 1} className="py-1">
-                  <div className="text-[11px] text-black/60">
-                    <span className="font-bold text-black">{i + 1}</span> ·{" "}
-                    {p.label.author ? <span className="text-[#1a237e]">{p.label.author.slice(0, 8)}</span> : <span className="text-[#1f5132]">anonymous</span>} ·{" "}
-                    {fmtTime(p.sentAtMs)}{" "}
-                    <span className={cx("px-1", b.cls)} title={p.label.detail}>
-                      {b.text}
-                    </span>
-                  </div>
-                  {p.state === "open" ? (
-                    <Body text={p.text} jump={jump} />
-                  ) : (
-                    <div className="pl-4 text-[12px] text-black/40">(cannot be read with this invite)</div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          {feedErr ? <p className="mt-1 font-mono text-[11px] text-[#8a1f1f]">{feedErr}</p> : null}
-
-          <div className="mt-2 font-mono text-[12px]">
-            <p className="text-black/70">{joinLine()}</p>
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              maxLength={TMAIL_MAX_PLAINTEXT_CHARS}
-              rows={3}
-              className={cx(bevel.inset, surface.field, "mt-1 w-full px-2 py-1 text-[13px] outline-none")}
-              placeholder={walletId ? "Write a post. >>2 refers to post 2." : "Create a wallet first."}
-              disabled={!walletId}
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <Win95Button variant="primary" className="px-3 py-0.5 text-sm" onClick={() => void onPost()} disabled={busy || !walletId}>
-                {mode === "anonymous" ? "Post anonymously" : "Post named"}
-              </Win95Button>
-              {prover === "found" ? (
-                <button type="button" className="text-[11px] underline text-black/60" onClick={() => setMode(mode === "anonymous" ? "named" : "anonymous")}>
-                  {mode === "anonymous" ? "post named instead (shows your wallet id)" : "post anonymously instead"}
-                </button>
-              ) : null}
-              {proving ? <span className="text-[11px] text-black/60">{anonState.state.replace("_", " ")}…</span> : null}
-            </div>
-            {notice ? <p className={cx("mt-1 text-[12px]", notice.kind === "ok" ? "text-[#1f5132]" : "text-[#8a1f1f]")}>{notice.text}</p> : null}
-          </div>
-        </>
-      )}
-      {err ? <p className="mt-2 font-mono text-[12px] text-[#8a1f1f]">{err}</p> : null}
-    </Win95Panel>
+        {err ? <p className="text-[15px] text-[#8a1f1f]">{err}</p> : null}
+      </div>
+    </section>
   );
 }

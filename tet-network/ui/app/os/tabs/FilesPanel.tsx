@@ -131,8 +131,6 @@ export default function FilesPanel(props: {
    * wallet; the try page asks the demo node's sponsor and never signs a fee with the visitor's.
    */
   feeMode?: FeeMode;
-  /** The try page's layout: no inner title, and the keys step first. */
-  compact?: boolean;
 }) {
   const { baseUrl, contacts } = props;
   const myWalletId = normalizeWalletId64(props.myWalletId);
@@ -460,11 +458,9 @@ export default function FilesPanel(props: {
     return "○";
   };
 
-  const body = (
-    <>
-      {props.compact ? null : (
-        <div className="text-sm font-semibold text-black">Files — End-to-End Encrypted (Phase 0)</div>
-      )}
+  return (
+    <Win95Panel variant="outset" className="p-3 space-y-3">
+      <div className="text-sm font-semibold text-black">Files — End-to-End Encrypted (Phase 0)</div>
 
       {/* A. Send */}
       <Win95Panel variant="inset" className="p-2 space-y-2">
@@ -602,10 +598,8 @@ export default function FilesPanel(props: {
       </Win95Panel>
 
       {/* C. Status */}
-      <Win95Panel variant="inset" className={cx("p-2 space-y-2", props.compact ? "order-first" : "")}>
-        <div className="text-xs font-semibold text-black">
-          {props.compact ? "1. Your messaging keys (the same as Tmail's)" : "Messaging Keys & Storage"}
-        </div>
+      <Win95Panel variant="inset" className="p-2 space-y-2">
+        <div className="text-xs font-semibold text-black">Messaging Keys &amp; Storage</div>
         {keyStatus.state === "loading" ? (
           <div className="text-[11px] text-black/60">Checking registration…</div>
         ) : keyStatus.state === "registered" ? (
@@ -634,20 +628,10 @@ export default function FilesPanel(props: {
           </div>
         )}
         <div className="text-[11px] font-mono text-black/60">
-          Max 5 MB · 30-day retention ·{" "}
-          {props.feeMode === "demo-sponsor"
-            ? `fee ${FILE_FEE_MICRO} µTET, paid by the demo's sponsor when it can`
-            : `fee ${FILE_FEE_MICRO} µTET (settled on-chain)`}{" "}
-          · Sent {sentCount} · Received {items.length}
+          Max 5 MB · 30-day retention · fee {FILE_FEE_MICRO} µTET (settled on-chain) · Sent {sentCount} · Received{" "}
+          {items.length}
         </div>
       </Win95Panel>
-    </>
-  );
-  return props.compact ? (
-    <div className="flex flex-col gap-2 font-mono">{body}</div>
-  ) : (
-    <Win95Panel variant="outset" className="p-3 space-y-3">
-      {body}
     </Win95Panel>
   );
 }

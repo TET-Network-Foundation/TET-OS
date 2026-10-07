@@ -8,7 +8,8 @@
 //    one POST to /demo/files/sponsor-fee, never /files/fee, and no FileFee transaction is signed.
 // 2. A refusal is final and says so: every reason ends as "unpaid" with the design's wording, after
 //    exactly one request (no retry).
-// 3. Every Files panel on the try page is in "demo-sponsor" mode.
+// 3. Every file fee on the try page is in "demo-sponsor" mode: each desktop Files panel and each
+//    direct `settleFileFee` call (checked in the page's sources, with a control).
 
 import { register } from "node:module";
 import { readFileSync, readdirSync } from "node:fs";
@@ -111,17 +112,53 @@ await check("the desktop's own mode still pays with the sender's wallet", async 
   assert.equal(JSON.parse(nodeRequests()[0].body).tx.kind, "file_fee");
 });
 
-await check("SECURITY: every Files panel on the try page is in demo-sponsor mode", () => {
-  const dir = new URL("../app/try/", import.meta.url);
-  let uses = 0;
-  for (const f of readdirSync(dir).filter((n) => /\.tsx?$/.test(n))) {
-    const src = readFileSync(new URL(f, dir), "utf8");
+/**
+ * Every way the try page can settle a file fee, checked in its sources: a desktop `<FilesPanel>` must
+ * carry `feeMode="demo-sponsor"`, and every `settleFileFee(...)` call must pass a literal
+ * `mode: "demo-sponsor"` (not a variable, not "self"). Returns the problems and how many fee sites
+ * were found.
+ */
+function feeSites(sources) {
+  const problems = [];
+  let sites = 0;
+  for (const [f, src] of Object.entries(sources)) {
     for (const m of src.matchAll(/<FilesPanel\b[^>]*>/gs)) {
-      uses++;
-      assert.match(m[0], /feeMode="demo-sponsor"/, `${f}: a Files panel without feeMode="demo-sponsor"`);
+      sites++;
+      if (!/feeMode="demo-sponsor"/.test(m[0])) problems.push(`${f}: a Files panel without feeMode="demo-sponsor"`);
     }
+    for (const m of src.matchAll(/\bsettleFileFee\s*\(\s*\{([^}]*)\}/gs)) {
+      sites++;
+      if (!/\bmode\s*:\s*"demo-sponsor"/.test(m[1])) problems.push(`${f}: a settleFileFee call without mode: "demo-sponsor"`);
+    }
+    // A call that doesn't start with an object literal can't be checked: refuse it.
+    for (const m of src.matchAll(/\bsettleFileFee\s*\(\s*(?!\{)/g)) problems.push(`${f}: settleFileFee called without a literal options object (at ${m.index})`);
   }
-  assert.ok(uses >= 1, "no Files panel found on the try page");
+  return { problems, sites };
+}
+
+await check("SECURITY: every file fee on the try page goes through the demo's sponsor", () => {
+  const dir = new URL("../app/try/", import.meta.url);
+  const sources = Object.fromEntries(
+    readdirSync(dir)
+      .filter((n) => /\.tsx?$/.test(n))
+      .map((n) => [n, readFileSync(new URL(n, dir), "utf8")]),
+  );
+  const { problems, sites } = feeSites(sources);
+  assert.deepEqual(problems, []);
+  assert.ok(sites >= 1, "no file-fee site found on the try page");
+});
+
+await check("control: the source check catches a self-paid fee, a variable mode and a bare panel", () => {
+  const cases = {
+    "self.tsx": `await settleFileFee({ mode: "self", baseUrl: BASE });`,
+    "variable.tsx": `await settleFileFee({ mode, baseUrl: BASE });`,
+    "spread.tsx": `await settleFileFee(opts);`,
+    "panel.tsx": `<FilesPanel baseUrl={BASE} myWalletId={id} />`,
+  };
+  for (const [f, src] of Object.entries(cases)) {
+    assert.ok(feeSites({ [f]: src }).problems.length >= 1, `${f} was not caught`);
+  }
+  assert.deepEqual(feeSites({ "ok.tsx": `await settleFileFee({ mode: "demo-sponsor", baseUrl: BASE });` }).problems, []);
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
