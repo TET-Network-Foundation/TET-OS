@@ -49,13 +49,19 @@ the seed overlay:
 
 ```bash
 COPYFILE_DISABLE=1 git archive --format=tar <commit> | ssh root@<demo-ip> 'tar -x -C /opt/TET-OS'
-ssh root@<demo-ip> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0_SKIP_BUILD=1" .env && f="$f -f docker-compose.dev.yml"; docker compose $f -f deploy/demo/docker-compose.demo.yml up -d --build tet-core ui caddy && install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck && install -m 0644 deploy/systemd/tet-healthcheck.service deploy/systemd/tet-healthcheck.timer /etc/systemd/system/ && systemctl daemon-reload && systemctl restart tet-healthcheck.timer && echo MONITOR-REFRESHED'
+ssh root@<demo-ip> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0_SKIP_BUILD=1" .env && f="$f -f docker-compose.dev.yml"; TET_GIT_SHA=<commit> docker compose $f -f deploy/demo/docker-compose.demo.yml up -d --build tet-core ui caddy && install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck && install -m 0644 deploy/systemd/tet-healthcheck.service deploy/systemd/tet-healthcheck.timer /etc/systemd/system/ && systemctl daemon-reload && systemctl restart tet-healthcheck.timer && echo MONITOR-REFRESHED'
 ```
+
+`TET_GIT_SHA=<commit>` (the same full commit as the `git archive`) is compiled into both images: the
+node reports it in `GET /status/live` (the try page's **Live** channel) and the page's "verify this
+page" names it. An archive has no `.git`, so the build can't find it on its own; left out, both say
+the build doesn't name its commit.
 
 ## 5. Check from outside
 
 ```bash
 curl -s https://try.<your domain>/tet-node-api/status | head -c 200               # 200, JSON
+curl -s https://try.<your domain>/tet-node-api/status/live | head -c 300          # 200: height, peers, commit
 curl -s -o /dev/null -w "%{http_code}\n" -X POST https://try.<your domain>/tet-node-api/ledger/mine   # 404
 curl -s -o /dev/null -w "%{http_code}\n" https://try.<your domain>/tet-node-api/metrics             # 404
 for i in $(seq 1 60); do curl -s -o /dev/null -w "%{http_code} " https://try.<your domain>/tet-node-api/status; done; echo   # 429s appear after the burst

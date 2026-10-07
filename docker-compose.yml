@@ -28,6 +28,8 @@ x-tet-core-common: &tet-core-common
     args:
       RISC0_SKIP_BUILD: "${RISC0_SKIP_BUILD:-0}"
       TET_BUILD_FEATURES: "${TET_BUILD_FEATURES-zk-prove}"
+      # The source commit the node reports in /status/live (deploy: TET_GIT_SHA=$(git rev-parse HEAD)).
+      TET_GIT_SHA: "${TET_GIT_SHA:-}"
   # Optional: absent on a fresh clone, which is why `docker compose up` used to
   # fail before it was ever built. Present, it wins over `environment:` below.
   env_file:
@@ -109,6 +111,8 @@ services:
         NEXT_PUBLIC_TET_TREASURY_ADDRESS: "${TET_TREASURY_ADDRESS:-fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321}"
         NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID: "${TET_GENESIS_FOUNDER_WALLET_ID:-57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0}"
         NEXT_PUBLIC_TET_CHAIN_ID: "${TET_CHAIN_ID:-tet-local-dev}"
+        # The commit the try page's "verify this page" names.
+        NEXT_PUBLIC_TET_BUILD_SHA: "${TET_GIT_SHA:-}"
     container_name: tet-ui
     environment:
       # Server-side proxy target for /tet-node-api/* (compose DNS, not localhost:

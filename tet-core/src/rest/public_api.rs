@@ -31,6 +31,8 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/chain"),
     ("GET", "/ledger/state"),
     ("GET", "/ledger/balance/:wallet"),
+    // The try page's Live channel: height, peers, apply-queue depth, recent gossip kinds, commit.
+    ("GET", "/status/live"),
     // Tmail
     ("POST", "/tmail/send"),
     ("GET", "/tmail/inbox/:wallet_id"),

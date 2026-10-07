@@ -3360,6 +3360,9 @@ async fn run_mdns_ping_swarm(
             }
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 println!("[P2P] CONNECTION ESTABLISHED with {}", peer_id);
+                if peer_id != *swarm.local_peer_id() {
+                    crate::live_feed::record("peer_connected", None, Some(&peer_id.to_string()));
+                }
                 let remote = remap_discovered_addr_for_listen(
                     endpoint.get_remote_address().clone(),
                     &listen,
@@ -3401,6 +3404,7 @@ async fn run_mdns_ping_swarm(
             }
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
                 log::warn!("[p2p][mdns] disconnected peer_id={peer_id} cause={cause:?}");
+                crate::live_feed::record("peer_disconnected", None, Some(&peer_id.to_string()));
                 dialing.remove(&peer_id);
                 last_chain_hello_sent_at.remove(&peer_id);
                 if bootnode_watch.is_bootnode(&peer_id) && !bootnode_watch.is_dead(&peer_id) {
@@ -3500,6 +3504,15 @@ async fn run_mdns_ping_swarm(
                                 gossip_event_acceptance(&event, Some(source), &producer_peers),
                             );
                         }
+                        // The try page's Live channel: what arrived, never what it said.
+                        let (live_kind, live_height) = match &event {
+                            NetworkEvent::BlockMined { block_height, .. } => ("block", Some(*block_height)),
+                            NetworkEvent::TxBroadcast { .. } => ("tx", None),
+                            NetworkEvent::TmailGossip { .. } => ("tmail", None),
+                            NetworkEvent::FileAnnounce { .. } => ("file", None),
+                            _ => ("other", None),
+                        };
+                        crate::live_feed::record(live_kind, live_height, source_peer.as_ref().map(|p| p.to_string()).as_deref());
                         match &event {
                             NetworkEvent::FaucetExecuted {
                                 event_id,
