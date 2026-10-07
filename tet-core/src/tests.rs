@@ -13204,6 +13204,9 @@ async fn demo_sponsor_pays_once_for_its_own_upload_and_only_for_the_sender() {
     let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
     assert_eq!(st, StatusCode::ACCEPTED, "{body}");
     assert_eq!(sponsored_fee_txs(&f).await, vec![(f.sponsor.wallet_id().to_string(), fid.clone())]);
+    // The receipt the try page keeps for a "stamp": the hash the tx index will key this fee by.
+    let queued = f.state.mempool.lock().await.iter().find(|e| matches!(e.tx, crate::protocol::TxV1::FileFee { .. })).cloned().unwrap();
+    assert_eq!(body["tx_hash"].as_str(), Some(crate::consensus::tx_hash_for_env(&queued).unwrap().as_str()), "{body}");
 
     let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
     assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid twice");

@@ -437,6 +437,12 @@ jobs:
         name: try page — every string is translated, placeholders intact
         run: node --experimental-strip-types scripts/try_i18n_guard.mjs
 
+      # Try TET "Sign anything": what the page signs is what Verify accepts; a stamp counts only for
+      # this .sig.json's file fee in a canonical block. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a page signature verifies and a stamp anchors only its own .sig.json
+        run: node --experimental-strip-types scripts/try_sign_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).

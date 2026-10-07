@@ -93,7 +93,7 @@ const REASON_TEXT: Record<string, string> = {
 
 export type FeeOutcome =
   | { state: "paid"; text: string }
-  | { state: "sponsored"; text: string }
+  | { state: "sponsored"; text: string; txHash?: string }
   | { state: "unpaid"; reason: string; text: string };
 
 /** Settle the fee for a file that was just delivered. Never throws. */
@@ -108,7 +108,7 @@ export async function settleFileFee(o: {
     let reason = "";
     try {
       const req = await buildSponsorFeeRequestV1({ fileId: o.fileId, baseUrl: o.baseUrl });
-      const r = await fetchJson<{ ok?: boolean; sponsored?: boolean; reason?: string }>(
+      const r = await fetchJson<{ ok?: boolean; sponsored?: boolean; reason?: string; tx_hash?: string | null }>(
         tetCoreUrl(o.baseUrl, "/demo/files/sponsor-fee"),
         {
           method: "POST",
@@ -117,7 +117,11 @@ export async function settleFileFee(o: {
         },
       );
       if (r.ok && r.data?.sponsored === true) {
-        return { state: "sponsored", text: `Fee ${FILE_FEE_MICRO} µTET: sponsored by the demo.` };
+        return {
+          state: "sponsored",
+          text: `Fee ${FILE_FEE_MICRO} µTET: sponsored by the demo.`,
+          txHash: typeof r.data?.tx_hash === "string" ? r.data.tx_hash : undefined,
+        };
       }
       // A refusal comes back as a non-2xx JSON body `{ ok: false, reason }`.
       let refused: string | undefined = r.data?.reason;
