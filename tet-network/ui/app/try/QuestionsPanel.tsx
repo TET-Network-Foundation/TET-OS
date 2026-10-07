@@ -3,8 +3,8 @@
 /**
  * Try TET, part 5: "AI asks a human" (docs/DEMO_NODE.md). Agents post questions to a public
  * questions board with the agent SDK's `postQuestion`; one action here: answer. Anonymous by
- * default unless no native prover is here (then named, and the answer says so); the set join and
- * the proof happen behind the button, as on the board. Rules in `lib/questions.mjs`, node calls in
+ * default unless no native prover is here (then named, and the answer says so). As on the board,
+ * joining the anonymity set is a separate tap that sends nothing (see `wallet.tsx`). Rules in `lib/questions.mjs`, node calls in
  * `lib/try_questions.ts`.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,7 +12,7 @@ import { PROVER_DOCS_URL, probeProver } from "../lib/board.mjs";
 import { DEFAULT_PROVER_URL } from "../lib/anon_poster.mjs";
 import { secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
-import { anonMembership, openBoard, registerForAnon, type OpenBoard } from "../lib/try_board";
+import { openBoard, type OpenBoard } from "../lib/try_board";
 import { answerAnonymously, answerNamed, askerInbox, readQuestions, type Question } from "../lib/try_questions";
 import { Badge, Button, Input, PinnedNotice, TextArea, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
@@ -46,20 +46,23 @@ function OwnerLine(props: { q: Question }) {
 }
 
 function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing" }) {
-  const { ensureWallet } = useTryWallet();
+  const { ensureWallet, anon, joinAnon } = useTryWallet();
+  const [joining, setJoining] = useState(false);
   const [text, setText] = useState("");
   const [named, setNamed] = useState(false);
   const [result, setResult] = useState<{ tone: Tone; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [step, setStep] = useState<{ name: string; atMs: number; readyAtMs?: number } | null>(null);
+  const [step, setStep] = useState<{ name: string; atMs: number } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const anonymous = props.prover !== "missing" && !named;
+  const needsJoin = anonymous && props.prover === "found" && !anon?.member;
 
+  const ticking = busy || !!anon?.joined;
   useEffect(() => {
-    if (!busy) return;
+    if (!ticking) return;
     const t = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(t);
-  }, [busy]);
+  }, [ticking]);
 
   async function onAnswer() {
     const body = text.trim();
@@ -78,17 +81,7 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
         await answerNamed(BASE, props.q, to, body);
         setResult({ tone: "named", text: "Sent, named: the agent sees your wallet id." });
       } else {
-        let m = await anonMembership(BASE);
-        if (m && !m.member) {
-          await registerForAnon(BASE);
-          m = await anonMembership(BASE);
-          while (m && !m.member) {
-            setStep({ name: "joining", atMs: Date.now(), readyAtMs: m.nextEpochAtMs });
-            const wait = Math.min(5_000, Math.max(1_000, m.nextEpochAtMs - Date.now() + 1_500));
-            await new Promise((r) => setTimeout(r, wait));
-            m = await anonMembership(BASE);
-          }
-        }
+        if (!anon?.member) throw new Error("Join the anonymity set first.");
         const out = await answerAnonymously(BASE, PROVER_URL, props.q, to, body, (s) => setStep({ name: s.state, atMs: Date.now() }));
         if (out.state === "sent") setResult({ tone: "ok", text: "✓ Sent anonymously. Only the agent can read it." });
         else setResult({ tone: "bad", text: `Not sent: ${out.state === "failed" ? out.reason : "not in the anonymity set yet"}` });
@@ -104,25 +97,45 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
 
   const progress = !step
     ? ""
-    : step.name === "joining"
-      ? `joining the anonymity set · ready in ${fmtSeconds(secondsUntil(step.readyAtMs ?? now, now))}`
-      : step.name === "proving"
-        ? `proving… ${fmtSeconds(Math.max(0, Math.floor((now - step.atMs) / 1000)))}`
-        : `${step.name.replace("_", " ")}…`;
+    : step.name === "proving"
+      ? `proving… ${fmtSeconds(Math.max(0, Math.floor((now - step.atMs) / 1000)))}`
+      : `${step.name.replace("_", " ")}…`;
 
   return (
     <div className="mt-2 space-y-2">
       <TextArea value={text} onChange={setText} rows={2} disabled={busy} placeholder="Your answer. Only the agent can read it." />
       <div className="flex flex-wrap items-center gap-2">
-        <Button disabled={busy || !text.trim() || props.prover === "unknown"} onClick={() => void onAnswer()}>
-          {props.prover === "unknown" ? "Checking for the prover…" : anonymous ? "Answer anonymously" : "Answer named"}
-        </Button>
+        {needsJoin ? (
+          <Button
+            disabled={joining || !!anon?.joined}
+            onClick={() => {
+              setJoining(true);
+              setResult(null);
+              void joinAnon()
+                .catch((e: unknown) => setResult({ tone: "bad", text: e instanceof Error ? e.message : String(e) }))
+                .finally(() => setJoining(false));
+            }}
+          >
+            {joining ? "Joining…" : anon?.joined ? `Ready in ${fmtSeconds(secondsUntil(anon.nextEpochAtMs, now))}` : "Join the anonymity set"}
+          </Button>
+        ) : (
+          <Button disabled={busy || !text.trim() || props.prover === "unknown"} onClick={() => void onAnswer()}>
+            {props.prover === "unknown" ? "Checking for the prover…" : anonymous ? "Answer anonymously" : "Answer named"}
+          </Button>
+        )}
         {props.prover === "found" && !busy ? (
           <Button kind="quiet" onClick={() => setNamed(!named)}>
             {named ? "answer anonymously instead" : "answer named instead"}
           </Button>
         ) : null}
       </div>
+      {needsJoin ? (
+        <p className="text-[14px] text-neutral-500">
+          {anon?.joined
+            ? "Joined (public). Your answer stays here; nothing is sent until you tap Answer. Waiting longer hides you among more members."
+            : "To answer anonymously, join the set first: a separate, public step that sends nothing."}
+        </p>
+      ) : null}
       {busy && progress ? <Badge tone="pending">{progress}</Badge> : null}
       {result ? <Badge tone={result.tone}>{result.text}</Badge> : null}
       {props.prover === "missing" ? (

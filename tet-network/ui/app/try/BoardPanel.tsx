@@ -3,8 +3,9 @@
 /**
  * Try TET, part 1: the anonymous board (docs/DEMO_NODE.md). A text board: numbered posts, anonymous
  * by default, text first, `>>n` replies as plain text. The honest limits are the pinned post `0`.
- * One tap posts: the wallet, the anonymity-set join and the proof all happen behind one button, and
- * the post shows at once with its progress. Rules in `lib/board.mjs`, node calls in
+ * Once in the anonymity set, one tap posts and the post shows at once with its progress. Joining the
+ * set is a separate tap that never posts (see `wallet.tsx`: a post fired the moment a join takes
+ * effect would point back at the join). Rules in `lib/board.mjs`, node calls in
  * `lib/try_board.ts`.
  *
  * #18 (follows, profiles, notifications) is later: `Author` is where a profile link would attach.
@@ -16,13 +17,11 @@ import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { tmailBucketIndex } from "../lib/anon_tree.mjs";
 import {
-  anonMembership,
   createBoard,
   openBoard,
   postAnonymous,
   postNamed,
   readBoard,
-  registerForAnon,
   type BoardPost,
   type OpenBoard,
 } from "../lib/try_board";
@@ -37,10 +36,9 @@ type Outgoing = {
   id: string;
   text: string;
   mode: "anonymous" | "named";
-  step: "joining" | "proving" | "depositing" | "sending" | "sent" | "failed";
+  step: "proving" | "depositing" | "sending" | "sent" | "failed";
   startedAtMs: number;
   stepAtMs: number;
-  readyAtMs?: number;
   msgId?: string;
   reason?: string;
 };
@@ -82,7 +80,8 @@ function Body(props: { text: string; onRef: (n: number) => void }) {
 }
 
 export default function BoardPanel() {
-  const { ensureWallet } = useTryWallet();
+  const { wallet, anon, refreshAnon, joinAnon, ensureWallet } = useTryWallet();
+  const [joining, setJoining] = useState(false);
   const [board, setBoard] = useState<OpenBoard | null>(null);
   const [newName, setNewName] = useState("");
   const [inviteText, setInviteText] = useState("");
@@ -94,7 +93,6 @@ export default function BoardPanel() {
   const [prover, setProver] = useState<"unknown" | "found" | "missing">("unknown");
   const [named, setNamed] = useState(false);
   const [text, setText] = useState("");
-  const [members, setMembers] = useState<number | null>(null);
   const [postedBuckets, setPostedBuckets] = useState<number[]>([]);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
@@ -171,6 +169,12 @@ export default function BoardPanel() {
   const allowance = anonAllowance({ nowMs: now, postedBuckets });
   // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
   const anonymous = prover !== "missing" && !named;
+  // Anonymous posting needs membership; until then the one button is the (separate) join.
+  const needsJoin = anonymous && prover === "found" && !anon?.member;
+
+  useEffect(() => {
+    if (wallet && prover === "found") void refreshAnon().catch(() => {});
+  }, [wallet, prover, refreshAnon]);
 
   async function onPost() {
     if (!board) return;
@@ -181,6 +185,10 @@ export default function BoardPanel() {
     const plan = boardPostPlan({ mode: anonymous ? "anonymous" : "named", prover, hasWallet: true });
     if (plan.action === "refuse") {
       setErr(plan.reason);
+      return;
+    }
+    if (plan.action === "anonymous" && !anon?.member) {
+      setErr("Join the anonymity set first.");
       return;
     }
     if (plan.action === "anonymous" && allowance.remaining === 0) {
@@ -196,19 +204,7 @@ export default function BoardPanel() {
         const msgId = await postNamed(BASE, board, body);
         patch(id, { step: "sent", msgId });
       } else {
-        // Join the anonymity set if needed, and wait for the epoch that admits us.
-        let m = await anonMembership(BASE);
-        if (m && !m.member) {
-          await registerForAnon(BASE);
-          m = await anonMembership(BASE);
-          while (m && !m.member && mounted.current) {
-            patch(id, { step: "joining", readyAtMs: m.nextEpochAtMs });
-            const wait = Math.min(5_000, Math.max(1_000, m.nextEpochAtMs - Date.now() + 1_500));
-            await new Promise((r) => setTimeout(r, wait));
-            m = await anonMembership(BASE);
-          }
-        }
-        if (m) setMembers(m.members);
+        // Only members get here: joining is a separate, earlier tap (see the header).
         const out = await postAnonymous(BASE, PROVER_URL, board, body, (s) => {
           if (s.state === "proving") patch(id, { step: "proving" });
           else if (s.state === "depositing") patch(id, { step: "depositing" });
@@ -232,7 +228,7 @@ export default function BoardPanel() {
 
   const notice = [
     "Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so.",
-    `You are anonymous among the registered members only (${members ?? "?"} on this node). Joining the set is public.`,
+    `You are anonymous among the registered members only (${anon?.members ?? "?"} on this node). Joining the set is public, and it is a separate step: posting right after you join makes the post easier to link to your join.`,
     "One anonymous post per board per UTC day (up to 3 around 00:00 UTC).",
     "The node and the first relaying peer see your IP. Posts expire with their TTL and are not on the chain.",
     "Anyone with the invite link can read every post. An invite cannot be revoked: start a new board.",
@@ -301,9 +297,7 @@ export default function BoardPanel() {
         {outgoing.map((o) => {
           const secs = Math.max(0, Math.floor((now - o.stepAtMs) / 1000));
           const status =
-            o.step === "joining"
-              ? `joining the anonymity set · ready in ${fmtSeconds(secondsUntil(o.readyAtMs ?? now, now))}`
-              : o.step === "proving"
+            o.step === "proving"
                 ? `proving… ${fmtSeconds(secs)}`
                 : o.step === "failed"
                   ? `not posted: ${o.reason}`
@@ -327,9 +321,24 @@ export default function BoardPanel() {
       <div className="sticky bottom-0 space-y-2 rounded-xl border border-neutral-200 bg-white/95 p-3 backdrop-blur">
         <TextArea value={text} onChange={setText} rows={text ? 3 : 1} maxLength={TMAIL_MAX_PLAINTEXT_CHARS} placeholder="Write a post (>>2 replies to post 2)" />
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <Button disabled={!text.trim() || prover === "unknown"} onClick={() => void onPost()}>
-            {prover === "unknown" ? "Checking for the prover…" : anonymous ? "Post anonymously" : "Post named"}
-          </Button>
+          {needsJoin ? (
+            <Button
+              disabled={joining || !!anon?.joined}
+              onClick={() => {
+                setErr("");
+                setJoining(true);
+                void joinAnon()
+                  .catch((e: unknown) => mounted.current && setErr(e instanceof Error ? e.message : String(e)))
+                  .finally(() => mounted.current && setJoining(false));
+              }}
+            >
+              {joining ? "Joining…" : anon?.joined ? `Ready in ${fmtSeconds(secondsUntil(anon.nextEpochAtMs, now))}` : "Join the anonymity set"}
+            </Button>
+          ) : (
+            <Button disabled={!text.trim() || prover === "unknown"} onClick={() => void onPost()}>
+              {prover === "unknown" ? "Checking for the prover…" : anonymous ? "Post anonymously" : "Post named"}
+            </Button>
+          )}
           {prover === "found" ? (
             <Button kind="quiet" onClick={() => setNamed(!named)}>
               {named ? "post anonymously instead" : "post named instead"}
@@ -344,6 +353,10 @@ export default function BoardPanel() {
                 </a>{" "}
                 to post anonymously.
               </>
+            ) : needsJoin && anon?.joined ? (
+              <>Joined (public). Your draft stays here; nothing is posted until you tap Post. Waiting longer hides you among more members.</>
+            ) : needsJoin ? (
+              <>To post anonymously, join the set first: a separate, public step that posts nothing.</>
             ) : anonymous ? (
               <>{allowance.remaining} anonymous post left today · about 30 s to prove</>
             ) : (

@@ -14,8 +14,13 @@
 //    and shows its sender; an anonymous post is VERIFIED only on the node's verified verdict.
 // 4. An invite that doesn't derive the board's registered keys is refused.
 // 5. Creating a board does not replace the visitor's own wallet session.
+// 6. Joining the anonymity set and sending anonymously never happen in the same action: a post fired
+//    the moment a (public) join takes effect would point back at the join. Checked in the page's
+//    sources: only `wallet.tsx`'s `joinAnon` registers, it sends nothing, and no block that calls
+//    `joinAnon()` also sends anonymously. With controls.
 
 import { register } from "node:module";
+import { readFileSync, readdirSync } from "node:fs";
 import assert from "node:assert/strict";
 
 register("./lib/ts_hooks.mjs", import.meta.url);
@@ -230,5 +235,71 @@ await check("the prover probe says missing when nothing answers, without sending
 });
 
 globalThis.fetch = realFetch;
+const ANON_SEND = /\b(postAnonymous|postAnonymousTo|answerAnonymously|runAnonPost)\s*\(/;
+
+/** The smallest `{…}` block around `at` in `src` (or the whole source when there is none). */
+function enclosingBlock(src, at) {
+  let depth = 0;
+  let start = 0;
+  for (let i = at; i >= 0; i--) {
+    if (src[i] === "}") depth++;
+    else if (src[i] === "{") {
+      if (depth === 0) {
+        start = i;
+        break;
+      }
+      depth--;
+    }
+  }
+  depth = 0;
+  for (let i = start; i < src.length; i++) {
+    if (src[i] === "{") depth++;
+    else if (src[i] === "}" && --depth === 0) return src.slice(start, i + 1);
+  }
+  return src.slice(start);
+}
+
+/** Where the try page could join and send anonymously in one action. */
+function joinPostProblems(sources) {
+  const problems = [];
+  for (const [f, src] of Object.entries(sources)) {
+    if (/\bregisterForAnon\s*\(/.test(src) && f !== "wallet.tsx") problems.push(`${f}: registers for the anonymity set outside wallet.tsx's joinAnon`);
+    if (f === "wallet.tsx" && ANON_SEND.test(src)) problems.push(`${f}: the join code sends anonymously`);
+    for (const m of src.matchAll(/\bjoinAnon\s*\(/g)) {
+      // The handler that joins, up to its enclosing function: two levels out covers `onClick={() => {…}}`.
+      const inner = enclosingBlock(src, m.index);
+      const outer = enclosingBlock(src, Math.max(0, src.indexOf(inner) - 1));
+      for (const b of [inner, outer.length < 4000 ? outer : ""]) {
+        if (ANON_SEND.test(b)) problems.push(`${f}: joins and sends anonymously in one action`);
+      }
+    }
+  }
+  return [...new Set(problems)];
+}
+
+await check("SECURITY: joining the anonymity set and posting anonymously are never one action", () => {
+  const dir = new URL("../app/try/", import.meta.url);
+  const sources = Object.fromEntries(
+    readdirSync(dir)
+      .filter((n) => /\.tsx?$/.test(n))
+      .map((n) => [n, readFileSync(new URL(n, dir), "utf8")]),
+  );
+  assert.deepEqual(joinPostProblems(sources), []);
+  assert.match(sources["wallet.tsx"], /\bregisterForAnon\s*\(/, "wallet.tsx should hold the one join");
+  const joins = Object.values(sources).join("\n").match(/\bjoinAnon\s*\(/g) ?? [];
+  assert.ok(joins.length >= 2, "the board and the answers should both join through joinAnon");
+});
+
+await check("control: the join/post check catches join-then-post, a stray register and a sending join", () => {
+  const cases = {
+    "a.tsx": `async function onPost() { if (!anon.member) { await joinAnon(); } await postAnonymous(BASE, P, board, body, f); }`,
+    "b.tsx": `<Button onClick={() => { void joinAnon().then(() => answerAnonymously(BASE, P, q, to, body, f)); }} />`,
+    "c.tsx": `async function go() { await registerForAnon(BASE); }`,
+    "wallet.tsx": `const joinAnon = async () => { await registerForAnon(BASE); await postAnonymousTo(BASE, P, to, t, f); };`,
+  };
+  for (const [f, src] of Object.entries(cases)) assert.ok(joinPostProblems({ [f]: src }).length >= 1, `${f} was not caught`);
+  assert.deepEqual(joinPostProblems({ "ok2.tsx": `<B onClick={() => { void joinAnon(); }} /> <C onClick={() => void onPost()} />` }), []);
+});
+
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
