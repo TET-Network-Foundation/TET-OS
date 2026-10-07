@@ -112,15 +112,7 @@ export default function VerifyPanel(props: { baseUrl: string }) {
       try {
         const r = await fetch(`${props.baseUrl}/chain`);
         const j = r.ok ? await r.json() : null;
-        if (live && j?.chain_id && j?.genesis_hash) {
-          setNodeChain({ chainId: j.chain_id, genesisHash: j.genesis_hash });
-          // A QR for another chain: check the signatures on that chain.
-          if (qr && (qr.chainId !== j.chain_id || qr.genesisHash !== j.genesis_hash)) {
-            setUseOther(true);
-            setOtherChainId(qr.chainId);
-            setOtherGenesis(qr.genesisHash);
-          }
-        }
+        if (live && j?.chain_id && j?.genesis_hash) setNodeChain({ chainId: j.chain_id, genesisHash: j.genesis_hash });
       } catch {
         /* shown as "unknown" below */
       }
@@ -128,7 +120,7 @@ export default function VerifyPanel(props: { baseUrl: string }) {
     return () => {
       live = false;
     };
-  }, [props.baseUrl, qr]);
+  }, [props.baseUrl]);
 
   async function onVerify() {
     setErr("");
@@ -211,6 +203,16 @@ export default function VerifyPanel(props: { baseUrl: string }) {
             {qr.sigSha256}
           </p>
           {qr.stampTx ? <p>{t("Its stamp receipt is filled in below.")}</p> : null}
+          {nodeChain && (qr.chainId !== nodeChain.chainId || qr.genesisHash !== nodeChain.genesisHash) ? (
+            // The QR's author chose its chain, so the page never switches to it: checking another
+            // chain is the reader's choice (the "another chain" option), made knowingly.
+            <p role="alert" className={INK.bad}>
+              {t("The QR names chain {qrChain}, not this node's chain {nodeChain}. Verify checks against this node's chain; a signature for another chain fails here.", {
+                qrChain: `${qr.chainId} (${qr.genesisHash.slice(0, 12)}…)`,
+                nodeChain: `${nodeChain.chainId} (${nodeChain.genesisHash.slice(0, 12)}…)`,
+              })}
+            </p>
+          ) : null}
         </div>
       ) : null}
       <div className="space-y-3">

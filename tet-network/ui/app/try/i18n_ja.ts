@@ -433,4 +433,5 @@ export const JA: Record<string, string> = {
   "Its SHA-256 is the one in the QR.": "その SHA-256 はQRのものと一致します。",
   "Its SHA-256 differs from the QR's: this is another .sig.json, or a copy that was changed (even re-indented).": "その SHA-256 はQRのものと違います。別の .sig.json か、変更された（インデントを変えただけでも）コピーです。",
   "qr": "QR",
+  "The QR names chain {qrChain}, not this node's chain {nodeChain}. Verify checks against this node's chain; a signature for another chain fails here.": "このQRはチェーン {qrChain} を指していますが、このノードのチェーンは {nodeChain} です。検証はこのノードのチェーンで行うため、別のチェーン向けの署名はここでは失敗します。",
 };

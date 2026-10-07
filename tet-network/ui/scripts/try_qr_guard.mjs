@@ -10,9 +10,13 @@
 // 3. Verify says "the QR names this .sig.json" only for the exact bytes: a re-indented copy (the
 //    same JSON) is not it. Control: a matcher that compares parsed JSON → FAILED.
 // 4. The QR is the link: the library's modules for the same text, error correction M, quiet zone 4.
+// 5. A QR never chooses the chain Verify checks against (its author picks it): in VerifyPanel the
+//    chain setters are called only from the reader's own controls, never with the QR's fields.
+//    Control: the auto-switch this replaced → FAILED.
 
 import { register } from "node:module";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 register("./lib/ts_hooks.mjs", import.meta.url);
 process.env.NEXT_PUBLIC_TET_CHAIN_ID ||= "tet-local-dev";
@@ -102,6 +106,34 @@ await check("the QR is the link: same modules as the library at error correction
   const dark = new Set(d.match(/M\d+ \d+/g).map((m) => m.slice(1)));
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) assert.equal(dark.has(`${c + 4} ${r + 4}`), ref.isDark(r, c));
   assert.ok(n <= 89, `version ${(n - 17) / 4} is too dense to print small`);
+});
+
+/** The property in (5), run against VerifyPanel's source. */
+function qrNeverPicksTheChain(src) {
+  const calls = [...src.matchAll(/\bset(UseOther|OtherChainId|OtherGenesis)\(([^)]*)\)/g)].map((m) => m[0]);
+  const allowed = new Set(["setUseOther(false)", "setUseOther(true)"]);
+  for (const c of calls) {
+    assert.ok(allowed.has(c), `chain set from code: ${c}`);
+    assert.ok(!/qr/i.test(c), `chain set from the QR: ${c}`);
+  }
+  // setUseOther(true) only from the radio button's onChange, and the id/genesis only from their inputs.
+  assert.equal((src.match(/onChange=\{\(\) => setUseOther\(true\)\}/g) ?? []).length, (src.match(/setUseOther\(true\)/g) ?? []).length, "setUseOther(true) outside the reader's radio button");
+  assert.match(src, /onChange=\{setOtherChainId\}/);
+  assert.match(src, /onChange=\{setOtherGenesis\}/);
+}
+
+const panel = readFileSync(new URL("../app/try/VerifyPanel.tsx", import.meta.url), "utf8");
+await check("SECURITY: a QR never chooses the chain Verify checks against", () => {
+  qrNeverPicksTheChain(panel);
+});
+
+await check("control: the auto-switch to the QR's chain is caught", () => {
+  const autoSwitch = panel.replace(
+    "const [qrMatch, setQrMatch]",
+    "if (qr) { setUseOther(true); setOtherChainId(qr.chainId); setOtherGenesis(qr.genesisHash); }\n  const [qrMatch, setQrMatch]",
+  );
+  assert.notEqual(autoSwitch, panel);
+  assert.throws(() => qrNeverPicksTheChain(autoSwitch));
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

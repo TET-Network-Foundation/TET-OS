@@ -433,4 +433,5 @@ export const ZH_HK: Record<string, string> = {
   "Its SHA-256 is the one in the QR.": "其 SHA-256 與 QR 中的相同。",
   "Its SHA-256 differs from the QR's: this is another .sig.json, or a copy that was changed (even re-indented).": "其 SHA-256 與 QR 中的不同：這是另一份 .sig.json，或是被改動過（即使只是重新縮排）的副本。",
   "qr": "QR",
+  "The QR names chain {qrChain}, not this node's chain {nodeChain}. Verify checks against this node's chain; a signature for another chain fails here.": "此 QR 指明的區塊鏈是 {qrChain}，而非此節點的區塊鏈 {nodeChain}。驗證會以此節點的區塊鏈進行；為其他區塊鏈所作的簽名在此不會通過。",
 };
