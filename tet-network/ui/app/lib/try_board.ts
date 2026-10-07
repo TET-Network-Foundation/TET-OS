@@ -24,7 +24,8 @@ import {
   postLabel,
 } from "./board.mjs";
 import { generateDisposableWords } from "./disposable_wallet.mjs";
-import { makeHelperProver, runAnonPost } from "./anon_poster.mjs";
+import { fetchAnonLeaves, makeHelperProver, runAnonPost } from "./anon_poster.mjs";
+import { anonCommitment, toHex } from "./anon_tree.mjs";
 import { expectedChainBinding } from "./chain_binding";
 import { mnemonicToTetEd25519Keypair, signTetEd25519 } from "./ed25519_tet";
 import { b64ToBytes } from "./encoding";
@@ -190,6 +191,25 @@ export async function postNamedTo(baseUrl: string, to: Recipient, text: string):
 export async function anonSetSize(baseUrl: string): Promise<number | null> {
   const r = await getTmailAnonRoot(baseUrl);
   return r.ok ? (r.members ?? null) : null;
+}
+
+/**
+ * Is this tab's wallet in the node's anonymity set yet, how big is the set, and when does the next
+ * epoch start (a registration takes effect then)? Downloads the whole registry, as a post does:
+ * the request names no wallet.
+ */
+export async function anonMembership(
+  baseUrl: string,
+): Promise<{ member: boolean; members: number; nextEpochAtMs: number } | null> {
+  const ks = getTmailKeySession();
+  if (!ks) return null;
+  const set = await fetchAnonLeaves(anonNodeAdapter(baseUrl));
+  const mine = toHex(anonCommitment(ks.anonMemberSecret));
+  return {
+    member: set.leaves.some((l: Uint8Array) => toHex(l) === mine),
+    members: set.leaves.length,
+    nextEpochAtMs: set.nextEpochAtMs,
+  };
 }
 
 /** Join the anonymity set. Public by design: it says this wallet is a member, not what it posts. */

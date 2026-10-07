@@ -12,8 +12,11 @@
  *    Negative control: the page fetches /wallet/mnemonic/new → FAILED.
  * 3. The wallet id is the one tet-core derives: the "abandon … about" phrase must give the
  *    agent_wallet_id that tet-core asserts in `agent_payload_envelopes_match_the_rust_signer`.
+ * 4. SECURITY REGRESSION GUARD: messaging keys are published only when the visitor taps "Publish
+ *    keys" (publishing is public): every `ensureMessagingKeys()` call in app/try sits in an
+ *    `onPublish` handler. Controls: a call in an effect, in a send handler, or bare → FAILED.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -59,7 +62,15 @@ check("two wallets differ", a !== b);
 check("wallet id is 64 hex", /^[0-9a-f]{64}$/.test(id ?? ""));
 
 // ---- 2. source: no mnemonic routes, no storage --------------------------------------------------
-const files = ["../app/try/page.tsx", "../app/lib/disposable_wallet.mjs", "../app/lib/try_session.ts"];
+// Every file of the try page (the wallet is made in app/try/wallet.tsx), plus its wallet modules.
+const tryDir = resolve(here, "../app/try");
+const files = [
+  ...readdirSync(tryDir)
+    .filter((n) => /\.tsx?$/.test(n))
+    .map((n) => `../app/try/${n}`),
+  "../app/lib/disposable_wallet.mjs",
+  "../app/lib/try_session.ts",
+];
 const banned = ["/wallet/mnemonic", "localStorage", "sessionStorage", "indexedDB", "document.cookie"];
 for (const f of files) {
   const src = readFileSync(resolve(here, f), "utf8")
@@ -69,6 +80,43 @@ for (const f of files) {
   const hits = banned.filter((b) => src.includes(b));
   check(`SECURITY: ${f.replace("../", "")} names no mnemonic route or browser storage`, hits.length === 0, hits.join(", "));
 }
+
+// ---- 4. keys are published only on a tap ------------------------------------------------------------
+/** The smallest `{…}` or `(…)` handler text around `at`: back to the nearest `onPublish`, or not. */
+function publishProblems(sources) {
+  const problems = [];
+  for (const [f, src] of Object.entries(sources)) {
+    if (f === "wallet.tsx") continue; // defines it
+    for (const m of src.matchAll(/\bensureMessagingKeys\s*\(/g)) {
+      // The call must be inside an `onPublish` prop or function: the nearest handler opener before
+      // it, among `onPublish`, `useEffect`, `on[A-Z]\w*` and `function`, must be `onPublish`.
+      const before = src.slice(0, m.index);
+      const openers = [...before.matchAll(/\b(onPublish|useEffect|on[A-Z]\w*|function\s+\w+)\b/g)];
+      const last = (openers.at(-1)?.[1] ?? "").replace(/^function\s+/, "");
+      if (last !== "onPublish") problems.push(`${f}: ensureMessagingKeys() outside an onPublish handler (in ${last || "top level"})`);
+    }
+  }
+  return problems;
+}
+const trySources = Object.fromEntries(
+  readdirSync(tryDir)
+    .filter((n) => /\.tsx?$/.test(n))
+    .map((n) => [n, readFileSync(resolve(tryDir, n), "utf8")]),
+);
+const pubProblems = publishProblems(trySources);
+const pubSites = Object.entries(trySources).filter(([f, s]) => f !== "wallet.tsx" && /\bensureMessagingKeys\s*\(/.test(s)).length;
+check("SECURITY: messaging keys are published only from a Publish keys tap", pubProblems.length === 0 && pubSites >= 2, pubProblems.join("; ") || `${pubSites} panels`);
+const controls = {
+  "effect.tsx": `useEffect(() => { void ensureMessagingKeys(); }, []);`,
+  "send.tsx": `async function onSend() { await ensureWallet(); await ensureMessagingKeys(); }`,
+  "named.tsx": `async function onPublishLater() { await ensureMessagingKeys(); }`,
+  "bare.tsx": `const x = 1; void ensureMessagingKeys();`,
+};
+check(
+  "control: a publish from an effect, a send handler or top level is caught",
+  Object.entries(controls).every(([f, src]) => publishProblems({ [f]: src }).length === 1) &&
+    publishProblems({ "ok.tsx": `<KeysBanner onPublish={() => { void ensureMessagingKeys().then(refresh); }} />` }).length === 0,
+);
 
 // ---- 3. the id tet-core derives -----------------------------------------------------------------
 const fixture = JSON.parse(

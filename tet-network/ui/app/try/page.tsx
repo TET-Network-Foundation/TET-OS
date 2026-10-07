@@ -1,230 +1,371 @@
 "use client";
 
 /**
- * Try TET — one page on today's testnet (docs/DEMO_NODE.md), in the desktop's Win95 look. The
- * disposable wallet (part 0c), Tmail and Files (parts 2, 3), the anonymous board (part 1) and verify
- * anything (part 4) and AI asks a human (part 5). Every panel prints its limits.
+ * Try TET: one page on today's testnet (docs/DEMO_NODE.md). Design pass 2, "Ledger": a three-column
+ * shell. Left, the channels: boards opened in this tab, the questions board, and the tools (verify,
+ * files, mail). Middle, the selected one. Right (wide screens only), node facts for engineers. On a
+ * phone the sidebar folds into a top bar with one switcher. The desktop at /os keeps Win95.
  *
- * Talks only to this site's `/tet-node-api` proxy, which reaches a tet-core in public mode (an
- * allow-list of routes, rate-limited per visitor). The wallet is made and kept in this tab only.
+ * Talks only to this site's `/tet-node-api` proxy (a tet-core in public mode: an allow-list of
+ * routes, rate-limited per visitor). A panel loads only when first opened. Board invites live after
+ * the `#` (never sent to a server); the open tool is in `?tab=`.
  */
-import { useEffect, useState } from "react";
-import MessagesPanel from "../os/MessagesPanel";
-import FilesPanel from "../os/tabs/FilesPanel";
-import Win95Button from "../os/components/Win95Button";
-import Win95Panel from "../os/components/Win95Panel";
-import { bevel, buttonBevel } from "../os/components/tokens";
-import { generateDisposableWords, wordsFileText } from "../lib/disposable_wallet.mjs";
-import { activateTryWallet, forgetTryWallet } from "../lib/try_session";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { wordsFileText } from "../lib/disposable_wallet.mjs";
+import { openBoard, type OpenBoard } from "../lib/try_board";
 import BoardPanel from "./BoardPanel";
-import VerifyPanel from "./VerifyPanel";
+import FilesTryPanel from "./FilesTryPanel";
+import MailPanel from "./MailPanel";
+import NewBoardPanel from "./NewBoardPanel";
 import QuestionsPanel from "./QuestionsPanel";
-
-const BASE = "/tet-node-api";
+import VerifyPanel from "./VerifyPanel";
+import { Button, FOCUS, INK, MONO, cx } from "./ui";
+import { BASE, WalletProvider, useTryWallet } from "./wallet";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
   ? (process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase()
   : "";
+/** The commit this UI was built from, when the build passes it in. */
+const BUILD_SHA = /^[0-9a-f]{7,40}$/.test(process.env.NEXT_PUBLIC_TET_BUILD_SHA ?? "") ? (process.env.NEXT_PUBLIC_TET_BUILD_SHA as string) : "";
+const REPO = "https://github.com/TET-Network-Foundation/TET-OS";
 
-const TMAIL_LIMITS = [
-  "Key exchange is Kyber round 3, not the final ML-KEM standard (FIPS 203).",
-  "Burn-after-read is best-effort: cooperating nodes delete the message; others may keep the ciphertext.",
-  "Scheduled release is the nodes withholding a message, not cryptographic enforcement.",
-  "A conversation keeps only its newest 5 messages, and messages expire after 7 days.",
-  "Contents are end-to-end encrypted; the demo node still sees which wallets write to which, and when.",
-  "To receive, register your messaging keys (the button below). Registering is public.",
-];
+const TOOLS = [
+  { id: "questions", label: "Questions for humans", group: "boards" },
+  { id: "verify", label: "verify", group: "tools" },
+  { id: "files", label: "files", group: "tools" },
+  { id: "mail", label: "mail", group: "tools" },
+] as const;
+type ToolId = (typeof TOOLS)[number]["id"] | "new";
+/** What the middle column shows: a board (by invite) or a tool. */
+type View = { board: string } | { tool: ToolId };
+const viewKey = (v: View) => ("board" in v ? `b:${v.board}` : `t:${v.tool}`);
 
-const FILES_LIMITS = [
-  "Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days.",
-  "The 1,000 µTET fee is paid by the demo's sponsor, for up to 5 files per connection and per wallet a day. Past that, or if the sponsor is low, the file still arrives and its fee shows as unpaid.",
-  "The node a file is stored on is only a hint: fetching asks the peers this node is connected to.",
-  "The demo node sees sender, recipient, size and time; not the contents or the file name.",
-];
+type Chain = { chainId: string; genesis: string } | null;
 
-function Limits(props: { items: string[] }) {
-  return (
-    <ul className="mt-2 list-disc pl-5 text-[11px] text-black/70">
-      {props.items.map((l) => (
-        <li key={l}>{l}</li>
-      ))}
-    </ul>
-  );
-}
-
-type NodeStatus =
-  | { state: "checking" }
-  | { state: "up"; height: number | null; chainId: string }
-  | { state: "down"; reason: string };
-
-type Wallet = { words: string; walletId: string; shown: boolean };
-
-
-export default function TryPage() {
-  const [node, setNode] = useState<NodeStatus>({ state: "checking" });
-  const [wallet, setWallet] = useState<Wallet | null>(null);
-  const [err, setErr] = useState("");
-
+function useNode() {
+  const [chain, setChain] = useState<Chain>(null);
+  const [height, setHeight] = useState<number | null>(null);
+  const [down, setDown] = useState("");
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
+    let live = true;
+    const poll = async () => {
       try {
-        const [st, ch] = await Promise.all([fetch(`${BASE}/ledger/state`), fetch(`${BASE}/chain`)]);
-        if (!st.ok || !ch.ok) throw new Error(`HTTP ${st.status}/${ch.status}`);
+        const st = await fetch(`${BASE}/ledger/state`);
+        if (!st.ok) throw new Error(`HTTP ${st.status}`);
         const s = await st.json();
-        const c = await ch.json();
-        if (!cancelled) {
-          setNode({ state: "up", height: s.block_height ?? null, chainId: String(c.chain_id ?? "") });
+        if (live) {
+          setHeight(typeof s.block_height === "number" ? s.block_height : null);
+          setDown("");
         }
       } catch (e: unknown) {
-        if (!cancelled) setNode({ state: "down", reason: e instanceof Error ? e.message : String(e) });
+        if (live) setDown(e instanceof Error ? e.message : String(e));
+      }
+    };
+    void (async () => {
+      try {
+        const c = await (await fetch(`${BASE}/chain`)).json();
+        if (live) setChain({ chainId: String(c.chain_id ?? ""), genesis: String(c.genesis_hash ?? "") });
+      } catch {
+        /* the height poll reports the node as down */
       }
     })();
+    void poll();
+    const t = setInterval(() => void poll(), 15_000);
     return () => {
-      cancelled = true;
+      live = false;
+      clearInterval(t);
     };
   }, []);
+  return { chain, height, down };
+}
 
-  async function onCreate() {
-    setErr("");
-    try {
-      const words = generateDisposableWords();
-      const walletId = await activateTryWallet(words);
-      setWallet({ words, walletId, shown: false });
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  }
-
+function WalletLine() {
+  const { wallet, forget } = useTryWallet();
+  const [shown, setShown] = useState(false);
+  // Forgetting can't be undone unless the words were saved: the first tap asks, the second forgets.
+  const [confirmForget, setConfirmForget] = useState(false);
+  useEffect(() => {
+    if (!confirmForget) return;
+    const t = setTimeout(() => setConfirmForget(false), 5_000);
+    return () => clearTimeout(t);
+  }, [confirmForget]);
+  if (!wallet) return <p className="text-[13.5px] text-[#5d646d]">No wallet yet: your first post or message makes one in this tab.</p>;
   function onDownload() {
     if (!wallet) return;
-    const blob = new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
+    const url = URL.createObjectURL(new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" }));
     const a = document.createElement("a");
     a.href = url;
     a.download = `tet-testnet-wallet-${wallet.walletId.slice(0, 8)}.txt`;
     a.click();
     URL.revokeObjectURL(url);
   }
+  return (
+    <div className="text-[13.5px]">
+      <div className="flex flex-wrap items-baseline gap-x-2">
+        <span>
+          wallet{" "}
+          <span translate="no" className={cx(MONO, INK.named)}>
+            {wallet.walletId.slice(0, 8)}
+          </span>
+        </span>
+        <Button kind="quiet" className="text-[13.5px]" onClick={() => setShown(!shown)}>
+          {shown ? "hide words" : "12 words"}
+        </Button>
+        <Button kind="quiet" className="text-[13.5px]" onClick={onDownload}>
+          save
+        </Button>
+        <Button
+          kind="quiet"
+          className="text-[13.5px]"
+          onClick={() => {
+            if (!confirmForget) return setConfirmForget(true);
+            setConfirmForget(false);
+            forget();
+          }}
+        >
+          {confirmForget ? <span className={INK.bad}>tap again to forget it</span> : "forget"}
+        </Button>
+      </div>
+      {shown ? (
+        <p translate="no" className={cx(MONO, "mt-1 break-words text-[13px]")}>
+          {wallet.words}
+        </p>
+      ) : null}
+      <p className="mt-1 text-[12.5px] text-[#5d646d]">Made in this tab, never sent anywhere. Close the tab without saving the words and it is gone.</p>
+    </div>
+  );
+}
 
-  function onForget() {
-    forgetTryWallet();
-    setWallet(null);
-  }
+/** The channel list: the sidebar on wide screens, the switcher menu on a phone. */
+function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => void }) {
+  const item = (v: View, prefix: string, label: string) => {
+    const on = viewKey(v) === viewKey(props.view);
+    return (
+      <li key={viewKey(v)}>
+        <button
+          type="button"
+          onClick={() => props.go(v)}
+          aria-current={on ? "page" : undefined}
+          className={cx(FOCUS, "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[15px]", on ? "bg-[#e2e5e9] font-semibold" : "hover:bg-[#e8eaed]")}
+        >
+          <span aria-hidden="true" className={cx(MONO, "text-[#5d646d]")}>
+            {prefix}
+          </span>
+          <span className="truncate">{label}</span>
+        </button>
+      </li>
+    );
+  };
+  return (
+    <nav aria-label="Channels">
+      <h2 className="mx-2 mb-1 mt-3 text-[13px] font-semibold text-[#5d646d]">boards</h2>
+      <ul>
+        {props.boards.map((b) => item({ board: b.invite }, "#", b.name || "Untitled board"))}
+        {item({ tool: "questions" }, "#", "Questions for humans")}
+      </ul>
+      <p className="mx-2 mt-1 text-[13.5px]">
+        <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "new" })}>
+          start or open a board
+        </button>
+      </p>
+      <h2 className="mx-2 mb-1 mt-4 text-[13px] font-semibold text-[#5d646d]">tools</h2>
+      <ul>{TOOLS.filter((t) => t.group === "tools").map((t) => item({ tool: t.id }, "/", t.label))}</ul>
+    </nav>
+  );
+}
+
+function Rail(props: { node: ReturnType<typeof useNode> }) {
+  const { wallet, anon, prover } = useTryWallet();
+  const { chain, height, down } = props.node;
+  const row = (k: string, v: ReactNode) => (
+    <>
+      <dt className="text-[#5d646d]">{k}</dt>
+      <dd className={cx(MONO, "m-0 break-words text-[13px]")}>{v}</dd>
+    </>
+  );
+  return (
+    <aside aria-label="Node facts" className="hidden border-l border-[#e3e5e8] px-4 py-4 text-[14px] xl:block">
+      <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">This node</h2>
+      <dl className="mb-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        {row("chain", chain?.chainId ?? "…")}
+        {row("genesis", chain ? `${chain.genesis.slice(0, 14)}…` : "…")}
+        {row("height", down ? <span className={INK.bad}>not answering</span> : <span className="tabular-nums">{height?.toLocaleString() ?? "…"}</span>)}
+        {row("api", BASE)}
+        {row(
+          "you",
+          wallet ? (
+            <span title={wallet.walletId} data-wallet-id={wallet.walletId}>
+              {wallet.walletId.slice(0, 8)}
+            </span>
+          ) : (
+            "no wallet yet"
+          ),
+        )}
+        {row("anon set", anon ? `${anon.members} members${anon.member ? " · you're in" : ""}` : wallet ? "…" : "shown once you have a wallet")}
+        {row("prover", prover === "found" ? "found (this computer)" : prover === "missing" ? "not found" : "checking…")}
+      </dl>
+      <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">This page</h2>
+      <p className="mb-2 text-[#3d434a]">
+        <a className="underline" href={BUILD_SHA ? `${REPO}/tree/${BUILD_SHA}/tet-network/ui` : `${REPO}/tree/main/tet-network/ui`} target="_blank" rel="noreferrer">
+          verify this page
+        </a>
+        :{" "}
+        {BUILD_SHA ? (
+          <>
+            built from <span className={MONO}>{BUILD_SHA.slice(0, 10)}</span>; rebuild it and compare.
+          </>
+        ) : (
+          <>the source it was built from. This build doesn&apos;t name its commit.</>
+        )}{" "}
+        Builds are not signed yet.
+      </p>
+      <p className="text-[#3d434a]">
+        <a className="underline" href={`${REPO}/blob/main/docs/DEMO_NODE.md`} target="_blank" rel="noreferrer">
+          how this demo works
+        </a>{" "}
+        ·{" "}
+        <a className="underline" href={REPO} target="_blank" rel="noreferrer">
+          source
+        </a>
+      </p>
+    </aside>
+  );
+}
+
+function TryApp() {
+  const node = useNode();
+  const [boards, setBoards] = useState<OpenBoard[]>([]);
+  const [view, setView] = useState<View>({ tool: "new" });
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  const [menu, setMenu] = useState(false);
+  const [boardErr, setBoardErr] = useState("");
+
+  const go = useCallback((v: View) => {
+    setView(v);
+    setOpened((o) => (o.has(viewKey(v)) ? o : new Set(o).add(viewKey(v))));
+    setMenu(false);
+    const url = new URL(window.location.href);
+    if ("tool" in v && v.tool !== "new") url.searchParams.set("tab", v.tool);
+    else url.searchParams.delete("tab");
+    if ("board" in v) url.hash = `board=${v.board}`;
+    window.history.replaceState(null, "", url);
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const addBoard = useCallback(
+    (b: OpenBoard) => {
+      setBoards((bs) => (bs.some((x) => x.invite === b.invite) ? bs : [...bs, b]));
+      go({ board: b.invite });
+    },
+    [go],
+  );
+
+  // First load: the board in the `#`, or the tool in `?tab=`.
+  useEffect(() => {
+    const tab = new URLSearchParams(window.location.search).get("tab");
+    const tool = TOOLS.find((t) => t.id === tab)?.id;
+    const h = window.location.hash;
+    let live = true;
+    if (h.startsWith("#board=")) {
+      void openBoard(BASE, h)
+        .then((b) => {
+          if (!live) return;
+          setBoards((bs) => (bs.some((x) => x.invite === b.invite) ? bs : [...bs, b]));
+          if (!tool) go({ board: b.invite });
+        })
+        .catch((e: unknown) => live && setBoardErr(e instanceof Error ? e.message : String(e)));
+    }
+    // A board link waits for its board; anything else opens at once.
+    const t = tool || !h.startsWith("#board=") ? setTimeout(() => go(tool ? { tool } : { tool: "new" }), 0) : undefined;
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [go]);
+
+  const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || "Untitled board" : view.tool === "new" ? "start or open a board" : TOOLS.find((t) => t.id === view.tool)?.label;
+
+  // Once opened, a panel stays mounted (hidden), so switching back keeps its state.
+  const panel = (v: View, el: ReactNode) =>
+    opened.has(viewKey(v)) ? (
+      <div key={viewKey(v)} className={cx(viewKey(v) !== viewKey(view) && "hidden")}>
+        {el}
+      </div>
+    ) : null;
 
   return (
-    <main className="min-h-screen bg-[#D6D4CE] font-mono text-sm text-black">
-      <div className="bg-[#000080] px-2 py-1 text-sm font-bold text-white">Try TET — testnet</div>
-      <div className="mx-auto max-w-5xl space-y-3 p-3">
-        <Win95Panel variant="inset" className="bg-[#fff8e1] p-2 text-[13px]">
-          Testnet. The demo node sees your IP address and when you make requests; it is run by one
-          person. Nothing here is audited. The wallet you make lives in this tab.
-        </Win95Panel>
+    <div className="try-root min-h-screen touch-manipulation bg-white text-base text-[#1c1f23] [-webkit-tap-highlight-color:transparent] [font-family:ui-sans-serif,system-ui,-apple-system,'Segoe_UI',Roboto,sans-serif]">
+      <a href="#panel" className={cx(FOCUS, "sr-only rounded bg-white px-3 py-2 focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-30")}>
+        Skip to the panel
+      </a>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Win95Panel title="Node" className="p-2">
-            {node.state === "checking" ? <p>Checking the demo node…</p> : null}
-            {node.state === "up" ? (
-              <p>
-                Connected · chain <code>{node.chainId}</code> · height {node.height ?? "?"}
-              </p>
-            ) : null}
-            {node.state === "down" ? (
-              <p className="text-[#8a1f1f]">The demo node isn&apos;t answering ({node.reason}).</p>
-            ) : null}
-          </Win95Panel>
-
-          <Win95Panel title="Your disposable wallet" className="p-2">
-            {!wallet ? (
-              <>
-                <p>Made in this tab from 12 random words. They are never sent anywhere, not even to the demo node.</p>
-                <Win95Button className="mt-2 px-3 py-0.5 text-sm" onClick={() => void onCreate()}>
-                  Create a wallet
-                </Win95Button>
-              </>
-            ) : (
-              <>
-                <p>
-                  Wallet id <code className="break-all">{wallet.walletId}</code>
-                </p>
-                <p className="mt-2">
-                  {wallet.shown ? (
-                    <code className="break-words">{wallet.words}</code>
-                  ) : (
-                    <Win95Button className="px-2 py-0.5 text-xs" onClick={() => setWallet({ ...wallet, shown: true })}>
-                      Show the 12 words
-                    </Win95Button>
-                  )}
-                </p>
-                <p className="mt-2 flex gap-2">
-                  <Win95Button className="px-2 py-0.5 text-xs" onClick={onDownload}>
-                    Download the words
-                  </Win95Button>
-                  <Win95Button className="px-2 py-0.5 text-xs" variant="danger" onClick={onForget}>
-                    Forget this wallet
-                  </Win95Button>
-                </p>
-                <p className="mt-2 text-[12px] text-black/60">
-                  Close this tab and the wallet is gone unless you saved the words. They open the same wallet in
-                  the TET desktop.
-                </p>
-              </>
-            )}
-            {err ? <p className="mt-2 text-[#8a1f1f]">{err}</p> : null}
-          </Win95Panel>
+      {/* Phone: one top bar with the switcher. */}
+      <header className="sticky top-0 z-20 border-b border-[#e3e5e8] bg-white md:hidden">
+        <div className="flex items-center gap-3 px-3.5 py-2.5">
+          <button
+            type="button"
+            aria-expanded={menu}
+            aria-controls="try-menu"
+            onClick={() => setMenu(!menu)}
+            className={cx(FOCUS, "flex min-h-10 min-w-0 items-center gap-2 rounded-md border border-[#c9ced4] px-3 text-[15px]")}
+          >
+            <span aria-hidden="true">≡</span>
+            <span className="truncate">{title}</span>
+            <span aria-hidden="true" className="text-[11px]">
+              ▾
+            </span>
+          </button>
+          <span className={cx(MONO, "ml-auto shrink-0 text-[13px] text-[#5d646d]")}>
+            {node.down ? <span className={INK.bad}>node down</span> : <span className="tabular-nums">height {node.height?.toLocaleString() ?? "…"}</span>}
+          </span>
         </div>
+        {menu ? (
+          <div id="try-menu" className="max-h-[75vh] overflow-y-auto border-t border-[#e3e5e8] bg-[#f1f2f4] px-2 pb-3">
+            <Channels boards={boards} view={view} go={go} />
+            <div className="mx-2 mt-4">
+              <WalletLine />
+            </div>
+          </div>
+        ) : null}
+      </header>
 
-        <Win95Panel title="Tmail" className="p-2">
-          {wallet ? (
-            <MessagesPanel
-              key={wallet.walletId}
-              outset={bevel.outset}
-              inset={bevel.inset}
-              winBtn={buttonBevel}
-              baseUrl={BASE}
-              myWalletId={wallet.walletId}
-              quickRecipients={[
-                ...(DEMO_CONTACT ? [{ label: "Message the demo", walletId: DEMO_CONTACT }] : []),
-                { label: "Message yourself", walletId: wallet.walletId },
-              ]}
-            />
-          ) : (
-            <p>Create a disposable wallet above to send and receive end-to-end encrypted messages.</p>
-          )}
-          {!DEMO_CONTACT ? (
-            <p className="mt-1 text-[12px] text-black/60">
-              No demo inbox on this node: message yourself, or open this page in a second tab with another wallet.
-            </p>
-          ) : null}
-          <Limits items={TMAIL_LIMITS} />
-        </Win95Panel>
+      <div className="md:grid md:min-h-screen md:grid-cols-[14.5rem_minmax(0,1fr)] xl:grid-cols-[14.5rem_minmax(0,1fr)_16.5rem]">
+        <aside className="hidden border-r border-[#e3e5e8] bg-[#f1f2f4] px-2.5 py-3.5 md:block">
+          <div className="sticky top-3.5">
+            <h1 className="mx-2 text-[16px] font-bold">
+              Try TET <span className="text-[14px] font-normal text-[#5d646d]">testnet</span>
+            </h1>
+            <Channels boards={boards} view={view} go={go} />
+            <div className="mx-2 mt-6 border-t border-[#dcdfe3] pt-3">
+              <WalletLine />
+            </div>
+          </div>
+        </aside>
 
-        <Win95Panel title="Files" className="p-2">
-          {wallet ? (
-            <FilesPanel
-              key={wallet.walletId}
-              baseUrl={BASE}
-              myWalletId={wallet.walletId}
-              feeMode="demo-sponsor"
-              contacts={[
-                ...(DEMO_CONTACT ? [{ label: "The demo", address: DEMO_CONTACT }] : []),
-                { label: "Yourself", address: wallet.walletId },
-              ]}
-            />
-          ) : (
-            <p>Create a disposable wallet above to send and receive encrypted files.</p>
-          )}
-          <Limits items={FILES_LIMITS} />
-        </Win95Panel>
+        <main id="panel" className="flex min-w-0 scroll-mt-16 flex-col">
+          {boardErr ? <p className={cx("px-4 py-2 text-[15px]", INK.bad)}>This invite didn&apos;t open: {boardErr}</p> : null}
+          {boards.map((b) => panel({ board: b.invite }, <BoardPanel board={b} />))}
+          {panel({ tool: "new" }, <NewBoardPanel onOpen={addBoard} />)}
+          {panel({ tool: "questions" }, <QuestionsPanel />)}
+          {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
+          {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
+          {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} />)}
+          <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
+            Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.
+          </p>
+        </main>
 
-        <BoardPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
-
-        <VerifyPanel baseUrl={BASE} />
-
-        <QuestionsPanel baseUrl={BASE} walletId={wallet?.walletId ?? null} />
-
+        <Rail node={node} />
       </div>
-    </main>
+    </div>
+  );
+}
+
+export default function TryPage() {
+  return (
+    <WalletProvider>
+      <TryApp />
+    </WalletProvider>
   );
 }
