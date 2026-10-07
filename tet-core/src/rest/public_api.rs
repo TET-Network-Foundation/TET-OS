@@ -309,17 +309,19 @@ pub async fn public_api_gate(
             .get(axum::http::header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<u64>().ok());
+        // A refusal reads (and drops) the body first, up to the node's cap: answering mid-upload
+        // makes the server reset the connection, and the client would never see why it was refused.
+        let refuse = |req: axum::http::Request<axum::body::Body>, status: StatusCode, tag: &'static str, msg: &'static str| async move {
+            let limit = (crate::files::max_file_body_bytes() + 3 * 1024 * 1024) as usize;
+            let _ = axum::body::to_bytes(req.into_body(), limit).await;
+            (status, [(GATE_HEADER, tag)], msg).into_response()
+        };
         let Some(len) = len else {
-            return (StatusCode::LENGTH_REQUIRED, [(GATE_HEADER, "refused")], "an upload needs a Content-Length").into_response();
+            return refuse(req, StatusCode::LENGTH_REQUIRED, "refused", "an upload needs a Content-Length").await;
         };
         let day = crate::swarm_health::now_ms() / 86_400_000;
         if !gate.charge_upload(&client, len, day) {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                [(GATE_HEADER, "upload-budget")],
-                "daily upload limit reached for this address",
-            )
-                .into_response();
+            return refuse(req, StatusCode::TOO_MANY_REQUESTS, "upload-budget", "daily upload limit reached for this address").await;
         }
     }
     next.run(req).await
