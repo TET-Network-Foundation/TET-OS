@@ -50,7 +50,11 @@ function toLocalInput(ms: number): string {
   return d.toISOString().slice(0, 16);
 }
 
-export default function MailPanel(props: { demoContact: string }) {
+export default function MailPanel(props: {
+  demoContact: string;
+  /** A DM someone started from a named post: open that conversation (`at` makes repeats count). */
+  dmTarget?: { walletId: string; at: number } | null;
+}) {
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
   const me = wallet?.walletId ?? "";
   const [received, setReceived] = useState<Received[]>([]);
@@ -70,6 +74,18 @@ export default function MailPanel(props: { demoContact: string }) {
   const [now, setNow] = useState(() => Date.now());
   const mounted = useRef(true);
   const endRef = useRef<HTMLDivElement | null>(null);
+
+  // A DM started from a named post opens its conversation.
+  useEffect(() => {
+    const t = props.dmTarget;
+    if (!t) return;
+    const id = setTimeout(() => {
+      setCurrent(me && t.walletId === me ? "self" : t.walletId);
+      setView("thread");
+      setNote(null);
+    }, 0);
+    return () => clearTimeout(id);
+  }, [props.dmTarget, me]);
 
   // "self" stands for this tab's wallet before it exists.
   const peer = current === "self" ? me : current;
@@ -250,18 +266,18 @@ export default function MailPanel(props: { demoContact: string }) {
   }
 
   return (
-    <section className="flex flex-col md:min-h-[calc(100vh-3.25rem)]" aria-label="Mail">
+    <section className="flex flex-col md:min-h-[calc(100vh-3.25rem)]" aria-label="DM">
       <PanelHead
-        title="Mail"
-        sub="end-to-end encrypted"
+        title="DM"
+        sub="Tmail · end-to-end encrypted"
         action={
           <Button kind="quiet" className="md:hidden" onClick={() => setView(view === "list" ? "thread" : "list")}>
             {view === "list" ? "back to the conversation" : "‹ conversations"}
           </Button>
         }
-        todo="Pick a conversation, write a message and send it."
+        todo="Pick a conversation, write a message and send it. To DM someone from a board, tap their id on a named post."
       />
-      {keys !== "published" ? <KeysBanner what="To receive mail, publish your messaging keys." onPublish={() => void onPublish()} busy={publishing} error={publishErr} /> : null}
+      {keys !== "published" ? <KeysBanner what="To receive DMs, publish your messaging keys." onPublish={() => void onPublish()} busy={publishing} error={publishErr} /> : null}
 
       <div className="grid flex-1 md:grid-cols-[16rem_minmax(0,1fr)]">
         <nav aria-label="Conversations" className={cx("border-[#e3e5e8] md:border-r", view === "thread" && "hidden md:block")}>
