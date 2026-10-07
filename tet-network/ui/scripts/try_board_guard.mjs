@@ -17,6 +17,9 @@
 // 7. An anonymous post never yields an author, so the page can never offer a DM for it (the DM
 //    link is drawn only from `postLabel(row).author`), even if a row carries a sender id.
 //    Control: a label that falls back to the row's sender → FAILED.
+// 8. A daily ID shows only on a verified anonymous post, from its verdict's nullifier: never on a
+//    pending or failed one, never on a named one, never from a malformed nullifier.
+//    Control: an ID taken from any verdict that carries a nullifier → FAILED.
 // 6. Joining the anonymity set and sending anonymously never happen in the same action: a post fired
 //    the moment a (public) join takes effect would point back at the join. Checked in the page's
 //    sources: only `wallet.tsx`'s `joinAnon` registers, it sends nothing, and no block that calls
@@ -322,6 +325,26 @@ await check("SECURITY: an anonymous post never yields an author, so it never off
 await check("control: a label that falls back to the row's sender is caught", () => {
   const leaky = (row) => ({ ...board.postLabel(row), author: board.postLabel(row).author ?? row.sender_wallet_id ?? null });
   assert.throws(() => anonymousHasNoDmTarget(leaky));
+});
+
+/** The property in (8), run against a label function. */
+function dailyIdOnlyFromAVerifiedProof(label) {
+  const nf = "ab12".padEnd(64, "0");
+  assert.equal(label({ flags: { anonymous: true }, anon_verdict: { state: "verified", nullifier_hex: nf } }).dailyId, "ab12");
+  for (const v of [{ state: "pending", nullifier_hex: nf }, { state: "failed", reason: "x", nullifier_hex: nf }, undefined]) {
+    assert.equal(label({ flags: { anonymous: true }, anon_verdict: v }).dailyId ?? null, null, `a ${v?.state ?? "missing"} verdict gave an ID`);
+  }
+  assert.equal(label({ flags: { anonymous: true }, anon_verdict: { state: "verified", nullifier_hex: "xyz" } }).dailyId ?? null, null, "a malformed nullifier gave an ID");
+  assert.equal(label({ sender_wallet_id: "cd".repeat(32), anon_verdict: { state: "verified", nullifier_hex: nf } }).dailyId ?? null, null, "a named post got an ID");
+}
+
+await check("SECURITY: a daily ID only from a verified proof's nullifier; never pending, failed or named", () => {
+  dailyIdOnlyFromAVerifiedProof(board.postLabel);
+});
+
+await check("control: an ID read from any verdict with a nullifier is caught", () => {
+  const eager = (row) => ({ ...board.postLabel(row), dailyId: row.anon_verdict?.nullifier_hex ? String(row.anon_verdict.nullifier_hex).slice(0, 4) : null });
+  assert.throws(() => dailyIdOnlyFromAVerifiedProof(eager));
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

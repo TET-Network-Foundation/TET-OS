@@ -159,6 +159,17 @@ export function inviteMatchesRegistration(keys, registration) {
  * @param {{ flags?: { anonymous?: boolean }, sender_wallet_id?: string, anon_verdict?: any }} row
  * @returns {{ kind: "named" | "anonymous", text: string, tone: "named" | "ok" | "pending" | "bad", author: string | null, detail: string }}
  */
+/**
+ * The daily ID of a verified anonymous post: the first 4 hex digits of its nullifier, which is a
+ * public output of the membership proof, one per (member, board, UTC day) — like 2ch's daily ID,
+ * but computed by the proof, not assigned by whoever runs the node. Only from a verified verdict;
+ * a pending or failed post, and every named post, has none.
+ */
+export function dailyIdOf(verdict) {
+  const n = verdict?.state === "verified" ? String(verdict.nullifier_hex ?? "") : "";
+  return /^[0-9a-f]{64}$/.test(n) ? n.slice(0, 4) : null;
+}
+
 export function postLabel(row) {
   if (row?.flags?.anonymous !== true) {
     const sender = String(row?.sender_wallet_id ?? "");
@@ -167,21 +178,23 @@ export function postLabel(row) {
       text: NAMED_LABEL,
       tone: "named",
       author: sender,
+      dailyId: null,
       detail: "Sent with the poster's own wallet, which is shown.",
     };
   }
   const v = row.anon_verdict;
   if (v?.state === "verified") {
-    return { kind: "anonymous", text: "ANONYMOUS — VERIFIED", tone: "ok", author: null, detail: "Membership proof checked by this node." };
+    return { kind: "anonymous", text: "ANONYMOUS — VERIFIED", tone: "ok", author: null, dailyId: dailyIdOf(v), detail: "Membership proof checked by this node." };
   }
   if (v?.state === "failed") {
-    return { kind: "anonymous", text: "ANONYMOUS — PROOF FAILED", tone: "bad", author: null, detail: String(v.reason ?? "") };
+    return { kind: "anonymous", text: "ANONYMOUS — PROOF FAILED", tone: "bad", author: null, dailyId: null, detail: String(v.reason ?? "") };
   }
   return {
     kind: "anonymous",
     text: "ANONYMOUS — PROOF PENDING",
     tone: "pending",
     author: null,
+    dailyId: null,
     detail: "The membership proof has not been verified yet.",
   };
 }

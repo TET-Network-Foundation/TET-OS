@@ -332,4 +332,6 @@ export const ZH_HK: Record<string, string> = {
   "To report a security problem, follow SECURITY.md rather than posting it on a board.": "如要報告保安問題，請按照 SECURITY.md 的做法，不要在討論區公開。",
   "Links": "連結",
   "GitHub (source code)": "GitHub（原始碼）",
+  "Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.": "每日 ID：來自此帖文的證明。同一成員、同一討論區、同一 UTC 日，ID 相同。",
+  "An anonymous post's ID (ID:ab12) is the first 4 hex digits of its proof's nullifier: one per member, board and UTC day, so it changes tomorrow. It comes out of the proof, not from whoever runs the node, and the node shows it only after checking the proof. A member can post anonymously once per board per day, so an ID marks one post; two members can share an ID by chance.": "匿名帖文的 ID（ID:ab12）是其證明 nullifier 的首 4 個十六進位數字：每位成員、每個討論區、每個 UTC 日各一個，翌日便會改變。ID 由證明產生，並非由運行節點的人指定；節點只會在檢查證明後才顯示。每位成員每個討論區每日只可匿名發帖一次，所以一個 ID 只對應一則帖文；兩位成員亦可能碰巧得到相同 ID。",
 };
