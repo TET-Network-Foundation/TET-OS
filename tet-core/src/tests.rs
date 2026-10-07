@@ -13530,6 +13530,37 @@ fn file_storage_total_cap_refuses_what_would_not_fit() {
     assert_eq!(store.total_blob_bytes(), 1000);
     assert!(store.has_room_for(500));
     assert!(!store.has_room_for(501), "1000 + 501 bytes must not fit under 1500");
+    // The store itself refuses (every path that stores a body — uploads and blobs fetched from peers
+    // — goes through it), and leaves no index entry for the refused file.
+    let big = vec![9u8; 600];
+    let env2 = build_signed_file_envelope(&w, &"cd".repeat(32), &big, file_now_ms());
+    assert!(
+        matches!(store.store_with_blob(&env2, &big), Err(crate::files::storage::FileStoreError::StorageFull { .. })),
+        "the store must refuse a body past the cap"
+    );
+    assert!(store.get_meta(&env2.file_id.to_string()).is_none(), "a refused file must leave no meta");
+    assert!(
+        matches!(store.put_blob(&env2, &big), Err(crate::files::storage::FileStoreError::StorageFull { .. })),
+        "put_blob (the other write path) must refuse too"
+    );
+    // Re-storing the same file isn't counted twice; deleting gives the room back.
+    store.store_with_blob(&env, &blob).expect("re-store the same file");
+    assert_eq!(store.total_blob_bytes(), 1000);
+    assert!(store.delete_file(&env.file_id.to_string()));
+    assert_eq!(store.total_blob_bytes(), 0);
+}
+
+/// Blobs stored before the size index existed are measured once when the store opens, so the cap
+/// counts them.
+#[test]
+fn file_size_index_backfills_blobs_stored_before_it() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    db.open_tree("files_blob_v1").unwrap().insert(b"old-file", vec![1u8; 777]).unwrap();
+    let store = crate::files::storage::FileStore::open(&db).expect("open");
+    assert_eq!(store.total_blob_bytes(), 777);
 }
 
 /// **SECURITY REGRESSION GUARD: in public mode, uploads are charged per client per UTC day** — so one

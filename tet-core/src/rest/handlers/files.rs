@@ -110,15 +110,15 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
         return (envelope_error_status(&e), format!("{e}")).into_response();
     }
 
-    if !state.files.has_room_for(body.len() as u64) {
-        return (
-            StatusCode::INSUFFICIENT_STORAGE,
-            "this node's file storage is full; try again after older files expire",
-        )
-            .into_response();
-    }
     match state.files.store_with_blob(&env, &body) {
         Ok(_) => {}
+        Err(crate::files::storage::FileStoreError::StorageFull { .. }) => {
+            return (
+                StatusCode::INSUFFICIENT_STORAGE,
+                "this node's file storage is full; try again after older files expire",
+            )
+                .into_response();
+        }
         Err(e) => {
             return (StatusCode::BAD_REQUEST, format!("{e}")).into_response();
         }

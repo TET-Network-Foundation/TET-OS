@@ -15,6 +15,9 @@ use crate::files::{FileEnvelopeV1, MAX_FILE_BODY_BYTES, sha256_hex};
 const TREE_BLOB: &str = "files_blob_v1";
 const TREE_META: &str = "files_meta_v1";
 const TREE_INBOX: &str = "files_inbox_v1";
+/// file_id → the stored blob's length (u64 big-endian), written and removed with the blob, so the
+/// total is a sum of small values — never a read of the blobs themselves.
+const TREE_SIZES: &str = "files_blob_size_v1";
 
 const DEFAULT_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_TTL_MS: u64 = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -34,12 +37,15 @@ pub enum FileStoreError {
     Sha256Mismatch { expected: String, actual: String },
     #[error("file store full (max_entries={0})")]
     Full(usize),
+    #[error("file storage full: {stored} + {incoming} bytes > cap {cap}")]
+    StorageFull { stored: u64, incoming: u64, cap: u64 },
 }
 
 pub struct FileStore {
     blob: sled::Tree,
     meta: sled::Tree,
     inbox: sled::Tree,
+    sizes: sled::Tree,
 }
 
 fn now_ms() -> u64 {
@@ -95,11 +101,50 @@ fn inbox_key(receiver: &str, created_at_ms: u64, file_id: &str) -> Vec<u8> {
 impl FileStore {
     /// Open the file-sharing trees on the ledger's sled `Db`.
     pub fn open(db: &sled::Db) -> Result<Self, FileStoreError> {
-        Ok(Self {
+        let store = Self {
             blob: db.open_tree(TREE_BLOB)?,
             meta: db.open_tree(TREE_META)?,
             inbox: db.open_tree(TREE_INBOX)?,
-        })
+            sizes: db.open_tree(TREE_SIZES)?,
+        };
+        // Blobs stored before the size index existed are measured once, here.
+        if store.sizes.is_empty() && !store.blob.is_empty() {
+            for item in store.blob.iter() {
+                let Ok((k, v)) = item else { continue };
+                store.sizes.insert(k, &(v.len() as u64).to_be_bytes())?;
+            }
+        }
+        Ok(store)
+    }
+
+    fn size_of(&self, file_id: &[u8]) -> u64 {
+        self.sizes
+            .get(file_id)
+            .ok()
+            .flatten()
+            .and_then(|v| <[u8; 8]>::try_from(v.as_ref()).ok())
+            .map(u64::from_be_bytes)
+            .unwrap_or(0)
+    }
+
+    /// Write a blob and its size, refusing it if the total would pass [`Self::max_total_bytes`].
+    /// Every path that stores a body comes through here (uploads and blobs fetched from peers).
+    fn insert_blob(&self, file_id: &[u8], blob: &[u8]) -> Result<(), FileStoreError> {
+        if let Some(cap) = Self::max_total_bytes() {
+            let stored = self.total_blob_bytes().saturating_sub(self.size_of(file_id));
+            let incoming = blob.len() as u64;
+            if stored.saturating_add(incoming) > cap {
+                return Err(FileStoreError::StorageFull { stored, incoming, cap });
+            }
+        }
+        self.blob.insert(file_id, blob)?;
+        self.sizes.insert(file_id, &(blob.len() as u64).to_be_bytes())?;
+        Ok(())
+    }
+
+    fn remove_blob(&self, file_id: &[u8]) {
+        let _ = self.blob.remove(file_id);
+        let _ = self.sizes.remove(file_id);
     }
 
     pub fn max_body_bytes() -> u64 {
@@ -112,9 +157,15 @@ impl FileStore {
         std::env::var("TET_FILES_MAX_TOTAL_BYTES").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|v| *v > 0)
     }
 
-    /// The bytes of file bodies stored now.
+    /// The bytes of file bodies stored now (from the size index; blobs are not read).
     pub fn total_blob_bytes(&self) -> u64 {
-        self.blob.iter().values().filter_map(|v| v.ok()).map(|v| v.len() as u64).sum()
+        self.sizes
+            .iter()
+            .values()
+            .filter_map(|v| v.ok())
+            .filter_map(|v| <[u8; 8]>::try_from(v.as_ref()).ok())
+            .map(u64::from_be_bytes)
+            .sum()
     }
 
     /// Whether `incoming` more bytes fit under [`Self::max_total_bytes`].
@@ -173,7 +224,7 @@ impl FileStore {
         if actual != expected {
             return Err(FileStoreError::Sha256Mismatch { expected, actual });
         }
-        self.blob.insert(env.file_id.to_string().as_bytes(), blob)?;
+        self.insert_blob(env.file_id.to_string().as_bytes(), blob)?;
         Ok(())
     }
 
@@ -197,8 +248,17 @@ impl FileStore {
         if actual != expected {
             return Err(FileStoreError::Sha256Mismatch { expected, actual });
         }
+        // Room first, so a full store leaves no index entry for a file it can't keep.
+        if let Some(cap) = Self::max_total_bytes() {
+            let id = env.file_id.to_string();
+            let stored = self.total_blob_bytes().saturating_sub(self.size_of(id.as_bytes()));
+            let incoming = blob.len() as u64;
+            if stored.saturating_add(incoming) > cap {
+                return Err(FileStoreError::StorageFull { stored, incoming, cap });
+            }
+        }
         let newly = self.store_meta(env)?;
-        self.blob.insert(env.file_id.to_string().as_bytes(), blob)?;
+        self.insert_blob(env.file_id.to_string().as_bytes(), blob)?;
         Ok(newly)
     }
 
@@ -267,7 +327,7 @@ impl FileStore {
             }
             None => false,
         };
-        let _ = self.blob.remove(file_id.as_bytes());
+        self.remove_blob(file_id.as_bytes());
         let _ = self.meta.remove(file_id.as_bytes());
         existed
     }
@@ -297,7 +357,7 @@ impl FileStore {
                 removed += 1;
             } else {
                 // meta was undecodable; still clear blob/meta best-effort.
-                let _ = self.blob.remove(file_id.as_bytes());
+                self.remove_blob(file_id.as_bytes());
                 let _ = self.meta.remove(file_id.as_bytes());
             }
         }

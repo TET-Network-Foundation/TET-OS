@@ -18,8 +18,10 @@ import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 
 const POLL_MS = 8_000;
-/** The demo node's cap (deploy/demo: TET_FILES_MAX_BODY_BYTES). */
-const MAX_BYTES = 100 * 1024 * 1024;
+/** The demo node's cap on the encrypted body (deploy/demo: TET_FILES_MAX_BODY_BYTES). */
+const NODE_MAX_BODY = 100 * 1024 * 1024;
+/** The largest file that fits: encryption adds a 16-byte tag. */
+const MAX_BYTES = NODE_MAX_BODY - 16;
 /** Kept 7 days (the demo node also caps it there). */
 const TTL_MS = 7 * 24 * 60 * 60 * 1000;
 /** What the picker offers: photos, PDFs and short videos. The node can't see what a file is. */
@@ -120,6 +122,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
         filename: file.name,
         mimeType: file.type || "application/octet-stream",
         ttlMs: TTL_MS,
+        maxBodyBytes: NODE_MAX_BODY,
         receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
         receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
         baseUrl: BASE,

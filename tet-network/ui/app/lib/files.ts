@@ -151,6 +151,8 @@ export type BuildFileEnvelopeOpts = {
   baseUrl?: string;
   feeMicro?: number;
   ttlMs?: number;
+  /** The receiving node's cap on the encrypted body; default the network-wide 5 MiB. */
+  maxBodyBytes?: number;
 };
 
 export type BuiltFileEnvelope = {
@@ -187,8 +189,9 @@ export async function buildFileEnvelopeV1(opts: BuildFileEnvelopeOpts): Promise<
 
   const bodyCiphertext = bundle.body_ciphertext;
   const fileSize = bodyCiphertext.length;
-  if (fileSize > MAX_FILE_BODY_BYTES) {
-    throw new Error(`Encrypted file exceeds the ${MAX_FILE_BODY_BYTES} byte limit.`);
+  const maxBody = opts.maxBodyBytes ?? MAX_FILE_BODY_BYTES;
+  if (fileSize > maxBody) {
+    throw new Error(`Encrypted file exceeds the ${maxBody} byte limit.`);
   }
   const fileSha256Hex = bytesToHex(sha256(bodyCiphertext));
   const filenameEncryptedB64 = bytesToB64(bundle.filename_ciphertext);
