@@ -9,7 +9,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { gradedVerdict } from "../lib/verify_anything.mjs";
 import { mldsa44Verify } from "../lib/pqc";
-import { Badge, Button, Input, PinnedNotice, TextArea, cx } from "./ui";
+import { Badge, Button, FOCUS, FilePick, INK, Input, PinnedNotice, TextArea, cx } from "./ui";
 
 type Step = { n: 1 | 2 | 3; status: "ok" | "failed" | "skipped"; text: string };
 type Verdict = { level: 0 | 1 | 2 | 3; steps: Step[]; chainLabel: string };
@@ -31,7 +31,7 @@ const LIMITS = [
   "A valid signature proves which key signed, not who holds it. Without a manifest or a pin, the verdict stops at step 1.",
   "The two keys (Ed25519, ML-DSA-44) are tied to each other only by the signatures in the sidecar; the wallet-level binding is Phase 1 work (SECURITY.md).",
   "A signature cannot prove when something was written: there is no timestamping.",
-  "\"Automated\" in a manifest is the owner's declaration, not a proof; a manifest cannot be revoked before it expires.",
+  "“Automated” in a manifest is the owner's declaration, not a proof; a manifest cannot be revoked before it expires.",
   "The chain is part of what was signed: a signature for another chain fails here unless you choose that chain.",
   "Everything is checked in this tab; nothing you add is uploaded.",
 ];
@@ -54,20 +54,22 @@ function FileOrPaste(props: {
       <div className="flex items-center justify-between gap-2">
         <span className="text-[15px] font-semibold text-neutral-700">{props.label}</span>
         {props.file ? (
-          <button type="button" className="text-[14px] text-neutral-500 underline" onClick={() => props.onFile(null)}>
+          <button type="button" className={cx(FOCUS, "rounded text-[14px] text-neutral-500 underline hover:text-neutral-900")} onClick={() => props.onFile(null)}>
             paste instead
           </button>
         ) : null}
       </div>
       {props.file ? (
-        <div className="rounded-xl border border-neutral-300 bg-neutral-50 px-3 py-2 text-base">{props.file.name}</div>
+        <div className="break-all rounded-xl border border-neutral-300 bg-neutral-50 px-3 py-2 text-base">{props.file.name}</div>
       ) : (
         <>
-          <label className="block cursor-pointer rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-center text-[15px] text-neutral-600">
+          <FilePick
+            onFile={props.onFile}
+            className="block rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-3 py-2 text-center text-[15px] text-neutral-600 hover:border-neutral-500"
+          >
             Choose a file
-            <input type="file" className="hidden" onChange={(e) => props.onFile(e.target.files?.[0] ?? null)} />
-          </label>
-          <TextArea value={props.text} onChange={props.onText} rows={2} placeholder={props.placeholder} />
+          </FilePick>
+          <TextArea label={props.label} value={props.text} onChange={props.onText} rows={2} placeholder={props.placeholder} />
         </>
       )}
     </div>
@@ -164,13 +166,13 @@ export default function VerifyPanel(props: { baseUrl: string }) {
       <div className="space-y-3 rounded-xl border border-neutral-200 bg-white p-3">
         <FileOrPaste label="1. The file or text" text={contentText} onText={setContentText} file={contentFile} onFile={setContentFile} placeholder="…or paste the exact text that was signed" />
         <FileOrPaste label="2. Its .sig.json" text={sigText} onText={setSigText} file={sigFile} onFile={setSigFile} placeholder='…or paste {"payloadType": …, "signatures": […], "tet": {…}}' />
-        <button type="button" className="text-[15px] text-neutral-600 underline" onClick={() => setShowMore(!showMore)}>
+        <button type="button" aria-expanded={showMore} className={cx(FOCUS, "rounded text-[15px] text-neutral-600 underline hover:text-neutral-900")} onClick={() => setShowMore(!showMore)}>
           {showMore ? "Hide the optional checks" : "Add an owner's manifest, a pinned key, or another chain (optional)"}
         </button>
         {showMore ? (
           <div className="space-y-3 rounded-xl bg-neutral-50 p-3">
             <FileOrPaste label="Owner's manifest" text={manText} onText={setManText} file={manFile} onFile={setManFile} placeholder='…or paste {"kind": "tet_agent_manifest_v1", …}' />
-            {slot("Pinned key", <Input value={pin} onChange={setPin} mono placeholder="ed25519 hex, tet-mldsa44 keyid, or pin.json" />)}
+            {slot("Pinned key", <Input ariaLabel="Pinned key" value={pin} onChange={setPin} mono placeholder="ed25519 hex, tet-mldsa44 key id, or pin.json…" />)}
             {slot(
               "Chain",
               <div className="space-y-1 text-[15px]">
@@ -184,8 +186,8 @@ export default function VerifyPanel(props: { baseUrl: string }) {
                 </label>
                 {useOther ? (
                   <div className="grid gap-2">
-                    <Input value={otherChainId} onChange={setOtherChainId} mono placeholder="chain id" />
-                    <Input value={otherGenesis} onChange={setOtherGenesis} mono placeholder="genesis hash" />
+                    <Input ariaLabel="Chain id" value={otherChainId} onChange={setOtherChainId} mono placeholder="e.g. tet-testnet-1…" />
+                    <Input ariaLabel="Genesis hash" value={otherGenesis} onChange={setOtherGenesis} mono placeholder="0x… (64 hex characters)" />
                   </div>
                 ) : null}
               </div>,
@@ -195,7 +197,7 @@ export default function VerifyPanel(props: { baseUrl: string }) {
         <Button className="w-full sm:w-auto" disabled={busy} onClick={() => void onVerify()}>
           {busy ? "Checking…" : "Verify"}
         </Button>
-        {err ? <p className="text-[15px] text-[#8a1f1f]">{err}</p> : null}
+        {err ? <p role="alert" className={cx("text-[15px]", INK.bad)}>{err}</p> : null}
       </div>
 
       {verdict ? (

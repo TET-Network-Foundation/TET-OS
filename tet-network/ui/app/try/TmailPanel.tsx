@@ -11,7 +11,7 @@ import { decryptForReceiver } from "../lib/tmail_e2ee";
 import { getTmailKeySession } from "../lib/tmail_session";
 import { b64ToBytes } from "../lib/encoding";
 import { getTmailInbox, getTmailKeys, normalizeWalletId64, postTmailSend } from "../lib/tet_core_http";
-import { Badge, Button, Chips, Input, PinnedNotice, TextArea, fmtWhen } from "./ui";
+import { Badge, Button, Chips, INK, Input, PinnedNotice, TextArea, cx, fmtWhen } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 
 const POLL_MS = 8_000;
@@ -130,23 +130,23 @@ export default function TmailPanel(props: { demoContact: string }) {
       <PinnedNotice lines={LIMITS} />
       <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
         <Chips options={options} value={to} onChange={setTo} />
-        {to === "other" ? <Input value={other} onChange={setOther} mono placeholder="64-character wallet id" /> : null}
-        <TextArea value={text} onChange={setText} rows={3} maxLength={TMAIL_MAX_PLAINTEXT_CHARS} placeholder="Write a message. It is encrypted before it leaves this tab." />
+        {to === "other" ? <Input ariaLabel="Recipient wallet id" value={other} onChange={setOther} mono placeholder="64 hex characters, e.g. 3f9a…" /> : null}
+        <TextArea label="Your message" value={text} onChange={setText} rows={3} maxLength={TMAIL_MAX_PLAINTEXT_CHARS} placeholder="Write a message…" />
         <Button className="w-full sm:w-auto" disabled={busy || !text.trim()} onClick={() => void onSend()}>
           {busy ? "Sending…" : "Send"}
         </Button>
-        {note ? <p className={note.ok ? "text-[15px] text-[#1f5132]" : "text-[15px] text-[#8a1f1f]"}>{note.text}</p> : null}
+        <p aria-live="polite" className={cx("text-[15px] empty:hidden", note?.ok ? INK.ok : INK.bad)}>{note?.text ?? ""}</p>
       </div>
 
       <div>
-        <h3 className="mb-1 text-[15px] font-semibold text-neutral-600">Inbox</h3>
+        <h2 className="mb-1 text-[15px] font-semibold text-neutral-600">Inbox</h2>
         {!wallet ? <p className="text-[15px] text-neutral-500">Send something first: that makes your wallet and its inbox.</p> : null}
         {wallet && inbox.length === 0 ? <p className="text-[15px] text-neutral-500">Nothing yet. Try messaging yourself.</p> : null}
         <ol className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white empty:hidden">
           {inbox.map((m) => (
             <li key={m.id} className="p-3">
               <div className="flex flex-wrap items-center gap-2 text-[14px] text-neutral-500">
-                {m.anonymous ? <Badge tone="pending">anonymous sender</Badge> : <span className="font-mono text-[#1a237e]">{m.from === wallet?.walletId ? "you" : m.from.slice(0, 8)}</span>}
+                {m.anonymous ? <Badge tone="pending">anonymous sender</Badge> : <span translate="no" className={cx("font-mono", INK.named)}>{m.from === wallet?.walletId ? "you" : m.from.slice(0, 8)}</span>}
                 <span>{fmtWhen(m.at, now)}</span>
               </div>
               <p className="mt-1 whitespace-pre-wrap break-words text-base leading-relaxed">{m.text ?? <span className="text-neutral-400">Scheduled or not readable here.</span>}</p>

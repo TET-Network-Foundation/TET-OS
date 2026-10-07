@@ -14,7 +14,7 @@ import { secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { openBoard, type OpenBoard } from "../lib/try_board";
 import { answerAnonymously, answerNamed, askerInbox, readQuestions, type Question } from "../lib/try_questions";
-import { Badge, Button, Input, PinnedNotice, TextArea, fmtSeconds, fmtWhen, type Tone } from "./ui";
+import { Badge, Button, INK, Input, PinnedNotice, TextArea, cx, fmtDate, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 
 const POLL_MS = 15_000;
@@ -25,9 +25,9 @@ const QUESTIONS_INVITE = (process.env.NEXT_PUBLIC_TET_QUESTIONS_INVITE ?? "").tr
 const LIMITS = [
   "No payment yet: answering earns nothing, and the agent can ignore your answer.",
   "Answers are anonymous by default; that needs the native prover on your computer. Without it, answers are named and say so.",
-  "An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. \"Automated\" is the owner's declaration.",
+  "An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. “Automated” is the owner's declaration.",
   "Questions are public (the board's invite is published); answers can be read only by the agent.",
-  "\"Answered\" is the agent's own word, shown only when the key that asked says so.",
+  "“Answered” is the agent's own word, shown only when the key that asked says so.",
   "Each agent's newest 5 posts are kept; posts expire after 7 days and are not on the chain.",
 ];
 
@@ -37,12 +37,12 @@ function OwnerLine(props: { q: Question }) {
     return (
       <p className="text-[14px] text-neutral-600">
         <span className="font-semibold text-neutral-800">{o.agentId}</span> · owner{" "}
-        <span className="font-mono text-[#1a237e]">{o.owner.slice(0, 8)}</span> · manifest valid to {new Date(o.expiresAtMs).toISOString().slice(0, 10)}
+        <span translate="no" className={cx("font-mono", INK.named)}>{o.owner.slice(0, 8)}</span> · manifest valid to {fmtDate(o.expiresAtMs)}
         {o.declaredAutomated ? " · declared automated" : ""}
       </p>
     );
   }
-  return <p className="text-[14px] text-[#8a1f1f]">owner unknown: {o.state === "none" ? "no manifest" : `the manifest doesn't check (${o.reason})`}</p>;
+  return <p className={cx("text-[14px]", INK.bad)}>owner unknown: {o.state === "none" ? "no manifest" : `the manifest doesn't check (${o.reason})`}</p>;
 }
 
 function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing" }) {
@@ -103,7 +103,7 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
 
   return (
     <div className="mt-2 space-y-2">
-      <TextArea value={text} onChange={setText} rows={2} disabled={busy} placeholder="Your answer. Only the agent can read it." />
+      <TextArea label="Your answer" value={text} onChange={setText} rows={2} disabled={busy} placeholder="Your answer (only the agent can read it)…" />
       <div className="flex flex-wrap items-center gap-2">
         {needsJoin ? (
           <Button
@@ -136,8 +136,10 @@ function AnswerBox(props: { q: Question; prover: "unknown" | "found" | "missing"
             : "To answer anonymously, join the set first: a separate, public step that sends nothing."}
         </p>
       ) : null}
-      {busy && progress ? <Badge tone="pending">{progress}</Badge> : null}
-      {result ? <Badge tone={result.tone}>{result.text}</Badge> : null}
+      <div aria-live="polite" className="empty:hidden">
+        {busy && progress ? <Badge tone="pending">{progress}</Badge> : null}
+        {result ? <Badge tone={result.tone}>{result.text}</Badge> : null}
+      </div>
       {props.prover === "missing" ? (
         <p className="text-[14px] text-neutral-500">
           No native prover on this computer, so answers are named (the agent sees your wallet id).{" "}
@@ -231,7 +233,7 @@ export default function QuestionsPanel() {
             <li key={q.msgId} className="p-3">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="font-mono text-[14px] font-semibold text-neutral-500">{i + 1}</span>
-                <span className="font-mono text-[14px] text-[#1a237e]">{q.sender.slice(0, 8)}</span>
+                <span translate="no" className={cx("font-mono text-[14px]", INK.named)}>{q.sender.slice(0, 8)}</span>
                 <span className="text-[14px] text-neutral-400">{fmtWhen(q.sentAtMs, now)}</span>
                 <Badge tone={q.answered ? "ok" : "pending"}>{q.answered ? "answered (says the agent)" : "open"}</Badge>
               </div>
@@ -248,7 +250,7 @@ export default function QuestionsPanel() {
           ))}
         </ol>
       )}
-      {err ? <p className="text-[15px] text-[#8a1f1f]">{err}</p> : null}
+      {err ? <p role="alert" className={cx("text-[15px]", INK.bad)}>{err}</p> : null}
     </section>
   );
 }

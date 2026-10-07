@@ -13,17 +13,18 @@ import { settleFileFee } from "../lib/files_fee";
 import { getTmailKeySession } from "../lib/tmail_session";
 import { b64ToBytes } from "../lib/encoding";
 import { getFilesFetch, getFilesInbox, getTmailKeys, normalizeWalletId64, postFilesUpload } from "../lib/tet_core_http";
-import { Badge, Button, Chips, Input, PinnedNotice, fmtWhen } from "./ui";
+import { Badge, Button, Chips, FilePick, INK, Input, PinnedNotice, cx, fmtWhen } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 
 const POLL_MS = 8_000;
 const MAX_BYTES = 5 * 1024 * 1024;
+const KB = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 });
 
 type Item = { env: FileEnvelopeV1; filename: string; mimeType: string };
 
 const LIMITS = [
-  "Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days.",
-  "The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid.",
+  "Files are encrypted in this tab and stored on the demo node: at most 5 MB, kept 30 days.",
+  "The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid.",
   "The node sees sender, recipient, size and time; not the contents or the file name.",
   "The storage node is only a hint: fetching asks this node's peers.",
 ];
@@ -174,19 +175,22 @@ export default function FilesTryPanel(props: { demoContact: string }) {
       <PinnedNotice lines={LIMITS} />
       <div className="space-y-2 rounded-xl border border-neutral-200 bg-white p-3">
         <Chips options={options} value={to} onChange={setTo} />
-        {to === "other" ? <Input value={other} onChange={setOther} mono placeholder="64-character wallet id" /> : null}
-        <label className="flex min-h-20 cursor-pointer items-center justify-center rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-3 text-center text-base text-neutral-600">
-          {file ? `${file.name} · ${(file.size / 1024).toFixed(1)} KB` : "Choose a file (up to 5 MB)"}
-          <input ref={inputRef} type="file" className="hidden" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-        </label>
+        {to === "other" ? <Input ariaLabel="Recipient wallet id" value={other} onChange={setOther} mono placeholder="64 hex characters, e.g. 3f9a…" /> : null}
+        <FilePick
+          ref={inputRef}
+          onFile={setFile}
+          className="flex min-h-20 items-center justify-center rounded-xl border border-dashed border-neutral-300 bg-neutral-50 px-3 text-center text-base text-neutral-600 hover:border-neutral-500"
+        >
+          <span className="break-all">{file ? `${file.name} · ${KB.format(file.size / 1024)} KB` : "Choose a file (up to 5 MB)"}</span>
+        </FilePick>
         <Button className="w-full sm:w-auto" disabled={!file || !!busy} onClick={() => void onSend()}>
           {busy || "Send the file"}
         </Button>
-        {note ? <p className={note.ok ? "text-[15px] text-[#1f5132]" : "text-[15px] text-[#8a1f1f]"}>{note.text}</p> : null}
+        <p aria-live="polite" className={cx("text-[15px] empty:hidden", note?.ok ? INK.ok : INK.bad)}>{note?.text ?? ""}</p>
       </div>
 
       <div>
-        <h3 className="mb-1 text-[15px] font-semibold text-neutral-600">Received</h3>
+        <h2 className="mb-1 text-[15px] font-semibold text-neutral-600">Received</h2>
         {!wallet ? <p className="text-[15px] text-neutral-500">Send something first: that makes your wallet and its inbox.</p> : null}
         {wallet && items.length === 0 ? <p className="text-[15px] text-neutral-500">Nothing yet. Try sending yourself a file.</p> : null}
         <ol className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white empty:hidden">
@@ -194,8 +198,8 @@ export default function FilesTryPanel(props: { demoContact: string }) {
             <li key={it.env.file_id} className="flex flex-wrap items-center gap-2 p-3">
               <span className="min-w-0 flex-1 break-all text-base">{it.filename}</span>
               <span className="text-[14px] text-neutral-500">
-                {(it.env.file_size / 1024).toFixed(1)} KB · from{" "}
-                <span className="font-mono text-[#1a237e]">{it.env.sender_wallet_id === wallet?.walletId ? "you" : it.env.sender_wallet_id.slice(0, 8)}</span> ·{" "}
+                {KB.format(it.env.file_size / 1024)} KB · from{" "}
+                <span translate="no" className={cx("font-mono", INK.named)}>{it.env.sender_wallet_id === wallet?.walletId ? "you" : it.env.sender_wallet_id.slice(0, 8)}</span> ·{" "}
                 {fmtWhen(it.env.created_at_ms, now)}
               </span>
               <Badge tone="neutral">encrypted</Badge>

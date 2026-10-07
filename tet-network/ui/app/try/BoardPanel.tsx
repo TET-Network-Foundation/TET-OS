@@ -25,7 +25,7 @@ import {
   type BoardPost,
   type OpenBoard,
 } from "../lib/try_board";
-import { Badge, Button, Input, PinnedNotice, TextArea, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
+import { Badge, Button, FOCUS, INK, Input, PinnedNotice, TextArea, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 
 const FEED_POLL_MS = 8_000;
@@ -53,7 +53,7 @@ function badgeFor(p: BoardPost): { tone: Tone; text: string } {
 /** Who wrote a post. #18 hook: a profile or follow control attaches here. */
 function Author(props: { walletId: string | null }) {
   return props.walletId ? (
-    <span className="font-mono text-[14px] text-[#1a237e]" data-author={props.walletId}>
+    <span translate="no" className={cx("font-mono text-[14px]", INK.named)} data-author={props.walletId}>
       {props.walletId.slice(0, 8)}
     </span>
   ) : (
@@ -68,7 +68,7 @@ function Body(props: { text: string; onRef: (n: number) => void }) {
       {props.text.split(/(>>\d+)/g).map((part, i) => {
         const m = /^>>(\d+)$/.exec(part);
         return m ? (
-          <button key={i} type="button" onClick={() => props.onRef(Number(m[1]))} className="rounded bg-[#eceefb] px-1 font-mono text-[15px] text-[#1a237e]">
+          <button key={i} type="button" onClick={() => props.onRef(Number(m[1]))} aria-label={`Go to post ${m[1]}`} className={cx(FOCUS, "rounded bg-[#eceefb] px-1 font-mono text-[15px]", INK.named)}>
             {part}
           </button>
         ) : (
@@ -144,7 +144,7 @@ export default function BoardPanel() {
 
   function onRef(n: number) {
     setHighlight(n);
-    listRef.current?.querySelector(`[data-post="${n}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    listRef.current?.querySelector(`[data-post="${n}"]`)?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
     setTimeout(() => mounted.current && setHighlight((h) => (h === n ? null : h)), 2_000);
   }
 
@@ -251,7 +251,7 @@ export default function BoardPanel() {
             Open
           </Button>
         </div>
-        {err ? <p className="text-[15px] text-[#8a1f1f]">{err}</p> : null}
+        {err ? <p role="alert" className={cx("text-[15px]", INK.bad)}>{err}</p> : null}
       </section>
     );
   }
@@ -260,7 +260,7 @@ export default function BoardPanel() {
     <section className="space-y-3">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <h2 className="text-lg font-semibold">{board.name || "Untitled board"}</h2>
-        <span className="text-[15px] text-neutral-500">{today} posts today ·</span>
+        <span className="text-[15px] tabular-nums text-neutral-500">{today} posts today ·</span>
         <Button
           kind="quiet"
           onClick={() => {
@@ -273,7 +273,7 @@ export default function BoardPanel() {
         </Button>
       </div>
 
-      <ol ref={listRef} className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white">
+      <ol ref={listRef} aria-label="Posts" className="divide-y divide-neutral-200 rounded-xl border border-neutral-200 bg-white">
         <li className="p-3">
           <PinnedNotice lines={notice} />
         </li>
@@ -305,7 +305,7 @@ export default function BoardPanel() {
                     ? "sent · waiting for the board"
                     : `${o.step}…`;
           return (
-            <li key={o.id} className="bg-neutral-50 p-3">
+            <li key={o.id} className="bg-neutral-50 p-3" aria-live="polite">
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span className="font-mono text-[14px] font-semibold text-neutral-400">{posts.length + 1}</span>
                 <span className="text-[14px] text-neutral-500">you · {o.mode}</span>
@@ -316,10 +316,10 @@ export default function BoardPanel() {
           );
         })}
       </ol>
-      {feedErr ? <p className="text-[15px] text-[#8a1f1f]">{feedErr}</p> : null}
+      {feedErr ? <p className={cx("text-[15px]", INK.bad)}>{feedErr}</p> : null}
 
       <div className="sticky bottom-0 space-y-2 rounded-xl border border-neutral-200 bg-white/95 p-3 backdrop-blur">
-        <TextArea value={text} onChange={setText} rows={text ? 3 : 1} maxLength={TMAIL_MAX_PLAINTEXT_CHARS} placeholder="Write a post (>>2 replies to post 2)" />
+        <TextArea label="Your post" value={text} onChange={setText} rows={text ? 3 : 1} maxLength={TMAIL_MAX_PLAINTEXT_CHARS} placeholder="Write a post (>>2 replies to post 2)" />
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           {needsJoin ? (
             <Button
@@ -364,7 +364,7 @@ export default function BoardPanel() {
             )}
           </span>
         </div>
-        {err ? <p className="text-[15px] text-[#8a1f1f]">{err}</p> : null}
+        {err ? <p role="alert" className={cx("text-[15px]", INK.bad)}>{err}</p> : null}
       </div>
     </section>
   );

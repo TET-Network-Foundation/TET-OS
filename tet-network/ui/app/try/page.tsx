@@ -18,7 +18,7 @@ import FilesTryPanel from "./FilesTryPanel";
 import QuestionsPanel from "./QuestionsPanel";
 import TmailPanel from "./TmailPanel";
 import VerifyPanel from "./VerifyPanel";
-import { Button, cx } from "./ui";
+import { Button, FOCUS, INK, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
@@ -40,6 +40,13 @@ type NodeStatus = { state: "checking" } | { state: "up"; height: number | null; 
 function WalletBar() {
   const { wallet, forget } = useTryWallet();
   const [shown, setShown] = useState(false);
+  // Forgetting can't be undone unless the words were saved: the first tap asks, the second forgets.
+  const [confirmForget, setConfirmForget] = useState(false);
+  useEffect(() => {
+    if (!confirmForget) return;
+    const t = setTimeout(() => setConfirmForget(false), 5_000);
+    return () => clearTimeout(t);
+  }, [confirmForget]);
   if (!wallet) return null;
   function onDownload() {
     if (!wallet) return;
@@ -54,7 +61,7 @@ function WalletBar() {
     <div className="rounded-xl border border-neutral-200 bg-white p-3 text-[15px]">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span>
-          Wallet <span className="font-mono text-[#1a237e]">{wallet.walletId.slice(0, 8)}</span>
+          Wallet <span translate="no" className={cx("font-mono", INK.named)}>{wallet.walletId.slice(0, 8)}</span>
         </span>
         <Button kind="quiet" onClick={() => setShown(!shown)}>
           {shown ? "hide words" : "12 words"}
@@ -62,11 +69,22 @@ function WalletBar() {
         <Button kind="quiet" onClick={onDownload}>
           save
         </Button>
-        <Button kind="quiet" onClick={forget}>
-          forget
+        <Button
+          kind="quiet"
+          onClick={() => {
+            if (!confirmForget) return setConfirmForget(true);
+            setConfirmForget(false);
+            forget();
+          }}
+        >
+          {confirmForget ? <span className={INK.bad}>tap again to forget this wallet</span> : "forget"}
         </Button>
       </div>
-      {shown ? <p className="mt-1 break-words font-mono text-[15px]">{wallet.words}</p> : null}
+      {shown ? (
+        <p translate="no" className="mt-1 break-words font-mono text-[15px]">
+          {wallet.words}
+        </p>
+      ) : null}
       <p className="mt-1 text-[14px] text-neutral-500">Made in this tab, never sent anywhere. Close the tab without saving the words and it is gone.</p>
     </div>
   );
@@ -76,6 +94,18 @@ function TryApp() {
   const [node, setNode] = useState<NodeStatus>({ state: "checking" });
   const [tab, setTab] = useState<TabId>("board");
   const [opened, setOpened] = useState<Set<TabId>>(() => new Set<TabId>(["board"]));
+
+  // The open panel lives in `?tab=` (the board invite stays in the `#`, which never reaches a server).
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("tab");
+    const found = TABS.find((x) => x.id === t);
+    if (!found || found.id === "board") return;
+    const t0 = setTimeout(() => {
+      setTab(found.id);
+      setOpened((o) => new Set(o).add(found.id));
+    }, 0);
+    return () => clearTimeout(t0);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,6 +127,10 @@ function TryApp() {
 
   function show(id: TabId) {
     setTab(id);
+    const url = new URL(window.location.href);
+    if (id === "board") url.searchParams.delete("tab");
+    else url.searchParams.set("tab", id);
+    window.history.replaceState(null, "", url);
     setOpened((o) => (o.has(id) ? o : new Set(o).add(id)));
     window.scrollTo({ top: 0 });
   }
@@ -105,15 +139,18 @@ function TryApp() {
   const panel = (id: TabId, node: React.ReactNode) => (opened.has(id) ? <div className={cx(tab !== id && "hidden")}>{node}</div> : null);
 
   return (
-    <main className="min-h-screen bg-[#f6f6f4] text-base text-neutral-900 [font-family:ui-sans-serif,system-ui,-apple-system,'Segoe_UI',Roboto,sans-serif]">
+    <main className="min-h-screen touch-manipulation bg-[#f6f6f4] text-base text-neutral-900 [-webkit-tap-highlight-color:transparent] [font-family:ui-sans-serif,system-ui,-apple-system,'Segoe_UI',Roboto,sans-serif]">
+      <a href="#panel" className={cx(FOCUS, "sr-only rounded bg-white px-3 py-2 focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-20")}>
+        Skip to the panel
+      </a>
       <header className="sticky top-0 z-10 border-b border-neutral-200 bg-[#f6f6f4]/95 backdrop-blur">
         <div className="mx-auto flex max-w-2xl items-baseline gap-2 px-4 pt-3">
           <h1 className="text-lg font-bold">Try TET</h1>
           <span className="text-[14px] text-neutral-500">testnet</span>
           <span className="ml-auto truncate text-[13px] text-neutral-500">
             {node.state === "checking" ? "node: checking…" : null}
-            {node.state === "up" ? `height ${node.height ?? "?"}` : null}
-            {node.state === "down" ? <span className="text-[#8a1f1f]">node not answering</span> : null}
+            {node.state === "up" ? <span className="tabular-nums">height {node.height ?? "?"}</span> : null}
+            {node.state === "down" ? <span className={INK.bad}>node not answering</span> : null}
           </span>
         </div>
         <nav className="mx-auto flex max-w-2xl gap-1 overflow-x-auto px-4 py-2" aria-label="Panels">
@@ -124,6 +161,7 @@ function TryApp() {
               onClick={() => show(t.id)}
               aria-current={tab === t.id ? "page" : undefined}
               className={cx(
+                FOCUS,
                 "min-h-9 shrink-0 rounded-full px-3 text-[15px] font-medium",
                 tab === t.id ? "bg-neutral-900 text-white" : "text-neutral-700 hover:bg-neutral-200",
               )}
@@ -134,7 +172,7 @@ function TryApp() {
         </nav>
       </header>
 
-      <div className="mx-auto max-w-2xl space-y-3 px-4 py-3">
+      <div id="panel" className="mx-auto max-w-2xl scroll-mt-28 space-y-3 px-4 py-3">
         <p className="text-[14px] leading-relaxed text-neutral-600">
           Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.
         </p>
