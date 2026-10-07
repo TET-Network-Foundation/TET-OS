@@ -112,6 +112,9 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
 
     match state.files.store_with_blob(&env, &body) {
         Ok(_) => {}
+        Err(crate::files::storage::FileStoreError::IdTaken(_)) => {
+            return (StatusCode::CONFLICT, "this file id is already used by another file").into_response();
+        }
         Err(crate::files::storage::FileStoreError::StorageFull { .. }) => {
             return (
                 StatusCode::INSUFFICIENT_STORAGE,

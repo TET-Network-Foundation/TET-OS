@@ -37,6 +37,8 @@ pub enum FileStoreError {
     Sha256Mismatch { expected: String, actual: String },
     #[error("file store full (max_entries={0})")]
     Full(usize),
+    #[error("file id {0} is already used by another file")]
+    IdTaken(String),
     #[error("file storage full: {stored} + {incoming} bytes > cap {cap}")]
     StorageFull { stored: u64, incoming: u64, cap: u64 },
 }
@@ -247,6 +249,16 @@ impl FileStore {
         let expected = env.file_sha256.trim().to_ascii_lowercase();
         if actual != expected {
             return Err(FileStoreError::Sha256Mismatch { expected, actual });
+        }
+        // A file id belongs to the first envelope stored under it. Ids can be chosen (a "stamp" derives
+        // one from a hash anyone holding the .sig.json can compute), so another envelope under the
+        // same id must not overwrite its body. The identical envelope may be uploaded again.
+        if let Some(existing) = self.get_meta(&env.file_id.to_string())
+            && (existing.sender_wallet_id.trim().to_ascii_lowercase() != env.sender_wallet_id.trim().to_ascii_lowercase()
+                || existing.file_sha256.trim().to_ascii_lowercase() != env.file_sha256.trim().to_ascii_lowercase()
+                || existing.receiver_wallet_id.trim().to_ascii_lowercase() != env.receiver_wallet_id.trim().to_ascii_lowercase())
+        {
+            return Err(FileStoreError::IdTaken(env.file_id.to_string()));
         }
         // Room first, so a full store leaves no index entry for a file it can't keep.
         if let Some(cap) = Self::max_total_bytes() {
