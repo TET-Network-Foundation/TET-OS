@@ -10,10 +10,11 @@
  * routes, rate-limited per visitor). A panel loads only when first opened. Board invites live after
  * the `#` (never sent to a server); the open tool is in `?tab=`.
  */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { wordsFileText } from "../lib/disposable_wallet.mjs";
 import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
 import DirectoryPanel from "./DirectoryPanel";
+import AboutPanel from "./AboutPanel";
 import BoardPanel from "./BoardPanel";
 import FilesTryPanel from "./FilesTryPanel";
 import MailPanel from "./MailPanel";
@@ -40,6 +41,7 @@ const TOOLS = [
   { id: "verify", label: "verify", group: "tools" },
   { id: "files", label: "files", group: "tools" },
   { id: "mail", label: "DM", group: "tools" },
+  { id: "about", label: "About", group: "footer" },
 ] as const;
 type ToolId = (typeof TOOLS)[number]["id"] | "new";
 /** What the middle column shows: a board (by invite) or a tool. */
@@ -183,6 +185,11 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
         {item({ tool: "files" }, "/", t("files"))}
         {item({ tool: "mail" }, "/", t("DM"))}
       </ul>
+      <p className="mx-2 mt-4 text-[13.5px]">
+        <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "about" })}>
+          {t("About")}
+        </button>
+      </p>
     </nav>
   );
 }
@@ -282,7 +289,10 @@ function TryApp() {
     };
   }, [refreshDirectory]);
 
+  /** Set once the visitor picks a view; the first-load default never overrides that choice. */
+  const chosen = useRef(false);
   const go = useCallback((v: View) => {
+    chosen.current = true;
     setView(v);
     setOpened((o) => (o.has(viewKey(v)) ? o : new Set(o).add(viewKey(v))));
     setMenu(false);
@@ -314,12 +324,17 @@ function TryApp() {
         .then((b) => {
           if (!live) return;
           setBoards((bs) => (bs.some((x) => x.invite === b.invite) ? bs : [...bs, b]));
-          if (!tool) go({ board: b.invite });
+          if (!tool && !chosen.current) go({ board: b.invite });
         })
         .catch((e: unknown) => live && setBoardErr(e instanceof Error ? e.message : String(e)));
     }
     // A board link waits for its board; anything else opens at once.
-    const t = tool || !h.startsWith("#board=") ? setTimeout(() => go(tool ? { tool } : { tool: "new" }), 0) : undefined;
+    const t =
+      tool || !h.startsWith("#board=")
+        ? setTimeout(() => {
+            if (!chosen.current) go(tool ? { tool } : { tool: "new" });
+          }, 0)
+        : undefined;
     return () => {
       live = false;
       clearTimeout(t);
@@ -333,6 +348,7 @@ function TryApp() {
     files: t("files"),
     mail: t("DM"),
     new: t("start or open a board"),
+    about: t("About"),
   };
   const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || t("Untitled board") : TOOL_LABEL[view.tool];
 
@@ -419,6 +435,7 @@ function TryApp() {
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
+          {panel({ tool: "about" }, <AboutPanel />)}
           <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
             {t("Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.")}
           </p>
