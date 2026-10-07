@@ -103,7 +103,7 @@ export default function LivePanel() {
                 <span className="text-[#5d646d]">{t("not recorded by this build")}</span>
               )}
             </p>
-            <h3 className="mt-2 text-[15px] font-semibold">{t("Last {n} events", { n: live.events.length })}</h3>
+            <h3 className="mt-2 text-[15px] font-semibold">{t("Recent events ({n})", { n: live.events.length })}</h3>
             <ol aria-live="polite" className="border-t border-[#eceef1]">
               {live.events.length === 0 ? <li className="py-3 text-[15px] text-[#5d646d]">{t("Nothing yet since this node started.")}</li> : null}
               {live.events.map((e, i) => (

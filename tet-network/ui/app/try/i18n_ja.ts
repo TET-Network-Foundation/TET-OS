@@ -358,7 +358,7 @@ export const JA: Record<string, string> = {
   "apply queue": "適用キュー",
   "Source commit:": "ソースのコミット:",
   "not recorded by this build": "このビルドには記録なし",
-  "Last {n} events": "直近 {n} 件のイベント",
+  "Recent events ({n})": "最近のイベント（{n}件）",
   "Nothing yet since this node started.": "このノードが起動してから、まだ何もありません。",
   "Reading the node…": "ノードを読んでいます…",
 };

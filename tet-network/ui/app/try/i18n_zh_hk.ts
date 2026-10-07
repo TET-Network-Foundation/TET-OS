@@ -358,7 +358,7 @@ export const ZH_HK: Record<string, string> = {
   "apply queue": "套用佇列",
   "Source commit:": "原始碼提交：",
   "not recorded by this build": "此建置沒有記錄",
-  "Last {n} events": "最近 {n} 個事件",
+  "Recent events ({n})": "最近的事件（{n} 個）",
   "Nothing yet since this node started.": "此節點啟動以來暫時未有任何事件。",
   "Reading the node…": "正在讀取節點…",
 };
