@@ -32,6 +32,8 @@ services:
         NEXT_PUBLIC_TET_DEMO_CONTACT: "${TET_DEMO_CONTACT:-}"
         # The public questions board's invite (its read key is public by design): "AI asks a human".
         NEXT_PUBLIC_TET_QUESTIONS_INVITE: "${TET_QUESTIONS_INVITE:-}"
+        # The public-board directory's invite (public by design): the try page's "Public boards".
+        NEXT_PUBLIC_TET_DIRECTORY_INVITE: "${TET_DIRECTORY_INVITE:-}"
 
   caddy:
     image: caddy:2.8

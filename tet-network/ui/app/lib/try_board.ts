@@ -35,7 +35,8 @@ import { buildAnonymousTmailEnvelopeV1, buildTmailEnvelopeV1, ephemeralWalletIdF
 import { buildTmailAnonRegistrationV1, type AnonSendState } from "./tmail_anon";
 import { decryptForReceiver } from "./tmail_e2ee";
 import { tmailKeyRegistrationAuthMessageBytes, type TmailKeyRegistrationV1 } from "./tmail_keys";
-import { getHybridSignerSession } from "./hybrid_signer_session";
+import { getHybridSignerSession, setHybridSignerSession } from "./hybrid_signer_session";
+import { encodeAnnouncement, parseListings } from "./board_directory.mjs";
 import { getTmailKeySession } from "./tmail_session";
 import {
   anonNodeAdapter,
@@ -127,8 +128,8 @@ export async function openBoard(baseUrl: string, inviteText: string): Promise<Op
 }
 
 /** The board's posts, newest first, decrypted with the invite's keys. */
-export async function readBoard(baseUrl: string, board: OpenBoard): Promise<BoardPost[]> {
-  const r = await getTmailInbox(baseUrl, board.boardWalletId, 100);
+export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100): Promise<BoardPost[]> {
+  const r = await getTmailInbox(baseUrl, board.boardWalletId, limit);
   if (!r.ok) throw new Error(r.text || `could not read the board (HTTP ${r.status})`);
   const out: BoardPost[] = [];
   for (const row of r.messages) {
@@ -273,3 +274,41 @@ export async function postAnonymousTo(
     { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text },
   )) as AnonSendState;
 }
+
+/**
+ * List a public board in the directory: a named post to the directory, signed by **the board's own
+ * wallet** (its 12 words), which is the only signature the directory accepts for that board
+ * (`board_directory.mjs`). The tab's own wallet is restored afterwards, whatever happens; a post
+ * from this tab racing this one fails on the sender check rather than being signed by the board.
+ */
+export async function announceBoard(baseUrl: string, directory: OpenBoard, board: OpenBoard, boardWords: string): Promise<string> {
+  await pqcInit();
+  const ed = mnemonicToTetEd25519Keypair(boardWords);
+  const wid = ed.walletIdHex.toLowerCase();
+  if (wid !== board.boardWalletId) throw new Error("Those 12 words are not this board's wallet.");
+  const pqc = await mldsa44KeypairFromMnemonic(boardWords);
+  const previous = getHybridSignerSession();
+  setHybridSignerSession({
+    walletIdHex64: wid,
+    signEd25519: (buf) => signTetEd25519(ed.secretKey, buf),
+    mldsa44_keypair_b64: pqc.keypair_b64,
+    mldsa44_pubkey_b64: pqc.pubkey_b64,
+    displayAddress: `${wid.slice(0, 10)}…`,
+  });
+  try {
+    return await postNamedTo(baseUrl, boardRecipient(directory), encodeAnnouncement(board.invite, Date.now()));
+  } finally {
+    setHybridSignerSession(previous);
+  }
+}
+
+/** The public boards the directory lists (its newest 200 posts), newest listing first. */
+export async function readDirectory(baseUrl: string, directory: OpenBoard) {
+  const posts = await readBoard(baseUrl, directory, 200);
+  return parseListings(
+    posts.flatMap((p) =>
+      p.state === "open" ? [{ msgId: p.msgId, sentAtMs: p.sentAtMs, sender: p.label.author ?? "", named: p.label.kind === "named", text: p.text }] : [],
+    ),
+  );
+}
+
