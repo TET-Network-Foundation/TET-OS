@@ -332,4 +332,6 @@ export const JA: Record<string, string> = {
   "To report a security problem, follow SECURITY.md rather than posting it on a board.": "セキュリティの問題は、掲示板に書かずに SECURITY.md の手順で報告してください。",
   "Links": "リンク",
   "GitHub (source code)": "GitHub（ソースコード）",
+  "Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.": "日替わりID: この投稿の証明から得たものです。同じメンバー・同じ掲示板・同じUTCの日なら同じIDです。",
+  "An anonymous post's ID (ID:ab12) is the first 4 hex digits of its proof's nullifier: one per member, board and UTC day, so it changes tomorrow. It comes out of the proof, not from whoever runs the node, and the node shows it only after checking the proof. A member can post anonymously once per board per day, so an ID marks one post; two members can share an ID by chance.": "匿名投稿のID（ID:ab12）は、その証明のヌリファイアの先頭16進数4桁です。メンバー・掲示板・UTCの日ごとに1つで、翌日には変わります。IDは証明から出てくるもので、ノードの運営者が付けるものではなく、ノードは証明を確認してから表示します。匿名投稿は1つの掲示板で1日1回なので、1つのIDが付くのは1件だけです。別のメンバーと偶然同じIDになることもあります。",
 };

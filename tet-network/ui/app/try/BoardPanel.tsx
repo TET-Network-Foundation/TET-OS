@@ -123,6 +123,7 @@ export const BOARD_NOTICE = (members: number | null, t: T) => [
   t("The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title."),
   t("Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time."),
   t("The node and the first relaying peer see your IP. Posts are not on the chain."),
+  t("An anonymous post's ID (ID:ab12) is the first 4 hex digits of its proof's nullifier: one per member, board and UTC day, so it changes tomorrow. It comes out of the proof, not from whoever runs the node, and the node shows it only after checking the proof. A member can post anonymously once per board per day, so an ID marks one post; two members can share an ID by chance."),
   t("Tap a named post's id to DM its wallet. Anonymous posts have no DM: nothing in them says who wrote them."),
   t("Anyone with the invite link can read every post. An invite cannot be revoked: start a new board."),
   t(TMAIL_ANON_DISCLOSURE),
@@ -509,10 +510,16 @@ export default function BoardPanel(props: {
                   <li
                     key={p.msgId}
                     data-post={n}
+                    data-msg={p.msgId}
                     className={cx("-mx-2 border-b border-[#eceef1] px-2 py-2.5 transition-colors", highlight === n && "bg-[#fff6dc]")}
                   >
                     <Meta n={n}>
                       <Author walletId={p.label.author} onDm={props.onDm} />
+                      {p.label.dailyId ? (
+                        <span translate="no" title={t("Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.")}>
+                          ID:{p.label.dailyId}
+                        </span>
+                      ) : null}
                       <span>{fmtWhen(p.sentAtMs, now, locale)}</span>
                       <Badge tone={b.tone} title={p.label.detail}>
                         {b.text}
