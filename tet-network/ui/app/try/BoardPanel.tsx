@@ -17,12 +17,12 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
-import { checkThreadTitle, encodeThreadPost, groupThreads, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
+import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { tmailBucketIndex } from "../lib/anon_tree.mjs";
 import { announceBoard, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
-import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
+import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
 import { useLang, type T } from "./i18n";
 
@@ -43,7 +43,7 @@ type Outgoing = {
 };
 
 type Label = BoardPost["label"];
-type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string };
+type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string; sage?: boolean };
 type Thread = { threadId: string; title: string | null; posts: ThreadPost[]; count: number; lastAtMs: number };
 
 function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
@@ -60,7 +60,8 @@ function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
  */
 function Author(props: { walletId: string | null; onDm?: (walletId: string) => void }) {
   const { t } = useLang();
-  if (!props.walletId) return <span title={t("No DM: an anonymous post doesn't say who wrote it.")}>{t("anonymous")}</span>;
+  // The default name for an anonymous post (2ch's 名無しさん).
+  if (!props.walletId) return <span title={t("No DM: an anonymous post doesn't say who wrote it.")}>{t("Anonymous")}</span>;
   const id = props.walletId;
   return props.onDm ? (
     <button
@@ -84,6 +85,14 @@ function Author(props: { walletId: string | null; onDm?: (walletId: string) => v
 /** Post text with `>>n` as a reference that jumps to and highlights post n of this thread. */
 function Body(props: { text: string; onRef: (n: number) => void }) {
   const { t } = useLang();
+  // Text art keeps its spacing: no wrapping, a fixed-width font, scrolled sideways if wide.
+  if (looksLikeAA(props.text)) {
+    return (
+      <pre className="mt-0.5 overflow-x-auto whitespace-pre text-[14px] leading-[1.2] text-[#1c1f23] [font-family:'MS_Gothic','Osaka-Mono','IPAGothic',ui-monospace,monospace]">
+        {props.text}
+      </pre>
+    );
+  }
   return (
     <p className="mt-0.5 whitespace-pre-wrap break-words text-base leading-relaxed text-[#1c1f23]">
       {props.text.split(/(>>\d+)/g).map((part, i) => {
@@ -108,9 +117,13 @@ function Body(props: { text: string; onRef: (n: number) => void }) {
 
 /** The dense meta line: number, author, time, verdict. */
 function Meta(props: { n: number; children: React.ReactNode }) {
+  const { t } = useLang();
+  const kiri = isKiriban(props.n);
   return (
     <div className={cx(MONO, "flex flex-wrap gap-x-2 text-[13px] text-[#5d646d]")}>
-      <span className="font-bold text-[#1c1f23]">{props.n}</span>
+      <span className={cx("font-bold", kiri ? "text-[#a07800]" : "text-[#1c1f23]")} title={kiri ? t("Kiriban: a round post number") : undefined}>
+        {props.n}
+      </span>
       {props.children}
     </div>
   );
@@ -152,6 +165,7 @@ export default function BoardPanel(props: {
   const [feedErr, setFeedErr] = useState("");
   const [err, setErr] = useState("");
   const [named, setNamed] = useState(false);
+  const [sage, setSage] = useState(false);
   const [text, setText] = useState("");
   const [newTitle, setNewTitle] = useState("");
   /** null = the thread list; "new" = the new-thread form; otherwise a thread id ("" = no thread). */
@@ -249,8 +263,9 @@ export default function BoardPanel(props: {
 
   /** Post `body` into a thread: a reply to `open`, or the first post of a new thread. */
   async function onPost() {
-    const body = text.trim();
-    if (!body || body.length > BODY_MAX) return;
+    // Keep a post's leading spaces (text art depends on them); drop only blank lines and trailing space.
+    const body = text.replace(/^(?:[ \t\u3000]*\n)+/, "").trimEnd();
+    if (!body.trim() || body.length > BODY_MAX) return;
     const starting = open === "new";
     let threadId = open ?? "";
     let title: string | undefined;
@@ -279,7 +294,7 @@ export default function BoardPanel(props: {
       setErr(t("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC."));
       return;
     }
-    const plaintext = encodeThreadPost({ threadId, title, body });
+    const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage });
     const id = `${Date.now()}-${Math.random()}`;
     const t0 = Date.now();
     setOutgoing((o) => [...o, { id, threadId, text: body, mode: plan.action === "anonymous" ? "anonymous" : "named", step: "sending", stepAtMs: t0 }]);
@@ -376,6 +391,11 @@ export default function BoardPanel(props: {
             <Button kind="quiet" onClick={() => setNamed(!named)}>
               {named ? t("post anonymously instead") : t("post named instead")}
             </Button>
+          ) : null}
+          {open !== "new" ? (
+            <Toggle on={sage} onChange={setSage}>
+              {t("sage (don't bump)")}
+            </Toggle>
           ) : null}
           <span>
             {prover === "missing" ? (
@@ -521,6 +541,7 @@ export default function BoardPanel(props: {
                         </span>
                       ) : null}
                       <span>{fmtWhen(p.sentAtMs, now, locale)}</span>
+                      {p.sage ? <span title={t("sage: this reply didn't move the thread up the list")}>sage</span> : null}
                       <Badge tone={b.tone} title={p.label.detail}>
                         {b.text}
                       </Badge>
