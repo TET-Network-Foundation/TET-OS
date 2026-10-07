@@ -5034,6 +5034,175 @@ mod block_sync {
         stop(&[n1, n2]);
     }
 
+    /// Two nodes on a shared tip of height 2, plus a block 3 (`parent`, signed by `parent_signer`)
+    /// that the producer's ledger holds **off** its canonical chain, and an honest, validly signed
+    /// child 4 built on it. Returns `(producer, follower, parent, child)`.
+    ///
+    /// `parent` is kept non-canonical on the producer so that height-range catch-up, which serves
+    /// only canonical blocks, cannot deliver it: the by-id `BlockRequest` the follower sends when
+    /// the gossiped child names a parent it lacks is the only path `parent` can arrive by. The
+    /// child's state root is computed on a scratch ledger that applied `parent`, so if `parent` were
+    /// accepted the follower would reorg onto `parent -> child`.
+    async fn backfill_parent_scenario(
+        parent_signer: &str,
+    ) -> (
+        TestNode,
+        TestNode,
+        crate::consensus::RemoteBlockGossip,
+        crate::consensus::RemoteBlockGossip,
+    ) {
+        let n1 = spawn_node(None, true).await;
+        let boot = n1.boot_multiaddr.clone();
+        let n2 = spawn_node(Some(&boot), false).await;
+        let ledgers = vec![n1.ledger.clone(), n2.ledger.clone()];
+        mine_n(&n1.state, 2).await;
+        wait_height_convergence(&ledgers, 0, Duration::from_secs(45)).await;
+        assert_eq!(n2.ledger.block_height().unwrap(), 2);
+
+        // Scratch ledger at the same tip, to build the child on `parent` with a real state root.
+        let tmp = tempfile::tempdir().unwrap();
+        let scratch_db = tmp.path().join("db");
+        std::mem::forget(tmp);
+        let scratch = Arc::new(
+            crate::ledger::Ledger::open(scratch_db.to_str().unwrap()).unwrap(),
+        );
+        scratch.init_genesis_founder_premine_from_env().unwrap();
+        let _ = scratch.apply_genesis_allocation("founder");
+        let mempool = Arc::new(Mutex::new(Vec::new()));
+        for h in 1..=2 {
+            let id = n1.ledger.canonical_block_id_at_height(h).unwrap().unwrap();
+            let rec = n1.ledger.block_record_by_id(&id).unwrap().unwrap();
+            let verified = crate::consensus::verify_block_producer(
+                crate::sync::block_record_to_remote_gossip(&rec),
+            )
+            .unwrap();
+            crate::consensus::apply_remote_block_from_gossip(scratch.clone(), mempool.clone(), verified)
+                .await
+                .unwrap();
+        }
+        assert_eq!(scratch.compute_state_root().unwrap(), n1.ledger.compute_state_root().unwrap());
+
+        let tip = n1.ledger.canonical_block_id_at_height(2).unwrap().unwrap();
+        let parent_ts = n1.ledger.block_record_by_id(&tip).unwrap().unwrap().ts_ms;
+        let unsigned_parent = super::coinbase_block_on(&n1.ledger, parent_ts + 1);
+        let parent = super::signed_with(unsigned_parent.clone(), parent_signer);
+        // The signature is not in `block_id`, so the scratch ledger can take the same block signed
+        // honestly and reach the state the follower would be in had it accepted `parent`.
+        crate::consensus::apply_remote_block_from_gossip(
+            scratch.clone(),
+            mempool.clone(),
+            super::sign_as_producer(unsigned_parent),
+        )
+        .await
+        .unwrap();
+        let child = super::signed_with(super::coinbase_block_on(&scratch, parent.ts_ms + 1), "alice");
+        assert_eq!(child.block_height, 4);
+        assert_eq!(child.parent_block_id.as_deref(), Some(parent.block_id.as_str()));
+
+        let mut row = super::record_of(&parent);
+        row.canonical = false;
+        n1.ledger.record_block_record(&row).unwrap();
+        assert_eq!(n1.ledger.block_height().unwrap(), 2, "producer's canonical tip stays at 2");
+        assert_eq!(
+            n1.ledger.canonical_block_id_at_height(3).unwrap(),
+            None,
+            "range catch-up must have nothing to serve at height 3"
+        );
+
+        let ev = crate::models::NetworkEvent::BlockMined {
+            block_height: child.block_height,
+            block_id: child.block_id.clone(),
+            parent_block_id: child.parent_block_id.clone(),
+            producer_id: child.producer_id.clone(),
+            base_reward_micro: child.base_reward_micro,
+            compute_reward_micro: child.compute_reward_micro,
+            total_reward_micro: child.total_reward_micro,
+            state_root: child.state_root.clone(),
+            txs: vec![],
+            ts_ms: child.ts_ms,
+            producer_sig: child.producer_sig.clone(),
+        };
+        n1.state
+            .gossip_tx
+            .clone()
+            .expect("gossip channel")
+            .send(serde_json::to_string(&ev).unwrap())
+            .await
+            .unwrap();
+
+        // The gossiped child reaches the follower and is buffered as a backfill candidate; that is
+        // what sends the by-id request for `parent`.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while n2.ledger.block_record_by_id(&child.block_id).unwrap().is_none() {
+            assert!(Instant::now() < deadline, "the gossiped child never reached the follower");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        (n1, n2, parent, child)
+    }
+
+    /// **SECURITY REGRESSION GUARD (D2), by-id backfill site: a block fetched by id is held to the
+    /// producer signature.** The follower is handed an honest child whose parent it lacks, and can
+    /// fetch that parent only by id. The parent has honest contents and names `alice`, but is
+    /// signed by `mallory`, outside the genesis set. The follower must never record it, and must
+    /// stay on its own tip.
+    ///
+    /// Gossip cannot deliver the parent (it is never gossiped) and range catch-up cannot either (it
+    /// is off the producer's canonical chain), so the `BlockSync` response handler is the only
+    /// path. Its companion, `by_id_backfill_accepts_a_validly_signed_parent`, shows that path
+    /// delivers within the same window when the signature is good. Negative control: skip
+    /// `verify_block_producer` in the `BlockSync` response handler (the follower then records the
+    /// forged parent and reorgs onto it).
+    #[tokio::test]
+    async fn by_id_backfill_refuses_a_block_without_a_valid_producer_signature() {
+        let _g = env_lock();
+        block_sync_env();
+
+        let (n1, n2, forged, child) = backfill_parent_scenario("mallory").await;
+        // The honest companion converges in well under this window.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            assert!(
+                n2.ledger.block_record_by_id(&forged.block_id).unwrap().is_none(),
+                "the follower recorded a by-id backfilled block signed outside the genesis set"
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(n2.ledger.block_height().unwrap(), 2, "the follower must stay on its tip");
+        assert_ne!(
+            n2.ledger.canonical_block_id_at_height(4).unwrap().as_deref(),
+            Some(child.block_id.as_str())
+        );
+
+        stop(&[n1, n2]);
+    }
+
+    /// Companion to `by_id_backfill_refuses_a_block_without_a_valid_producer_signature`: the same
+    /// scenario with the parent signed by `alice`. The follower fetches it by id and reorgs onto
+    /// `parent -> child`, which shows the by-id path is reached, answered and applied inside the
+    /// guard's window, so the guard's refusal is the signature check and not a path that never ran.
+    #[tokio::test]
+    async fn by_id_backfill_accepts_a_validly_signed_parent() {
+        let _g = env_lock();
+        block_sync_env();
+
+        let (n1, n2, parent, child) = backfill_parent_scenario("alice").await;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while n2.ledger.canonical_block_id_at_height(4).unwrap().as_deref() != Some(child.block_id.as_str()) {
+            assert!(
+                Instant::now() < deadline,
+                "the follower did not backfill the parent by id and reorg onto it: height={}",
+                n2.ledger.block_height().unwrap()
+            );
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert_eq!(
+            n2.ledger.canonical_block_id_at_height(3).unwrap().as_deref(),
+            Some(parent.block_id.as_str())
+        );
+
+        stop(&[n1, n2]);
+    }
+
     #[tokio::test]
     async fn tip_state_root_strict_match_after_mine() {
         let _g = env_lock();
