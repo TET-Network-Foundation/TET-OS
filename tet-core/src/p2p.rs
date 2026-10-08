@@ -3810,10 +3810,7 @@ async fn run_mdns_ping_swarm(
                     // respected by `get_blob`). `from_blob` re-hashes so the requester can verify
                     // integrity against the announced `file_sha256`.
                     let file_id = request.file_id;
-                    let resp = match file_store.get_blob(&file_id.to_string()) {
-                        Some(blob) => crate::files::FileFetchResponse::from_blob(file_id, &blob),
-                        None => crate::files::FileFetchResponse::not_found(file_id),
-                    };
+                    let resp = crate::files::serve_peer_fetch(&file_store, file_id);
                     let found = resp.found;
                     let _ = swarm.behaviour_mut().files_fetch.send_response(channel, resp);
                     println!(

@@ -15,6 +15,7 @@ import { wordsFileText } from "../lib/disposable_wallet.mjs";
 import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
 import DirectoryPanel from "./DirectoryPanel";
 import AboutPanel from "./AboutPanel";
+import TermsPanel from "./TermsPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
 import QrPanel from "./QrPanel";
@@ -48,6 +49,7 @@ const TOOLS = [
   { id: "mail", label: "DM", group: "tools" },
   { id: "live", label: "live", group: "tools" },
   { id: "about", label: "About", group: "footer" },
+  { id: "terms", label: "Terms", group: "footer" },
 ] as const;
 type ToolId = (typeof TOOLS)[number]["id"] | "new";
 /** What the middle column shows: a board (by invite) or a tool. */
@@ -197,6 +199,10 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
       <p className="mx-2 mt-4 text-[13.5px]">
         <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "about" })}>
           {t("About")}
+        </button>
+        {" · "}
+        <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "terms" })}>
+          {t("Terms")}
         </button>
       </p>
     </nav>
@@ -360,6 +366,7 @@ function TryApp() {
     mail: t("DM"),
     new: t("start or open a board"),
     about: t("About"),
+    terms: t("Terms"),
     live: t("live"),
   };
   const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || t("Untitled board") : TOOL_LABEL[view.tool];
@@ -450,6 +457,7 @@ function TryApp() {
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           {panel({ tool: "about" }, <AboutPanel />)}
+          {panel({ tool: "terms" }, <TermsPanel />)}
           {panel({ tool: "live" }, <LivePanel />)}
           <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
             {t("Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.")}

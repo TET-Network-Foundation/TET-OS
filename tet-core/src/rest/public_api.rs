@@ -298,19 +298,28 @@ fn is_write(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
+/// Operator routes the gate lets through from loopback only (never on the allow-list).
+pub const OPERATOR_PATHS: &[&str] = &["/operator/hide", "/operator/unhide", "/operator/hidden"];
+
 /// The outermost layer in public mode: allow-list first, then the per-client limit.
 pub async fn public_api_gate(
     axum::extract::State(gate): axum::extract::State<Arc<PublicGate>>,
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
 ) -> Response {
-    if !is_allowed(req.method(), req.uri().path()) {
-        return (StatusCode::NOT_FOUND, [(GATE_HEADER, "refused")], "not found").into_response();
-    }
     let peer = req
         .extensions()
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|c| c.0.ip());
+    // The operator's hide routes (operator_hide.rs), from loopback only: the operator runs them
+    // inside the node's container. Exact paths; the route itself still requires the admin key. From
+    // anywhere else they are refused like any other route that isn't on the allow-list.
+    if OPERATOR_PATHS.contains(&req.uri().path()) && peer.map(|ip| ip.is_loopback()).unwrap_or(false) {
+        return next.run(req).await;
+    }
+    if !is_allowed(req.method(), req.uri().path()) {
+        return (StatusCode::NOT_FOUND, [(GATE_HEADER, "refused")], "not found").into_response();
+    }
     let client = client_key(peer, req.headers(), &gate.trusted);
     if !gate.allow(&client, is_write(req.method()), Instant::now()) {
         return (

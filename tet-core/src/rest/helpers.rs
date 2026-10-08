@@ -184,6 +184,15 @@ pub fn require_dex_hybrid_sig_strict(
     Ok(())
 }
 
+/// `410 Gone` for content the operator stopped serving on this node (`operator_hide.rs`).
+pub fn hidden_by_operator() -> axum::response::Response {
+    (
+        StatusCode::GONE,
+        axum::Json(serde_json::json!({ "ok": false, "error": "hidden_by_operator" })),
+    )
+        .into_response()
+}
+
 pub fn mainnet_strict() -> bool {
     std::env::var("TET_MAINNET")
         .ok()
