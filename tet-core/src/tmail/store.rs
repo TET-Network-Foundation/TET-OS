@@ -156,9 +156,9 @@ pub struct TmailStore {
     anon_roots: std::sync::Mutex<Vec<(u64, [u8; 32])>>,
     /// Serialises an anonymous send's check → store → (on failure) release, so a release can never
     /// interleave with another store of the same message and free a nullifier a stored post holds.
-    /// An async lock: proof checks run on a blocking thread while it's held, so a burst of
-    /// anonymous sends waits in line without blocking the runtime's worker threads.
-    pub anon_send_lock: tokio::sync::Mutex<()>,
+    /// Serialises [`Self::send_anonymous`] (check → store → release). Only ever taken on a
+    /// blocking thread, never on the async runtime.
+    anon_send_lock: std::sync::Mutex<()>,
 }
 
 fn now_ms() -> u64 {
@@ -255,7 +255,7 @@ impl TmailStore {
             anon_receipts: db.open_tree(TREE_ANON_RECEIPTS)?,
             anon_nullifiers: db.open_tree(TREE_ANON_NULLIFIERS)?,
             anon_roots: std::sync::Mutex::new(Vec::new()),
-            anon_send_lock: tokio::sync::Mutex::new(()),
+            anon_send_lock: std::sync::Mutex::new(()),
         })
     }
 
@@ -1023,6 +1023,19 @@ impl TmailStore {
 // Anonymous message verdicts — verify on ARRIVAL, read the stored verdict later.
 // ---------------------------------------------------------------------------
 
+/// Why [`TmailStore::send_anonymous`] didn't store a post.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnonSendError {
+    /// The envelope says anonymous but carries no proof.
+    NoProof,
+    /// The proof's receipt wasn't deposited first.
+    NoReceipt,
+    /// The proof doesn't verify (a repeat on the same board and day included).
+    Refused(String),
+    /// It verified but couldn't be stored (the claim was released).
+    Store(String),
+}
+
 /// What this node concluded about an anonymous message's proof.
 ///
 /// Stored when the message arrives, not computed when it is read. That is what keeps the root
@@ -1066,6 +1079,38 @@ impl TmailStore {
     ///
     /// Re-claiming for the same `msg_id` is idempotent, so a duplicate delivery of one message does
     /// not look like a replay.
+    /// Check, store and (on a failed store) release, as one unit under `anon_send_lock`: an
+    /// anonymous post from a client is kept only if its proof verifies now (its receipt was
+    /// deposited first). Blocking: call it on a blocking thread. `Ok(true)` stored, `Ok(false)` the
+    /// same message was already stored.
+    pub fn send_anonymous(&self, env: &TmailEnvelopeV1) -> Result<bool, AnonSendError> {
+        let _g = self.anon_send_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let anon = env.anonymous.as_ref().ok_or(AnonSendError::NoProof)?;
+        let bytes = self.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex).ok_or(AnonSendError::NoReceipt)?;
+        let nullifier_hex = match crate::tmail::anon::verify_anonymous_proof(self, env, &bytes) {
+            AnonVerdict::Verified { nullifier_hex, verified_at_ms } => {
+                let v = AnonVerdict::Verified { nullifier_hex: nullifier_hex.clone(), verified_at_ms };
+                match self.store_tmail(env) {
+                    Ok(stored) => {
+                        let _ = self.set_anon_verdict(env.msg_id.trim(), &v);
+                        return Ok(stored);
+                    }
+                    Err(e) => {
+                        // Not stored: give the nullifier back (only this message's claim), or the
+                        // member's post for the day is used up with nothing posted.
+                        if self.get_by_msg_id(env.msg_id.trim()).is_none() {
+                            self.release_anon_nullifier(&nullifier_hex, env.msg_id.trim());
+                        }
+                        return Err(AnonSendError::Store(e.to_string()));
+                    }
+                }
+            }
+            AnonVerdict::Failed { reason, .. } => reason,
+            AnonVerdict::Pending => "couldn't be checked yet".to_string(),
+        };
+        Err(AnonSendError::Refused(nullifier_hex))
+    }
+
     /// Undo [`Self::claim_anon_nullifier`] for a message that wasn't stored after all. Only the
     /// claim by this `msg_id` is removed; anyone else's stands.
     pub fn release_anon_nullifier(&self, nullifier_hex: &str, msg_id: &str) {

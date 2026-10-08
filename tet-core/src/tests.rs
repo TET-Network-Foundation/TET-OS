@@ -14021,12 +14021,13 @@ fn an_anonymous_post_that_is_not_stored_does_not_use_up_the_day() {
     assert!(!store.claim_anon_nullifier(&n, "msg-c").unwrap(), "someone else's release freed the claim");
     store.release_anon_nullifier(&n, "msg-a");
     assert!(store.claim_anon_nullifier(&n, "msg-c").unwrap(), "the day stayed used up");
-    let src = include_str!("rest/handlers/tmail.rs");
-    assert!(src.contains("state.tmail.release_anon_nullifier(nullifier_hex, env.msg_id.trim());"), "the send no longer releases the claim when the store fails");
+    let src = include_str!("tmail/store.rs");
+    assert!(src.contains("self.release_anon_nullifier(&nullifier_hex, env.msg_id.trim());"), "the send no longer releases the claim when the store fails");
 }
 
 /// **SECURITY REGRESSION GUARD: a released claim can never belong to a stored post.** The send's
-/// check → store → release runs under one lock, and releases only when the message isn't stored.
+/// check → store → release is one unit (`send_anonymous`, under one lock, run whole on a blocking
+/// thread so a client hanging up can't split it), and releases only when the message isn't stored.
 /// Two requests for the same anonymous message racing (one failing to store, one storing) can't
 /// leave its nullifier free while the post is kept.
 /// Negative control (run by hand): the release without the "not stored" check → FAILED.
@@ -14042,13 +14043,30 @@ fn a_released_claim_never_belongs_to_a_stored_post() {
     // Both requests claimed (same message: idempotent); the second stored it.
     assert!(store.claim_anon_nullifier(&n, "race-msg").unwrap());
     assert!(store.store_tmail(&env).unwrap());
-    // The first now hits its store failure and runs the handler's release rule.
-    let src = include_str!("rest/handlers/tmail.rs");
-    assert!(src.contains("&& state.tmail.get_by_msg_id(env.msg_id.trim()).is_none()"), "the release no longer checks the message isn't stored");
+    // The first now hits its store failure and runs the release rule (`send_anonymous`).
+    let src = include_str!("tmail/store.rs");
+    assert!(src.contains("if self.get_by_msg_id(env.msg_id.trim()).is_none() {\n                            self.release_anon_nullifier"), "the release no longer checks the message isn't stored");
     if store.get_by_msg_id("race-msg").is_none() {
         store.release_anon_nullifier(&n, "race-msg");
     }
     assert!(!store.claim_anon_nullifier(&n, "another-msg").unwrap(), "a stored post's nullifier was freed for another message");
-    assert!(src.contains("state.tmail.anon_send_lock.lock().await"), "anonymous sends are no longer serialised (with an async lock)");
-    assert!(src.contains("tokio::task::spawn_blocking(move || crate::tmail::anon::verify_anonymous_proof"), "the proof check runs on the async runtime");
+    assert!(src.contains("let _g = self.anon_send_lock.lock()"), "anonymous sends are no longer serialised");
+    let handler = include_str!("rest/handlers/tmail.rs");
+    assert!(handler.contains("tokio::task::spawn_blocking(move || store.send_anonymous(&e2))"), "the check-store-release unit no longer runs whole on a blocking thread");
+
+    // send_anonymous refuses without storing: no proof, no receipt, a proof that doesn't verify.
+    let mut no_proof = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [7u8; 32], "no-proof", tmail_now_ms_for_tests());
+    no_proof.anonymous = None;
+    assert_eq!(store.send_anonymous(&no_proof), Err(crate::tmail::store::AnonSendError::NoProof));
+    let no_receipt = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [8u8; 32], "no-receipt", tmail_now_ms_for_tests());
+    assert_eq!(store.send_anonymous(&no_receipt), Err(crate::tmail::store::AnonSendError::NoReceipt));
+    let junk = b"junk".to_vec();
+    let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
+    store.put_anon_receipt(&jh, &junk).unwrap();
+    let mut bad = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [9u8; 32], "bad-proof", tmail_now_ms_for_tests());
+    bad.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh;
+    assert!(matches!(store.send_anonymous(&bad), Err(crate::tmail::store::AnonSendError::Refused(_))));
+    for id in ["no-proof", "no-receipt", "bad-proof"] {
+        assert!(store.get_by_msg_id(id).is_none(), "{id} was stored");
+    }
 }

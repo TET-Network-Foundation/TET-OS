@@ -63,67 +63,43 @@ pub async fn post_tmail_send(
         return crate::rest::helpers::hidden_by_operator();
     }
     // An anonymous post is checked BEFORE it's stored or relayed: this node holds the receipt the
-    // sender just deposited, so there is nothing to wait for. A post whose proof doesn't verify (a
-    // repeat on the same board and day included) is refused with the reason, never kept or relayed.
-    // Held from the proof check through the store (and any release): see `anon_send_lock`.
-    let anon_guard = if env.flags.anonymous { Some(state.tmail.anon_send_lock.lock().await) } else { None };
-    let anon_verdict = if env.flags.anonymous {
-        let Some(anon) = env.anonymous.as_ref() else {
-            return (StatusCode::BAD_REQUEST, "an anonymous envelope needs its proof").into_response();
-        };
-        let Some(bytes) = state.tmail.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex) else {
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "deposit the proof's receipt first" }))).into_response();
-        };
-        // The receipt check is CPU work: off the async runtime.
+    // sender just deposited. A post whose proof doesn't verify (a repeat on the same board and day
+    // included) is refused with the reason, never kept or relayed. The check, the store and any
+    // release run as one unit on a blocking thread (`TmailStore::send_anonymous`), so neither a
+    // burst of sends nor a client hanging up mid-check can split them.
+    let stored = if env.flags.anonymous {
         let (store, e2) = (state.tmail.clone(), env.clone());
-        let verdict = tokio::task::spawn_blocking(move || crate::tmail::anon::verify_anonymous_proof(&store, &e2, &bytes))
-            .await
-            .unwrap_or_else(|j| crate::tmail::store::AnonVerdict::Failed { reason: format!("the check didn't finish: {j}"), failed_at_ms: 0 });
-        match verdict {
-            v @ crate::tmail::store::AnonVerdict::Verified { .. } => Some(v),
-            crate::tmail::store::AnonVerdict::Failed { reason, .. } => {
+        match tokio::task::spawn_blocking(move || store.send_anonymous(&e2)).await {
+            Ok(Ok(stored)) => stored,
+            Ok(Err(crate::tmail::store::AnonSendError::NoProof)) => return (StatusCode::BAD_REQUEST, "an anonymous envelope needs its proof").into_response(),
+            Ok(Err(crate::tmail::store::AnonSendError::NoReceipt)) => {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "deposit the proof's receipt first" }))).into_response();
+            }
+            Ok(Err(crate::tmail::store::AnonSendError::Refused(reason))) => {
                 return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": format!("the anonymous proof doesn't verify: {reason}") }))).into_response();
             }
-            crate::tmail::store::AnonVerdict::Pending => {
-                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "the anonymous proof couldn't be checked yet" }))).into_response();
-            }
+            Ok(Err(crate::tmail::store::AnonSendError::Store(e))) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+            Err(j) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")).into_response(),
         }
     } else {
-        None
+        match state.tmail.store_tmail(&env) {
+            Ok(s) => s,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+        }
     };
-    match state.tmail.store_tmail(&env) {
-        Ok(true) => {}
-        Ok(false) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "ok": false,
-                    "msg_id": env.msg_id,
-                    "status": "duplicate",
-                })),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            // Not stored: give the nullifier back, or the member's post for the day is used up with
-            // nothing posted (a resend would be refused as a repeat).
-            // Only if this message isn't stored (another request for it may have stored it).
-            if let Some(crate::tmail::store::AnonVerdict::Verified { nullifier_hex, .. }) = &anon_verdict
-                && state.tmail.get_by_msg_id(env.msg_id.trim()).is_none()
-            {
-                state.tmail.release_anon_nullifier(nullifier_hex, env.msg_id.trim());
-            }
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response();
-        }
-    }
-    // Its (verified) verdict is stored with it, so the sender's own copy reads checked at once.
-    if let Some(v) = anon_verdict {
-        let _ = state.tmail.set_anon_verdict(env.msg_id.trim(), &v);
+    if !stored {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "ok": false,
+                "msg_id": env.msg_id,
+                "status": "duplicate",
+            })),
+        )
+            .into_response();
     }
 
     // Propagate to peers so an offline receiver's node can buffer it too.
-    // Stored: the lock has done its job; don't hold it across the broadcast.
-    drop(anon_guard);
     state.broadcast_tmail(&env).await;
     (
         StatusCode::ACCEPTED,
