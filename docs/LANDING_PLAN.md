@@ -117,6 +117,18 @@ by itself. Rows whose feature isn't built say **planned** and have no button.
 | shops | A signed listing a buyer can scan. | 買い手が読み取れる署名付き出品。 | — | **planned** (queue r) |
 | schools | A members-only anonymous poll. | メンバー限定の匿名投票。 | — | **planned** (queue n; needs a design decision) |
 
+## 4b. Play (planned)
+
+A small corner below "Use it for", labelled **planned**. Four items, one line each plus its honest
+line. None is built; each is a later idea in FUTURE_IDEAS.
+
+| item | en | proves / doesn't (en) | ja | proves / doesn't (ja) |
+|---|---|---|---|---|
+| sealed prediction | Seal a prediction now (only its salted hash is posted); reveal the text later. | Proves the text was fixed when it was sealed. Doesn't prove it was a good guess, or that the same person didn't seal other predictions too. | 予想を封印（ソルト付きハッシュだけを投稿）し、後で中身を公開。 | 封印した時点で文が決まっていたことを証明。当たったことや、同じ人がほかの予想も封印していないことは証明しません。 |
+| letter to future self | Write a letter that is delivered to you later. | The node holds it, encrypted to you, until the date. Up to 30 days ahead on this node; if the node is gone, so is the letter. | 未来の自分に届く手紙。 | 日付まで暗号化したままノードが預かります。このノードでは30日先まで。ノードがなくなれば手紙も消えます。 |
+| attendance | Scan the venue's QR, which changes every 30 seconds. | Proves you scanned the venue QR. Not that you were there: someone could pass the code on within 30 seconds. | 会場のQR（30秒ごとに変わる）を読み取る。 | 会場のQRを読み取ったことを証明。その場にいたことは証明しません（30秒以内に誰かが転送できます）。 |
+| vouched recommendation | A member recommends someone anonymously. | The recipient must opt in to receive them, and nothing is shown publicly unless the recipient chooses to. Proves a member wrote it, not which one. | メンバーが匿名で誰かを推薦する。 | 受け取る側が受け取りを選んだときだけ届き、本人が選ばない限り公開されません。メンバーの誰かが書いたことを証明し、誰かは示しません。 |
+
 ## 5. Why this will be needed
 
 Four short lines. No predictions with dates, no "the future of".
@@ -150,6 +162,7 @@ The table's honest rows (one producer, not audited, no value) stay in it.
 |---|---|
 | Now: v0.2 testnet. Two seed nodes, one block producer, coins with no value. | 現在：v0.2 テストネット。シードノード2台、ブロック生成は1台、コインに価値なし。 |
 | Target: the Phase 1 genesis in Q1 2027 — binds the post-quantum key to the wallet, signs blocks, renames the chain. It's a target, not a date. | 目標：2027年第1四半期の Phase 1 ジェネシス。耐量子の鍵とウォレットの結びつけ、ブロック署名、チェーン名の変更。目標であって確定日ではありません。 |
+| Planned: TetSearch at search.stevenexus.org — searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation. (The address doesn't resolve yet.) | 予定：search.stevenexus.org の TetSearch。署名付きの TET サイトだけを検索し、紹介された人だけが公開でき、AIによる大量生成を締め出すように作ります。（アドレスはまだ有効ではありません） |
 | What's open is in SECURITY.md. | 未解決の点は SECURITY.md にあります。 |
 
 ## 8. Shelter (planned)
@@ -177,8 +190,9 @@ Unchanged from the About panel (#53), shortened:
 |---|---|
 | Built and run by Steve, a student in Switzerland. | スイスの学生、Steve が作って運営しています。 |
 | Contact: tetsteve@proton.me · source on GitHub · SECURITY.md | 連絡先：tetsteve@proton.me · GitHub のソース · SECURITY.md |
+| Report content: abuse@stevenexus.org — reviewed within 48 hours. | 通報：abuse@stevenexus.org（48時間以内に確認します） |
 
-No age, no school.
+No age, no school. No personal email: the two addresses above are the only ones published.
 
 ---
 
