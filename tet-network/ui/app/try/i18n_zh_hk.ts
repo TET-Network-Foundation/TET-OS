@@ -289,7 +289,7 @@ export const ZH_HK: Record<string, string> = {
   "Links": "連結",
   "GitHub (source code)": "GitHub（原始碼）",
   "Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.": "每日 ID：來自此帖文的證明。同一成員、同一討論區、同一 UTC 日，ID 相同。",
-  "Anonymous": "無名氏",
+  "Anonymous": "匿名者",
   "Kiriban: a round post number": "整數帖號",
   "sage: this reply didn't move the thread up the list": "sage：這則回覆沒有把討論串頂上去",
   "sage (don't bump)": "sage（不頂帖）",
@@ -882,4 +882,5 @@ export const ZH_HK: Record<string, string> = {
   "Newest threads": "最新討論串",
   "Keep this ID? Save your passphrase (12 words)": "保留此 ID？儲存你的密語（12 個字）",
   "This is a testnet. Data may be reset.": "這是測試網，資料可能會被重設。",
+  "No name": "無名氏",
 };

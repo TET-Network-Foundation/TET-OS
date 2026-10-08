@@ -57,6 +57,16 @@ function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
 }
 
 /**
+ * The name shown on a post. An anonymous post is always "Anonymous" (a name on one would be the
+ * poster's own choice and could link their posts, so it is ignored). A named post shows its name,
+ * or "No name" — never "Anonymous", since its ID is shown.
+ */
+export function shownName(p: { name?: string; label: Label }, t: (s: string) => string): string {
+  if (!p.label.author) return t("Anonymous");
+  return p.name || t("No name");
+}
+
+/**
  * Who wrote a post. A named post's short id opens a DM with that wallet; an anonymous post has no
  * author (`postLabel` never gives one), so there is nothing to message. #18 hook: a profile or
  * follow control attaches here.
@@ -169,9 +179,7 @@ export default function BoardPanel(props: {
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
   const [feedErr, setFeedErr] = useState("");
   const [err, setErr] = useState("");
-  // 2ch-style by default: a post goes out at once with a name and an ID (made silently on the first
-  // post). Posting with an anonymous proof (membership, the native prover) is one tap away.
-  const [named, setNamed] = useState(true);
+  const [named, setNamed] = useState(false);
   const [sage, setSage] = useState(false);
   // A display name for this tab's posts (blank: Anonymous / 名無しさん). Not stored, not checked.
   const [name, setName] = useState("");
@@ -303,7 +311,7 @@ export default function BoardPanel(props: {
     mounted.current && setOutgoing((o) => o.map((x) => (x.id === id ? { ...x, ...p, stepAtMs: p.step ? Date.now() : x.stepAtMs } : x)));
 
   const allowance = anonAllowance({ nowMs: now, postedBuckets });
-  // Named (name + ID) by default; anonymous when chosen and a prover is here.
+  // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
   const anonymous = prover !== "missing" && !named;
   // Anonymous posting needs membership; until then the one button is the (separate) join.
   const needsJoin = anonymous && prover === "found" && !anon?.member;
@@ -345,7 +353,8 @@ export default function BoardPanel(props: {
       setErr(t("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC."));
       return;
     }
-    const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage, name });
+    // An anonymous post never carries a name: the same name on two posts would link them.
+    const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage, name: anonymous ? "" : name });
     const id = `${Date.now()}-${Math.random()}`;
     const t0 = Date.now();
     setOutgoing((o) => [...o, { id, threadId, text: body, mode: plan.action === "anonymous" ? "anonymous" : "named", step: "sending", stepAtMs: t0 }]);
@@ -419,9 +428,11 @@ export default function BoardPanel(props: {
             />
           </div>
         ) : null}
-        <div className="mb-2 max-w-[18rem]">
-          <Input label={t("Name (optional)")} value={name} onChange={(v) => setName(v.slice(0, NAME_MAX))} placeholder={t("Anonymous")} />
-        </div>
+        {anonymous ? null : (
+          <div className="mb-2 max-w-[18rem]">
+            <Input label={t("Name (optional)")} value={name} onChange={(v) => setName(v.slice(0, NAME_MAX))} placeholder={t("No name")} />
+          </div>
+        )}
         <div
           onKeyDown={(e) => {
             // Cmd/Ctrl+Enter posts.
@@ -614,7 +625,7 @@ export default function BoardPanel(props: {
                   >
                     <Meta n={n}>
                       <span className="font-semibold text-[#1f5132]" title={p.label.author ? undefined : t("No DM: an anonymous post doesn't say who wrote it.")}>
-                        {p.name || t("Anonymous")}
+                        {shownName(p, t)}
                       </span>
                       <Author walletId={p.label.author} onDm={props.onDm} />
                       {p.label.dailyId ? (

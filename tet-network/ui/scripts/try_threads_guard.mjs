@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 // Guard for Try TET board threads (app/lib/board_threads.mjs): the page's own code, plain Node.
 //
 //   node scripts/try_threads_guard.mjs
@@ -203,6 +204,32 @@ function namesSafe(clean, parse, encode) {
 await check("a display name round-trips cleaned, and a body can't pose as one", () => namesSafe(t.cleanName, t.parseThreadPost, t.encodeThreadPost));
 await check("control: a name cleaner that keeps bidi overrides is caught", () => {
   assert.throws(() => namesSafe((x) => String(x).trim(), t.parseThreadPost, t.encodeThreadPost));
+});
+
+// ── Names can't pose as an ID or a label, and never ride on an anonymous post ──────────────────
+function namesCantSpoof(clean) {
+  for (const bad of ["01babab8", "ID:01ba bab8", "ab12 cd34", "Anonymous", "名無しさん", "匿名", "記名", "anonymous · verified", "ＩＤ：ａｂ１２ｃｄ", "Mo\u200bnar\u200b ab\u200b12cd"]) {
+    assert.equal(clean(bad), "", `"${bad}" passes for an ID or a label`);
+  }
+  assert.equal(clean("Mo\u200bnar"), "Monar", "zero-width characters are removed");
+  assert.equal(clean("モナー"), "モナー");
+  assert.equal(clean("Sakura 2"), "Sakura 2");
+}
+await check("a name can't pose as an ID or a status label", () => namesCantSpoof(t.cleanName));
+await check("control: a cleaner that only trims is caught", () => assert.throws(() => namesCantSpoof((x) => String(x).trim())));
+
+const BOARD = readFileSync(new URL("../app/try/BoardPanel.tsx", import.meta.url), "utf8");
+function anonPostsUnnamed(src) {
+  assert.match(src, /const \[named, setNamed\] = useState\(false\);/, "posting is not anonymous by default");
+  assert.match(src, /encodeThreadPost\(\{[^}]*name: anonymous \? "" : name[^}]*\}\)/, "an anonymous post can carry a name");
+  assert.match(src, /if \(!p\.label\.author\) return t\("Anonymous"\);/, "a name on an anonymous post is shown");
+  assert.match(src, /return p\.name \|\| t\("No name"\);/, "a named post without a name is labelled anonymous");
+}
+await check("posts are anonymous by default, anonymous posts carry and show no name", () => anonPostsUnnamed(BOARD));
+await check("control: a named default, or a name on anonymous posts, is caught", () => {
+  assert.throws(() => anonPostsUnnamed(BOARD.replace("const [named, setNamed] = useState(false);", "const [named, setNamed] = useState(true);")));
+  assert.throws(() => anonPostsUnnamed(BOARD.replace('name: anonymous ? "" : name', "name")));
+  assert.throws(() => anonPostsUnnamed(BOARD.replace('return p.name || t("No name");', 'return p.name || t("Anonymous");')));
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");

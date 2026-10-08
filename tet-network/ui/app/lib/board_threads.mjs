@@ -48,6 +48,7 @@ export function checkThreadTitle(title) {
 /** The most characters a display name holds. */
 export const NAME_MAX = 32;
 const NAME_RE = /^name: (.*)$/;
+const RESERVED = /\bid\b|anonymous|verified|named|no name|proof|名無し|匿名|記名|検証|無名|具名|證明|証明/i;
 
 /**
  * A display name as shown: trimmed, without control or bidi-override characters (which could make
@@ -57,9 +58,14 @@ const NAME_RE = /^name: (.*)$/;
  */
 export function cleanName(raw) {
   const s = String(raw ?? "")
-    .replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0]/g, "")
+    .normalize("NFKC")
+    .replace(/\s+/g, " ")
     .trim();
-  return [...s].slice(0, NAME_MAX).join("");
+  const name = [...s].slice(0, NAME_MAX).join("");
+  // A name that could pass for an ID or a status label is no name.
+  if (/[0-9a-f]{6,}/i.test(name.replace(/[\s:：]/g, "")) || RESERVED.test(name)) return "";
+  return name;
 }
 
 export function encodeThreadPost(o) {

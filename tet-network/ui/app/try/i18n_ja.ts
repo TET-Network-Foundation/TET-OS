@@ -289,7 +289,7 @@ export const JA: Record<string, string> = {
   "Links": "リンク",
   "GitHub (source code)": "GitHub（ソースコード）",
   "Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.": "日替わりID: この投稿の証明から得たものです。同じメンバー・同じ掲示板・同じUTCの日なら同じIDです。",
-  "Anonymous": "名無しさん",
+  "Anonymous": "匿名さん",
   "Kiriban: a round post number": "キリ番",
   "sage: this reply didn't move the thread up the list": "sage: このレスではスレが上がっていません",
   "sage (don't bump)": "sage（上げない）",
@@ -882,4 +882,5 @@ export const JA: Record<string, string> = {
   "Newest threads": "新着スレッド",
   "Keep this ID? Save your passphrase (12 words)": "この ID を残しますか？パスフレーズ（12語）を保存",
   "This is a testnet. Data may be reset.": "これはテストネットです。データはリセットされることがあります。",
+  "No name": "名無しさん",
 };
