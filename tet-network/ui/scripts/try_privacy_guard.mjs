@@ -53,8 +53,9 @@ export const OVERCLAIM = new RegExp(
 );
 // A content filter's blocklist names the phrase; it doesn't claim it. And this file defines the list.
 const NOT_CLAIMS = new Set(["tet-core/src/ai_filter.rs", "tet-network/ui/scripts/try_privacy_guard.mjs"]);
-// Statements that *deny* a claim are fine ("doesn't hide your IP"): only the claim itself counts.
-const DENIAL = /(?:doesn't|does not|don't|never|not|ません|しない|ではありません|不會|不能|並不)\s*.{0,24}$/i;
+// Statements that *deny* a claim are fine ("doesn't hide your IP"): only the claim itself counts. The
+// denial must be in the same sentence, so "No signup. Your posts are untraceable." is still a claim.
+const DENIAL = /(?:doesn't|does not|don't|never|not|no|ません|しない|ではありません|不會|不能|並不)[^.!?。！？]{0,24}$/i;
 
 function overclaims(files) {
   const found = [];
@@ -85,11 +86,12 @@ await check("SECURITY: no file claims untraceable, IP-hidden or complete anonymi
 });
 
 await check("control: an overclaim is caught; a denial of one isn't", () => {
-  for (const claim of ["Your posts are untraceable.", "Your IP stays hidden.", "投稿は追跡できない。", "完全匿名で投稿できます。", "IPアドレスを隠します。", "你的 IP 會被隱藏。"]) {
+  for (const claim of ["Your posts are untraceable.", "Your IP stays hidden.", "投稿は追跡できない。", "完全匿名で投稿できます。", "IPアドレスを隠します。", "你的 IP 會被隱藏。", "No signup. Your posts are untraceable."]) {
     assert.equal(overclaims([["x.tsx", claim]]).length, 1, claim);
   }
   assert.equal(overclaims([["x.tsx", "It doesn't hide your IP address from the node."]]).length, 0);
   assert.equal(overclaims([["x.tsx", "IPを隠したいときはTorか自分のノードを使ってください。"]]).length, 0);
+  assert.equal(overclaims([["x.yml", '# no "untraceable" claim anywhere']]).length, 0);
 });
 
 // ── 2. Required statements, in every language ─────────────────────────────────────────────────
