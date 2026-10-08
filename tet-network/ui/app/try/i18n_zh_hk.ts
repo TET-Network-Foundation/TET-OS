@@ -904,4 +904,6 @@ export const ZH_HK: Record<string, string> = {
   "Counting…": "點算中…",
   "How many": "數量",
   "How long it's kept": "保存期限",
+  "Anyone: questions, ideas and feedback in GitHub Discussions.": "任何人：問題、想法及意見，歡迎到 GitHub Discussions。",
+  "Discussions": "討論區",
 };

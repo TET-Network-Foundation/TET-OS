@@ -904,4 +904,6 @@ export const JA: Record<string, string> = {
   "Counting…": "数えています…",
   "How many": "件数",
   "How long it's kept": "保存期間",
+  "Anyone: questions, ideas and feedback in GitHub Discussions.": "誰でも：質問・アイデア・感想は GitHub Discussions へ。",
+  "Discussions": "ディスカッション",
 };
