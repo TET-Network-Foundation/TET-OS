@@ -735,4 +735,6 @@ export const ZH_HK: Record<string, string> = {
   "Breadcrumb": "導覽路徑",
   "← back to top": "← 返回頁首",
   "Search public threads": "搜尋公開主題",
+  "last edit signed {when}": "最後一次編輯簽署於 {when}",
+  "A node can leave out newer edits and show an older version; compare the version with the site's owner.": "節點可以略去較新的編輯並顯示舊版本；請與網站擁有人核對版本。",
 };

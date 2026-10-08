@@ -51,6 +51,8 @@ function SiteView(props: { site: string }) {
           <>
             <span className="font-semibold text-[#1f5132]">{t("Signed site · checked in your tab")}</span> ·{" "}
             {t("{n} edits, every signature and link valid", { n: verdict.count })} · <span className="font-mono">{t("version")} {verdict.version.slice(0, 12)}</span> ·{" "}
+            {t("last edit signed {when}", { when: new Date(verdict.lastSignedAtMs).toLocaleString() })} ·{" "}
+            {t("A node can leave out newer edits and show an older version; compare the version with the site's owner.")}{" "}
             {t("Proves this site's key published every block, in this order. Not who holds the key.")}{" "}
             <a className="underline" href="/try">
               {t("What is TET?")}

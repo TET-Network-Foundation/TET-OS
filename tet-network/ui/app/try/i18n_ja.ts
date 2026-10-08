@@ -735,4 +735,6 @@ export const JA: Record<string, string> = {
   "Breadcrumb": "現在地",
   "← back to top": "← ページの先頭へ",
   "Search public threads": "公開スレッドを検索",
+  "last edit signed {when}": "最終編集の署名 {when}",
+  "A node can leave out newer edits and show an older version; compare the version with the site's owner.": "ノードは新しい編集を省いて古い版を見せることができます。バージョンをサイトの持ち主と照らし合わせてください。",
 };

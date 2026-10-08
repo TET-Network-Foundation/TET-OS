@@ -126,7 +126,12 @@ export async function appendEdit(baseUrl: string, words: string, op: unknown): P
   throw new Error("The site changed while saving. Try again.");
 }
 
-export type ChainVerdict = { ok: true; version: string; count: number } | { ok: false; at: number; reason: string };
+/**
+ * `lastSignedAtMs` is the newest edit's signed time. A node can serve a valid *prefix* of a chain
+ * (an older version) by leaving out newer edits, and signatures can't prove recency: the reader
+ * page shows this time and the version, and says so, so a reader can compare with the owner.
+ */
+export type ChainVerdict = { ok: true; version: string; count: number; lastSignedAtMs: number } | { ok: false; at: number; reason: string };
 
 /**
  * Check a chain in this tab: every edit is the site's own (signer = site), signed with both
@@ -157,5 +162,5 @@ export async function verifyChain(
     if (!(await mldsa44Verify(e.hybrid_sig.mldsa_pubkey_b64, e.hybrid_sig.mldsa_sig_b64, msg))) return fail("ML-DSA-44 signature doesn't verify");
     prev = editHash(e);
   }
-  return { ok: true, version: prev, count: edits.length };
+  return { ok: true, version: prev, count: edits.length, lastSignedAtMs: edits.length ? edits[edits.length - 1].created_at_ms : 0 };
 }
