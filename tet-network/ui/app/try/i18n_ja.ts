@@ -594,4 +594,13 @@ export const JA: Record<string, string> = {
   "To check a file against a record, put both into Verify.": "ファイルを記録と照らし合わせるには、両方を「検証」に入れてください。",
   "Publishing the record…": "記録を公開しています…",
   "Get a proof code": "証明コードを取得",
+  "continue:": "続き:",
+  "open your remembered key": "記憶した鍵を開く",
+  "key options": "鍵の設定",
+  "This node's newest blocks": "このノードの最新ブロック",
+  "node not answering: {why}": "ノードが応答しません: {why}",
+  "newest blocks on this node · blocks aren't signed by their producer yet; the signatures shown are each transaction's signer's (ed25519 · ML-DSA-44)": "このノードの最新ブロック · ブロックにはまだ生成者の署名がありません。表示している署名は各トランザクションの署名者のものです（ed25519 · ML-DSA-44）",
+  "no blocks yet": "まだブロックはありません",
+  "matches the hash on the line above": "上の行のハッシュと一致",
+  "this node": "このノード",
 };

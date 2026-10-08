@@ -315,6 +315,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::ledger::get_explorer_tx),
         )
         .route(
+            "/explorer/blocks/recent",
+            axum::routing::get(super::handlers::ledger::get_explorer_recent_blocks),
+        )
+        .route(
             "/vault/history",
             axum::routing::get(super::handlers::ledger::get_vault_history),
         )

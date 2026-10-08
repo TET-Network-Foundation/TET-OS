@@ -594,4 +594,13 @@ export const ZH_HK: Record<string, string> = {
   "To check a file against a record, put both into Verify.": "如要以記錄核對檔案，請把兩者都放進「驗證」。",
   "Publishing the record…": "正在發佈記錄…",
   "Get a proof code": "取得證明碼",
+  "continue:": "繼續：",
+  "open your remembered key": "開啟已記住的鑰匙",
+  "key options": "鑰匙選項",
+  "This node's newest blocks": "此節點的最新區塊",
+  "node not answering: {why}": "節點沒有回應：{why}",
+  "newest blocks on this node · blocks aren't signed by their producer yet; the signatures shown are each transaction's signer's (ed25519 · ML-DSA-44)": "此節點的最新區塊 · 區塊尚未由產生者簽署；顯示的簽名屬於各交易的簽署者（ed25519 · ML-DSA-44）",
+  "no blocks yet": "尚未有區塊",
+  "matches the hash on the line above": "與上一行的雜湊相符",
+  "this node": "此節點",
 };
