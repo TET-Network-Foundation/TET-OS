@@ -142,6 +142,8 @@ pub enum TmailStoreError {
     Full(usize),
     #[error("key registration verification failed: {0}")]
     KeyVerify(String),
+    #[error("this wallet is a poll: {0}")]
+    PollBallot(String),
 }
 
 pub struct TmailStore {
@@ -267,6 +269,17 @@ impl TmailStore {
     /// already present (idempotent duplicate). Callers MUST have run
     /// [`crate::tmail::envelope::verify_tmail_envelope_v1`] first.
     pub fn store_tmail(&self, env: &TmailEnvelopeV1) -> Result<bool, TmailStoreError> {
+        self.store_tmail_inner(env, true)
+    }
+
+    /// Tests only: store as `store_tmail` does but without the poll-ballot gate, to fill a poll's
+    /// inbox without real proofs.
+    #[cfg(test)]
+    pub fn store_tmail_ungated_for_tests(&self, env: &TmailEnvelopeV1) -> Result<bool, TmailStoreError> {
+        self.store_tmail_inner(env, false)
+    }
+
+    fn store_tmail_inner(&self, env: &TmailEnvelopeV1, poll_gate: bool) -> Result<bool, TmailStoreError> {
         let msg_id = env.msg_id.trim();
         if msg_id.is_empty() {
             return Err(TmailStoreError::EmptyMsgId);
@@ -278,6 +291,11 @@ impl TmailStore {
         // Idempotency: skip if we've already seen this msg_id (gossip + self-store both call here).
         if self.by_msg_id.contains_key(msg_id.as_bytes())? {
             return Ok(false);
+        }
+        // A poll's wallet stores only anonymous ballots this node verified (tmail/poll.rs), so junk
+        // can't crowd real ballots out. Gossip and REST both come through here.
+        if poll_gate && self.get_poll_root(&receiver).is_some() {
+            self.poll_ballot_gate(env).map_err(TmailStoreError::PollBallot)?;
         }
         // Capacity guard: reap expired first, then reject if still at the cap.
         let max = Self::max_entries();
@@ -311,7 +329,7 @@ impl TmailStore {
         if !is_wallet_id_64hex(&receiver) {
             return Ok(0);
         }
-        let keep = anon_retain_per_receiver();
+        let keep = self.anon_keep_for(&receiver);
         let mut rows: Vec<(u64, Vec<u8>, String, u64)> = Vec::new();
         for item in self.by_receiver.scan_prefix(receiver.as_bytes()) {
             let Ok((k, v)) = item else { continue };
@@ -441,7 +459,7 @@ impl TmailStore {
         }
         let now = now_ms();
         let keep = retain_per_conversation();
-        let anon_keep = anon_retain_per_receiver();
+        let anon_keep = self.anon_keep_for(&receiver);
         let mut anon_seen = 0usize;
         let mut per_conversation: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -779,6 +797,19 @@ impl TmailStore {
     /// same list was already registered; a different list for the same poll is refused.
     pub fn register_poll_root(&self, r: &crate::tmail::poll::TmailPollRootV1) -> Result<bool, String> {
         let key = r.poll_wallet_id.trim().to_ascii_lowercase();
+        if r.members.is_empty() {
+            if let Some(existing) = self.get_poll_root(&key) {
+                if existing.root_hex.is_none() && existing.poll.bucket_index == r.bucket_index {
+                    return Ok(false);
+                }
+                return Err("this poll already has a different member list; a poll's members can't be changed".into());
+            }
+            let stored = crate::tmail::poll::StoredPollRoot { poll: r.clone(), root_hex: None };
+            let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
+            self.poll_roots.insert(key.as_bytes(), bytes).map_err(|e| e.to_string())?;
+            let _ = self.poll_roots.flush();
+            return Ok(true);
+        }
         let mut leaves = Vec::with_capacity(r.members.len());
         for m in &r.members {
             let Some(reg) = self.get_anon_registration(m) else {
@@ -790,7 +821,7 @@ impl TmailStore {
                 .ok_or("a member's registered commitment is malformed")?;
             leaves.push(bytes);
         }
-        let root_hex = hex::encode(crate::tmail::anon::AnonMerkleTree::build(leaves).root());
+        let root_hex = Some(hex::encode(crate::tmail::anon::AnonMerkleTree::build(leaves).root()));
         if let Some(existing) = self.get_poll_root(&key) {
             if existing.root_hex == root_hex && existing.poll.bucket_index == r.bucket_index {
                 return Ok(false);
@@ -802,6 +833,31 @@ impl TmailStore {
         self.poll_roots.insert(key.as_bytes(), bytes).map_err(|e| e.to_string())?;
         let _ = self.poll_roots.flush();
         Ok(true)
+    }
+
+    /// A poll's wallet takes an envelope only if it's an anonymous ballot whose receipt is here and
+    /// verifies now. The verdict is recorded (and the nullifier claimed) on the way.
+    fn poll_ballot_gate(&self, env: &TmailEnvelopeV1) -> Result<(), String> {
+        let Some(anon) = env.anonymous.as_ref().filter(|_| env.flags.anonymous) else {
+            return Err("it takes only anonymous ballots".into());
+        };
+        let Some(receipt) = self.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex) else {
+            return Err("a ballot's proof receipt must be deposited first".into());
+        };
+        match crate::tmail::anon::verify_anonymous_proof(self, env, &receipt) {
+            v @ AnonVerdict::Verified { .. } => {
+                let _ = self.set_anon_verdict(env.msg_id.trim(), &v);
+                Ok(())
+            }
+            AnonVerdict::Failed { reason, .. } => Err(format!("ballot refused: {reason}")),
+            other => Err(format!("ballot not verified: {other:?}")),
+        }
+    }
+
+    /// How many anonymous messages to keep for `receiver`: a poll keeps all its (verified, so one
+    /// per member) ballots; everyone else the newest [`ANON_RETAIN_PER_RECEIVER`].
+    fn anon_keep_for(&self, receiver: &str) -> usize {
+        if self.get_poll_root(receiver).is_some() { usize::MAX } else { anon_retain_per_receiver() }
     }
 
     pub fn get_poll_root(&self, poll_wallet_id: &str) -> Option<crate::tmail::poll::StoredPollRoot> {

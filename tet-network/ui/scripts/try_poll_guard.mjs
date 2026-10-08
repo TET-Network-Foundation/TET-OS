@@ -13,6 +13,11 @@
 // 4. The tally counts only ballots the node verified, one option each; pending, failed, named or
 //    out-of-range ballots don't count. Control: a counter that counts pending ballots is caught.
 // 5. A malformed poll definition is not a poll.
+// 6. Every poll is registered with the node, open ones too (so its wallet takes only verified
+//    ballots and none can be crowded out). Control: registration only for members-only is caught.
+// 7. The poll box says how anonymous a vote really is: hidden only among the listed members, the
+//    maker chose the list, timing can give a vote away, the node sees IP addresses. Control: a
+//    box missing the maker line is caught.
 
 import { register } from "node:module";
 import { readFileSync } from "node:fs";
@@ -24,6 +29,7 @@ process.env.NEXT_PUBLIC_TET_TREASURY_ADDRESS ||= "fedcba0987654321fedcba09876543
 
 const poll = await import("../app/lib/poll.ts");
 const TS = readFileSync(new URL("../app/lib/poll.ts", import.meta.url), "utf8");
+const BOX = readFileSync(new URL("../app/try/PollBox.tsx", import.meta.url), "utf8");
 const RS = readFileSync(new URL("../../../tet-core/src/tmail/poll.rs", import.meta.url), "utf8");
 
 let failed = 0;
@@ -124,6 +130,31 @@ await check("malformed polls don't", () => {
   ]) assert.equal(poll.parsePoll(JSON.stringify(bad)), null, JSON.stringify(bad));
   assert.equal(poll.parsePoll("not json"), null);
 });
+
+// 6. every poll registered
+const registersAll = (src) => {
+  const f = src.slice(src.indexOf("export async function createPoll("), src.indexOf("async function registerPollRoot"));
+  const call = f.split("\n").find((l) => l.includes("registerPollRoot("));
+  assert.ok(call, "createPoll doesn't register the poll");
+  assert.match(call, /^  await registerPollRoot\(/, "registration isn't unconditional in createPoll");
+};
+await check("every poll is registered, open ones too", () => registersAll(TS));
+await mustThrow("registration only for members-only polls is caught", () =>
+  registersAll(TS.replace("  await registerPollRoot(baseUrl, ownerWords", "  if (members) await registerPollRoot(baseUrl, ownerWords")),
+);
+
+// 7. honest anonymity
+const LINES = [
+  "Your vote is hidden only among the {n} listed members.",
+  "The poll's maker chose the list: if they control most of those wallets, they can work out how the others voted.",
+  "the timing can give a vote away",
+  "The node sees your IP address.",
+];
+const honest = (src) => {
+  for (const l of LINES) assert.ok(src.includes(l), `the poll box lost: ${l}`);
+};
+await check("the poll box says how anonymous a vote is", () => honest(BOX));
+await mustThrow("a box missing the maker line is caught", () => honest(BOX.replace("The poll's maker chose the list: if they control most of those wallets, they can work out how the others voted.", "")));
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

@@ -4,14 +4,16 @@
 //
 //   TET_TRY_ORIGIN=http://127.0.0.1:3100 node --experimental-strip-types scripts/try_poll_e2e.mjs
 //
-//   1. Members M1 and M2, and a stranger S, join the anonymity set; S is not listed in the poll.
-//   2. A members-only poll naming an unregistered wallet is refused; one listing M1 and M2 is made,
-//      and the node's root is the one it built from its own registry.
+//   1. Members M1, M2 and M3, and a stranger S, join the anonymity set; S is not listed.
+//   2. A members-only poll naming an unregistered wallet is refused, and so is one listing only
+//      two; one listing M1, M2 and M3 is made, and the node holds the list.
 //   3. M1 and M2 vote (real proofs). Both count.
-//   4. M1 votes again: not counted (one vote per member).
-//   5. S proves against the whole anonymity set and sends a ballot to the poll: not counted (a
+//   4. M1 votes again: refused (one vote per member), nothing stored.
+//   5. S proves against the whole anonymity set and sends a ballot to the poll: refused (a
 //      members-only poll takes only its own root). S's ordinary vote() stops before proving.
-//   6. The tally is [1, 1] with 2 verified votes.
+//   6. Named mail to the poll's wallet is refused (it takes only verified ballots).
+//   7. The tally is [1, 1] with 2 verified votes and nothing unverified stored.
+//   8. An open poll: S, in the anonymity set, votes, and it counts.
 
 import { register } from "node:module";
 import assert from "node:assert/strict";
@@ -38,9 +40,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const t0 = Date.now();
 console.log(`node via ${ORIGIN}${BASE}; prover at ${PROVER}: ${await board.probeProver({ url: PROVER })}`);
 
-step("1. M1, M2 and a stranger S join the anonymity set");
+step("1. M1, M2, M3 and a stranger S join the anonymity set");
 const who = {};
-for (const name of ["M1", "M2", "S"]) {
+for (const name of ["M1", "M2", "M3", "S"]) {
   const words = generateDisposableWords();
   const id = await trySession.activateTryWallet(words);
   console.log(`  ${name} ${id.slice(0, 12)}… register: ${await tb.registerForAnon(BASE)}`);
@@ -56,14 +58,18 @@ await trySession.activateTryWallet(generateDisposableWords()); // the creator, n
 const stranger = generateDisposableWords();
 const unregistered = await trySession.activateTryWallet(stranger);
 await assert.rejects(
-  () => poll.createPoll(BASE, "stuffed?", ["yes", "no"], [who.M1.id, unregistered]),
+  () => poll.createPoll(BASE, "stuffed?", ["yes", "no"], [who.M1.id, who.M2.id, unregistered]),
   (e) => (console.log(`  with an unregistered wallet: refused: ${e.message}`), /not a registered member/.test(e.message)),
 );
-const def = await poll.createPoll(BASE, "Lunch on Friday?", ["yes", "no"], [who.M1.id, who.M2.id]);
+await assert.rejects(
+  () => poll.createPoll(BASE, "two?", ["yes", "no"], [who.M1.id, who.M2.id]),
+  (e) => (console.log(`  listing two: refused: ${e.message}`), /at least 3/.test(e.message)),
+);
+const def = await poll.createPoll(BASE, "Lunch on Friday?", ["yes", "no"], [who.M1.id, who.M2.id, who.M3.id]);
 console.log(`  poll ${poll.encodePoll(def).slice(0, 90)}…`);
 const opened = await tb.openBoard(BASE, def.invite);
 const reg = await poll.nodePollRoot(BASE, opened.boardWalletId);
-assert.deepEqual(reg.members, [who.M1.id, who.M2.id].sort());
+assert.deepEqual(reg.members, [who.M1.id, who.M2.id, who.M3.id].sort());
 console.log(`  node's root ${reg.rootHex.slice(0, 16)}… for ${reg.members.length} members, day ${reg.day}`);
 
 async function voteAs(name, choice) {
@@ -77,7 +83,7 @@ async function settledTally(want) {
   let t;
   for (let i = 0; i < 30; i++) {
     t = await poll.tally(BASE, def);
-    if (t.verified + t.unverified >= want && t.unverified === 0 ? true : t.verified + t.unverified >= want) break;
+    if (t.verified + t.unverified >= want) break;
     await sleep(2000);
   }
   console.log(`  tally ${JSON.stringify(t)}`);
@@ -92,22 +98,44 @@ assert.deepEqual(t.counts, [1, 1]);
 
 step("4. M1 votes again");
 const again = await voteAs("M1", 0);
-t = await settledTally(again.state === "sent" ? 3 : 2);
-assert.deepEqual(t.counts, [1, 1], "a second vote counted");
+assert.notEqual(again.state, "sent", "a second vote was accepted");
+assert.match(again.reason ?? "", /replay/);
 
 step("5. S, in the anonymity set but not listed");
 await trySession.activateTryWallet(who.S.words);
 const bypass = await tb.postAnonymousTo(BASE, PROVER, tb.boardRecipient(opened), JSON.stringify({ vote: 0 }), () => {});
 console.log(`  S proves against the whole set and sends: ${bypass.state}${bypass.state === "failed" ? ` (${bypass.reason})` : ""}`);
+assert.notEqual(bypass.state, "sent", "S's set-root ballot was accepted");
+assert.match(bypass.reason ?? "", /root not recognised/);
 const ordinary = await voteAs("S", 0);
 assert.notEqual(ordinary.state, "sent", "S's ordinary vote was sent");
 
-step("6. the tally");
-t = await settledTally(bypass.state === "sent" ? (again.state === "sent" ? 4 : 3) : 2);
+step("6. named mail to the poll's wallet");
+await trySession.activateTryWallet(who.S.words);
+await assert.rejects(
+  () => tb.postNamed(BASE, opened, "spam that would push ballots out"),
+  (e) => (console.log(`  refused: ${e.message.slice(0, 120)}`), /poll|403/.test(e.message)),
+);
+
+step("7. the tally");
+t = await settledTally(2);
 assert.deepEqual(t.counts, [1, 1]);
 assert.equal(t.verified, 2);
-const refused = (await tb.readBoard(BASE, opened, 50)).filter((p) => p.label.tone !== "ok").map((p) => p.label.detail);
-for (const r of refused) console.log(`  not counted: ${r}`);
-assert.ok(refused.some((r) => /replay/.test(r)), "M1's second vote wasn't refused as a replay");
-if (bypass.state === "sent") assert.ok(refused.some((r) => /root not recognised/.test(r)), "S's set-root ballot wasn't refused on the root");
+assert.equal(t.unverified, 0, "something unverified was stored on the poll's wallet");
+
+step("8. an open poll: anyone in the anonymity set");
+await trySession.activateTryWallet(generateDisposableWords());
+const open = await poll.createPoll(BASE, "Open question?", ["a", "b"], null);
+await trySession.activateTryWallet(who.S.words);
+const sv = await poll.vote(BASE, PROVER, open, 1, () => {});
+console.log(`  S votes b: ${sv.state}${sv.state === "failed" ? ` (${sv.reason})` : ""}`);
+assert.equal(sv.state, "sent");
+let ot;
+for (let i = 0; i < 15; i++) {
+  ot = await poll.tally(BASE, open);
+  if (ot.verified >= 1) break;
+  await sleep(2000);
+}
+console.log(`  tally ${JSON.stringify(ot)}`);
+assert.deepEqual(ot.counts, [0, 1]);
 console.log(`\nall passed in ${Math.round((Date.now() - t0) / 1000)} s`);

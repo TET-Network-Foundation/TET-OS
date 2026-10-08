@@ -75,6 +75,9 @@ pub async fn post_tmail_send(
             )
                 .into_response();
         }
+        Err(e @ crate::tmail::store::TmailStoreError::PollBallot(_)) => {
+            return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+        }
         Err(e) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response();
         }
@@ -142,10 +145,9 @@ pub async fn get_tmail_inbox(
     if state.operator_hide.is_wallet_hidden(&w) {
         return crate::rest::helpers::hidden_by_operator();
     }
-    let limit = q
-        .limit
-        .unwrap_or(INBOX_DEFAULT_LIMIT)
-        .clamp(1, INBOX_MAX_LIMIT);
+    // A poll's wallet holds only verified ballots, one per member; a tally reads them all at once.
+    let max = if state.tmail.get_poll_root(&w).is_some() { crate::tmail::poll::POLL_MAX_MEMBERS } else { INBOX_MAX_LIMIT };
+    let limit = q.limit.unwrap_or(INBOX_DEFAULT_LIMIT).clamp(1, max);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)

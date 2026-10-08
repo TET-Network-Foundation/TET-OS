@@ -15,10 +15,20 @@
 //! - **One day:** the poll is open on the UTC day in `bucket_index`. The nullifier is one per
 //!   (member, receiver, day), so with the poll closing at the end of its day, one nullifier is one
 //!   vote. Ballots for any other day are refused.
-//! - **Only its own members:** a wallet with a poll registered accepts anonymous mail only as that
-//!   poll's ballots, on its day (the node's anonymity-set roots don't count there, or anyone in the
-//!   set could vote); after the day, none. So a poll gets a fresh wallet (the page makes one), and
-//!   only the wallet's own key can register a poll on it.
+//! - **Only its own members:** a wallet with a members-only poll accepts proofs against that
+//!   poll's root only (the node's anonymity-set roots don't count there, or anyone in the set could
+//!   vote). An **open** poll (no list) is registered too, and accepts the anonymity-set roots.
+//! - **Closes at 00:00 UTC, really:** a ballot counts only if it's for the poll's day *and* checked
+//!   on that day; a ballot dated to the poll's day but sent after the close is refused.
+//! - **Only ballots:** a poll wallet stores nothing but anonymous ballots this node verified (named
+//!   mail and unverified proofs are refused before storing), and its ballots are exempt from the
+//!   per-receiver anonymous cap. Verified ballots are one per member, so they're bounded by the
+//!   list (or the anonymity set), and nobody can push real ballots out with junk.
+//! - **Anonymous among the listed members only,** and the list is public. A members-only poll lists
+//!   at least [`POLL_MIN_MEMBERS`]; the page says the maker chose the list, and that a maker who
+//!   controls most of the listed wallets can work out how the others voted.
+//! - A poll gets a fresh wallet (the page makes one); only the wallet's own key can register a poll
+//!   on it, and after its day the wallet accepts no anonymous mail.
 //! - **Node-local (v1):** roots are not gossiped yet; other nodes show those ballots as unverified.
 //! - Proofs still have to come from the pinned membership program (`anon::anon_program_accepted`).
 
@@ -29,6 +39,8 @@ use crate::tmail::envelope::TmailHybridSig;
 pub const TMAIL_POLL_ROOT_KIND: &str = "tmail_poll_root_v1";
 /// The most members a poll can list (the tree holds 2^20; a poll needs far fewer).
 pub const POLL_MAX_MEMBERS: usize = 1_000;
+/// The fewest a members-only poll can list: with one or two, a ballot all but names its voter.
+pub const POLL_MIN_MEMBERS: usize = 3;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TmailPollRootV1 {
@@ -36,7 +48,8 @@ pub struct TmailPollRootV1 {
     pub kind: String,
     /// The poll's wallet: the receiver of its ballots, and the signer of this root.
     pub poll_wallet_id: String,
-    /// The listed members' wallet ids, sorted ascending, no repeats.
+    /// The listed members' wallet ids, sorted ascending, no repeats; empty for an open poll
+    /// (anyone in this node's anonymity set).
     pub members: Vec<String>,
     /// The UTC day the poll is open (`tmail_bucket_index_v1`).
     pub bucket_index: u64,
@@ -52,7 +65,7 @@ pub enum TmailPollRootError {
     Malformed,
     #[error("the member list must be sorted ascending with no repeats")]
     Order,
-    #[error("a poll lists between 1 and {POLL_MAX_MEMBERS} members")]
+    #[error("a members-only poll lists between {POLL_MIN_MEMBERS} and {POLL_MAX_MEMBERS} members")]
     Members,
     #[error("the poll root must be signed by the poll's own wallet")]
     SignerMismatch,
@@ -90,7 +103,7 @@ pub fn verify_tmail_poll_root_v1(r: &TmailPollRootV1) -> Result<(), TmailPollRoo
         return Err(TmailPollRootError::Version);
     }
     let wallet = r.poll_wallet_id.trim().to_ascii_lowercase();
-    if r.members.is_empty() || r.members.len() > POLL_MAX_MEMBERS {
+    if !r.members.is_empty() && (r.members.len() < POLL_MIN_MEMBERS || r.members.len() > POLL_MAX_MEMBERS) {
         return Err(TmailPollRootError::Members);
     }
     if !is_64hex(&wallet) || !r.members.iter().all(|m| is_64hex(m) && *m == m.to_ascii_lowercase()) {
@@ -115,17 +128,23 @@ pub fn verify_tmail_poll_root_v1(r: &TmailPollRootV1) -> Result<(), TmailPollRoo
     Ok(())
 }
 
-/// A registered poll: the signed list, and the root **the node** computed from its own registry.
+/// A registered poll: the signed list, and the root **the node** computed from its own registry
+/// (`None` for an open poll).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredPollRoot {
     pub poll: TmailPollRootV1,
-    pub root_hex: String,
+    pub root_hex: Option<String>,
 }
 
-/// Does `root` (from a ballot's journal, for `bucket`) match the root registered for `receiver`?
-pub fn poll_accepts(registered: Option<&StoredPollRoot>, root: &[u8; 32], bucket: u64) -> bool {
-    match registered {
-        Some(p) => p.poll.bucket_index == bucket && p.root_hex.eq_ignore_ascii_case(&hex::encode(root)),
-        None => false,
+/// Is a ballot to this poll, proven against `root` for `bucket`, checked during `now_bucket`, one
+/// that counts? Only on the poll's day, checked on that day; against the poll's own root, or for an
+/// open poll against one of the node's anonymity-set roots (`set_root_ok`).
+pub fn poll_accepts(p: &StoredPollRoot, root: &[u8; 32], bucket: u64, now_bucket: u64, set_root_ok: impl FnOnce() -> bool) -> bool {
+    if bucket != p.poll.bucket_index || now_bucket != p.poll.bucket_index {
+        return false;
+    }
+    match &p.root_hex {
+        Some(r) => r.eq_ignore_ascii_case(&hex::encode(root)),
+        None => set_root_ok(),
     }
 }

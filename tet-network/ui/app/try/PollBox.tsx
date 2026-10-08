@@ -77,8 +77,14 @@ export function PollBox(props: { def: PollDef; now: number }) {
         {open ? t("Open until 00:00 UTC.") : t("Closed.")} {def.members ? t("Members-only: {n} listed members can vote.", { n: def.members }) : t("Anyone in this node's anonymity set can vote.")}{" "}
         {t("{n} verified votes.", { n: total })}
         {counts?.unverified ? ` ${t("{n} not verified (not counted).", { n: counts.unverified })}` : ""}
+        {counts?.capped ? ` ${t("Only the newest {n} ballots are counted.", { n: 1000 })}` : ""}
       </p>
-      <p className="text-[13px] text-[#5d646d]">{t("One vote per member: the proof lets the node refuse a second one without knowing who voted. The node still sees your IP address.")}</p>
+      <p className="text-[13px] text-[#5d646d]">
+        {def.members
+          ? t("Your vote is hidden only among the {n} listed members. The poll's maker chose the list: if they control most of those wallets, they can work out how the others voted.", { n: def.members })
+          : t("Your vote is hidden among this node's anonymity set.")}{" "}
+        {t("One vote per member. Anyone who can read this thread sees votes as they arrive, so when few people vote, the timing can give a vote away. The node sees your IP address.")}
+      </p>
       {open && prover !== "found" ? <p className="text-[13px] text-[#5d646d]">{t("Voting needs the native prover on this device.")}</p> : null}
       {state === "proving" ? (
         <Badge tone="pending">{t("proving…")}</Badge>
@@ -136,7 +142,7 @@ export function PollMaker(props: { post: (text: string) => Promise<void>; onDone
       </label>
       {membersOnly ? (
         <label className="block text-[14px]">
-          {t("Wallet ids, one per line. Each must have joined the anonymity set on this node.")}
+          {t("Wallet ids, one per line, at least 3. Each must have joined the anonymity set on this node.")}
           <textarea value={members} onChange={(e) => setMembers(e.target.value)} rows={4} className={cx(field, "font-mono text-[13px]")} />
         </label>
       ) : null}

@@ -379,10 +379,10 @@ pub fn anon_program_accepted(id: &[u32; 8]) -> bool {
 
 /// Is `root` an acceptable membership root for a proof to `receiver` in `bucket`?
 ///
-/// A members-only poll's wallet accepts **only** its own poll's root, on the poll's day (and that
-/// day within one of today); the node's anonymity-set roots don't count there, or anyone in the
-/// set could vote in a poll that doesn't list them. Every other receiver accepts the node's
-/// anonymity-set roots, as before.
+/// A poll's wallet follows the poll's rules (`tmail::poll::poll_accepts`): its day only, checked
+/// on that day; a members-only poll's own root only (the node's anonymity-set roots don't count
+/// there, or anyone in the set could vote). Every other receiver accepts the node's anonymity-set
+/// roots, as before.
 pub fn anon_root_accepted_for(
     store: &crate::tmail::store::TmailStore,
     receiver: &str,
@@ -391,7 +391,7 @@ pub fn anon_root_accepted_for(
     now_bucket: u64,
 ) -> bool {
     match store.get_poll_root(receiver) {
-        Some(p) => bucket.abs_diff(now_bucket) <= 1 && crate::tmail::poll::poll_accepts(Some(&p), root, bucket),
+        Some(p) => crate::tmail::poll::poll_accepts(&p, root, bucket, now_bucket, || store.accepts_anon_root(root, bucket)),
         None => store.accepts_anon_root(root, bucket),
     }
 }

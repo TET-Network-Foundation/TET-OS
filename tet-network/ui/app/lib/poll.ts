@@ -12,9 +12,12 @@
  *   from its own registry (tet-core tmail/poll.rs), so a poll can't list invented members. Voters
  *   take the list and root from the node, not from the thread post.
  * - **One vote per member:** a nullifier is one per (member, receiver, UTC day) and the node refuses
- *   a second ballot with the same nullifier; the poll closes at the end of the UTC day it opens.
- * - **The tally** counts only ballots the node verified. It's public to anyone who can read the
- *   thread. The node still sees voters' IP addresses; the proof unlinks the ballot from the key.
+ *   a second ballot with the same nullifier; the poll closes at 00:00 UTC on the day it opens, and
+ *   the node refuses ballots after that. Every poll (open or members-only) is registered, so its
+ *   wallet stores only verified ballots and none can be crowded out.
+ * - **The tally** counts only ballots the node verified. Anyone who can read the thread sees votes
+ *   as they arrive. A vote is hidden only among the listed members (or the anonymity set); the
+ *   node still sees voters' IP addresses.
  */
 import { sha256 } from "@noble/hashes/sha2";
 import { anonCommitment, fromHex, tmailBucketIndex, toHex } from "./anon_tree.mjs";
@@ -28,6 +31,10 @@ import { tetCoreUrl } from "./tet_core_http";
 
 export const POLL_KIND = "tet_poll_v1";
 export const POLL_MAX_OPTIONS = 6;
+/** tet-core's POLL_MIN_MEMBERS: with one or two listed, a ballot all but names its voter. */
+export const POLL_MIN_MEMBERS = 3;
+/** tet-core's POLL_MAX_MEMBERS, and the most ballots one tally reads. */
+export const POLL_MAX_BALLOTS = 1000;
 
 export type PollDef = {
   kind: typeof POLL_KIND;
@@ -93,7 +100,7 @@ export async function memberLeaves(baseUrl: string, members: string[]): Promise<
 /** A members-only poll as the node registered it: the signed list and the node's root. */
 export async function nodePollRoot(baseUrl: string, pollWallet: string): Promise<{ members: string[]; rootHex: string; day: number } | null> {
   const r = await fetchJson(baseUrl, `/tmail/poll/root/${pollWallet}`);
-  const p = r.json?.poll_root as { root_hex?: string; poll?: { members?: string[]; bucket_index?: number } } | undefined;
+  const p = r.json?.poll_root as { root_hex?: string | null; poll?: { members?: string[]; bucket_index?: number } } | undefined;
   if (r.status !== 200 || !p?.root_hex || !Array.isArray(p.poll?.members)) return null;
   return { members: p.poll.members, rootHex: p.root_hex, day: Number(p.poll.bucket_index) };
 }
@@ -107,20 +114,21 @@ export async function createPoll(baseUrl: string, question: string, options: str
   if (opts.length < 2 || opts.length > POLL_MAX_OPTIONS) throw new Error(`A poll has 2 to ${POLL_MAX_OPTIONS} options.`);
   const { board, ownerWords } = await createBoard(baseUrl, `Poll: ${question.slice(0, 60)}`);
   const day = tmailBucketIndex(Date.now());
-  let count: number | null = null;
+  let ids: string[] = [];
   if (members) {
-    const ids = [...new Set(members.map((m) => m.trim().toLowerCase()).filter(Boolean))].sort();
-    if (ids.length === 0) throw new Error("List at least one member, or make the poll open to everyone.");
+    ids = [...new Set(members.map((m) => m.trim().toLowerCase()).filter(Boolean))].sort();
+    if (ids.length < POLL_MIN_MEMBERS) throw new Error(`List at least ${POLL_MIN_MEMBERS} members, or make the poll open to everyone.`);
     const bad = ids.find((m) => !/^[0-9a-f]{64}$/.test(m));
     if (bad) throw new Error(`Not a wallet id: ${bad.slice(0, 16)}`);
-    await registerPollRoot(baseUrl, ownerWords, board.boardWalletId, ids, day);
-    count = ids.length;
   }
+  // Every poll is registered (an open one with no list), so its wallet takes only verified ballots.
+  await registerPollRoot(baseUrl, ownerWords, board.boardWalletId, ids, day);
+  const count = members ? ids.length : null;
   return { kind: POLL_KIND, invite: board.invite, question: question.trim(), options: opts, day, members: count };
 }
 
-/** Sign (with the poll wallet's words) and register a poll's member list: tet-core's pre-image. Returns the node's root. */
-async function registerPollRoot(baseUrl: string, pollWords: string, pollWallet: string, members: string[], day: number): Promise<string> {
+/** Sign (with the poll wallet's words) and register a poll (its member list, empty if open): tet-core's pre-image. */
+async function registerPollRoot(baseUrl: string, pollWords: string, pollWallet: string, members: string[], day: number): Promise<void> {
   await pqcInit();
   const ed = mnemonicToTetEd25519Keypair(pollWords);
   if (ed.walletIdHex.toLowerCase() !== pollWallet) throw new Error("internal: poll words don't match the poll wallet");
@@ -146,8 +154,7 @@ async function registerPollRoot(baseUrl: string, pollWords: string, pollWallet: 
     },
   };
   const r = await fetchJson(baseUrl, "/tmail/poll/root", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  if (r.status !== 202 || typeof r.json?.root_hex !== "string") throw new Error(String(r.json?.error ?? `the node refused the poll's member list (HTTP ${r.status})`));
-  return r.json.root_hex as string;
+  if (r.status !== 202) throw new Error(String(r.json?.error ?? `the node refused the poll (HTTP ${r.status})`));
 }
 
 /** Cast an anonymous ballot (through the native prover). */
@@ -164,12 +171,13 @@ export async function vote(baseUrl: string, proverUrl: string, def: PollDef, cho
   return postAnonymousTo(baseUrl, proverUrl, boardRecipient(poll), JSON.stringify({ vote: choice }), onState, memberTree);
 }
 
-export type Tally = { counts: number[]; verified: number; unverified: number };
+export type Tally = { counts: number[]; verified: number; unverified: number; capped?: boolean };
 
 /** Count the ballots: only those the node verified (one per nullifier, the node refuses repeats). */
 export async function tally(baseUrl: string, def: PollDef): Promise<Tally> {
   const poll = await openBoard(baseUrl, def.invite);
-  return countBallots(await readBoard(baseUrl, poll, 200), def.options.length);
+  const posts = await readBoard(baseUrl, poll, POLL_MAX_BALLOTS);
+  return { ...countBallots(posts, def.options.length), capped: posts.length >= POLL_MAX_BALLOTS };
 }
 
 type BallotPost = { state: string; text?: string; label: { kind: string; tone: string } };
