@@ -161,6 +161,20 @@ Hiding a wallet also hides everything it sent (its directory listing included) a
 posts and files to or from it. Copies other nodes already hold stay on those nodes. Reports go to
 abuse@stevenexus.org and are reviewed within 48 hours.
 
+## Before going public (checklist)
+
+1. **No test boards in the public directory.** List them, then hide each test one (this keeps the
+   chain and everyone's copies; it only stops this node serving them):
+   ```sh
+   # on any machine, in tet-network/ui
+   TET_TRY_ORIGIN=https://<this host> NEXT_PUBLIC_TET_DIRECTORY_INVITE=<directory invite> \
+     node --experimental-strip-types scripts/list_public_boards.mjs
+   # on the host, for each test board
+   deploy/operator-hide.sh hide wallet <board wallet> "test board before launch"
+   ```
+2. **The sample is marked** on this node and `TET_SAMPLE_CODE` is set (§11).
+3. **Every page in ja and en** looks right (the i18n guard checks the strings; look at the pages).
+
 ## 11. Proof codes (the public signature registry)
 
 Nothing to set up. Proof codes (Sign → **Get a proof code**, and the home search) live in the
