@@ -1420,6 +1420,11 @@ impl Ledger {
         let mut airdrop_count = self.meta_u64_or_zero(META_FAUCET_INITIAL_RECIPIENTS_COUNT)?;
 
         for env in txs {
+            // The signer must be the wallet the transaction acts for (`protocol::signer_acts_for_itself`).
+            // Preview and apply refuse the same blocks, so their state roots never diverge.
+            if !crate::protocol::signer_acts_for_itself(env) {
+                return Err(LedgerError::Invalid("signer must be the wallet the transaction acts for".into()));
+            }
             match &env.tx {
                 crate::protocol::TxV1::Transfer {
                     from_wallet,
@@ -1675,6 +1680,11 @@ impl Ledger {
         let mut workers_registry_dirty = false;
 
         for (env, tx_hash) in txs.iter().zip(tx_hashes.iter()) {
+            // The signer must be the wallet the transaction acts for (`protocol::signer_acts_for_itself`).
+            // Preview and apply refuse the same blocks, so their state roots never diverge.
+            if !crate::protocol::signer_acts_for_itself(env) {
+                return Err(LedgerError::Invalid("signer must be the wallet the transaction acts for".into()));
+            }
             match &env.tx {
                 crate::protocol::TxV1::Transfer {
                     from_wallet,
@@ -3571,6 +3581,12 @@ impl Ledger {
                 continue;
             };
             match serde_json::from_slice::<crate::protocol::SignedTxEnvelopeV1>(&v) {
+                // A row that no longer verifies (e.g. queued before the signer rule) can never be
+                // mined, and the miner treats an unverifiable tx as fatal: drop it here.
+                Ok(env) if crate::rest::helpers::verify_envelope_v1(&env).is_err() => {
+                    dropped += 1;
+                    let _ = tree.remove(k);
+                }
                 Ok(env) => out.push((hash, env)),
                 Err(_) => {
                     dropped += 1;
@@ -3579,7 +3595,7 @@ impl Ledger {
             }
         }
         if dropped > 0 {
-            println!("[mempool] dropped {dropped} undecodable persisted tx row(s) at startup");
+            println!("[mempool] dropped {dropped} undecodable or unverifiable persisted tx row(s) at startup");
         }
         out
     }

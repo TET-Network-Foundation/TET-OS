@@ -235,6 +235,11 @@ pub fn verify_envelope_v1(env: &SignedTxEnvelopeV1) -> Result<Vec<u8>, String> {
     )
     .map_err(|_| "invalid signature or missing chain_id/genesis_hash binding".to_string())?;
     let signed_tx_bytes = tx_bytes;
+    // A valid signature by the wrong wallet is not authorization: the signer must be the wallet the
+    // transaction acts for. Guarded by `a_tx_signed_by_another_wallet_is_refused_everywhere`.
+    if !crate::protocol::signer_acts_for_itself(env) {
+        return Err("signer must be the wallet the transaction acts for".into());
+    }
 
     let must_attest = mainnet_strict() || crate::attestation::attestation_required();
     if must_attest {
