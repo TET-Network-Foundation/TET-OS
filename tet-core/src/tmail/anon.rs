@@ -285,9 +285,13 @@ pub fn verify_anonymous_proof(
         _ => return fail("receipt proves a different claim than anonymous membership"),
     };
 
-    // 3. is the root one we accept?
+    // 3. is the root one we accept? The node's own anonymity-set roots, or, for a members-only
+    // poll, the root its own wallet registered for exactly this receiver and day (tmail/poll.rs).
     let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
-    if !store.accepts_anon_root(&journal.merkle_root, bucket) {
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+    );
+    if !anon_root_accepted_for(store, &env.receiver_wallet_id, &journal.merkle_root, bucket, now_bucket) {
         return fail("registry root not recognised, or outside the acceptance window");
     }
 
@@ -371,5 +375,24 @@ pub fn anon_program_accepted(id: &[u32; 8]) -> bool {
     std::env::var("TET_ANON_ACCEPTED_IMAGE_IDS")
         .map(|v| v.split(',').any(|x| x.trim().eq_ignore_ascii_case(&h)))
         .unwrap_or(false)
+}
+
+/// Is `root` an acceptable membership root for a proof to `receiver` in `bucket`?
+///
+/// A members-only poll's wallet accepts **only** its own poll's root, on the poll's day (and that
+/// day within one of today); the node's anonymity-set roots don't count there, or anyone in the
+/// set could vote in a poll that doesn't list them. Every other receiver accepts the node's
+/// anonymity-set roots, as before.
+pub fn anon_root_accepted_for(
+    store: &crate::tmail::store::TmailStore,
+    receiver: &str,
+    root: &[u8; 32],
+    bucket: u64,
+    now_bucket: u64,
+) -> bool {
+    match store.get_poll_root(receiver) {
+        Some(p) => bucket.abs_diff(now_bucket) <= 1 && crate::tmail::poll::poll_accepts(Some(&p), root, bucket),
+        None => store.accepts_anon_root(root, bucket),
+    }
 }
 

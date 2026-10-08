@@ -584,3 +584,44 @@ pub async fn get_tmail_anon_receipt(
             .into_response(),
     }
 }
+
+/// `POST /tmail/poll/root` — register a members-only poll's member root (tmail/poll.rs), signed by
+/// the poll's own wallet. Immutable once set; the poll must be open today (UTC).
+pub async fn post_tmail_poll_root(State(state): State<RestState>, Json(r): Json<crate::tmail::poll::TmailPollRootV1>) -> Response {
+    if let Err(e) = crate::tmail::poll::verify_tmail_poll_root_v1(&r) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+    }
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+    );
+    if r.bucket_index != now_bucket {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "a poll is registered on the UTC day it opens" }))).into_response();
+    }
+    match state.tmail.register_poll_root(&r) {
+        Ok(stored) => {
+            let root_hex = state.tmail.get_poll_root(&r.poll_wallet_id).map(|p| p.root_hex);
+            (StatusCode::ACCEPTED, Json(serde_json::json!({ "ok": true, "stored": stored, "root_hex": root_hex }))).into_response()
+        }
+        Err(e) => {
+            let status = if e.starts_with("this poll already") { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST };
+            (status, Json(serde_json::json!({ "ok": false, "error": e }))).into_response()
+        }
+    }
+}
+
+/// `GET /tmail/poll/root/:wallet_id` — a poll's registered member root, or 404.
+pub async fn get_tmail_poll_root(State(state): State<RestState>, Path(wallet_id): Path<String>) -> Response {
+    match state.tmail.get_poll_root(&wallet_id) {
+        Some(r) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "poll_root": r }))).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false }))).into_response(),
+    }
+}
+
+/// `GET /tmail/anon/commitment/:wallet_id` — a member's public commitment (registrations are
+/// public), so a poll's creator can build the poll's member tree.
+pub async fn get_tmail_anon_commitment(State(state): State<RestState>, Path(wallet_id): Path<String>) -> Response {
+    match state.tmail.get_anon_registration(&wallet_id) {
+        Some(r) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "wallet_id": r.wallet_id, "commitment_hex": r.commitment_hex }))).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false, "error": "not a registered member" }))).into_response(),
+    }
+}

@@ -13785,6 +13785,9 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
         // A membership proof's receipt: no message text, no sender.
         "/tmail/anon/receipt/:hash",
+        // A poll's eligible wallets (public by design: voters build the tree from it) and a member's
+        // commitment (already public: registrations carry wallet id and commitment over gossip).
+        "/tmail/poll/root/:wallet_id", "/tmail/anon/commitment/:wallet_id",
         "/files/upload-budget",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
@@ -13986,4 +13989,165 @@ fn s8_real_guest_image_id_is_pinned() {
         crate::tmail::anon::ANON_GUEST_IMAGE_IDS.iter().any(|x| x.eq_ignore_ascii_case(&id)),
         "the real guest's id {id} is not in ANON_GUEST_IMAGE_IDS"
     );
+}
+
+fn signed_poll_root_for_tests(words: &str, poll_wallet: &str, members: &[String], bucket: u64) -> crate::tmail::poll::TmailPollRootV1 {
+    use base64::Engine as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let mut r = crate::tmail::poll::TmailPollRootV1 {
+        v: 1,
+        kind: crate::tmail::poll::TMAIL_POLL_ROOT_KIND.to_string(),
+        poll_wallet_id: poll_wallet.to_string(),
+        members: members.to_vec(),
+        bucket_index: bucket,
+        registered_at_ms: tmail_now_ms_for_tests(),
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: hex::encode(ed_sk.verifying_key().to_bytes()),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: mldsa_pubkey_b64.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::poll::tmail_poll_root_auth_message_bytes(&r, &mldsa_pubkey_b64);
+    r.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    r.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    r
+}
+
+/// `n` registered anonymity-set members in `store`: (sorted wallet ids, their commitments in that order).
+fn registered_members_for_tests(store: &crate::tmail::store::TmailStore, n: u8) -> (Vec<String>, Vec<[u8; 32]>) {
+    let mut ms = Vec::new();
+    for i in 0..n {
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+        let secret = [0x40 + i; 32];
+        let reg = signed_anon_registration_for_tests(&words, &id, &secret, tmail_now_ms_for_tests());
+        store.register_anon(&reg).unwrap();
+        let c: [u8; 32] = hex::decode(&reg.commitment_hex).unwrap().try_into().unwrap();
+        ms.push((id, c));
+    }
+    ms.sort();
+    (ms.iter().map(|m| m.0.clone()).collect(), ms.iter().map(|m| m.1).collect())
+}
+
+/// **SECURITY REGRESSION GUARD: a poll's members are real members, fixed, for the poll's day only.**
+/// The node builds a poll's root from **its own registry**: the creator lists wallet ids and never
+/// supplies a root or a leaf, so a poll can't be stuffed with invented members (an earlier draft
+/// took the creator's root, and any wallet could have minted verified anonymous posts to itself).
+/// A list naming an unregistered wallet is refused. Only the poll's own wallet can register its list
+/// (another wallet's signature or a tampered list is refused); a registered list can't be swapped;
+/// a ballot's root is accepted for that poll only on the poll's UTC day.
+/// Negative controls (run by hand): the node takes a creator-supplied root again → FAILED; the
+/// signer check removed → FAILED; the immutability check removed → FAILED.
+#[test]
+fn a_poll_is_real_members_signed_by_the_poll_fixed_and_for_its_day_only() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let other = crate::wallet::generate_mnemonic_12().unwrap();
+    let (ow, oid) = (other.mnemonic_12.clone().unwrap(), other.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    let (members, leaves) = registered_members_for_tests(&store, 3);
+
+    // An unregistered wallet in the list: refused, nothing stored.
+    let mut with_stranger = members.clone();
+    with_stranger.push(oid.clone());
+    with_stranger.sort();
+    let stuffed = signed_poll_root_for_tests(&pw, &pid, &with_stranger, day);
+    crate::tmail::poll::verify_tmail_poll_root_v1(&stuffed).expect("well-formed and signed");
+    let e = store.register_poll_root(&stuffed).unwrap_err();
+    assert!(e.contains("not a registered member"), "{e}");
+    assert!(store.get_poll_root(&pid).is_none());
+
+    let good = signed_poll_root_for_tests(&pw, &pid, &members, day);
+    crate::tmail::poll::verify_tmail_poll_root_v1(&good).expect("signed by the poll's own wallet");
+    // Someone else's key signing a list for this poll; a tampered list; bad shapes.
+    assert_eq!(crate::tmail::poll::verify_tmail_poll_root_v1(&signed_poll_root_for_tests(&ow, &pid, &members, day)), Err(crate::tmail::poll::TmailPollRootError::SignerMismatch));
+    let mut tampered = good.clone();
+    tampered.members.pop();
+    assert!(matches!(crate::tmail::poll::verify_tmail_poll_root_v1(&tampered), Err(crate::tmail::poll::TmailPollRootError::Signature(_))));
+    assert_eq!(crate::tmail::poll::verify_tmail_poll_root_v1(&signed_poll_root_for_tests(&pw, &pid, &[], day)), Err(crate::tmail::poll::TmailPollRootError::Members));
+    let mut unsorted = members.clone();
+    unsorted.reverse();
+    assert_eq!(crate::tmail::poll::verify_tmail_poll_root_v1(&signed_poll_root_for_tests(&pw, &pid, &unsorted, day)), Err(crate::tmail::poll::TmailPollRootError::Order));
+
+    // The node's root is the members' registered commitments, in wallet-id order.
+    assert_eq!(store.register_poll_root(&good), Ok(true));
+    let expected = crate::tmail::anon::AnonMerkleTree::build(leaves.clone()).root();
+    assert_eq!(store.get_poll_root(&pid).unwrap().root_hex, hex::encode(expected));
+    assert_eq!(store.register_poll_root(&good), Ok(false), "the same list again is a no-op");
+    let swap = signed_poll_root_for_tests(&pw, &pid, &members[..2], day);
+    assert!(store.register_poll_root(&swap).is_err(), "a poll's member list was swapped");
+    assert_eq!(store.get_poll_root(&pid).unwrap().root_hex, hex::encode(expected));
+
+    // Accepted for that poll, that root, that day only.
+    let reg = store.get_poll_root(&pid);
+    assert!(crate::tmail::poll::poll_accepts(reg.as_ref(), &expected, day));
+    assert!(!crate::tmail::poll::poll_accepts(reg.as_ref(), &expected, day + 1), "another day");
+    assert!(!crate::tmail::poll::poll_accepts(reg.as_ref(), &[0xcd; 32], day), "another root");
+    assert!(!crate::tmail::poll::poll_accepts(store.get_poll_root(&oid).as_ref(), &expected, day), "another poll");
+}
+
+/// The register route refuses a poll for any day but today (a poll opens and is registered the same
+/// UTC day) and a list with an unregistered wallet, and serves the node's root back.
+#[tokio::test]
+async fn poll_root_route_takes_only_todays_poll_of_real_members() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (members, _) = registered_members_for_tests(&state.tmail, 2);
+    let router = crate::rest::routes::build_router(state);
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    let post = |r: crate::tmail::poll::TmailPollRootV1| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(axum::http::Request::builder().method("POST").uri("/tmail/poll/root").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&r).unwrap())).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(post(signed_poll_root_for_tests(&pw, &pid, &members, day - 1)).await, StatusCode::BAD_REQUEST);
+    assert_eq!(post(signed_poll_root_for_tests(&pw, &pid, &[pid.clone()], day)).await, StatusCode::BAD_REQUEST, "an unregistered wallet");
+    assert_eq!(post(signed_poll_root_for_tests(&pw, &pid, &members, day)).await, StatusCode::ACCEPTED);
+    let got = router.clone().oneshot(axum::http::Request::builder().uri(format!("/tmail/poll/root/{pid}")).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(got.status(), StatusCode::OK);
+}
+
+/// **SECURITY REGRESSION GUARD: a members-only poll takes only its own members.** A poll wallet
+/// accepts proofs against its own poll's root only; the node's anonymity-set root — which every
+/// member of the set can prove against — is refused there, while other receivers still accept it.
+/// Negative control (run by hand): the global root accepted for poll wallets too → FAILED.
+#[test]
+fn a_members_only_poll_refuses_the_anonymity_set_root() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let store = tmail_store_for_tests();
+    let (members, _) = registered_members_for_tests(&store, 3);
+    std::thread::sleep(std::time::Duration::from_millis(5)); // past the 1 ms epoch boundary
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    let global = store.anon_tree().root();
+    let (_rw, plain_receiver) = tmail_party_for_tests();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &plain_receiver, &global, day, day), "precondition: the set's root works for a plain receiver");
+
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &members[..2], day)).unwrap();
+    let poll_root: [u8; 32] = hex::decode(store.get_poll_root(&pid).unwrap().root_hex).unwrap().try_into().unwrap();
+    assert_ne!(poll_root, global);
+
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &pid, &poll_root, day, day), "the poll's own root");
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &pid, &global, day, day), "the anonymity set's root was accepted for a members-only poll");
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &pid, &poll_root, day + 1, day + 1), "another day");
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &plain_receiver, &global, day, day), "other receivers are unaffected");
 }

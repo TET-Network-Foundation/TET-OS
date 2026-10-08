@@ -30,6 +30,7 @@ const TREE_BY_MSG_ID: &str = "tmail_by_msg_id_v1";
 const TREE_KEYS: &str = "tmail_keys_v1";
 /// Anonymity-set registrations: key `wallet_id`, value = `TmailAnonRegistrationV1` JSON.
 const TREE_ANON_REGISTRY: &str = "tmail_anon_registry_v1";
+const TREE_POLL_ROOTS: &str = "tmail_poll_roots_v1";
 /// Verdict per anonymous message: key `msg_id`, value = [`AnonVerdict`] JSON.
 const TREE_ANON_VERDICT: &str = "tmail_anon_verdict_v1";
 /// Content-addressed receipt cache: key = SHA-256 of the receipt, value = receipt bytes.
@@ -151,6 +152,8 @@ pub struct TmailStore {
     anon_verdict: sled::Tree,
     anon_receipts: sled::Tree,
     anon_nullifiers: sled::Tree,
+    /// Members-only poll roots, by poll wallet (tmail/poll.rs). Immutable once set.
+    poll_roots: sled::Tree,
     /// Memoised `(epoch, root)`. Purely a cache — a miss is recomputed from the registry, so
     /// losing it (restart, eviction, flood) costs time and never acceptance.
     anon_roots: std::sync::Mutex<Vec<(u64, [u8; 32])>>,
@@ -249,6 +252,7 @@ impl TmailStore {
             anon_verdict: db.open_tree(TREE_ANON_VERDICT)?,
             anon_receipts: db.open_tree(TREE_ANON_RECEIPTS)?,
             anon_nullifiers: db.open_tree(TREE_ANON_NULLIFIERS)?,
+            poll_roots: db.open_tree(TREE_POLL_ROOTS)?,
             anon_roots: std::sync::Mutex::new(Vec::new()),
         })
     }
@@ -767,6 +771,42 @@ impl TmailStore {
         wallet_id: &str,
     ) -> Option<crate::tmail::anon::TmailAnonRegistrationV1> {
         self.get_stored_anon(wallet_id).map(|s| s.registration)
+    }
+
+    /// Register a members-only poll (signature already verified). The node computes the root from
+    /// **its own registry**: every listed wallet must be a registered member, and its registered
+    /// commitment is the leaf; the creator supplies no leaves. `Ok(true)` stored, `Ok(false)` the
+    /// same list was already registered; a different list for the same poll is refused.
+    pub fn register_poll_root(&self, r: &crate::tmail::poll::TmailPollRootV1) -> Result<bool, String> {
+        let key = r.poll_wallet_id.trim().to_ascii_lowercase();
+        let mut leaves = Vec::with_capacity(r.members.len());
+        for m in &r.members {
+            let Some(reg) = self.get_anon_registration(m) else {
+                return Err(format!("{}… is not a registered member", &m[..8.min(m.len())]));
+            };
+            let bytes: [u8; 32] = hex::decode(reg.commitment_hex.trim())
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .ok_or("a member's registered commitment is malformed")?;
+            leaves.push(bytes);
+        }
+        let root_hex = hex::encode(crate::tmail::anon::AnonMerkleTree::build(leaves).root());
+        if let Some(existing) = self.get_poll_root(&key) {
+            if existing.root_hex == root_hex && existing.poll.bucket_index == r.bucket_index {
+                return Ok(false);
+            }
+            return Err("this poll already has a different member list; a poll's members can't be changed".into());
+        }
+        let stored = crate::tmail::poll::StoredPollRoot { poll: r.clone(), root_hex };
+        let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
+        self.poll_roots.insert(key.as_bytes(), bytes).map_err(|e| e.to_string())?;
+        let _ = self.poll_roots.flush();
+        Ok(true)
+    }
+
+    pub fn get_poll_root(&self, poll_wallet_id: &str) -> Option<crate::tmail::poll::StoredPollRoot> {
+        let v = self.poll_roots.get(poll_wallet_id.trim().to_ascii_lowercase().as_bytes()).ok()??;
+        serde_json::from_slice(&v).ok()
     }
 
     pub fn anon_member_count(&self) -> usize {

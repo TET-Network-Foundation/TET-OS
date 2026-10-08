@@ -224,6 +224,9 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/tmail/send",
             axum::routing::post(super::handlers::tmail::post_tmail_send),
         )
+        .route("/tmail/poll/root", axum::routing::post(super::handlers::tmail::post_tmail_poll_root))
+        .route("/tmail/poll/root/:wallet_id", axum::routing::get(super::handlers::tmail::get_tmail_poll_root))
+        .route("/tmail/anon/commitment/:wallet_id", axum::routing::get(super::handlers::tmail::get_tmail_anon_commitment))
         .route(
             "/tmail/anon/register",
             axum::routing::post(super::handlers::tmail::post_tmail_anon_register),

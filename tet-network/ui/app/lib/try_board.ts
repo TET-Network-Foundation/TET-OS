@@ -164,7 +164,7 @@ export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100):
 /** Where a Tmail goes: a wallet id and its messaging public keys. */
 export type Recipient = { walletId: string; x25519Pub: Uint8Array; mlkemPub: Uint8Array };
 
-const boardRecipient = (board: OpenBoard): Recipient => ({
+export const boardRecipient = (board: OpenBoard): Recipient => ({
   walletId: board.boardWalletId,
   x25519Pub: board.keys.x25519_pub,
   mlkemPub: board.keys.mlkem_pub,
@@ -245,6 +245,7 @@ export async function postAnonymousTo(
   to: Recipient,
   text: string,
   onState: (s: AnonSendState) => void,
+  memberTree?: { leaves: Uint8Array[]; rootHex: string },
 ): Promise<AnonSendState> {
   const ks = getTmailKeySession();
   if (!ks) return { state: "failed", reason: "Create a disposable wallet first." };
@@ -275,7 +276,7 @@ export async function postAnonymousTo(
       now: () => Date.now(),
       onState,
     },
-    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text, memberTree },
   )) as AnonSendState;
 }
 
