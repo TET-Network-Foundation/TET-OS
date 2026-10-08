@@ -18,7 +18,8 @@ import AboutPanel from "./AboutPanel";
 import TermsPanel from "./TermsPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
-import LandingPanel from "./LandingPanel";
+import HomePanel from "./HomePanel";
+import HowPanel from "./HowPanel";
 import { getUi, setUi } from "../lib/device_store";
 import QrPanel from "./QrPanel";
 import BoardPanel from "./BoardPanel";
@@ -53,7 +54,7 @@ const TOOLS = [
   { id: "about", label: "About", group: "footer" },
   { id: "terms", label: "Terms", group: "footer" },
 ] as const;
-type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home";
+type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home" | "how";
 /** What the middle column shows: a board (by invite) or a tool. */
 type View = { board: string } | { tool: ToolId };
 const viewKey = (v: View) => ("board" in v ? `b:${v.board}` : `t:${v.tool}`);
@@ -357,7 +358,7 @@ function TryApp() {
   // First load: the board in the `#`, or the tool in `?tab=`.
   useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab");
-    const tool = TOOLS.find((t) => t.id === tab)?.id;
+    const tool: ToolId | undefined = TOOLS.find((t) => t.id === tab)?.id ?? (tab === "home" || tab === "how" ? tab : undefined);
     const h = window.location.hash;
     let live = true;
     if (h.startsWith("#board=")) {
@@ -392,6 +393,7 @@ function TryApp() {
     mail: t("DM"),
     new: t("start or open a board"),
     home: t("TET: start here"),
+    how: t("How it works"),
     about: t("About"),
     terms: t("Terms"),
     live: t("live"),
@@ -488,16 +490,22 @@ function TryApp() {
           {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
           {panel(
             { tool: "home" },
-            <LandingPanel
+            <HomePanel
+              go={(tool) => go({ tool: tool as ToolId })}
+              listings={listings}
+              listingsError={dirErr}
+              onBoard={addBoard}
+              lastBoard={lastBoard}
+              onOpenBoard={(invite) => void openBoard(BASE, invite).then(addBoard).catch((e: unknown) => setBoardErr(e instanceof Error ? e.message : String(e)))}
+            />,
+          )}
+          {panel(
+            { tool: "how" },
+            <HowPanel
               go={(tool, hint) => {
                 setSignHint(hint ?? "");
                 go({ tool: tool as ToolId });
               }}
-              lastBoard={lastBoard}
-              onOpenBoard={(invite) => void openBoard(BASE, invite).then(addBoard).catch((e: unknown) => setBoardErr(e instanceof Error ? e.message : String(e)))}
-              listings={listings}
-              listingsError={dirErr}
-              onBoard={addBoard}
             />,
           )}
           {panel({ tool: "qr" }, <QrPanel />)}

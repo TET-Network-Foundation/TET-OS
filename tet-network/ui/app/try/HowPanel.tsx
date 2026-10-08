@@ -1,22 +1,17 @@
 "use client";
 
 /**
- * Try TET's first screen (docs/LANDING_PLAN.md, #62): what TET is, what works today with what each
- * piece proves and doesn't, what's planned (labelled so), and a "continue" block for a returning
- * visitor. Plain text, thin rules, underlined links. Remembering anything on this device goes
- * through lib/device_store.ts only (its guard: scripts/try_storage_guard.mjs).
+ * "How it works": the landing's content behind the home view's link (docs/LANDING_PLAN.md, #62):
+ * how it works, what works today with what each piece proves and doesn't, uses, the planned
+ * corners (labelled so), why, how TET differs, roadmap, FAQ and about. Plain text, thin rules.
  *
  * Money: the TET token is not featured here. The FAQ has the one sanctioned line
  * (try_money_guard.mjs).
  */
-import { useEffect, useState, type ReactNode } from "react";
-import { forgetDevice, getUi, hasRememberedKey, openRememberedKey, rememberKey, setUi } from "../lib/device_store";
-import { Button, FOCUS, INK, Input, MONO, cx } from "./ui";
-import { useTryWallet } from "./wallet";
+import { type ReactNode } from "react";
+import { FOCUS, MONO, cx } from "./ui";
 import { useLang } from "./i18n";
 import { ABUSE_CONTACT } from "./TermsPanel";
-import LandingLive from "./LandingLive";
-import type { OpenBoard } from "../lib/try_board";
 
 export type LandingGo = (tool: string, hint?: string) => void;
 
@@ -36,185 +31,10 @@ function Row(props: { name: ReactNode; does: ReactNode; proves: ReactNode }) {
 
 const PLANNED = "text-[13px] font-semibold uppercase tracking-wide text-[#6b4e00]";
 
-export default function LandingPanel(props: {
-  go: LandingGo;
-  lastBoard: { name: string; invite: string | null } | null;
-  onOpenBoard: (invite: string) => void;
-  listings: { name: string; invite: string; boardWalletId: string }[] | null;
-  listingsError: string;
-  onBoard: (b: OpenBoard) => void;
-}) {
+export default function HowPanel(props: { go: LandingGo }) {
   const { t } = useLang();
-  const { wallet, ensureWallet, openWithWords } = useTryWallet();
-  const [returning, setReturning] = useState(false);
-  const [remembered, setRemembered] = useState(false);
-  const [pass, setPass] = useState("");
-  const [pass2, setPass2] = useState("");
-  const [msg, setMsg] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [showRemember, setShowRemember] = useState(false);
-
-  useEffect(() => {
-    // Read once after mount: storage may be missing, and the server render must match the first one.
-    const t0 = setTimeout(() => {
-      setReturning(getUi("tet.ui.v1.visited") === "1");
-      setRemembered(hasRememberedKey());
-      setUi("tet.ui.v1.visited", "1");
-    }, 0);
-    return () => clearTimeout(t0);
-  }, []);
-
-  const collapsed = returning || !!wallet;
-  const tryNow = async () => {
-    setBusy(true);
-    try {
-      await ensureWallet();
-      props.go("directory");
-    } finally {
-      setBusy(false);
-    }
-  };
-  const open = async () => {
-    setMsg("");
-    setBusy(true);
-    try {
-      await openWithWords(await openRememberedKey(pass));
-      setPass("");
-      setMsg(t("Your key is open in this tab."));
-    } catch (e: unknown) {
-      setMsg(e instanceof Error && e.message === "Wrong passphrase." ? t("Wrong passphrase. Try again, or open with your 12 words.") : t("This device can't open the remembered key. Open with your 12 words instead."));
-    } finally {
-      setBusy(false);
-    }
-  };
-  const remember = async () => {
-    setMsg("");
-    if (pass !== pass2) return setMsg(t("The two passphrases differ. Type them again."));
-    if (!wallet) return;
-    setBusy(true);
-    try {
-      await rememberKey(wallet.words, pass);
-      setPass("");
-      setPass2("");
-      setRemembered(true);
-      setShowRemember(false);
-      setMsg(t("Remembered on this device, encrypted with your passphrase."));
-    } catch (e: unknown) {
-      setMsg(e instanceof Error && /at least 8/.test(e.message) ? t("Use a passphrase of at least 8 characters.") : t("This browser won't let the page remember anything."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <section aria-label={t("TET")} className="max-w-[46rem] space-y-6 px-4 py-4 text-[16px] leading-relaxed md:px-5 md:text-[15px]">
-      {/* Hero: one sentence, three buttons, and no money buttons, ever. */}
-      <div className="space-y-4 pt-2">
-        <div className="flex items-center gap-2.5 text-[15px]">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/brand/tet-logo.svg" width={32} height={32} alt={t("TET logo")} className="tet-logo h-8 w-8 shrink-0" />
-          <span className="font-semibold">TET v0.2 · testnet</span>
-        </div>
-        <p className="max-w-[34rem] text-[26px] font-semibold leading-tight md:text-[30px]">{t("TET is a network where anyone can check who made something, and when.")}</p>
-        <div className="flex flex-wrap gap-2">
-          <Button onClick={() => void tryNow()} disabled={busy}>
-            {t("Try it now")}
-          </Button>
-          <Button kind="secondary" onClick={() => props.go("sign")}>
-            {t("Sign something")}
-          </Button>
-          <Button kind="secondary" onClick={() => document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-            {t("How it works")}
-          </Button>
-        </div>
-        {collapsed ? null : (
-          <p className="text-[14px] text-[#5d646d]">
-            {t("Makes a key in this tab. Close the tab without saving the 12 words and it's gone.")} {t("Testnet: the coins have no value and the chain can be reset.")}
-          </p>
-        )}
-      </div>
-
-      {/* Live: real data from the public boards and this node's /status/live. */}
-      <LandingLive listings={props.listings} listingsError={props.listingsError} onOpenBoard={props.onBoard} />
-
-      {collapsed ? (
-        <div>
-          <h2 className={H}>{t("Continue")}</h2>
-          <ul className="space-y-1">
-            {wallet ? (
-              <li>
-                {t("Your key in this tab:")}{" "}
-                <span translate="no" className={cx(MONO, INK.named)}>
-                  {wallet.walletId.slice(0, 8)}
-                </span>
-              </li>
-            ) : (
-              <li>{t("No key in this tab yet: your first post makes one.")}</li>
-            )}
-            {props.lastBoard ? (
-              <li>
-                {t("Last board:")}{" "}
-                {props.lastBoard.invite ? (
-                  <button type="button" className={LINK} onClick={() => props.onOpenBoard(props.lastBoard!.invite!)}>
-                    {props.lastBoard.name}
-                  </button>
-                ) : (
-                  <span>
-                    {props.lastBoard.name} <span className="text-[#5d646d]">{t("(invite-only: open it with its invite link)")}</span>
-                  </span>
-                )}
-              </li>
-            ) : null}
-            {!wallet && remembered ? (
-              <li className="space-y-1.5 pt-1">
-                <p>{t("A key is remembered on this device. Open it with your passphrase:")}</p>
-                <div className="flex max-w-sm gap-2">
-                  <Input ariaLabel={t("Passphrase")} type="password" value={pass} onChange={setPass} placeholder={t("Passphrase")} />
-                  <Button disabled={busy || !pass} onClick={() => void open()}>
-                    {t("Open")}
-                  </Button>
-                </div>
-              </li>
-            ) : null}
-            {wallet && !remembered ? (
-              <li className="pt-1">
-                {showRemember ? (
-                  <div className="max-w-sm space-y-1.5">
-                    <p className="text-[14px] text-[#5d646d]">{t("Anyone with this device and your passphrase can use your key. A script injected into this page could read it while it's open.")}</p>
-                    <Input ariaLabel={t("Passphrase")} type="password" value={pass} onChange={setPass} placeholder={t("Passphrase (8 characters or more)")} />
-                    <Input ariaLabel={t("Passphrase again")} type="password" value={pass2} onChange={setPass2} placeholder={t("Passphrase again")} />
-                    <Button disabled={busy || !pass} onClick={() => void remember()}>
-                      {t("Remember my key on this device")}
-                    </Button>
-                  </div>
-                ) : (
-                  <button type="button" className={LINK} onClick={() => setShowRemember(true)}>
-                    {t("Remember my key on this device (optional, encrypted)")}
-                  </button>
-                )}
-              </li>
-            ) : null}
-            {remembered || returning ? (
-              <li>
-                <button
-                  type="button"
-                  className={cx(LINK, "text-[14px] text-[#5d646d]")}
-                  onClick={() => {
-                    forgetDevice();
-                    setRemembered(false);
-                    setReturning(false);
-                    setMsg(t("This device forgot everything the page kept."));
-                  }}
-                >
-                  {t("Forget this device")}
-                </button>
-              </li>
-            ) : null}
-          </ul>
-          {msg ? <p className="mt-1 text-[14px]">{msg}</p> : null}
-        </div>
-      ) : null}
-
+    <section aria-label={t("How it works")} className="max-w-[46rem] space-y-6 px-4 py-4 text-[16px] leading-relaxed md:px-5 md:text-[15px]">
       {/* How it works (short; the full walk through one real block is queue item j). */}
       <div id="how-it-works" className="scroll-mt-16">
         <h2 className={H}>{t("How it works")}</h2>
