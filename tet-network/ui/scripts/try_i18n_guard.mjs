@@ -2,7 +2,7 @@
 // Japanese and a Hong Kong Chinese translation, with the same {placeholders}. Includes Tmail's
 // locked disclosures, which stay byte-identical in English and are translated by meaning.
 //
-//   node --experimental-strip-types scripts/try_i18n_guard.mjs [--missing]
+//   node --experimental-strip-types scripts/try_i18n_guard.mjs [--missing | --keys]
 //
 // 1. Every `t("…")` literal in app/try/*.tsx, and every locked disclosure the page passes to t(),
 //    has a non-empty entry in JA and ZH_HK.
@@ -67,6 +67,12 @@ const sources = Object.fromEntries(
     .map((n) => [n, readFileSync(new URL(n, dir), "utf8")]),
 );
 const keys = pageKeys(sources);
+
+// `--keys` prints every key the page uses (the dictionary generator keeps exactly these).
+if (process.argv.includes("--keys")) {
+  for (const k of keys) console.log(JSON.stringify(k));
+  process.exit(0);
+}
 
 if (process.argv.includes("--missing")) {
   for (const k of keys) if (!JA[k] || !ZH_HK[k]) console.log(JSON.stringify(k));

@@ -455,6 +455,13 @@ jobs:
         name: try page — a TET QR names only its exact .sig.json, all after the #
         run: node --experimental-strip-types scripts/try_qr_guard.mjs
 
+      # Money wording: testnet TET is a practice unit with no value that can't be bought, so nothing
+      # /try shows talks about prices, earning, investing or buying (en/ja/zh); the landing plan's
+      # FAQ carries the one sanctioned line. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — no price / earn / invest wording
+        run: node --experimental-strip-types scripts/try_money_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).
