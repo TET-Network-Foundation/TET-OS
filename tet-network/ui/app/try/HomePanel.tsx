@@ -25,6 +25,8 @@ export default function HomePanel(props: {
   onBoard: (b: OpenBoard) => void;
   lastBoard: { name: string; invite: string | null } | null;
   onOpenBoard: (invite: string) => void;
+  /** A search handed over from an inner page's top bar (a new `n` runs it again). */
+  search?: { q: string; n: number };
 }) {
   const { t } = useLang();
   const { ensureWallet } = useTryWallet();
@@ -42,6 +44,11 @@ export default function HomePanel(props: {
   }, [props.listings]);
 
   const hits = useMemo(() => (threads && asked ? searchThreads(threads, asked) : []), [threads, asked]);
+  useEffect(() => {
+    if (!props.search) return;
+    setQ(props.search.q);
+    setAsked(props.search.q);
+  }, [props.search]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     setAsked(q.trim());
@@ -55,6 +62,7 @@ export default function HomePanel(props: {
           <img src="/brand/tet-logo.svg" width={88} height={88} alt={t("TET logo")} className="tet-logo h-[88px] w-[88px]" />
           <p className="text-[22px] font-semibold">TET v0.2 · testnet</p>
         </div>
+        <p className="text-[16px] text-[#3d434a]">{t("A network where anyone can check who made something, and when.")}</p>
         <form onSubmit={submit} className="flex gap-2" role="search">
           <input
             aria-label={t("Search")}
@@ -68,6 +76,10 @@ export default function HomePanel(props: {
           </button>
         </form>
         <p className="text-[15px]">
+          <button type="button" className={LINK} onClick={() => props.go("what")}>
+            {t("What is TET")}
+          </button>
+          {" · "}
           <button type="button" className={LINK} onClick={() => void ensureWallet().then(() => props.go("directory"))}>
             {t("Try")}
           </button>
@@ -78,10 +90,6 @@ export default function HomePanel(props: {
           {" · "}
           <button type="button" className={LINK} onClick={() => props.go("verify")}>
             {t("Verify")}
-          </button>
-          {" · "}
-          <button type="button" className={LINK} onClick={() => props.go("how")}>
-            {t("How it works")}
           </button>
         </p>
         <ContinueBlock lastBoard={props.lastBoard} onOpenBoard={props.onOpenBoard} />
