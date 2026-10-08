@@ -842,4 +842,6 @@ export const ZH_HK: Record<string, string> = {
   "This record doesn't check out. Don't trust it.": "此記錄未能通過核對，請勿信任。",
   "Find marks by file or date": "以檔案或日期尋找標記",
   "Proof code, or search threads": "證明碼，或搜尋討論串",
+  "First marked as genuine": "最先標記為正本",
+  "Also marked later, by another ID": "其後另一個 ID 亦有標記",
 };

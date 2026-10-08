@@ -185,6 +185,24 @@ pub struct SigQuery {
 
 impl SigStore {
     pub fn open(db: &sled::Db) -> Result<Self, sled::Error> {
+        let store = Self::open_trees(db)?;
+        // The file index moved to a time-ordered key (v2). Rebuild it from the records if an older
+        // index exists, so no record is left out of file searches; then drop the old index.
+        if db.tree_names().iter().any(|n| n.as_ref() == b"sigs_by_file_v1") {
+            for (_, v) in store.records.iter().filter_map(|r| r.ok()) {
+                if let Ok(r) = serde_json::from_slice::<StoredRecord>(&v) {
+                    let mut fk = r.file_sha256.as_bytes().to_vec();
+                    fk.extend_from_slice(&r.published_at_ms.to_be_bytes());
+                    fk.extend_from_slice(r.record_sha256.as_bytes());
+                    store.by_file.insert(fk, &[])?;
+                }
+            }
+            db.drop_tree("sigs_by_file_v1")?;
+        }
+        Ok(store)
+    }
+
+    fn open_trees(db: &sled::Db) -> Result<Self, sled::Error> {
         Ok(Self {
             records: db.open_tree(TREE_RECORDS)?,
             by_code: db.open_tree(TREE_BY_CODE)?,

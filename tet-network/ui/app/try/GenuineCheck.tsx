@@ -119,7 +119,9 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
       {hits.map((h, i) => (
         <article key={i} className={cx("rounded-md border p-3 text-[15px]", h.verified ? "border-[#c9ced4]" : "border-[#8a1f1f]")}>
           {h.verified ? (
-            <p className="text-[17px] font-semibold text-[#1f5132]">✓ {props.byFile ? t("Your file was marked as genuine") : t("Marked as genuine")}</p>
+            <p className="text-[17px] font-semibold text-[#1f5132]">
+              ✓ {h.match === "file" ? (hits.findIndex((x) => x.match === "file" && x.verified) === i ? t("First marked as genuine") : t("Also marked later, by another ID")) : t("Marked as genuine")}
+            </p>
           ) : (
             <p className="text-[17px] font-semibold text-[#8a1f1f]">✗ {t("This record doesn't check out. Don't trust it.")}</p>
           )}

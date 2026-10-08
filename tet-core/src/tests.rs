@@ -14684,3 +14684,28 @@ fn later_markings_of_a_file_cannot_hide_the_first() {
     assert_eq!(found.len(), crate::sigs::SEARCH_MAX);
     assert_eq!(found[0].record_sha256, hex::encode(sha2::Sha256::digest(&first)), "the first marking was pushed out or not listed first");
 }
+
+/// **The registry's file index is rebuilt when its format changes,** so records indexed the old way
+/// still show up in file searches (and the old index is dropped).
+/// Negative control (run by hand): no rebuild on open → FAILED.
+#[test]
+fn the_registry_rebuilds_its_file_index_from_an_older_format() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    let store = crate::sigs::SigStore::open(&db).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let rec = hash_record_for_tests(&w, b"an older record", crate::sigs::HASH_PAYLOAD_TYPE);
+    store.publish(&rec, &consent_for_tests(&w, &rec), 1_000).unwrap();
+    // Simulate a store written before v2: empty the v2 index and leave a v1 tree behind.
+    db.open_tree("sigs_by_file_v2").unwrap().clear().unwrap();
+    db.open_tree("sigs_by_file_v1").unwrap().insert(b"legacy", &[]).unwrap();
+    let file = hex::encode(sha2::Sha256::digest(b"an older record"));
+    let q = crate::sigs::SigQuery { file_sha256: Some(file), ..Default::default() };
+    assert!(store.search(&q).is_empty(), "precondition: the old record is missing from the index");
+    let reopened = crate::sigs::SigStore::open(&db).unwrap();
+    assert_eq!(reopened.search(&q).len(), 1, "an older record is missing from file searches");
+    assert!(!db.tree_names().iter().any(|n| n.as_ref() == b"sigs_by_file_v1"), "the old index wasn't dropped");
+}

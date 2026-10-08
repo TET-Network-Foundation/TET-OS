@@ -842,4 +842,6 @@ export const JA: Record<string, string> = {
   "This record doesn't check out. Don't trust it.": "この記録は確認できません。信用しないでください。",
   "Find marks by file or date": "ファイルや日付で記録を探す",
   "Proof code, or search threads": "証明コード、またはスレッド検索",
+  "First marked as genuine": "最初に本物として記録されたもの",
+  "Also marked later, by another ID": "後から別の ID でも記録されたもの",
 };
