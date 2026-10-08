@@ -21,7 +21,7 @@ import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeA
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { tmailBucketIndex } from "../lib/anon_tree.mjs";
-import { announceBoard, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
+import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
 import { useLang, type T } from "./i18n";
@@ -470,9 +470,11 @@ export default function BoardPanel(props: {
                 ) : null}
               </div>
             ) : null}
-            <Button className="mb-2" onClick={() => show("new")}>
-              {t("New thread")}
-            </Button>
+            {feedErr === HIDDEN_BOARD ? null : (
+              <Button className="mb-2" onClick={() => show("new")}>
+                {t("New thread")}
+              </Button>
+            )}
             <ol aria-label={t("Threads")} className="border-t border-[#eceef1]">
               {threads.map((th, i) => (
                 <li key={th.threadId || "none"} className="border-b border-[#eceef1]">
@@ -493,7 +495,7 @@ export default function BoardPanel(props: {
                 {t("Posts this invite can't read: {n}", { n: unreadable })}
               </p>
             ) : null}
-            {feedErr ? <p className={cx("py-2 text-[15px]", INK.bad)}>{feedErr}</p> : null}
+            {feedErr ? <p className={cx("py-2 text-[15px]", INK.bad)}>{feedErr === HIDDEN_BOARD ? t("This node no longer serves this board: its operator hid it. Hiding is local to this node; see Terms.") : feedErr}</p> : null}
           </div>
         </div>
       </section>

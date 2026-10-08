@@ -78,6 +78,8 @@ pub struct RestState {
     pub log_sse_connections: Arc<AtomicUsize>,
     /// The demo node's file-fee sponsor (`None` everywhere else). See [`crate::demo_sponsor`].
     pub demo_sponsor: Option<Arc<crate::demo_sponsor::DemoSponsor>>,
+    /// What the operator has stopped serving on public routes (`operator_hide.rs`). Node-local.
+    pub operator_hide: crate::operator_hide::OperatorHide,
 }
 
 #[derive(Debug, Clone)]

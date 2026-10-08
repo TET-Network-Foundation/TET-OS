@@ -1,6 +1,8 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+import { isOperatorPath } from "../../lib/proxy_paths";
+
 type RouteContext = {
   params: Promise<{ path?: string[] }> | { path?: string[] };
 };
@@ -41,6 +43,9 @@ function proxyHeaders(req: Request): Headers {
 
 async function proxyTetCore(req: Request, ctx: RouteContext): Promise<Response> {
   const params = await ctx.params;
+  if (isOperatorPath(params.path)) {
+    return new Response("not found", { status: 404 });
+  }
   const path = (params.path ?? []).map((part) => encodeURIComponent(part)).join("/");
   const sourceUrl = new URL(req.url);
   const suffix = `/${path}${sourceUrl.search}`;

@@ -4,6 +4,7 @@ pub mod ai_local;
 pub mod e2ee;
 pub mod executor;
 pub mod files;
+pub mod operator_hide;
 pub mod fees;
 pub mod fips204_vectors;
 pub mod genesis;

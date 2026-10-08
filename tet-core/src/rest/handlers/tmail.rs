@@ -56,6 +56,12 @@ pub async fn post_tmail_send(
     if let Err(e) = verify_tmail_envelope_v1(&env) {
         return (envelope_error_status(&e), format!("{e}")).into_response();
     }
+    // Nothing new to or from a wallet the operator hid: it would be stored and never served.
+    if state.operator_hide.is_wallet_hidden(&env.receiver_wallet_id)
+        || (!env.flags.anonymous && state.operator_hide.is_wallet_hidden(&env.sender_wallet_id))
+    {
+        return crate::rest::helpers::hidden_by_operator();
+    }
     match state.tmail.store_tmail(&env) {
         Ok(true) => {}
         Ok(false) => {
@@ -132,6 +138,10 @@ pub async fn get_tmail_inbox(
     if !is_wallet_id_64hex(&w) {
         return (StatusCode::BAD_REQUEST, "wallet must be 64 hex chars").into_response();
     }
+    // Hidden by the operator (`operator_hide.rs`): not served on this node's public routes.
+    if state.operator_hide.is_wallet_hidden(&w) {
+        return crate::rest::helpers::hidden_by_operator();
+    }
     let limit = q
         .limit
         .unwrap_or(INBOX_DEFAULT_LIMIT)
@@ -144,6 +154,11 @@ pub async fn get_tmail_inbox(
         .tmail
         .get_inbox(&w, limit)
         .iter()
+        // A hidden post, or any post by a hidden wallet (its board's directory listing included).
+        .filter(|env| {
+            !state.operator_hide.is_msg_hidden(env.msg_id.trim())
+                && (env.flags.anonymous || !state.operator_hide.is_wallet_hidden(&env.sender_wallet_id))
+        })
         .map(|env| {
             let verdict = if env.flags.anonymous {
                 state.tmail.get_anon_verdict(env.msg_id.trim())

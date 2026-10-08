@@ -52,6 +52,8 @@ pub struct FileStore {
     /// total cap, must not change between the check and the write (two uploads racing for one id
     /// would otherwise both pass, and the second would overwrite the first).
     write_lock: std::sync::Mutex<()>,
+    /// The operator's hide list (same sled tree the REST routes read): peer fetches honour it too.
+    pub hidden: crate::operator_hide::OperatorHide,
 }
 
 fn now_ms() -> u64 {
@@ -113,6 +115,7 @@ impl FileStore {
             inbox: db.open_tree(TREE_INBOX)?,
             sizes: db.open_tree(TREE_SIZES)?,
             write_lock: std::sync::Mutex::new(()),
+            hidden: crate::operator_hide::OperatorHide::open(db)?,
         };
         // Blobs stored before the size index existed are measured once, here.
         if store.sizes.is_empty() && !store.blob.is_empty() {

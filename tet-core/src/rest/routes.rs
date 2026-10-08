@@ -428,6 +428,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/admin/gossip",
             axum::routing::post(super::handlers::admin::post_admin_gossip),
         )
+        // Operator hide list (operator_hide.rs): loopback + admin key, never on the public allow-list.
+        .route("/operator/hide", axum::routing::post(super::handlers::operator::post_operator_hide))
+        .route("/operator/unhide", axum::routing::post(super::handlers::operator::post_operator_unhide))
+        .route("/operator/hidden", axum::routing::get(super::handlers::operator::get_operator_hidden))
         .route(
             "/phase4/tee/status",
             axum::routing::get(super::handlers::phase4::get_phase4_tee_status),

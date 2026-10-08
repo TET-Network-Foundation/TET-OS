@@ -319,3 +319,21 @@ impl FileFetchResponse {
         }
     }
 }
+
+/// What this node answers a peer's `/tet/v1/files/fetch` request with: the blob, unless the operator
+/// hid the file or a party to it (`operator_hide.rs`), or it isn't here.
+pub fn serve_peer_fetch(store: &storage::FileStore, file_id: uuid::Uuid) -> FileFetchResponse {
+    let id = file_id.to_string();
+    let hidden_party = store
+        .get_meta(&id)
+        .map(|m| store.hidden.is_wallet_hidden(&m.sender_wallet_id) || store.hidden.is_wallet_hidden(&m.receiver_wallet_id))
+        .unwrap_or(false);
+    if store.hidden.is_file_hidden(&id) || hidden_party {
+        return FileFetchResponse::not_found(file_id);
+    }
+    match store.get_blob(&id) {
+        Some(blob) => FileFetchResponse::from_blob(file_id, &blob),
+        None => FileFetchResponse::not_found(file_id),
+    }
+}
+

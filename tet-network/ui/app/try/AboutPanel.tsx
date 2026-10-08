@@ -3,6 +3,7 @@
 /** About: what TET is, who runs it, how to reach them. Plain text, no claims beyond what is built. */
 import { MONO, PanelHead, cx } from "./ui";
 import { useLang } from "./i18n";
+import { ABUSE_CONTACT } from "./TermsPanel";
 
 const REPO = "https://github.com/TET-Network-Foundation/TET-OS";
 
@@ -39,6 +40,13 @@ export default function AboutPanel() {
             </a>
           </p>
           <p className="mt-1 text-[15px] text-[#3d434a]">{t("To report a security problem, follow SECURITY.md rather than posting it on a board.")}</p>
+          <p className="mt-3">
+            {t("To report content:")}{" "}
+            <a className={cx(MONO, "text-[15px] underline")} href={`mailto:${ABUSE_CONTACT}`}>
+              {ABUSE_CONTACT}
+            </a>
+          </p>
+          <p className="mt-1 text-[15px] text-[#3d434a]">{t("Reports are reviewed within 48 hours.")}</p>
         </div>
         <div>
           <h3 className="mb-1 text-[15px] font-semibold">{t("Links")}</h3>
