@@ -443,6 +443,12 @@ jobs:
         name: try page — a page signature verifies and a stamp anchors only its own .sig.json
         run: node --experimental-strip-types scripts/try_sign_guard.mjs
 
+      # TET QR: nothing about the document before the `#`; only a well-formed link pre-fills Verify;
+      # the QR names only the exact .sig.json bytes. Control.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a TET QR names only its exact .sig.json, all after the #
+        run: node --experimental-strip-types scripts/try_qr_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).

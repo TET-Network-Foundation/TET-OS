@@ -34,3 +34,23 @@ button,
 .try-root * {
   cursor: revert;
 }
+
+/* TET QR: printing shows only the label (the QR and its caption). */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .tet-print,
+  .tet-print * {
+    visibility: visible;
+  }
+  .tet-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    border: 0;
+    width: 8cm;
+    max-width: none;
+  }
+}
+

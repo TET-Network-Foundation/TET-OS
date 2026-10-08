@@ -17,6 +17,7 @@ import DirectoryPanel from "./DirectoryPanel";
 import AboutPanel from "./AboutPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
+import QrPanel from "./QrPanel";
 import BoardPanel from "./BoardPanel";
 import FilesTryPanel from "./FilesTryPanel";
 import MailPanel from "./MailPanel";
@@ -42,6 +43,7 @@ const TOOLS = [
   { id: "questions", label: "Questions for humans", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
   { id: "sign", label: "sign", group: "tools" },
+  { id: "qr", label: "qr", group: "tools" },
   { id: "files", label: "files", group: "tools" },
   { id: "mail", label: "DM", group: "tools" },
   { id: "live", label: "live", group: "tools" },
@@ -187,6 +189,7 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
       <ul>
         {item({ tool: "verify" }, "/", t("verify"))}
         {item({ tool: "sign" }, "/", t("sign"))}
+        {item({ tool: "qr" }, "/", t("qr"))}
         {item({ tool: "files" }, "/", t("files"))}
         {item({ tool: "mail" }, "/", t("DM"))}
         {item({ tool: "live" }, "/", t("live"))}
@@ -352,6 +355,7 @@ function TryApp() {
     questions: t("Questions for humans"),
     verify: t("verify"),
     sign: t("sign"),
+    qr: t("qr"),
     files: t("files"),
     mail: t("DM"),
     new: t("start or open a board"),
@@ -442,6 +446,7 @@ function TryApp() {
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "sign" }, <SignPanel />)}
+          {panel({ tool: "qr" }, <QrPanel />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           {panel({ tool: "about" }, <AboutPanel />)}
