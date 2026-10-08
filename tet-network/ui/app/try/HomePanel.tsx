@@ -130,6 +130,10 @@ export default function HomePanel(props: {
             {t("Mark as genuine")}
           </button>
           {" · "}
+          <button type="button" className={LINK} onClick={() => props.go("seal")}>
+            {t("Sealed prediction")}
+          </button>
+          {" · "}
           <button type="button" className={LINK} onClick={() => props.go("what")}>
             {t("What is TET")}
           </button>
