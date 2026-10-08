@@ -208,20 +208,20 @@ await check("control: a name cleaner that keeps bidi overrides is caught", () =>
 
 // ── Names can't pose as an ID or a label, and never ride on an anonymous post ──────────────────
 function namesCantSpoof(clean) {
-  for (const bad of ["01b\u0430b\u0430b8", "\u0410n\u043enym\u043eus", "名 無しさん", "名・無しさん", "N o n a m e", "id 01ba", "01babab8", "ID:01ba bab8", "ab12 cd34", "Anonymous", "名無しさん", "匿名", "記名", "anonymous · verified", "ＩＤ：ａｂ１２ｃｄ", "Mo\u200bnar\u200b ab\u200b12cd"]) {
+  for (const bad of ["Anon\u{E0100}ymous", "01ba\u{E0100}bab8", "Anon\u{E0041}ymous", "An\u0585nymous", "\u13AAnonymous", "\u00c1nonymous", "Ano\u0301nymous", "01\u044c\u0430\u044c\u0430\u044c8", "0\u0251b\u0251b\u0251b8", "Anon\u180bymous", "01babab\u20338", "01b\u0430b\u0430b8", "\u0410n\u043enym\u043eus", "名 無しさん", "名・無しさん", "N o n a m e", "id 01ba", "01babab8", "ID:01ba bab8", "ab12 cd34", "Anonymous", "名無しさん", "匿名", "記名", "anonymous · verified", "ＩＤ：ａｂ１２ｃｄ", "Mo\u200bnar\u200b ab\u200b12cd"]) {
     assert.equal(clean(bad), "", `"${bad}" passes for an ID or a label`);
   }
   assert.equal(clean("Mo\u200bnar"), "Monar", "zero-width characters are removed");
   assert.equal(clean("モナー"), "モナー");
   assert.equal(clean("Sakura 2"), "Sakura 2");
-  for (const ok of ["Ida", "Иван", "Ελένη", "陈小明", "김철수", "Café Zoë", "José"]) assert.equal(clean(ok), ok, `an ordinary name "${ok}" is refused`);
+  for (const ok of ["Ida", "Иван", "Ελένη", "陈小明", "김철수", "Café Zoë", "José", "モナーA", "ひろゆきX", "Александр"]) assert.equal(clean(ok), ok, `an ordinary name "${ok}" is refused`);
 }
 await check("a name can't pose as an ID or a status label", () => namesCantSpoof(t.cleanName));
 
 // Every name the parser shows is exactly what the cleaner makes, whether the post came from the
 // encoder or was written by hand: no input is read one way by one and another way by the other.
 function noNameDifferential(clean, parse, encode, n) {
-  const pool = ["a", "Z", "0", "9", "b", " ", "\r", "\u2028", "\u2029", "\u0085", "\u00a0", "\u3000", "\u200b", "\u202e", "\ufeff", "ﾃ", "Ⅸ", "ﬁ", "①", "e\u0301", "名", "無", "し", "：", "title: ", "name: ", "\t", "𝟎", "\u0430", "\u03bf"];
+  const pool = ["\u{E0100}", "\u{E0041}", "\u180b", "\u0301", "\u0585", "\u13aa", "a", "Z", "0", "9", "b", " ", "\r", "\u2028", "\u2029", "\u0085", "\u00a0", "\u3000", "\u200b", "\u202e", "\ufeff", "ﾃ", "Ⅸ", "ﬁ", "①", "e\u0301", "名", "無", "し", "：", "title: ", "name: ", "\t", "𝟎", "\u0430", "\u03bf"];
   let seed = 7;
   const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
   for (let i = 0; i < n; i++) {
