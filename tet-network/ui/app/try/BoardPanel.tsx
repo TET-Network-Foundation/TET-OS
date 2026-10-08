@@ -6,7 +6,7 @@
  * first); a thread shows its posts numbered from 1, with `>>n` jumping within the thread. Anyone
  * who can read the board can open a thread. Threads are a convention inside the post text
  * (`lib/board_threads.mjs`): the node never sees them. The honest limits are the pinned
- * `0 · notice`.
+ * notice.
  *
  * Once in the anonymity set, one tap posts and the post shows at once with its progress. Joining the
  * set is a separate tap that never posts (see `wallet.tsx`: a post fired the moment a join takes

@@ -18,6 +18,7 @@ type Tx = { hash: string; kind: string; ed25519_sig: string; mldsa44_sig: string
 type Block = { height: number; block_id: string; parent_block_id: string | null; state_root: string; tx_count: number; ts_ms: number; producer_id: string; txs: Tx[] };
 
 const LINES = 5;
+const hms = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 const h = (s: string | null | undefined, n = 10) => (s ? s.replace(/^0x/, "").slice(0, n) : "—");
 
 export default function LiveStrip() {
@@ -80,7 +81,7 @@ export default function LiveStrip() {
                   {linked ? "=" : ""}
                   {h(b.parent_block_id)}
                 </span>{" "}
-                <span className="text-[#6c737b]">root</span> {h(b.state_root, 8)} <span className="text-[#6c737b]">txs</span> {b.tx_count} <span className="text-[#6c737b]">t</span> {b.ts_ms}{" "}
+                <span className="text-[#6c737b]">root</span> {h(b.state_root, 8)} <span className="text-[#6c737b]">txs</span> {b.tx_count} <span className="text-[#6c737b]">t</span> {b.ts_ms} <span className="text-[#6c737b]">({hms(b.ts_ms)})</span>{" "}
                 <span className="text-[#6c737b]">by</span> {b.producer_id.slice(0, 12)}
                 {b.txs.map((x) => (
                   <span key={x.hash}>

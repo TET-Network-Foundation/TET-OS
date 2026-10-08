@@ -162,7 +162,7 @@ export function Toggle(props: { on: boolean; onChange: (on: boolean) => void; ch
 }
 
 /**
- * The honest limits, as the pinned rules post `0 · notice`. The first rule always shows; the rest
+ * The honest limits, as a pinned notice. The first rule always shows; the rest
  * open with one tap, so a phone screen is not all notice.
  */
 export function PinnedNotice(props: { lines: ReactNode[] }) {
@@ -171,7 +171,7 @@ export function PinnedNotice(props: { lines: ReactNode[] }) {
   const [first, ...rest] = props.lines;
   return (
     <div className="my-3 border-l-[3px] border-[#c9a227] bg-[#fffbea] px-3 py-2 text-[14.5px] leading-relaxed text-[#1c1f23]">
-      <div className={cx(MONO, "text-[13px] font-semibold text-[#6b4e00]")}>0 · {t("notice")}</div>
+      <div className={cx(MONO, "text-[13px] font-semibold text-[#6b4e00]")}>{t("notice")}</div>
       <p className="mt-0.5">{first}</p>
       {open
         ? rest.map((l, i) => (

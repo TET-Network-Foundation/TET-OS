@@ -98,24 +98,24 @@ export default function DirectoryPanel(props: { directory: OpenBoard | null; lis
         ) : (
           <>
             <Input ariaLabel={t("Search boards by name")} value={query} onChange={setQuery} placeholder={t("Search by name…")} />
-            <ol aria-label={t("Boards")} className="mt-3 border-t border-[#eceef1]">
+            <ol aria-label={t("Boards")} className="mt-3">
               {shown.map((l) => {
                 const s = stats[l.boardWalletId];
                 return (
-                  <li key={l.boardWalletId} className="border-b border-[#eceef1]">
+                  <li key={l.boardWalletId} className="truncate py-1 text-[15px]">
                     <button
                       type="button"
                       disabled={!!opening}
                       onClick={() => void open(l)}
-                      className={cx(FOCUS, "-mx-2 block w-[calc(100%+1rem)] px-2 py-2.5 text-left hover:bg-[#fafbfc] disabled:opacity-60")}
+                      className={cx(FOCUS, "rounded-sm text-left text-[#1a237e] underline underline-offset-2 disabled:opacity-60")}
                     >
-                      <span className="block text-base font-semibold">{l.name}</span>
-                      <span className={cx(MONO, "block text-[12.5px] text-[#5d646d]")}>
-                        {s === undefined ? "…" : s === "unreadable" ? <span className={INK.bad}>{t("doesn't open")}</span> : t("{threads} threads · {today} posts today", { threads: s.threads, today: s.today })} ·{" "}
-                        {t("listed {date}", { date: fmtDate(l.listedAtMs, locale) })}
-                        {opening === l.boardWalletId ? ` · ${t("opening…")}` : ""}
-                      </span>
-                    </button>
+                      {l.name}
+                    </button>{" "}
+                    <span className="text-[13.5px] text-[#5d646d]">
+                      — {s === undefined ? "…" : s === "unreadable" ? <span className={INK.bad}>{t("doesn't open")}</span> : t("{threads} threads · {today} posts today", { threads: s.threads, today: s.today })} ·{" "}
+                      {t("listed {date}", { date: fmtDate(l.listedAtMs, locale) })}
+                      {opening === l.boardWalletId ? ` · ${t("opening…")}` : ""}
+                    </span>
                   </li>
                 );
               })}
