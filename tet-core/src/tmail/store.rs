@@ -1060,6 +1060,13 @@ impl TmailStore {
     ///
     /// Re-claiming for the same `msg_id` is idempotent, so a duplicate delivery of one message does
     /// not look like a replay.
+    /// Undo [`Self::claim_anon_nullifier`] for a message that wasn't stored after all. Only the
+    /// claim by this `msg_id` is removed; anyone else's stands.
+    pub fn release_anon_nullifier(&self, nullifier_hex: &str, msg_id: &str) {
+        let key = nullifier_hex.trim().to_ascii_lowercase();
+        let _ = self.anon_nullifiers.compare_and_swap(key.as_bytes(), Some(msg_id.trim().as_bytes()), None as Option<&[u8]>);
+    }
+
     pub fn claim_anon_nullifier(
         &self,
         nullifier_hex: &str,

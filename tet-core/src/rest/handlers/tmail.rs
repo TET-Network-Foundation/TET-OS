@@ -98,6 +98,11 @@ pub async fn post_tmail_send(
                 .into_response();
         }
         Err(e) => {
+            // Not stored: give the nullifier back, or the member's post for the day is used up with
+            // nothing posted (a resend would be refused as a repeat).
+            if let Some(crate::tmail::store::AnonVerdict::Verified { nullifier_hex, .. }) = &anon_verdict {
+                state.tmail.release_anon_nullifier(nullifier_hex, env.msg_id.trim());
+            }
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response();
         }
     }

@@ -14004,3 +14004,23 @@ async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
         assert!(kept.contains(&format!("cap-{i}")), "a verified post was pushed out by pending ones: kept {kept:?}");
     }
 }
+
+/// **SECURITY REGRESSION GUARD: an anonymous post that isn't stored doesn't use up the day.**
+/// The send checks the proof (claiming the nullifier) before storing; when the store then fails,
+/// the claim is released, so the member can post again. A release frees only the claim made by
+/// that same message.
+/// Negative control (run by hand): release made a no-op → FAILED.
+#[test]
+fn an_anonymous_post_that_is_not_stored_does_not_use_up_the_day() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let n = hex::encode([5u8; 32]);
+    assert!(store.claim_anon_nullifier(&n, "msg-a").unwrap());
+    store.release_anon_nullifier(&n, "msg-b");
+    assert!(!store.claim_anon_nullifier(&n, "msg-c").unwrap(), "someone else's release freed the claim");
+    store.release_anon_nullifier(&n, "msg-a");
+    assert!(store.claim_anon_nullifier(&n, "msg-c").unwrap(), "the day stayed used up");
+    let src = include_str!("rest/handlers/tmail.rs");
+    assert!(src.contains("state.tmail.release_anon_nullifier(nullifier_hex, env.msg_id.trim());"), "the send no longer releases the claim when the store fails");
+}
