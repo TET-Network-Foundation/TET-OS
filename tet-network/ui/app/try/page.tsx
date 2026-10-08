@@ -34,6 +34,7 @@ import { LangProvider, LangSwitch, useLang } from "./i18n";
 import LiveStrip from "./LiveStrip";
 import SitePanel from "./SitePanel";
 import WhatPanel from "./WhatPanel";
+import InsidePanel from "./InsidePanel";
 import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
 
@@ -62,7 +63,7 @@ const TOOLS = [
   { id: "about", label: "About", group: "footer" },
   { id: "terms", label: "Terms", group: "footer" },
 ] as const;
-type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home" | "how" | "what";
+type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home" | "how" | "what" | "inside";
 /** What the middle column shows: a board (by invite) or a tool. */
 type View = { board: string } | { tool: ToolId };
 const viewKey = (v: View) => ("board" in v ? `b:${v.board}` : `t:${v.tool}`);
@@ -303,6 +304,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
     [{ tool: "genuine" }, t("Mark as genuine")],
     [{ tool: "seal" }, t("Sealed prediction")],
     [{ tool: "what" }, t("What is TET")],
+    [{ tool: "inside" }, t("Inside")],
     [{ tool: "directory" }, t("Public boards")],
     [{ tool: "questions" }, t("Questions for humans")],
     [{ tool: "new" }, t("start or open a board")],
@@ -451,7 +453,7 @@ function TryApp() {
   // First load: the board in the `#`, or the tool in `?tab=`.
   useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab");
-    const tool: ToolId | undefined = TOOLS.find((t) => t.id === tab)?.id ?? (tab === "home" || tab === "how" || tab === "what" ? tab : undefined);
+    const tool: ToolId | undefined = TOOLS.find((t) => t.id === tab)?.id ?? (tab === "home" || tab === "how" || tab === "what" || tab === "inside" ? tab : undefined);
     const h = window.location.hash;
     let live = true;
     if (h.startsWith("#board=")) {
@@ -596,6 +598,7 @@ function TryApp() {
             />,
           )}
           {panel({ tool: "what" }, <WhatPanel go={(tool) => go({ tool: tool as ToolId })} />)}
+          {panel({ tool: "inside" }, <InsidePanel listings={listings} go={(tool) => go({ tool: tool as ToolId })} />)}
           {panel({ tool: "qr" }, <QrPanel />)}
           {panel({ tool: "site" }, <SitePanel />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}

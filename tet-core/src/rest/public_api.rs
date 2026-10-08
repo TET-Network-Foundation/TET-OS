@@ -36,6 +36,8 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/explorer/tx/:hash"),
     // The home page's live strip: the newest canonical block headers and tx hash/kind/signatures.
     ("GET", "/explorer/blocks/recent"),
+    // The "Inside" page: counts and how long each kind is kept (no names, no content).
+    ("GET", "/stats/inside"),
     // The public signature registry (sigs.rs): publish a hash-only record; search records.
     ("POST", "/sigs/publish"),
     ("GET", "/sigs/search"),

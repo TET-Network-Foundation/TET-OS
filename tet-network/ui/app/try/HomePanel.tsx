@@ -154,6 +154,10 @@ export default function HomePanel(props: {
             {t("What is TET")}
           </button>
           {" · "}
+          <button type="button" className={LINK} onClick={() => props.go("inside")}>
+            {t("Inside")}
+          </button>
+          {" · "}
           <button type="button" className={LINK} onClick={() => void ensureWallet().then(() => props.go("directory"))}>
             {t("Try")}
           </button>

@@ -51,7 +51,7 @@ fn skew_ms() -> u64 {
     std::env::var("TET_SITES_EDIT_SKEW_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|v| *v > 0).unwrap_or(EDIT_CLOCK_SKEW_MS)
 }
 
-fn ttl_ms() -> u64 {
+pub fn ttl_ms() -> u64 {
     if let Some(ms) = std::env::var("TET_SITES_TTL_MS").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|v| *v > 0) {
         return ms;
     }
@@ -213,6 +213,11 @@ fn edit_key(site: &str, seq: u64) -> Vec<u8> {
 impl SiteStore {
     pub fn open(db: &sled::Db) -> Result<Self, sled::Error> {
         Ok(Self { edits: db.open_tree(TREE_EDITS)?, heads: db.open_tree(TREE_HEADS)?, append_lock: std::sync::Mutex::new(0) })
+    }
+
+    /// Sites held now (expired ones not yet pruned included).
+    pub fn site_count(&self) -> usize {
+        self.heads.len().saturating_sub(usize::from(self.heads.contains_key(TOTAL_KEY).unwrap_or(false)))
     }
 
     /// Bytes of edit bodies held across all sites.

@@ -13793,6 +13793,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         "/files/upload-budget",
         // Block headers and tx hash, kind and shortened signatures: chain metadata, no content.
         "/explorer/blocks/recent",
+        // Counts and retention settings only.
+        "/stats/inside",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -14708,4 +14710,51 @@ fn the_registry_rebuilds_its_file_index_from_an_older_format() {
     let reopened = crate::sigs::SigStore::open(&db).unwrap();
     assert_eq!(reopened.search(&q).len(), 1, "an older record is missing from file searches");
     assert!(!db.tree_names().iter().any(|n| n.as_ref() == b"sigs_by_file_v1"), "the old index wasn't dropped");
+}
+
+/// **The "Inside" page shows retention from the real config.** `GET /stats/inside` reports how long
+/// posts, files and sites are kept from the same settings the stores apply (overridden here), and
+/// the store really behaves that way: a post one second younger than the reported default is
+/// served, one second older is gone.
+/// Negative control (run by hand): the route hard-coding 7 days → FAILED.
+#[tokio::test]
+async fn inside_stats_report_the_retention_the_stores_apply() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _a = EnvVarGuard::set("TET_TMAIL_DEFAULT_TTL_MS", "3600000");
+    let _b = EnvVarGuard::set("TET_TMAIL_MAX_TTL_MS", "7200000");
+    let _c = EnvVarGuard::set("TET_FILES_DEFAULT_TTL_MS", "1800000");
+    let _d = EnvVarGuard::set("TET_FILES_MAX_TTL_MS", "5400000");
+    let _e = EnvVarGuard::set("TET_SITES_TTL_DAYS", "5");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let r = router.oneshot(axum::http::Request::builder().uri("/stats/inside").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let j: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap()).unwrap();
+    let rt = &j["retention"];
+    assert_eq!(rt["messages_and_posts_ms"]["default"], 3_600_000);
+    assert_eq!(rt["messages_and_posts_ms"]["max"], 7_200_000);
+    assert_eq!(rt["files_ms"]["default"], 1_800_000);
+    assert_eq!(rt["files_ms"]["max"], 5_400_000);
+    assert_eq!(rt["sites_after_last_edit_ms"], 5 * 86_400_000u64);
+    assert!(j["counts"]["blocks"].is_u64() && j["at_ms"].as_u64().unwrap() > 0);
+
+    // The store keeps a post exactly as long as the page says.
+    let default_ms = rt["messages_and_posts_ms"]["default"].as_u64().unwrap();
+    let (sw, sid) = tmail_party_for_tests();
+    let (_rw, rx) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let mut young = signed_tmail_env_for_tests(&sw, &sid, &rx, "young", tmail_flags_for_tests(false), None);
+    young.sent_at_ms = now - default_ms + 1_000;
+    resign_tmail_env_for_tests(&mut young, &sw);
+    let mut old = signed_tmail_env_for_tests(&sw, &sid, &rx, "old", tmail_flags_for_tests(false), None);
+    old.sent_at_ms = now - default_ms - 1_000;
+    resign_tmail_env_for_tests(&mut old, &sw);
+    state.tmail.store_tmail(&young).unwrap();
+    let _ = state.tmail.store_tmail(&old);
+    let ids: Vec<String> = state.tmail.get_inbox(&rx, 50).into_iter().map(|e| e.msg_id).collect();
+    assert!(ids.contains(&"young".to_string()), "a post younger than the shown retention is gone");
+    assert!(!ids.contains(&"old".to_string()), "a post older than the shown retention is still served");
 }

@@ -214,6 +214,11 @@ impl SigStore {
         })
     }
 
+    /// Records held now.
+    pub fn record_count(&self) -> usize {
+        self.records.len()
+    }
+
     pub fn total_bytes(&self) -> u64 {
         self.meta.get(TOTAL_KEY).ok().flatten().and_then(|v| <[u8; 8]>::try_from(v.as_ref()).ok()).map(u64::from_be_bytes).unwrap_or(0)
     }

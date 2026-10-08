@@ -188,6 +188,11 @@ fn is_wallet_id_64hex(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// How long messages and posts are kept: (default, longest), as `store_tmail` applies them.
+pub fn retention_ms() -> (u64, u64) {
+    (effective_ttl_ms(0), effective_ttl_ms(u64::MAX))
+}
+
 /// Effective TTL after clamping: `0` (unset) → default; otherwise capped at the max.
 fn effective_ttl_ms(ttl_ms: u64) -> u64 {
     let max = env_u64("TET_TMAIL_MAX_TTL_MS", MAX_TTL_MS);
@@ -875,6 +880,11 @@ impl TmailStore {
     pub fn get_poll_root(&self, poll_wallet_id: &str) -> Option<crate::tmail::poll::StoredPollRoot> {
         let v = self.poll_roots.get(poll_wallet_id.trim().to_ascii_lowercase().as_bytes()).ok()??;
         serde_json::from_slice(&v).ok()
+    }
+
+    /// Messages and posts held now (all inboxes).
+    pub fn message_count(&self) -> usize {
+        self.by_receiver.len()
     }
 
     pub fn anon_member_count(&self) -> usize {
