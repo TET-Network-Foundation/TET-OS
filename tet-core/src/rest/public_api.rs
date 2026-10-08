@@ -34,6 +34,8 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/ledger/balance/:wallet"),
     // A mined transaction by hash (public chain data): checks a "stamp" receipt on the try page.
     ("GET", "/explorer/tx/:hash"),
+    // The home page's live strip: the newest canonical block headers and tx hash/kind/signatures.
+    ("GET", "/explorer/blocks/recent"),
     // The try page's Live channel: height, peers, apply-queue depth, recent gossip kinds, commit.
     ("GET", "/status/live"),
     // Tmail

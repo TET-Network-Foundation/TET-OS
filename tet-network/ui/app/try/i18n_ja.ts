@@ -620,4 +620,13 @@ export const JA: Record<string, string> = {
   "Your vote is hidden among this node's anonymity set.": "あなたの票は、このノードの匿名セットの中に隠れます。",
   "One vote per member. Anyone who can read this thread sees votes as they arrive, so when few people vote, the timing can give a vote away. The node sees your IP address.": "1人1票です。このスレッドを読める人には票が届いた順に見えるので、投票する人が少ないと、タイミングから票が分かることがあります。ノードにはあなたの IP アドレスが見えます。",
   "Wallet ids, one per line, at least 3. Each must have joined the anonymity set on this node.": "ウォレット ID を1行に1つ、3つ以上。どれもこのノードで匿名セットに参加済みである必要があります。",
+  "continue:": "続き:",
+  "open your remembered key": "記憶した鍵を開く",
+  "key options": "鍵の設定",
+  "This node's newest blocks": "このノードの最新ブロック",
+  "node not answering: {why}": "ノードが応答しません: {why}",
+  "newest blocks on this node · blocks aren't signed by their producer yet; the signatures shown are each transaction's signer's (ed25519 · ML-DSA-44)": "このノードの最新ブロック · ブロックにはまだ生成者の署名がありません。表示している署名は各トランザクションの署名者のものです（ed25519 · ML-DSA-44）",
+  "no blocks yet": "まだブロックはありません",
+  "matches the hash on the line above": "上の行のハッシュと一致",
+  "this node": "このノード",
 };

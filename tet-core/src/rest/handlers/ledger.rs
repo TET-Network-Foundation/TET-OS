@@ -1013,3 +1013,59 @@ pub async fn post_ledger_unstake(
 ) -> axum::response::Response {
     post_ledger_worker_bond_unstake_impl(State(state), Json(req)).await
 }
+
+/// Most blocks `GET /explorer/blocks/recent` returns.
+pub const RECENT_BLOCKS_MAX: usize = 6;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RecentBlocksQuery {
+    pub n: Option<usize>,
+}
+
+/// `GET /explorer/blocks/recent?n=…` — the newest canonical blocks, newest first, walked from the
+/// chain tip by parent link: public header fields, and for each transaction only its hash, kind and
+/// its signer's two signatures (shortened). No amounts, wallets, payloads or post content. Blocks
+/// carry no producer signature yet (the Phase 1 header change); `producer_signed: false` says so.
+pub async fn get_explorer_recent_blocks(State(state): State<RestState>, Query(q): Query<RecentBlocksQuery>) -> axum::response::Response {
+    let n = q.n.unwrap_or(RECENT_BLOCKS_MAX).clamp(1, RECENT_BLOCKS_MAX);
+    let tip = match state.ledger.chain_tip() {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let short = |s: &str| s.chars().take(16).collect::<String>();
+    let mut out = Vec::new();
+    let mut cur = tip.map(|t| t.block_id);
+    while let Some(id) = cur.take() {
+        if out.len() >= n {
+            break;
+        }
+        let Ok(Some(b)) = state.ledger.block_record_by_id(&id) else { break };
+        let txs: Vec<serde_json::Value> = b
+            .txs
+            .iter()
+            .zip(b.tx_hashes.iter())
+            .map(|(env, hash)| {
+                let kind = serde_json::to_value(&env.tx).ok().and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string)).unwrap_or_default();
+                serde_json::json!({
+                    "hash": hash,
+                    "kind": kind,
+                    "ed25519_sig": short(&env.sig.ed25519_sig_b64),
+                    "mldsa44_sig": short(&env.sig.mldsa_sig_b64),
+                })
+            })
+            .collect();
+        out.push(serde_json::json!({
+            "height": b.height,
+            "block_id": b.block_id,
+            "parent_block_id": b.parent_block_id,
+            "state_root": b.state_root,
+            "tx_count": b.txs.len(),
+            "ts_ms": b.ts_ms as u64,
+            "producer_id": b.producer_id,
+            "producer_signed": false,
+            "txs": txs,
+        }));
+        cur = b.parent_block_id.clone();
+    }
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "blocks": out }))).into_response()
+}
