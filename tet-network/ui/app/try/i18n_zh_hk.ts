@@ -873,4 +873,5 @@ export const ZH_HK: Record<string, string> = {
   "Anyone with this link can read the prediction. On the day, share it: that is the reveal. Lose it and the prediction can't be opened.": "任何擁有此連結的人都能閱讀預言。到了那天分享它，就是公開。遺失了就無法公開預言。",
   "Copy the reveal link": "複製公開連結",
   "Hashtag: #TET予言": "主題標籤：#TET予言",
+  "Marks (proof codes) and sealed predictions hold only a fingerprint and your ID, never the content. They're kept on this node, and the operator can hide them like anything else.": "標記（證明碼）和封印預言只包含指紋和你的 ID，絕不包含內容。它們保存在此節點上，營運者可以像其他內容一樣將其隱藏。",
 };

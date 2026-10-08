@@ -873,4 +873,5 @@ export const JA: Record<string, string> = {
   "Anyone with this link can read the prediction. On the day, share it: that is the reveal. Lose it and the prediction can't be opened.": "このリンクを持つ人は誰でも予言を読めます。当日にこれを共有すれば、それが公開になります。なくすと予言は公開できません。",
   "Copy the reveal link": "公開用リンクをコピー",
   "Hashtag: #TET予言": "ハッシュタグ：#TET予言",
+  "Marks (proof codes) and sealed predictions hold only a fingerprint and your ID, never the content. They're kept on this node, and the operator can hide them like anything else.": "記録（証明コード）と予言の封印が持つのは、指紋とあなたの ID だけで、中身は持ちません。このノードに保管され、運営者はほかのものと同じように非表示にできます。",
 };
