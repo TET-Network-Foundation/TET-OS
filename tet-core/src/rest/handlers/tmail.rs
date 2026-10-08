@@ -62,41 +62,48 @@ pub async fn post_tmail_send(
     {
         return crate::rest::helpers::hidden_by_operator();
     }
-    match state.tmail.store_tmail(&env) {
-        Ok(true) => {}
-        Ok(false) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "ok": false,
-                    "msg_id": env.msg_id,
-                    "status": "duplicate",
-                })),
-            )
-                .into_response();
+    // An anonymous post is checked BEFORE it's stored or relayed: this node holds the receipt the
+    // sender just deposited. A post whose proof doesn't verify (a repeat on the same board and day
+    // included) is refused with the reason, never kept or relayed. The check, the store and any
+    // release run as one unit on a blocking thread (`TmailStore::send_anonymous`), so neither a
+    // burst of sends nor a client hanging up mid-check can split them.
+    let stored = if env.flags.anonymous {
+        let (store, e2) = (state.tmail.clone(), env.clone());
+        match tokio::task::spawn_blocking(move || store.send_anonymous(&e2)).await {
+            Ok(Ok(stored)) => stored,
+            Ok(Err(crate::tmail::store::AnonSendError::NoProof)) => return (StatusCode::BAD_REQUEST, "an anonymous envelope needs its proof").into_response(),
+            Ok(Err(crate::tmail::store::AnonSendError::NoReceipt)) => {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "deposit the proof's receipt first" }))).into_response();
+            }
+            Ok(Err(crate::tmail::store::AnonSendError::Refused(reason))) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": format!("the anonymous proof doesn't verify: {reason}") }))).into_response();
+            }
+            // A ballot the poll's rules refuse (closed, not a member list's root, …): the reason, not a 500.
+            Ok(Err(crate::tmail::store::AnonSendError::Ballot(reason))) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": reason }))).into_response();
+            }
+            Ok(Err(crate::tmail::store::AnonSendError::Store(e))) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+            Err(j) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")).into_response(),
         }
-        Err(e @ crate::tmail::store::TmailStoreError::PollBallot(_)) => {
-            return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+    } else {
+        match state.tmail.store_tmail(&env) {
+            Ok(s) => s,
+            Err(e @ crate::tmail::store::TmailStoreError::PollBallot(_)) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+            }
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
         }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response();
-        }
-    }
-    // An anonymous message gets a verdict here too, not only on the receiving node. The sender's
-    // node holds the receipt it just deposited, so there is nothing to pull and no reason to leave
-    // its own copy reading "pending" -- which would otherwise look like a failure to the sender.
-    if env.flags.anonymous
-        && let Some(anon) = env.anonymous.as_ref()
-    {
-        let verdict = match state
-            .tmail
-            .get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex)
-        {
-            Some(bytes) => crate::tmail::anon::verify_anonymous_proof(&state.tmail, &env, &bytes),
-            // No receipt deposited: honestly pending, and the pull will resolve it.
-            None => crate::tmail::store::AnonVerdict::Pending,
-        };
-        let _ = state.tmail.set_anon_verdict(env.msg_id.trim(), &verdict);
+    };
+    if !stored {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "ok": false,
+                "msg_id": env.msg_id,
+                "status": "duplicate",
+            })),
+        )
+            .into_response();
     }
 
     // Propagate to peers so an offline receiver's node can buffer it too.
