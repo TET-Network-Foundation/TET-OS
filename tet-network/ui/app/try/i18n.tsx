@@ -11,6 +11,7 @@
  * scripts/try_i18n_guard.mjs fails if any `t("…")` on the try page lacks a translation.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { getUi, setUi } from "../lib/device_store";
 import { JA } from "./i18n_ja";
 import { ZH_HK } from "./i18n_zh_hk";
 
@@ -46,7 +47,8 @@ export function LangProvider(props: { children: ReactNode }) {
 
   // The language in `?lang=` (this tab only).
   useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get("lang");
+    // `?lang=` wins; otherwise the language this device chose before (device_store, plain UI state).
+    const q = new URLSearchParams(window.location.search).get("lang") ?? getUi("tet.ui.v1.lang");
     if (!isLang(q) || q === "en") return;
     const t0 = setTimeout(() => setLangState(q), 0);
     return () => clearTimeout(t0);
@@ -58,6 +60,7 @@ export function LangProvider(props: { children: ReactNode }) {
 
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
+    setUi("tet.ui.v1.lang", l === "en" ? null : l);
     const url = new URL(window.location.href);
     if (l === "en") url.searchParams.delete("lang");
     else url.searchParams.set("lang", l);

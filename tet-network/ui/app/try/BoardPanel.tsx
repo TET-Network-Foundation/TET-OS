@@ -24,6 +24,7 @@ import { tmailBucketIndex } from "../lib/anon_tree.mjs";
 import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
+import { getUi, setUi } from "../lib/device_store";
 import { useLang, type T } from "./i18n";
 
 const FEED_POLL_MS = 8_000;
@@ -167,7 +168,34 @@ export default function BoardPanel(props: {
   const [err, setErr] = useState("");
   const [named, setNamed] = useState(false);
   const [sage, setSage] = useState(false);
-  const [text, setText] = useState("");
+  const [text, setTextState] = useState("");
+  // The composer's draft for this board, kept on this device (device_store: plain, non-secret UI state).
+  const setText = useCallback(
+    (v: string) => {
+      setTextState(v);
+      try {
+        const all = JSON.parse(getUi("tet.ui.v1.drafts") ?? "{}") as Record<string, string>;
+        if (v.trim()) all[board.boardWalletId] = v.slice(0, 4000);
+        else delete all[board.boardWalletId];
+        setUi("tet.ui.v1.drafts", Object.keys(all).length ? JSON.stringify(all) : null);
+      } catch {
+        /* a broken drafts record is dropped */
+        setUi("tet.ui.v1.drafts", null);
+      }
+    },
+    [board.boardWalletId],
+  );
+  useEffect(() => {
+    const t0 = setTimeout(() => {
+      try {
+        const d = (JSON.parse(getUi("tet.ui.v1.drafts") ?? "{}") as Record<string, string>)[board.boardWalletId];
+        if (d) setTextState(d);
+      } catch {
+        /* no draft */
+      }
+    }, 0);
+    return () => clearTimeout(t0);
+  }, [board.boardWalletId]);
   const [newTitle, setNewTitle] = useState("");
   /** null = the thread list; "new" = the new-thread form; otherwise a thread id ("" = no thread). */
   const [open, setOpen] = useState<string | null>(null);

@@ -21,7 +21,7 @@ export default function AboutPanel() {
         <div className="flex items-center gap-3">
           {/* The TET logo: the founder's design, traced exactly (public/brand/tet-logo.svg). */}
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/brand/tet-logo.svg" width={56} height={56} alt={t("TET logo")} className="h-14 w-14" />
+          <img src="/brand/tet-logo.svg" width={56} height={56} alt={t("TET logo")} className="tet-logo h-14 w-14" />
           <p className="text-[15px] font-semibold">TET v0.2 · testnet</p>
         </div>
         <div>
