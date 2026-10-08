@@ -1069,3 +1069,35 @@ pub async fn get_explorer_recent_blocks(State(state): State<RestState>, Query(q)
     }
     (StatusCode::OK, Json(serde_json::json!({ "ok": true, "blocks": out }))).into_response()
 }
+
+/// `GET /stats/inside` — what this node holds right now, and for how long it keeps each kind, read
+/// from the same settings the stores apply (so the "Inside" page can't drift from the config).
+/// Counts only: never names, content or who.
+pub async fn get_stats_inside(State(state): State<RestState>) -> axum::response::Response {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let height = state.ledger.block_height().unwrap_or(0);
+    let (posts_default, posts_max) = crate::tmail::store::retention_ms();
+    let (files_default, files_max) = crate::files::storage::retention_ms();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "at_ms": now,
+            "counts": {
+                "blocks": height,
+                "messages_and_posts": state.tmail.message_count(),
+                "files": state.files.len(),
+                "signatures": state.sigs.record_count(),
+                "sites": state.sites.site_count(),
+            },
+            "retention": {
+                "blocks": "on_chain_forever",
+                "messages_and_posts_ms": { "default": posts_default, "max": posts_max },
+                "files_ms": { "default": files_default, "max": files_max },
+                "sites_after_last_edit_ms": crate::sites::ttl_ms(),
+                "signatures": "kept_until_hidden",
+            },
+        })),
+    )
+        .into_response()
+}

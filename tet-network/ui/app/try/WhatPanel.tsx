@@ -161,6 +161,12 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
       <h2 className={H}>{t("Get involved")}</h2>
       <ul className="list-disc pl-5">
         <li>
+          {t("Anyone: questions, ideas and feedback in GitHub Discussions.")}{" "}
+          <a className={link} href={`${REPO}/discussions`} target="_blank" rel="noreferrer">
+            {t("Discussions")}
+          </a>
+        </li>
+        <li>
           {t("Developers: open an issue or a pull request on GitHub.")}{" "}
           <a className={link} href={`${REPO}/issues`} target="_blank" rel="noreferrer">
             {t("Issues")}

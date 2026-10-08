@@ -507,6 +507,12 @@ jobs:
         name: try page — plain words on everyday pages
         run: node scripts/try_plain_guard.mjs
 
+      # The "Inside" page: retention shown only from the node's settings (the Rust test checks those
+      # against the config), counts with the time they were read. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — Inside shows real retention and counts
+        run: node scripts/try_inside_guard.mjs
+
       # Anonymous polls: the page signs tet-core's poll pre-image field for field; a members-only
       # poll sends wallet ids only (the node builds the root from its own registry); a voter proves
       # against the node's root, not the post's; the tally counts only verified ballots. Controls.

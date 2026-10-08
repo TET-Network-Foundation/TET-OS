@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 
 const DIR = new URL("../app/try/", import.meta.url);
 const read = (f) => readFileSync(new URL(f, DIR), "utf8");
-const EVERYDAY = ["BoardPanel.tsx", "MailPanel.tsx", "FilesTryPanel.tsx", "PollBox.tsx", "page.tsx", "ContinueBlock.tsx", "SitePanel.tsx", "NewBoardPanel.tsx", "DirectoryPanel.tsx", "HomePanel.tsx", "wallet.tsx", "ui.tsx", "GenuinePanel.tsx", "GenuineCheck.tsx", "SealPanel.tsx"].filter((f) => {
+const EVERYDAY = ["BoardPanel.tsx", "MailPanel.tsx", "FilesTryPanel.tsx", "PollBox.tsx", "page.tsx", "ContinueBlock.tsx", "SitePanel.tsx", "NewBoardPanel.tsx", "DirectoryPanel.tsx", "HomePanel.tsx", "wallet.tsx", "ui.tsx", "GenuinePanel.tsx", "GenuineCheck.tsx", "SealPanel.tsx", "InsidePanel.tsx"].filter((f) => {
   try {
     read(f);
     return true;

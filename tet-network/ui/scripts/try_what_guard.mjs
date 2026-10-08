@@ -114,5 +114,15 @@ await check("every string on the page has Japanese and Hong Kong Chinese", () =>
   assert.deepEqual(missing, []);
 });
 
+// "Get involved" points everyone to Discussions (enabled on the repo), developers to issues and PRs.
+const involved = (src) => {
+  assert.match(src, /href=\{`\$\{REPO\}\/discussions`\}/, "no Discussions link");
+  assert.match(src, /href=\{`\$\{REPO\}\/issues`\}/, "no Issues link");
+};
+await check("\"Get involved\" links Discussions and Issues", () => involved(SRC));
+await check("control: a page without the Discussions link is caught", () => {
+  assert.throws(() => involved(SRC.replace("/discussions`}", "/wiki`}")));
+});
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

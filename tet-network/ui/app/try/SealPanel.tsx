@@ -150,7 +150,7 @@ export default function SealPanel() {
               <select value={days} onChange={(e) => setDays(Number(e.target.value))} className={cx(FOCUS, "rounded border border-[#c9ced4] px-1 py-1")}>
                 {Array.from({ length: SEAL_MAX_DAYS - SEAL_MIN_DAYS + 1 }, (_, i) => i + SEAL_MIN_DAYS).map((d) => (
                   <option key={d} value={d}>
-                    {t("{n} days", { n: d })}
+                    {t("in {n} days", { n: d })}
                   </option>
                 ))}
               </select>{" "}
