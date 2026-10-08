@@ -34,6 +34,7 @@ import { LangProvider, LangSwitch, useLang } from "./i18n";
 import LiveStrip from "./LiveStrip";
 import SitePanel from "./SitePanel";
 import WhatPanel from "./WhatPanel";
+import GenuinePanel from "./GenuinePanel";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -50,6 +51,7 @@ const TOOLS = [
   { id: "questions", label: "Questions for humans", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
   { id: "sign", label: "sign", group: "tools" },
+  { id: "genuine", label: "mark as genuine", group: "tools" },
   { id: "qr", label: "qr", group: "tools" },
   { id: "files", label: "files", group: "tools" },
   { id: "site", label: "site", group: "tools" },
@@ -242,7 +244,7 @@ function TopBar(props: { go: (v: View) => void; onSearch: (q: string) => void })
             aria-label={t("Search")}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={t("Search public threads")}
+            placeholder={t("Proof code, or search threads")}
             className={cx(FOCUS, "w-full rounded-full border border-[#c9ced4] bg-white px-3.5 py-1.5 text-[15px]")}
           />
         </form>
@@ -286,6 +288,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
   const [open, setOpen] = useState(false);
   const link = cx(FOCUS, "rounded-sm underline underline-offset-2");
   const tools: [View, string][] = [
+    [{ tool: "genuine" }, t("Mark as genuine")],
     [{ tool: "what" }, t("What is TET")],
     [{ tool: "directory" }, t("Public boards")],
     [{ tool: "questions" }, t("Questions for humans")],
@@ -464,6 +467,7 @@ function TryApp() {
     questions: t("Questions for humans"),
     verify: t("verify"),
     sign: t("sign"),
+    genuine: t("Mark as genuine"),
     qr: t("qr"),
     files: t("files"),
     site: t("site"),
@@ -552,6 +556,7 @@ function TryApp() {
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
+          {panel({ tool: "genuine" }, <GenuinePanel />)}
           {panel(
             { tool: "home" },
             <HomePanel

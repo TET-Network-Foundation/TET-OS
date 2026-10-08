@@ -172,3 +172,8 @@ node's public signature registry (`tet-core/src/sigs.rs`, `POST /sigs/publish`, 
   default 256 MiB); each publish is charged to the client's daily upload budget. Records don't
   expire.
 - Takedown: hiding a signer's wallet (§10) stops their records being listed.
+- **The home page's "try it: verify this sample"**: once the node is up, run
+  `TET_TRY_ORIGIN=https://<this host> node --experimental-strip-types scripts/make_sample.mjs`
+  (in `tet-network/ui`). It marks `public/sample/tet-sample.txt` with a throwaway ID and prints
+  `NEXT_PUBLIC_TET_SAMPLE_CODE=…`; put that code in `.env` as `TET_SAMPLE_CODE=…` and rebuild the UI.
+  Without it the home page simply has no sample link.

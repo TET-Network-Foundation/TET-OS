@@ -14594,7 +14594,7 @@ fn envelope_for_tests(words: &str, payload_type: &str, payload: &[u8]) -> Vec<u8
 /// no-op. Search by the code's 40 bits, the file's SHA-256, the signer and a date range finds it;
 /// a date-only search walks the time index and stops at the limit. The node-wide byte cap holds.
 /// Negative controls (run by hand): the signature check skipped → FAILED; search ignoring the date
-/// range → FAILED; the consent check skipped → FAILED.
+/// range → FAILED; the consent check skipped → FAILED; the cap counting raw record bytes → FAILED.
 #[test]
 fn the_signature_registry_holds_real_records_and_finds_them() {
     use sha2::Digest as _;
@@ -14650,9 +14650,37 @@ fn the_signature_registry_holds_real_records_and_finds_them() {
     assert_eq!(q(crate::sigs::SigQuery { to_ms: Some(1_500), ..Default::default() }), vec![rh.clone()], "date range");
     assert!(q(crate::sigs::SigQuery { file_sha256: Some(file), from_ms: Some(4_000), ..Default::default() }).is_empty(), "file and date together");
 
+    // The total counts what is stored (base64 record and indexes), not the raw record.
+    assert!(store.total_bytes() > (rec.len() + o.len()) as u64 * 4 / 3, "the cap undercounts what's stored: {}", store.total_bytes());
     // The node-wide cap.
     let _cap = EnvVarGuard::set("TET_SIGS_MAX_TOTAL_BYTES", &(store.total_bytes() + 10).to_string());
     let third = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
     let th = hash_record_for_tests(&third, b"one more", crate::sigs::HASH_PAYLOAD_TYPE);
     assert_eq!(store.publish(&th, &consent_for_tests(&third, &th), 6_000).map(|_| ()), Err(crate::sigs::SigsError::StoreFull));
+}
+
+/// **SECURITY REGRESSION GUARD: later markings of a file can't hide the first one.** Anyone can mark
+/// any file with their own ID, so a file's search lists the earliest markings first and reads its
+/// index oldest first: however many records others publish for the same file afterwards, the first
+/// marking is always in the results.
+/// Negative control (run by hand): file results ordered newest first again → FAILED.
+#[test]
+fn later_markings_of_a_file_cannot_hide_the_first() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sigs::SigStore::open(&ledger.sled_db()).unwrap();
+    let file = b"the original photo".as_slice();
+    let author = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let first = hash_record_for_tests(&author, file, crate::sigs::HASH_PAYLOAD_TYPE);
+    store.publish(&first, &consent_for_tests(&author, &first), 1_000).unwrap();
+    for i in 0..(crate::sigs::SEARCH_MAX + 5) {
+        let w = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+        let r = hash_record_for_tests(&w, file, crate::sigs::HASH_PAYLOAD_TYPE);
+        store.publish(&r, &consent_for_tests(&w, &r), 2_000 + i as u64).unwrap();
+    }
+    let found = store.search(&crate::sigs::SigQuery { file_sha256: Some(hex::encode(sha2::Sha256::digest(file))), ..Default::default() });
+    assert_eq!(found.len(), crate::sigs::SEARCH_MAX);
+    assert_eq!(found[0].record_sha256, hex::encode(sha2::Sha256::digest(&first)), "the first marking was pushed out or not listed first");
 }
