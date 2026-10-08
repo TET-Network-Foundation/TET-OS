@@ -494,6 +494,14 @@ jobs:
         name: try page — polls count only real members' verified ballots
         run: node --experimental-strip-types scripts/try_poll_guard.mjs
 
+      # Signed sites: rendering is deterministic; author text can't make a page run anything (only
+      # the renderer's tags and attributes, a script-forbidding CSP); the proves line is on every
+      # page; a reader's chain check refuses tampered, dropped, reordered, replayed or foreign edits;
+      # the page signs tet-core's pre-image field for field. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a site is exactly what its key signed, and runs nothing
+        run: node --experimental-strip-types scripts/try_site_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).

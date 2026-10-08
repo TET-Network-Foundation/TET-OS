@@ -32,6 +32,7 @@ import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
 import { LangProvider, LangSwitch, useLang } from "./i18n";
 import LiveStrip from "./LiveStrip";
+import SitePanel from "./SitePanel";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -50,6 +51,7 @@ const TOOLS = [
   { id: "sign", label: "sign", group: "tools" },
   { id: "qr", label: "qr", group: "tools" },
   { id: "files", label: "files", group: "tools" },
+  { id: "site", label: "site", group: "tools" },
   { id: "mail", label: "DM", group: "tools" },
   { id: "live", label: "live", group: "tools" },
   { id: "about", label: "About", group: "footer" },
@@ -434,6 +436,7 @@ function TryApp() {
     sign: t("sign"),
     qr: t("qr"),
     files: t("files"),
+    site: t("site"),
     mail: t("DM"),
     new: t("start or open a board"),
     home: t("TET: start here"),
@@ -556,6 +559,7 @@ function TryApp() {
             />,
           )}
           {panel({ tool: "qr" }, <QrPanel />)}
+          {panel({ tool: "site" }, <SitePanel />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           {panel({ tool: "about" }, <AboutPanel />)}

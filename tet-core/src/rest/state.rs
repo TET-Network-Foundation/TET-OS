@@ -80,6 +80,8 @@ pub struct RestState {
     pub demo_sponsor: Option<Arc<crate::demo_sponsor::DemoSponsor>>,
     /// What the operator has stopped serving on public routes (`operator_hide.rs`). Node-local.
     pub operator_hide: crate::operator_hide::OperatorHide,
+    /// Signed sites: node-local edit chains (`sites.rs`).
+    pub sites: Arc<crate::sites::SiteStore>,
 }
 
 #[derive(Debug, Clone)]

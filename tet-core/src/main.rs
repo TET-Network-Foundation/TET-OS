@@ -35,6 +35,7 @@ mod rest;
 mod swarm_health;
 mod sync;
 mod tee_compute;
+mod sites;
 mod tmail;
 mod updater;
 mod vision;
@@ -713,6 +714,10 @@ async fn main() -> Result<(), AnyErr> {
             eprintln!("[startup] operator hide list: {e}");
             std::process::exit(2);
         }),
+        sites: Arc::new(crate::sites::SiteStore::open(&ledger_for_hide).unwrap_or_else(|e| {
+            eprintln!("[startup] site store: {e}");
+            std::process::exit(2);
+        })),
     };
 
     // Pending txs this node admitted over REST are re-published on a timer until they are mined.
