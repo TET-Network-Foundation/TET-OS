@@ -2,13 +2,36 @@
 
 /**
  * "What is TET": one readable column of plain text. What it is, why it's needed now, what works
- * today (each with what it proves and doesn't), how it differs from other chains (true claims only),
- * the roadmap (genesis is a target, labelled so), and who builds it. No cards.
+ * today (each with what it proves and doesn't), a comparison with Bitcoin and Ethereum (true claims
+ * only; never "first"), where TET is weaker today, the roadmap (Phase 1 is the only dated phase, and
+ * its date is a target), who builds it, and how to get involved. No cards. try_what_guard checks it.
  */
 import { FOCUS, cx } from "./ui";
 import { useLang } from "./i18n";
 
 const REPO = "https://github.com/TET-Network-Foundation/TET-OS";
+
+/** Bitcoin, Ethereum and TET side by side. True claims only; never "first". */
+export const ROWS: [string, string, string, string][] = [
+  ["Purpose", "Digital money", "A platform for smart contracts", "Checking who made something, and when"],
+  ["Post-quantum signatures today", "No (proposals are under discussion)", "No (on the research roadmap)", "Yes: every transaction is signed with ML-DSA-44 as well as Ed25519"],
+  ["Anonymous one-person-one-vote", "No", "Not built in (apps such as MACI add it)", "Built in: members-only polls, one vote per member"],
+  ["Everyday interface", "Wallet apps from other projects", "Wallets and apps from other projects", "Built in: boards, signing and polls in the browser"],
+  ["Energy", "Proof of work: high", "Proof of stake since 2022: low", "One block producer, no mining: low"],
+];
+
+/** Phases 2–10: a vision, without dates. */
+export const VISION = [
+  "An outside security audit",
+  "More than one block producer",
+  "Signature badges, proof codes and search by file",
+  "Members-only polls and the Shelter corner",
+  "The site builder",
+  "TetSearch",
+  "Nodes that run in the browser (libp2p over WebRTC)",
+  "Open block production",
+  "Developer tools for other apps",
+];
 
 export default function WhatPanel(props: { go: (tool: string) => void }) {
   const { t } = useLang();
@@ -33,6 +56,7 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
       <p>{t("TET is a public network for checking who made something, and when. Every transaction and message on it is signed twice: once with Ed25519, and once with ML-DSA-44, one of the quantum-resistant signatures (ML-DSA) standardised by NIST as FIPS 204.")}</p>
       <p className="mt-2">{t("Anyone can check a signature on their own device. You don't have to trust this website or this node to do it.")}</p>
       <p className="mt-2">{t("Today it runs as a testnet (v0.2): a public test version. Nothing on it has monetary value.")}</p>
+      <p className="mt-2">{t("This demo shows only part of what TET can do.")}</p>
 
       <h2 className={H}>{t("Why it's needed now")}</h2>
       <p>{t("Text, pictures and voices can now be generated in seconds, so \"who made this, and when?\" is harder to answer than it used to be. A signature answers part of it: it shows which key signed exactly these bytes.")}</p>
@@ -62,20 +86,64 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
         )}
       </ul>
 
-      <h2 className={H}>{t("How it differs from other chains")}</h2>
+      <h2 className={H}>{t("How it compares with Bitcoin and Ethereum")}</h2>
+      {/* Phones: one row at a time, so the TET column is never off-screen. */}
+      <dl className="sm:hidden">
+        {ROWS.map(([k, btc, eth, tet]) => (
+          <div key={k} className="mb-3">
+            <dt className="font-semibold">{t(k)}</dt>
+            <dd className="m-0">Bitcoin: {t(btc)}</dd>
+            <dd className="m-0">Ethereum: {t(eth)}</dd>
+            <dd className="m-0 font-semibold">TET: {t(tet)}</dd>
+          </div>
+        ))}
+      </dl>
+      <div className="hidden overflow-x-auto sm:block">
+        <table className="w-full min-w-[34rem] border-collapse text-left text-[15px]">
+          <thead>
+            <tr className="border-b border-[#c9ced4]">
+              <th className="py-1.5 pr-3 font-semibold"></th>
+              <th className="py-1.5 pr-3 font-semibold">Bitcoin</th>
+              <th className="py-1.5 pr-3 font-semibold">Ethereum</th>
+              <th className="py-1.5 font-semibold">TET</th>
+            </tr>
+          </thead>
+          <tbody>
+            {ROWS.map(([k, btc, eth, tet]) => (
+              <tr key={k} className="border-b border-[#eceef1] align-top">
+                <th scope="row" className="py-1.5 pr-3 font-semibold">
+                  {t(k)}
+                </th>
+                <td className="py-1.5 pr-3">{t(btc)}</td>
+                <td className="py-1.5 pr-3">{t(eth)}</td>
+                <td className="py-1.5">{t(tet)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="mt-2">{t("TET isn't the only network with post-quantum signatures: QRL and others already use them. What TET adds is the combination: quantum-resistant signatures, anonymous one-person-one-vote and an everyday interface, in one network.")}</p>
+      <p className="mt-2">{t("Messages, files and boards are not written to the chain. They stay on nodes for a limited time; the chain holds keys and proofs, not your content.")}</p>
+
+      <h2 className={H}>{t("Where TET is weaker today")}</h2>
       <ul className="list-disc pl-5">
-        <li>{t("Every transaction carries two signatures, Ed25519 and ML-DSA-44. Most widely used chains sign with one classical signature (ECDSA or Ed25519).")}</li>
-        <li>{t("Anonymous posts use a zero-knowledge proof built only from hashes (SHA-256).")}</li>
-        <li>{t("Messages, files and boards are not written to the chain. They stay on nodes for a limited time; the chain holds keys and proofs, not your content.")}</li>
-        <li>{t("It is small and early: one person runs the testnet, nothing is audited, and nothing is for sale.")}</li>
+        <li>{t("It's a testnet only: nothing on it is meant to last or has value.")}</li>
+        <li>{t("One block producer makes every block.")}</li>
+        <li>{t("No security audit has been done.")}</li>
+        <li>{t("Very few people use it.")}</li>
       </ul>
 
       <h2 className={H}>{t("Roadmap")}</h2>
       <ul className="list-disc pl-5">
-        <li>{t("Now: testnet v0.2, this site.")}</li>
-        <li>{t("Next: blocks signed by their producer, members-only features that work across nodes, and an outside security audit.")}</li>
-        <li>{t("Genesis, the start of the real network: target Q1 2027. This is a target, not a promise; it moves if the work isn't ready.")}</li>
+        <li>{t("Phase 0 (now): testnet v0.2, this site.")}</li>
+        <li>{t("Phase 1: genesis, the start of the real network. Target: Q1 2027. A target, not a promise; it moves if the work isn't ready.")}</li>
       </ul>
+      <p className="mt-3 font-semibold">{t("After that: the vision. No dates; the order may change.")}</p>
+      <ol className="list-decimal pl-5" start={2}>
+        {VISION.map((v) => (
+          <li key={v}>{t(v)}</li>
+        ))}
+      </ol>
 
       <h2 className={H}>{t("Who builds it")}</h2>
       <p>
@@ -90,6 +158,27 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
         </button>
         .
       </p>
+      <h2 className={H}>{t("Get involved")}</h2>
+      <ul className="list-disc pl-5">
+        <li>
+          {t("Developers: open an issue or a pull request on GitHub.")}{" "}
+          <a className={link} href={`${REPO}/issues`} target="_blank" rel="noreferrer">
+            {t("Issues")}
+          </a>
+          {" · "}
+          <a className={link} href={`${REPO}/pulls`} target="_blank" rel="noreferrer">
+            {t("Pull requests")}
+          </a>
+        </li>
+        <li>
+          {t("Researchers, organizations, anything else:")}{" "}
+          <a className={link} href="mailto:hello@stevenexus.org">
+            hello@stevenexus.org
+          </a>
+        </li>
+      </ul>
+      <p className="mt-2">{t("TET is a volunteer open-source project. There are no paid roles or tokens to offer.")}</p>
+
       <p className="mt-6">
         <button type="button" className={link} onClick={() => props.go("how")}>
           {t("How the demo works")}
