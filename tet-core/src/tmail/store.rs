@@ -587,6 +587,17 @@ impl TmailStore {
     ///
     /// Callers MUST have authorized the revoke first
     /// ([`crate::tmail::burn::authorize_burn_revoke`]) — this method does no policy check.
+    /// Remove a message entirely, leaving no tombstone (a later delivery may store it again).
+    pub fn forget_by_msg_id(&self, msg_id: &str) -> Result<bool, TmailStoreError> {
+        let msg_id = msg_id.trim();
+        let Some(key) = self.index_key_for_msg_id(msg_id) else {
+            return Ok(false);
+        };
+        let removed = self.by_receiver.remove(&key)?.is_some();
+        self.by_msg_id.remove(msg_id.as_bytes())?;
+        Ok(removed)
+    }
+
     pub fn delete_by_msg_id(&self, msg_id: &str) -> Result<bool, TmailStoreError> {
         let msg_id = msg_id.trim();
         let Some(key) = self.index_key_for_msg_id(msg_id) else {
@@ -1070,13 +1081,17 @@ impl TmailStore {
     pub fn set_anon_verdict(&self, msg_id: &str, verdict: &AnonVerdict) -> Result<(), TmailStoreError> {
         let val = serde_json::to_vec(verdict).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
         self.anon_verdict.insert(msg_id.trim().as_bytes(), val)?;
-        // Only a definite failure deletes. "Root not recognised" depends on this node's view of the
-        // registry (another node may know the root already), so such a post is kept, hidden and not
-        // counted, rather than deleted for good.
-        if let AnonVerdict::Failed { reason, .. } = verdict
-            && failure_is_definitive(reason)
-        {
-            self.delete_by_msg_id(msg_id)?;
+        // Every failure deletes: nothing failed is kept, served or counted. A definite failure is
+        // tombstoned, so a re-delivery can't bring it back. "Root not recognised" depends on this
+        // node's view of the registry, so that one is deleted WITHOUT a tombstone: if the post is
+        // genuine and arrives again once this node knows the root, it can still be checked and kept.
+        // (Keeping it instead would let anyone post with a proof against a tree they made up.)
+        if let AnonVerdict::Failed { reason, .. } = verdict {
+            if failure_is_definitive(reason) {
+                self.delete_by_msg_id(msg_id)?;
+            } else {
+                self.forget_by_msg_id(msg_id)?;
+            }
         }
         Ok(())
     }
