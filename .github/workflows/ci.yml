@@ -487,6 +487,12 @@ jobs:
         name: try page — proof codes find; signatures prove
         run: node --experimental-strip-types scripts/try_badge_guard.mjs
 
+      # "Mark as genuine": a copy matches only byte for byte; no jargon on the mark and check pages;
+      # the honest lines stay; marking sends the fingerprint, never the file. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — mark as genuine is exact, plain and sends no file
+        run: node --experimental-strip-types scripts/try_genuine_guard.mjs
+
       # Anonymous polls: the page signs tet-core's poll pre-image field for field; a members-only
       # poll sends wallet ids only (the node builds the root from its own registry); a voter proves
       # against the node's root, not the post's; the tally counts only verified ballots. Controls.

@@ -12,7 +12,8 @@
 // 4b. Publishing always sends the signer's consent for exactly the record (tet-core refuses without
 //    it); a lookup honours its date bounds; the file search says exact files only and that the
 //    file is never uploaded. Controls.
-// 4. A lookup lists every matching record and checks each: a record whose signature was tampered
+// 4. A lookup lists every matching record and checks each (a file's markings earliest first, so a
+//    later copy can't take the first marking's place; control: newest first is caught): a record whose signature was tampered
 //    with is listed as not verified, never as signed. Control: a lookup that trusts the code alone
 //    is caught.
 // 5. Wording: the page never calls a proof code a key, and says "the code finds it; the signature
@@ -100,7 +101,11 @@ const records = async () => [
 async function listsAndChecks(find) {
   const byHash = await find({ query: rec.fileSha256, chain, records, mldsa44Verify });
   assert.equal(byHash.length, 2, "every record for that hash is listed");
-  assert.deepEqual(byHash.map((f) => f.verified), [true, false], "the tampered record must be listed as not verified");
+  // A file's markings come earliest first (the first marking can't be displaced by later ones).
+  assert.deepEqual(byHash.map((f) => f.publishedAtMs), [1, 2], "a file's markings must be listed earliest first");
+  assert.ok(byHash.every((f) => f.match === "file"), "a file search's hits are labelled as file matches");
+  assert.equal(byHash.find((f) => f.publishedAtMs === 1).verified, false, "the tampered record must be listed as not verified");
+  assert.equal(byHash.find((f) => f.publishedAtMs === 2).verified, true, "the genuine record must verify");
   let askedPrefix;
   const byCode = await find({ query: pc.proofCode(rec.bytes), chain, records: (q) => ((askedPrefix = q.codePrefix), records()), mldsa44Verify });
   // The registry indexes records by the first 40 bits of their hash: a code lookup asks only for those.
@@ -113,6 +118,10 @@ async function listsAndChecks(find) {
   assert.deepEqual(await find({ query: "hello", chain, records, mldsa44Verify }), []);
 }
 await check("SECURITY: a lookup lists every match and marks a tampered record as not verified", () => listsAndChecks(pc.findSignatures));
+await check("control: a lookup listing a file's markings newest first is caught", async () => {
+  const newestFirst = async (o) => (await pc.findSignatures(o)).sort((x, y) => y.publishedAtMs - x.publishedAtMs);
+  await assert.rejects(() => listsAndChecks(newestFirst));
+});
 await check("control: a lookup that trusts the code alone is caught", async () => {
   const trusting = async (o) => (await pc.findSignatures(o)).map((f) => ({ ...f, verified: true }));
   await assert.rejects(() => listsAndChecks(trusting));
@@ -130,7 +139,7 @@ await check("publishing always sends the signer's consent for exactly this recor
 await check("control: publishing without a consent is caught", () => assert.throws(() => consents(PUB.replace(/consent_b64:[^}]*/, ""))));
 await check("a lookup honours its date bounds", async () => {
   const all = await pc.findSignatures({ query: rec.fileSha256, chain, records, mldsa44Verify });
-  const t = all[0].publishedAtMs;
+  const t = Math.max(...all.map((x) => x.publishedAtMs)); // the latest record
   assert.equal((await pc.findSignatures({ query: rec.fileSha256, chain, fromMs: t + 1, records, mldsa44Verify })).length, 0, "a record before the range was listed");
   assert.ok((await pc.findSignatures({ query: rec.fileSha256, chain, fromMs: t, toMs: t, records, mldsa44Verify })).length >= 1);
 });

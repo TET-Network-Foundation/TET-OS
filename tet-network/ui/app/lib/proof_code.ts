@@ -117,6 +117,8 @@ export async function registryRecords(baseUrl: string, q: RecordQuery): Promise<
 
 export type FoundSignature = {
   code: string;
+  /** How it matched the query: by proof code, by the file's fingerprint, or by the ID. */
+  match: "code" | "file" | "signer";
   fileSha256: string;
   signerEd25519: string;
   publishedAtMs: number;
@@ -179,7 +181,12 @@ export async function findSignatures(o: {
     if (o.toMs !== undefined && rec.publishedAtMs > o.toMs) continue;
     if (!hit) continue;
     const v = await verifyEnvelope({ envelope: env, content: new Uint8Array(), recordOnly: true, chain: o.chain, mldsa44Verify: o.mldsa44Verify });
-    out.push({ code: c, fileSha256: fileHash, signerEd25519: signer, publishedAtMs: rec.publishedAtMs, verified: v.ok === true, reason: v.ok ? undefined : v.reason, recordBytes: rec.bytes });
+    const match: FoundSignature["match"] = code ? "code" : fileHash === h ? "file" : "signer";
+    out.push({ code: c, match, fileSha256: fileHash, signerEd25519: signer, publishedAtMs: rec.publishedAtMs, verified: v.ok === true, reason: v.ok ? undefined : v.reason, recordBytes: rec.bytes });
   }
-  return out.sort((a, b) => b.publishedAtMs - a.publishedAtMs);
+  // A file's markings: the earliest first, so the first person to mark it is the one shown on top
+  // (later markings of the same file by others can't take its place). Everything else: newest first.
+  const byFile = out.filter((f) => f.match === "file").sort((a, b) => a.publishedAtMs - b.publishedAtMs);
+  const rest = out.filter((f) => f.match !== "file").sort((a, b) => b.publishedAtMs - a.publishedAtMs);
+  return [...byFile, ...rest];
 }

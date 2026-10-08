@@ -15,7 +15,11 @@ import { FOCUS, MONO, cx } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 import ContinueBlock from "./ContinueBlock";
-import { SignatureResults } from "./ProofCode";
+import GenuineCheck from "./GenuineCheck";
+
+/** A real sample marked as genuine on this node (deploy: scripts/make_sample.mjs); empty: no link. */
+const SAMPLE_CODE = (process.env.NEXT_PUBLIC_TET_SAMPLE_CODE ?? "").trim();
+const SAMPLE_URL = "/sample/tet-sample.txt";
 import { parseProofCode } from "../lib/proof_code";
 
 const LINK = cx(FOCUS, "rounded-sm underline underline-offset-2");
@@ -85,19 +89,47 @@ export default function HomePanel(props: {
           <p className="text-[22px] font-semibold">TET v0.2 · testnet</p>
         </div>
         <p className="text-[16px] text-[#3d434a]">{t("A network where anyone can check who made something, and when.")}</p>
-        <form onSubmit={submit} className="flex gap-2" role="search">
+        <form
+          onSubmit={submit}
+          className="flex gap-2"
+          role="search"
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            void onFile(e.dataTransfer.files?.[0]);
+          }}
+        >
           <input
             aria-label={t("Search")}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={t("Search threads, or enter a proof code")}
+            placeholder={t("Enter a proof code, or drop a file here")}
             className={cx(FOCUS, "min-w-0 flex-1 rounded-full border border-[#c9ced4] bg-white px-4 py-2.5 text-[16px]")}
           />
           <button type="submit" className={cx(FOCUS, "rounded-full border border-[#c9ced4] px-4 py-2.5 text-[15px] hover:bg-[#fafbfc]")}>
             {t("Search")}
           </button>
         </form>
+        {SAMPLE_CODE ? (
+          <p className="text-[14px]">
+            <button
+              type="button"
+              className={LINK}
+              onClick={() => {
+                setByFile(false);
+                setQ(SAMPLE_CODE);
+                setAsked(SAMPLE_CODE);
+              }}
+            >
+              {t("try it: verify this sample")}
+            </button>
+          </p>
+        ) : null}
         <p className="text-[15px]">
+          <button type="button" className={LINK} onClick={() => props.go("genuine")}>
+            {t("Mark as genuine")}
+          </button>
+          {" · "}
           <button type="button" className={LINK} onClick={() => props.go("what")}>
             {t("What is TET")}
           </button>
@@ -105,17 +137,14 @@ export default function HomePanel(props: {
           <button type="button" className={LINK} onClick={() => void ensureWallet().then(() => props.go("directory"))}>
             {t("Try")}
           </button>
-          {" · "}
-          <button type="button" className={LINK} onClick={() => props.go("sign")}>
-            {t("Sign")}
-          </button>
+
           {" · "}
           <button type="button" className={LINK} onClick={() => props.go("verify")}>
             {t("Verify")}
           </button>
         </p>
         <details className="text-[13.5px] text-[#5d646d]">
-          <summary className={cx(FOCUS, "cursor-pointer rounded-sm")}>{t("Find signatures by file or date")}</summary>
+          <summary className={cx(FOCUS, "cursor-pointer rounded-sm")}>{t("Find marks by file or date")}</summary>
           <div className="mt-2 space-y-2 text-left">
             <label className="block">
               {t("Drop or choose a file: its SHA-256 is computed in this tab, and the file is never uploaded.")}
@@ -148,12 +177,13 @@ export default function HomePanel(props: {
 
         {signatureQuery ? (
           <div aria-live="polite" className="text-left">
-            <SignatureResults
+            <GenuineCheck
               query={asked}
               fromMs={fromMs}
               toMs={toMs}
               byFile={byFile}
-              onSigner={(k) => {
+              sample={SAMPLE_CODE && asked === SAMPLE_CODE ? { url: SAMPLE_URL } : undefined}
+              onId={(k) => {
                 setByFile(false);
                 setQ(k);
                 setAsked(k);

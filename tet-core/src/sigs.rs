@@ -32,10 +32,15 @@ pub const DEFAULT_TOTAL_BYTES: u64 = 256 * 1024 * 1024;
 pub const MAX_RECORDS_PER_SIGNER: usize = 1_000;
 /// Most records one search returns.
 pub const SEARCH_MAX: usize = 50;
+/// Most index entries one search reads (a popular file or a busy signer can't make a search load
+/// thousands of records); the newest are read first where the index is ordered by time.
+pub const SEARCH_SCAN_MAX: usize = 500;
 
 const TREE_RECORDS: &str = "sigs_records_v1"; // record sha256 -> StoredRecord
 const TREE_BY_CODE: &str = "sigs_by_code_v1"; // 10 hex || record sha256 -> ()
-const TREE_BY_FILE: &str = "sigs_by_file_v1"; // file sha256 || record sha256 -> ()
+// file sha256 || published_at be || record sha256 -> (): oldest first, so the first marking of a file
+// is always read, however many others mark the same file later.
+const TREE_BY_FILE: &str = "sigs_by_file_v2";
 const TREE_BY_SIGNER: &str = "sigs_by_signer_v1"; // signer || published_at be || record sha256 -> ()
 const TREE_BY_TIME: &str = "sigs_by_time_v1"; // published_at be || record sha256 -> ()
 const TREE_META: &str = "sigs_meta_v1";
@@ -180,6 +185,24 @@ pub struct SigQuery {
 
 impl SigStore {
     pub fn open(db: &sled::Db) -> Result<Self, sled::Error> {
+        let store = Self::open_trees(db)?;
+        // The file index moved to a time-ordered key (v2). Rebuild it from the records if an older
+        // index exists, so no record is left out of file searches; then drop the old index.
+        if db.tree_names().iter().any(|n| n.as_ref() == b"sigs_by_file_v1") {
+            for (_, v) in store.records.iter().filter_map(|r| r.ok()) {
+                if let Ok(r) = serde_json::from_slice::<StoredRecord>(&v) {
+                    let mut fk = r.file_sha256.as_bytes().to_vec();
+                    fk.extend_from_slice(&r.published_at_ms.to_be_bytes());
+                    fk.extend_from_slice(r.record_sha256.as_bytes());
+                    store.by_file.insert(fk, &[])?;
+                }
+            }
+            db.drop_tree("sigs_by_file_v1")?;
+        }
+        Ok(store)
+    }
+
+    fn open_trees(db: &sled::Db) -> Result<Self, sled::Error> {
         Ok(Self {
             records: db.open_tree(TREE_RECORDS)?,
             by_code: db.open_tree(TREE_BY_CODE)?,
@@ -210,9 +233,6 @@ impl SigStore {
             return Err(SigsError::SignerFull);
         }
         let total = self.total_bytes();
-        if total + bytes.len() as u64 > total_cap() {
-            return Err(SigsError::StoreFull);
-        }
         let r = StoredRecord {
             record_b64: base64::engine::general_purpose::STANDARD.encode(bytes),
             record_sha256: rh.clone(),
@@ -221,10 +241,19 @@ impl SigStore {
             published_at_ms: now_ms,
         };
         let val = serde_json::to_vec(&r).map_err(|x| SigsError::Store(x.to_string()))?;
+        // The cap counts what is actually stored: the record (base64, with its fields) and its four
+        // index entries, not just the raw record.
+        let cost = (val.len() + 64 + 10 + 64 + 64 + 64 + 8 + 64 + 8 + 64) as u64;
+        if total + cost > total_cap() {
+            return Err(SigsError::StoreFull);
+        }
         let st = |x: sled::Error| SigsError::Store(x.to_string());
         self.records.insert(rh.as_bytes(), val).map_err(st)?;
         self.by_code.insert(format!("{}{}", &rh[..10], rh).as_bytes(), &[]).map_err(st)?;
-        self.by_file.insert(format!("{file_sha256}{rh}").as_bytes(), &[]).map_err(st)?;
+        let mut fk = file_sha256.as_bytes().to_vec();
+        fk.extend_from_slice(&now_ms.to_be_bytes());
+        fk.extend_from_slice(rh.as_bytes());
+        self.by_file.insert(fk, &[]).map_err(st)?;
         let mut sk = signer.as_bytes().to_vec();
         sk.extend_from_slice(&now_ms.to_be_bytes());
         sk.extend_from_slice(rh.as_bytes());
@@ -232,7 +261,7 @@ impl SigStore {
         let mut tk = now_ms.to_be_bytes().to_vec();
         tk.extend_from_slice(rh.as_bytes());
         self.by_time.insert(tk, &[]).map_err(st)?;
-        self.meta.insert(TOTAL_KEY, &(total + bytes.len() as u64).to_be_bytes()).map_err(st)?;
+        self.meta.insert(TOTAL_KEY, &(total + cost).to_be_bytes()).map_err(st)?;
         Ok((r, true))
     }
 
@@ -240,15 +269,17 @@ impl SigStore {
         serde_json::from_slice(&self.records.get(rh.as_bytes()).ok()??).ok()
     }
 
-    /// Records matching every given criterion, newest first, at most [`SEARCH_MAX`]. With no code,
-    /// file or signer, the newest records in the date range.
+    /// Records matching every given criterion, at most [`SEARCH_MAX`]: for a file, the earliest first
+    /// (the first marking can't be pushed out by later ones); otherwise the newest first. With no
+    /// code, file or signer, the newest records in the date range.
     pub fn search(&self, q: &SigQuery) -> Vec<StoredRecord> {
         let hashes: Vec<String> = if let Some(c) = &q.code_prefix {
-            self.by_code.scan_prefix(c.as_bytes()).keys().filter_map(|k| k.ok()).filter_map(|k| String::from_utf8(k[10..].to_vec()).ok()).collect()
+            self.by_code.scan_prefix(c.as_bytes()).keys().filter_map(|k| k.ok()).take(SEARCH_SCAN_MAX).filter_map(|k| String::from_utf8(k[10..].to_vec()).ok()).collect()
         } else if let Some(f) = &q.file_sha256 {
-            self.by_file.scan_prefix(f.as_bytes()).keys().filter_map(|k| k.ok()).filter_map(|k| String::from_utf8(k[64..].to_vec()).ok()).collect()
+            self.by_file.scan_prefix(f.as_bytes()).keys().filter_map(|k| k.ok()).take(SEARCH_SCAN_MAX).filter_map(|k| String::from_utf8(k[72..].to_vec()).ok()).collect()
         } else if let Some(s) = &q.signer {
-            self.by_signer.scan_prefix(s.as_bytes()).keys().filter_map(|k| k.ok()).filter_map(|k| String::from_utf8(k[72..].to_vec()).ok()).collect()
+            // Ordered by publish time: read the newest first.
+            self.by_signer.scan_prefix(s.as_bytes()).keys().rev().filter_map(|k| k.ok()).take(SEARCH_SCAN_MAX).filter_map(|k| String::from_utf8(k[72..].to_vec()).ok()).collect()
         } else {
             // Date only: walk the time index newest first, inside the range, and stop at the limit.
             let lo = q.from_ms.unwrap_or(0).to_be_bytes().to_vec();
@@ -264,7 +295,13 @@ impl SigStore {
             .filter(|r| q.from_ms.is_none_or(|t| r.published_at_ms >= t))
             .filter(|r| q.to_ms.is_none_or(|t| r.published_at_ms <= t))
             .collect();
-        out.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
+        // A file's search lists the earliest markings first (who marked it first is what matters, and
+        // later copies by others can't push it out); everything else lists the newest first.
+        if q.file_sha256.is_some() {
+            out.sort_by(|a, b| a.published_at_ms.cmp(&b.published_at_ms));
+        } else {
+            out.sort_by(|a, b| b.published_at_ms.cmp(&a.published_at_ms));
+        }
         out.truncate(SEARCH_MAX);
         out
     }
