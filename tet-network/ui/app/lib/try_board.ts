@@ -127,9 +127,13 @@ export async function openBoard(baseUrl: string, inviteText: string): Promise<Op
   };
 }
 
+/** What the page says when the node answers 410: its operator stopped serving this board. */
+export const HIDDEN_BOARD = "This node no longer serves this board: its operator hid it. Hiding is local to this node; see Terms.";
+
 /** The board's posts, newest first, decrypted with the invite's keys. */
 export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100): Promise<BoardPost[]> {
   const r = await getTmailInbox(baseUrl, board.boardWalletId, limit);
+  if (r.status === 410) throw new Error(HIDDEN_BOARD);
   if (!r.ok) throw new Error(r.text || `could not read the board (HTTP ${r.status})`);
   const out: BoardPost[] = [];
   for (const row of r.messages) {

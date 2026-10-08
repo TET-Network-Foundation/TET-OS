@@ -461,6 +461,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — no price / earn / invest wording
         run: node --experimental-strip-types scripts/try_money_guard.mjs
+      # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
+      # case, encoding); ordinary routes still pass. Control.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the node proxy never forwards operator routes
+        run: node --experimental-strip-types scripts/try_proxy_guard.mjs
 
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
@@ -607,6 +612,12 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: the demo node exposes only what the design says
         run: bash deploy/tests/demo-node.test.sh
+
+      # The operator's hide command (deploy/operator-hide.sh): valid JSON whatever the reason says,
+      # and no call to the container without a kind, an id and a reason. Control included.
+      - if: needs.gate.outputs.code == 'true'
+        name: operator-hide.sh refuses incomplete commands
+        run: bash deploy/tests/operator-hide.test.sh
 
       # seed-liveness.yml's verdict on healthchecks.io's status: every check "up", at least two,
       # and a malformed or empty answer is a failure, never a pass.

@@ -11,6 +11,7 @@ pub mod ledger;
 pub mod logs;
 pub mod metrics;
 pub mod network;
+pub mod operator;
 pub mod pages;
 pub mod phase4;
 pub mod system;

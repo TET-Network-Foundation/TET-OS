@@ -121,3 +121,42 @@ nobody can list a board they don't own (`tet-network/ui/app/lib/board_directory.
    a board** offers **Public (listed)**.
 3. Listings last 7 days (the node's Tmail TTL); a board's creator lists it again with the board's
    12 words. The page reads the directory's newest 200 posts.
+
+## 10. Hiding content (operator)
+
+The Terms panel says the operator may hide a board, thread, post or file from this node's public
+API, that hiding never deletes chain data, and that every hide is logged. This is how.
+
+One-time: give the node an admin key in `/opt/TET-OS/.env` (never commit it), then restart tet-core
+with the up command in §4:
+
+```bash
+echo "TET_ADMIN_API_KEY=$(openssl rand -hex 32)" >> /opt/TET-OS/.env
+```
+
+The key never leaves the host: `deploy/operator-hide.sh` runs the request inside the container, so
+it comes from loopback (the only place the node answers `/operator/*`; Caddy and the page's proxy
+never forward it) and reads the key from the container's environment.
+
+```bash
+deploy/operator-hide.sh hide wallet <board wallet id> "report 2026-10-12: reason"   # a whole board
+deploy/operator-hide.sh hide msg <msg_id> "reason"                                   # one post
+deploy/operator-hide.sh hide file <file uuid> "reason"
+deploy/operator-hide.sh unhide <kind> <id> "reason"
+deploy/operator-hide.sh list
+deploy/operator-hide.sh log          # /data/operator.log: one JSON line per hide/unhide
+```
+
+A thread: on your own machine, with the invite from the report,
+
+```bash
+cd tet-network/ui
+TET_NODE=https://<domain>/tet-node-api node --experimental-strip-types scripts/operator_thread_ids.mjs '<invite>'           # list threads
+TET_NODE=https://<domain>/tet-node-api node --experimental-strip-types scripts/operator_thread_ids.mjs '<invite>' <thread id>
+```
+
+then hide each printed `msg_id`. The invite stays on your machine; the node only sees an inbox read.
+
+Hiding a wallet also hides everything it sent (its directory listing included) and refuses new
+posts and files to or from it. Copies other nodes already hold stay on those nodes. Reports go to
+abuse@stevenexus.org and are reviewed within 48 hours.

@@ -101,6 +101,7 @@ fn open_temp_ledger() -> crate::ledger::Ledger {
 }
 
 fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate::rest::RestState {
+    let hide_db = ledger.sled_db();
     let (log_tx, _log_rx) = tokio::sync::broadcast::channel::<String>(64);
     let tmail = std::sync::Arc::new(
         crate::tmail::store::TmailStore::open(&ledger.sled_db()).expect("tmail store"),
@@ -134,6 +135,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         log_tx,
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         demo_sponsor: None,
+        operator_hide: crate::operator_hide::OperatorHide::open(&hide_db).unwrap(),
     }
 }
 
@@ -13753,4 +13755,176 @@ async fn a_tx_signed_by_another_wallet_is_refused_everywhere() {
     crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string()).await.expect("mine");
     assert!(ledger.is_tx_applied(&crate::consensus::tx_hash_for_env(&good).unwrap()).unwrap());
     assert_eq!(ledger.balance_micro(&victim).unwrap(), before - 50 * crate::ledger::STEVEMON);
+}
+
+/// **SECURITY REGRESSION GUARD: what the operator hides is not served on any public route.**
+/// Hiding is node-local (`operator_hide.rs`): a hidden post, a hidden wallet (everything sent to it,
+/// and everything it sent — so its directory listing goes too) and a hidden file are absent from the
+/// Tmail inbox, the files inbox, file fetch and peer fetch; unhiding serves them again; the chain is
+/// untouched; every hide/unhide is written to the operator log; the operator routes refuse a caller
+/// that isn't on loopback or lacks the admin key. Every public GET route must be classified as
+/// content (checked here) or not, so a new content route can't skip the check unnoticed.
+/// Negative control (run by hand): with the inbox filter removed this test FAILS.
+#[tokio::test]
+async fn operator_hidden_items_are_not_served_on_any_public_route() {
+    use axum::extract::{ConnectInfo, State};
+    use crate::operator_hide::HideKind;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let hide_body = |kind: HideKind, id: &str, reason: &str| {
+        axum::body::Bytes::from(serde_json::json!({ "kind": kind, "id": id, "reason": reason }).to_string())
+    };
+    let log = std::env::temp_dir().join(format!("tet-operator-{}.log", uuid::Uuid::new_v4()));
+    unsafe { std::env::set_var("TET_OPERATOR_LOG", &log) };
+
+    // Every public GET is classified; content routes are the ones this test exercises.
+    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id"];
+    const NOT_CONTENT: &[&str] = &[
+        "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/status/live",
+        "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
+        // A membership proof's receipt: no message text, no sender.
+        "/tmail/anon/receipt/:hash",
+        "/files/upload-budget",
+    ];
+    for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
+        if *m == "GET" {
+            assert!(CONTENT.contains(p) || NOT_CONTENT.contains(p), "classify public GET {p}: does it return content?");
+        }
+    }
+
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let router = crate::rest::routes::build_router(state.clone());
+    let get = |uri: String| {
+        let router = router.clone();
+        async move {
+            let resp = router.oneshot(axum::http::Request::builder().uri(uri).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+            let status = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (status, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+
+    // A board wallet with two posts from two senders, and a file to a third wallet.
+    let (w1, s1, board) = tmail_pair_for_tests();
+    let (w2, s2, _) = tmail_pair_for_tests();
+    for (words, sender, id) in [(&w1, &s1, "post-one"), (&w2, &s2, "post-two")] {
+        let env = signed_tmail_env_for_tests(words, sender, &board, id, tmail_flags_for_tests(false), None);
+        assert!(state.tmail.store_tmail(&env).unwrap());
+    }
+    let alice = file_test_wallet();
+    let bob = file_test_wallet();
+    let blob = b"encrypted file body".to_vec();
+    let fenv = build_signed_file_envelope(&alice, &bob.wallet_id, &blob, file_now_ms());
+    state.files.store_with_blob(&fenv, &blob).unwrap();
+    let fid = fenv.file_id.to_string();
+    let root = ledger.compute_state_root().unwrap();
+
+    let inbox = |w: &str| get(format!("/tmail/inbox/{w}?limit=200"));
+    assert!(inbox(&board).await.1.contains("post-one"));
+
+    let admin = admin_headers_for_tests();
+    let local = Some(ConnectInfo("127.0.0.1:9".parse::<std::net::SocketAddr>().unwrap()));
+    let hide = |kind: HideKind, id: &str| crate::rest::handlers::operator::post_operator_hide(
+        State(state.clone()), local, admin.clone(),
+        hide_body(kind, id, "test report #1"),
+    );
+
+    // The routes: loopback and the admin key, or nothing.
+    let req = || hide_body(HideKind::Msg, "post-one", "r");
+    let remote = Some(ConnectInfo("203.0.113.9:9".parse::<std::net::SocketAddr>().unwrap()));
+    assert_eq!(crate::rest::handlers::operator::post_operator_hide(State(state.clone()), remote, admin.clone(), req()).await.status(), StatusCode::FORBIDDEN);
+    assert_eq!(crate::rest::handlers::operator::post_operator_hide(State(state.clone()), local, axum::http::HeaderMap::new(), req()).await.status(), StatusCode::UNAUTHORIZED);
+    assert!(inbox(&board).await.1.contains("post-one"), "a refused call hid something");
+
+    // A post.
+    assert_eq!(hide(HideKind::Msg, "post-one").await.status(), StatusCode::OK);
+    let (st, body) = inbox(&board).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(!body.contains("post-one") && body.contains("post-two"), "{body}");
+
+    // A sender wallet: its posts go everywhere (this is how a board's directory listing goes).
+    assert_eq!(hide(HideKind::Wallet, &s2).await.status(), StatusCode::OK);
+    assert!(!inbox(&board).await.1.contains("post-two"));
+
+    // The board wallet itself: its inbox isn't served at all.
+    assert_eq!(hide(HideKind::Wallet, &board).await.status(), StatusCode::OK);
+    assert_eq!(inbox(&board).await.0, StatusCode::GONE);
+    // …and it takes nothing new: a fresh post to it is refused, not stored and never served.
+    let late = signed_tmail_env_for_tests(&w1, &s1, &board, "post-late", tmail_flags_for_tests(false), None);
+    let resp = router
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri("/tmail/send")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(serde_json::to_vec(&late).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::GONE, "a post to a hidden board was accepted");
+    assert!(state.tmail.get_by_msg_id("post-late").is_none(), "a post to a hidden board was stored");
+
+    // A file: files inbox, fetch, and a peer's fetch.
+    assert!(get(format!("/files/inbox/{}", bob.wallet_id)).await.1.contains(&fid));
+    assert_eq!(get(format!("/files/fetch/{fid}")).await.0, StatusCode::OK);
+    assert_eq!(hide(HideKind::File, &fid).await.status(), StatusCode::OK);
+    assert!(!get(format!("/files/inbox/{}", bob.wallet_id)).await.1.contains(&fid));
+    assert_eq!(get(format!("/files/fetch/{fid}")).await.0, StatusCode::GONE);
+    assert!(!crate::files::serve_peer_fetch(&state.files, fenv.file_id).found, "a peer was served a hidden file");
+
+    // Unhide serves it again; the chain never moved.
+    let un = crate::rest::handlers::operator::post_operator_unhide(
+        State(state.clone()), local, admin.clone(),
+        hide_body(HideKind::File, &fid, "report withdrawn"),
+    ).await;
+    assert_eq!(un.status(), StatusCode::OK);
+    assert_eq!(get(format!("/files/fetch/{fid}")).await.0, StatusCode::OK);
+    assert!(crate::files::serve_peer_fetch(&state.files, fenv.file_id).found);
+    assert_eq!(ledger.compute_state_root().unwrap(), root, "hiding touched the chain");
+
+    // Every use is in the operator log.
+    let lines = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"hide\"")).count(), 4, "{lines}");
+    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"unhide\"")).count(), 1, "{lines}");
+    unsafe { std::env::remove_var("TET_OPERATOR_LOG") };
+    let _ = std::fs::remove_file(&log);
+}
+
+/// **SECURITY REGRESSION GUARD: in public mode the operator routes pass the gate from loopback only.**
+/// The demo runs in public mode, so the operator's hide routes would otherwise be unreachable; the gate
+/// lets exactly `OPERATOR_PATHS` through when the TCP peer is loopback (the operator runs them inside
+/// the container). From the reverse proxy, from anywhere else, with a forged `X-Forwarded-For:
+/// 127.0.0.1`, or on a near-miss path, they stay refused; and through the gate the route still needs
+/// the admin key (401 without it). Negative control (run by hand): drop the loopback condition → FAILED.
+#[tokio::test]
+async fn public_mode_lets_operator_routes_through_from_loopback_only() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "1000");
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "1000");
+    let (router, _e) = public_router_for_tests(true);
+    for path in crate::rest::public_api::OPERATOR_PATHS {
+        let method = if path.ends_with("hidden") { "GET" } else { "POST" };
+        for (peer, xff, why) in [
+            (TEST_PROXY_PEER, None, "the reverse proxy"),
+            ("203.0.113.5:4000", None, "a remote client"),
+            (TEST_PROXY_PEER, Some("127.0.0.1"), "a forged X-Forwarded-For"),
+        ] {
+            let (s, refused) = public_call_from_for_tests(&router, method, path, xff, peer).await;
+            assert!(refused && s == StatusCode::NOT_FOUND, "{method} {path} from {why}: {s} refused={refused}");
+        }
+        let (s, refused) = public_call_from_for_tests(&router, method, path, None, "127.0.0.1:4000").await;
+        assert!(!refused, "{method} {path} from loopback was refused by the gate");
+        assert_eq!(s, StatusCode::UNAUTHORIZED, "{method} {path} from loopback without the admin key");
+    }
+    for near in ["/operator/hide/", "/operator/HIDE", "/operator//hide", "/operator/hide/../hidden", "/operator"] {
+        let (s, refused) = public_call_from_for_tests(&router, "POST", near, None, "127.0.0.1:4000").await;
+        assert!(refused && s == StatusCode::NOT_FOUND, "near miss {near} from loopback: {s} refused={refused}");
+    }
 }

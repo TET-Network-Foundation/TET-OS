@@ -110,6 +110,10 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
         return (envelope_error_status(&e), format!("{e}")).into_response();
     }
 
+    // Nothing new to or from a wallet the operator hid: it would be stored and never served.
+    if state.operator_hide.is_wallet_hidden(&env.receiver_wallet_id) || state.operator_hide.is_wallet_hidden(&env.sender_wallet_id) {
+        return crate::rest::helpers::hidden_by_operator();
+    }
     match state.files.store_with_blob(&env, &body) {
         Ok(_) => {}
         Err(crate::files::storage::FileStoreError::IdTaken(_)) => {
@@ -198,7 +202,16 @@ pub async fn get_files_inbox(
         .limit
         .unwrap_or(INBOX_DEFAULT_LIMIT)
         .clamp(1, INBOX_MAX_LIMIT);
-    let files = state.files.get_inbox(&w, limit);
+    // Hidden by the operator (`operator_hide.rs`): not served on this node's public routes.
+    if state.operator_hide.is_wallet_hidden(&w) {
+        return crate::rest::helpers::hidden_by_operator();
+    }
+    let files: Vec<_> = state
+        .files
+        .get_inbox(&w, limit)
+        .into_iter()
+        .filter(|f| !state.operator_hide.is_file_hidden(&f.file_id.to_string()) && !state.operator_hide.is_wallet_hidden(&f.sender_wallet_id))
+        .collect();
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -224,6 +237,15 @@ pub async fn get_files_fetch(
     let id = file_id.trim();
     if uuid::Uuid::parse_str(id).is_err() {
         return (StatusCode::BAD_REQUEST, "file_id must be a UUID").into_response();
+    }
+    // Hidden by the operator: the file itself, or its sender or receiver.
+    let hidden_party = state
+        .files
+        .get_meta(id)
+        .map(|m| state.operator_hide.is_wallet_hidden(&m.sender_wallet_id) || state.operator_hide.is_wallet_hidden(&m.receiver_wallet_id))
+        .unwrap_or(false);
+    if state.operator_hide.is_file_hidden(id) || hidden_party {
+        return crate::rest::helpers::hidden_by_operator();
     }
     if let Some(bytes) = state.files.get_blob(id) {
         return (
