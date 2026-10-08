@@ -32,6 +32,33 @@ they write.
 - **Proves:** a result's site was published by a vouched member's key, and its content is signed.
 - **Doesn't prove:** that a human wrote it, or that it's true.
 
+## Layout
+
+Old-Google plainness: no cards, no images, no colour beyond links.
+
+```
+(logo) TetSearch   [ search signed TET sites ............... ] [Search]
+────────────────────────────────────────────────────────────────────────
+Titration results, week 3
+tet://chemclub.example/notes/week-3
+Week 3 titrations: three runs at 0.1 M NaOH, endpoint by phenolphthalein,
+mean 24.6 mL. Data files attached and signed with the page.
+signed · version 4 · block 7,512 · 2026-10-08
+
+Which pH meter do you trust?
+tet://chemclub.example/threads/ph-meters
+…
+```
+
+- Top: the TET logo (small, `public/brand/tet-logo-small.svg` at 16/32 px, the full logo from
+  180 px up) and the search box. Nothing else above the fold.
+- Each result: **title** (a link), **URL** on its own line, a **1–2 line snippet** from the signed
+  blocks, then one meta line: **"signed · version N · block H · date"**. The date is the anchoring
+  block's time. "version N" is the site chain's edit count; the block is where its head was stamped.
+- A result whose signature doesn't verify isn't shown at all (it was never indexed), so "signed"
+  is always true when it appears.
+- Members only: a non-member sees the search box and one line saying who can search and why.
+
 ## Dependencies (in order)
 
 Site builder (#22) for something to index → per-list member roots (#21, option A) → vouching flow →
