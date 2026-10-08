@@ -480,6 +480,13 @@ jobs:
         name: try page — the home search matches every word, and nothing for an empty query
         run: node --experimental-strip-types scripts/try_search_guard.mjs
 
+      # Signature badge and proof codes: a hash-only signature matches only a file with that SHA-256;
+      # record-only checks only for hash records; a code lookup lists every match, verifies each,
+      # and fetches only its own file; a proof code is never called a key. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — proof codes find; signatures prove
+        run: node --experimental-strip-types scripts/try_badge_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).

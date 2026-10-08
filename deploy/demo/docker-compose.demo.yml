@@ -42,6 +42,7 @@ services:
         NEXT_PUBLIC_TET_QUESTIONS_INVITE: "${TET_QUESTIONS_INVITE:-}"
         # The public-board directory's invite (public by design): the try page's "Public boards".
         NEXT_PUBLIC_TET_DIRECTORY_INVITE: "${TET_DIRECTORY_INVITE:-}"
+        NEXT_PUBLIC_TET_SIGNATURES_INVITE: "${TET_SIGNATURES_INVITE:-}"
 
   caddy:
     image: caddy:2.8
