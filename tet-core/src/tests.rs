@@ -10172,7 +10172,8 @@ fn install_capture_log() -> bool {
 
 /// **SECURITY REGRESSION GUARD: an anonymous post names no poster to the node.** Replays the exact
 /// request sequence `tet-network/ui/app/lib/anon_poster.mjs` makes (download the whole registry,
-/// deposit the receipt, send the envelope) through the real router, then looks for the poster's
+/// deposit the receipt, send the envelope) through the real router (the placeholder receipt is
+/// refused at send, so the envelope is also stored the way gossip delivers it), then looks for the poster's
 /// wallet id and registry commitment in everything the node saw or kept: the requests, the `log`
 /// output, the node's live log feed, and every sled tree except the registry, where the
 /// registration is public by design.
@@ -10263,9 +10264,15 @@ async fn anonymous_post_names_no_poster_to_the_node() {
         &eph_words, &ephemeral, &receiver, nullifier, "anon-trace-1", sent_at,
     );
     env.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = receipt_hash;
-    let (status, _) =
+    let (status, body) =
         call("POST", "/tmail/send".into(), Some(serde_json::to_value(&env).unwrap())).await;
-    assert!(status.is_success(), "the anonymous envelope is accepted: {status}");
+    // The trace's receipt is a placeholder, so since anonymous posts are checked before they're
+    // stored, the node refuses it (and keeps nothing); the refusal path must name no poster either.
+    assert_eq!(status, StatusCode::FORBIDDEN, "a post whose proof doesn't verify must be refused: {body}");
+    assert!(state.tmail.get_by_msg_id("anon-trace-1").is_none(), "a refused anonymous post was stored");
+    // A peer can still deliver it over gossip, where it waits as pending for its receipt: store it
+    // the way that path does, so the scan below covers a kept anonymous post too.
+    assert!(state.tmail.store_tmail(&env).unwrap());
 
     let needles = [poster.clone(), poster.to_ascii_uppercase(), commitment.clone()];
     let hit = |hay: &str| needles.iter().find(|n| hay.contains(n.as_str())).cloned();
@@ -14757,4 +14764,173 @@ async fn inside_stats_report_the_retention_the_stores_apply() {
     let ids: Vec<String> = state.tmail.get_inbox(&rx, 50).into_iter().map(|e| e.msg_id).collect();
     assert!(ids.contains(&"young".to_string()), "a post younger than the shown retention is gone");
     assert!(!ids.contains(&"old".to_string()), "a post older than the shown retention is still served");
+}
+
+/// **SECURITY REGRESSION GUARD: an anonymous post whose proof doesn't verify is never kept, served,
+/// relayed or counted.** At `POST /tmail/send` the proof is checked before anything is stored: no
+/// receipt → refused; a receipt that doesn't verify (a repeat on the same board and day included)
+/// → refused with the reason, nothing stored. A post that arrives some other way (gossip, pending
+/// until its receipt is pulled) is deleted the moment its verdict is Failed, and tombstoned so a
+/// re-delivery can't bring it back. And unverified posts can't push verified ones out of a board:
+/// the per-receiver cap keeps verified posts first.
+/// A failure that depends on this node's view (a registry root it doesn't know yet) is deleted too,
+/// but not tombstoned, so a genuine post can come back once the node knows the root.
+/// Negative controls (run by hand): the send storing before checking again → FAILED; a Failed
+/// verdict not deleting → FAILED; the cap ranking newest-only again → FAILED; the unknown-root
+/// failure kept → FAILED; tombstoned → FAILED.
+#[tokio::test]
+async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let (_rw, board) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let send = |env: crate::tmail::envelope::TmailEnvelopeV1| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(axum::http::Request::builder().method("POST").uri("/tmail/send").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&env).unwrap())).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+
+    // No receipt deposited.
+    let a = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [1u8; 32], "anon-no-receipt", tmail_now_ms_for_tests());
+    assert_eq!(send(a).await, StatusCode::BAD_REQUEST);
+    assert!(state.tmail.get_by_msg_id("anon-no-receipt").is_none());
+
+    // A receipt that doesn't verify.
+    let junk = b"not a receipt".to_vec();
+    let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
+    state.tmail.put_anon_receipt(&jh, &junk).unwrap();
+    let mut b = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [2u8; 32], "anon-bad-proof", tmail_now_ms_for_tests());
+    b.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    resign_tmail_env_for_tests(&mut b, &ew);
+    assert_eq!(send(b.clone()).await, StatusCode::FORBIDDEN);
+    assert!(state.tmail.get_by_msg_id("anon-bad-proof").is_none(), "a post whose proof failed was stored");
+    assert!(state.tmail.get_inbox(&board, 200).is_empty());
+
+    // Delivered another way (gossip: pending), then Failed: deleted, and a re-delivery stays out.
+    assert!(state.tmail.store_tmail(&b).unwrap());
+    state.tmail.set_anon_verdict("anon-bad-proof", &crate::tmail::store::AnonVerdict::Failed { reason: "replay".into(), failed_at_ms: 1 }).unwrap();
+    assert!(state.tmail.get_inbox(&board, 200).is_empty(), "a failed post is still served");
+    assert!(!state.tmail.store_tmail(&b).unwrap(), "a failed post came back on re-delivery");
+
+    // A root this node doesn't know yet depends on its view: deleted (never kept, served or counted:
+    // anyone can prove membership of a tree they made up), but not tombstoned, so a genuine post can
+    // be stored and checked again once this node knows the root.
+    let mut c = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [3u8; 32], "anon-root-unknown", tmail_now_ms_for_tests());
+    c.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    resign_tmail_env_for_tests(&mut c, &ew);
+    assert!(state.tmail.store_tmail(&c).unwrap());
+    state.tmail.set_anon_verdict("anon-root-unknown", &crate::tmail::store::AnonVerdict::Failed { reason: "registry root not recognised, or outside the acceptance window".into(), failed_at_ms: 1 }).unwrap();
+    assert!(state.tmail.get_by_msg_id("anon-root-unknown").is_none(), "a post with an unknown root was kept");
+    assert!(state.tmail.get_inbox(&board, 200).iter().all(|e| e.msg_id != "anon-root-unknown"), "a post with an unknown root is served");
+    assert!(state.tmail.store_tmail(&c).unwrap(), "a post with an unknown root was tombstoned: a genuine one could never come back");
+
+    // The cap keeps verified posts first: 3 verified (older), then 6 pending (newer), cap 3.
+    let _cap = EnvVarGuard::set("TET_TMAIL_ANON_RETAIN_PER_RECEIVER", "3");
+    let (_rw2, board2) = tmail_party_for_tests();
+    let base = tmail_now_ms_for_tests();
+    for i in 0..9u8 {
+        let env = anon_env_with_nullifier_for_tests(&ew, &eid, &board2, [10 + i; 32], &format!("cap-{i}"), base + i as u64);
+        if i < 3 {
+            state.tmail.set_anon_verdict(&format!("cap-{i}"), &crate::tmail::store::AnonVerdict::Verified { nullifier_hex: hex::encode([10 + i; 32]), verified_at_ms: 1 }).unwrap();
+        }
+        state.tmail.store_tmail(&env).unwrap();
+    }
+    let kept: std::collections::BTreeSet<String> = state.tmail.get_inbox(&board2, 200).into_iter().map(|e| e.msg_id).collect();
+    for i in 0..3 {
+        assert!(kept.contains(&format!("cap-{i}")), "a verified post was pushed out by pending ones: kept {kept:?}");
+    }
+}
+
+/// **SECURITY REGRESSION GUARD: an anonymous post that isn't stored doesn't use up the day.**
+/// The send checks the proof (claiming the nullifier) before storing; when the store then fails,
+/// the claim is released, so the member can post again. A release frees only the claim made by
+/// that same message.
+/// Negative control (run by hand): release made a no-op → FAILED.
+#[test]
+fn an_anonymous_post_that_is_not_stored_does_not_use_up_the_day() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let n = hex::encode([5u8; 32]);
+    assert!(store.claim_anon_nullifier(&n, "msg-a").unwrap());
+    store.release_anon_nullifier(&n, "msg-b");
+    assert!(!store.claim_anon_nullifier(&n, "msg-c").unwrap(), "someone else's release freed the claim");
+    store.release_anon_nullifier(&n, "msg-a");
+    assert!(store.claim_anon_nullifier(&n, "msg-c").unwrap(), "the day stayed used up");
+    let src = include_str!("tmail/store.rs");
+    assert!(src.contains("self.release_anon_nullifier(&nullifier_hex, env.msg_id.trim());"), "the send no longer releases the claim when the store fails");
+}
+
+/// **SECURITY REGRESSION GUARD: a released claim can never belong to a stored post.** The send's
+/// check → store → release is one unit (`send_anonymous`, under one lock, run whole on a blocking
+/// thread so a client hanging up can't split it), and releases only when the message isn't stored.
+/// Two requests for the same anonymous message racing (one failing to store, one storing) can't
+/// leave its nullifier free while the post is kept.
+/// Negative control (run by hand): the release without the "not stored" check → FAILED.
+#[test]
+fn a_released_claim_never_belongs_to_a_stored_post() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let (_rw, board) = tmail_party_for_tests();
+    let env = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [6u8; 32], "race-msg", tmail_now_ms_for_tests());
+    let n = hex::encode([6u8; 32]);
+    // Both requests claimed (same message: idempotent); the second stored it.
+    assert!(store.claim_anon_nullifier(&n, "race-msg").unwrap());
+    assert!(store.store_tmail(&env).unwrap());
+    // The first now hits its store failure and runs the release rule (`send_anonymous`).
+    let src = include_str!("tmail/store.rs");
+    assert!(src.contains("if self.get_by_msg_id(env.msg_id.trim()).is_none() {\n                            self.release_anon_nullifier"), "the release no longer checks the message isn't stored");
+    if store.get_by_msg_id("race-msg").is_none() {
+        store.release_anon_nullifier(&n, "race-msg");
+    }
+    assert!(!store.claim_anon_nullifier(&n, "another-msg").unwrap(), "a stored post's nullifier was freed for another message");
+    assert!(src.contains("let _g = self.anon_send_lock.lock()"), "anonymous sends are no longer serialised");
+    let handler = include_str!("rest/handlers/tmail.rs");
+    assert!(handler.contains("tokio::task::spawn_blocking(move || store.send_anonymous(&e2))"), "the check-store-release unit no longer runs whole on a blocking thread");
+
+    // send_anonymous refuses without storing: no proof, no receipt, a proof that doesn't verify.
+    let mut no_proof = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [7u8; 32], "no-proof", tmail_now_ms_for_tests());
+    no_proof.anonymous = None;
+    assert_eq!(store.send_anonymous(&no_proof), Err(crate::tmail::store::AnonSendError::NoProof));
+    let no_receipt = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [8u8; 32], "no-receipt", tmail_now_ms_for_tests());
+    assert_eq!(store.send_anonymous(&no_receipt), Err(crate::tmail::store::AnonSendError::NoReceipt));
+    let junk = b"junk".to_vec();
+    let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
+    store.put_anon_receipt(&jh, &junk).unwrap();
+    let mut bad = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [9u8; 32], "bad-proof", tmail_now_ms_for_tests());
+    bad.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh;
+    assert!(matches!(store.send_anonymous(&bad), Err(crate::tmail::store::AnonSendError::Refused(_))));
+    for id in ["no-proof", "no-receipt", "bad-proof"] {
+        assert!(store.get_by_msg_id(id).is_none(), "{id} was stored");
+    }
+}
+
+/// **A ballot the poll's rules refuse is a 403 with the reason, not a 500, on the checked send
+/// path.** With #78 every anonymous post, ballots included, goes through `send_anonymous`; the poll
+/// gate in `store_tmail` can still refuse a verified ballot (the poll closed, …). That refusal maps
+/// to `AnonSendError::Ballot`, which the handler answers with 403; other store failures stay 500.
+/// (The nullifier release on that path is `a_ballot_that_is_not_stored_does_not_use_up_the_vote`.)
+/// Negative control (run by hand): `from_store` mapping everything to `Store` → FAILED.
+#[test]
+fn a_refused_ballot_on_the_checked_send_path_is_a_403() {
+    use crate::tmail::store::{AnonSendError, TmailStoreError};
+    match AnonSendError::from_store(TmailStoreError::PollBallot("ballot refused: closed".into())) {
+        AnonSendError::Ballot(r) => assert!(r.contains("closed"), "{r}"),
+        other => panic!("a poll refusal became {other:?}"),
+    }
+    assert!(matches!(AnonSendError::from_store(TmailStoreError::Full(1)), AnonSendError::Store(_)));
+    let handler = include_str!("rest/handlers/tmail.rs");
+    let arm = handler.split("AnonSendError::Ballot(reason)").nth(1).expect("the handler has no Ballot arm");
+    assert!(arm[..arm.find("AnonSendError::Store").unwrap_or(arm.len())].contains("StatusCode::FORBIDDEN"), "a refused ballot isn't a 403");
 }

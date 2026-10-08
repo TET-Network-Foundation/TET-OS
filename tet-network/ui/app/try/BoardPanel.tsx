@@ -20,7 +20,8 @@ import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib
 import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, NAME_MAX, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
-import { tmailBucketIndex } from "../lib/anon_tree.mjs";
+import { anonNullifier, fromHex, tmailBucketIndex, toHex } from "../lib/anon_tree.mjs";
+import { getTmailKeySession } from "../lib/tmail_session";
 import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
@@ -310,7 +311,11 @@ export default function BoardPanel(props: {
   const patch = (id: string, p: Partial<Outgoing>) =>
     mounted.current && setOutgoing((o) => o.map((x) => (x.id === id ? { ...x, ...p, stepAtMs: p.step ? Date.now() : x.stepAtMs } : x)));
 
-  const allowance = anonAllowance({ nowMs: now, postedBuckets });
+  // This member's daily ID on this board today, and the verified daily IDs already posted today.
+  const bucketNow = tmailBucketIndex(now);
+  const myDailyId = anon?.member && getTmailKeySession() ? toHex(anonNullifier(getTmailKeySession()!.anonMemberSecret, fromHex(board.boardWalletId), bucketNow)).slice(0, 4) : null;
+  const dailyIdsToday = posts.filter((p) => p.label.dailyId && tmailBucketIndex(p.sentAtMs) === bucketNow).map((p) => p.label.dailyId as string);
+  const allowance = anonAllowance({ nowMs: now, postedBuckets, myDailyId, dailyIdsToday });
   // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
   const anonymous = prover !== "missing" && !named;
   // Anonymous posting needs membership; until then the one button is the (separate) join.

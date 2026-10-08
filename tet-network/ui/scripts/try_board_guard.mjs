@@ -347,5 +347,48 @@ await check("control: an ID read from any verdict with a nullifier is caught", (
   assert.throws(() => dailyIdOnlyFromAVerifiedProof(eager));
 });
 
+// ── Anonymous posts whose proof failed are never shown; one per board per day, seen from the board ──
+{
+  const { createHash } = await import("node:crypto");
+  const { readFileSync } = await import("node:fs");
+  const at = await import("../app/lib/anon_tree.mjs");
+  const ref = (secret, rx, bucket, littleEndian = true) => {
+    const b = Buffer.alloc(8);
+    littleEndian ? b.writeBigUInt64LE(BigInt(bucket)) : b.writeBigUInt64BE(BigInt(bucket));
+    return createHash("sha256").update("tet-null-v1").update(secret).update(rx).update(b).digest("hex");
+  };
+  const secret = new Uint8Array(32).fill(7);
+  const rx = new Uint8Array(32).fill(9);
+  await check("SECURITY: the page's nullifier is nexus-protocol's (daily IDs match the node's)", () => {
+    assert.equal(at.toHex(at.anonNullifier(secret, rx, 20734)), ref(secret, rx, 20734));
+  });
+  await check("control: a big-endian bucket is caught", () => {
+    assert.notEqual(at.toHex(at.anonNullifier(secret, rx, 20734)), ref(secret, rx, 20734, false));
+  });
+  const L = (row) => board.postLabel(row);
+  const filtersFailed = (src) => {
+    const i = src.indexOf("export async function readBoard");
+    const rb = src.slice(i, src.indexOf("\n}\n", i));
+    assert.ok(/if \(!shownOnBoard\(base\.label\)\) continue;/.test(rb), "readBoard doesn't drop failed posts");
+  };
+  await check("SECURITY: an anonymous post whose proof failed is never shown on a board", () => {
+    assert.equal(board.shownOnBoard(L({ flags: { anonymous: true }, anon_verdict: { state: "failed", reason: "replay" } })), false);
+    assert.equal(board.shownOnBoard(L({ flags: { anonymous: true }, anon_verdict: { state: "verified", nullifier_hex: "ab".repeat(32) } })), true);
+    assert.equal(board.shownOnBoard(L({ flags: { anonymous: true } })), true, "pending is shown, as checking");
+    assert.equal(board.shownOnBoard(L({ sender_wallet_id: "cd".repeat(32) })), true);
+    filtersFailed(readFileSync(new URL("../app/lib/try_board.ts", import.meta.url), "utf8"));
+  });
+  await check("control: a readBoard that shows failed posts is caught", () => {
+    const src = readFileSync(new URL("../app/lib/try_board.ts", import.meta.url), "utf8");
+    assert.throws(() => filtersFailed(src.replace("    if (!shownOnBoard(base.label)) continue;\n", "")));
+  });
+  await check("the daily allowance counts this member's verified post already on the board", () => {
+    const nowMs = 20734 * 86_400_000 + 1000;
+    assert.equal(board.anonAllowance({ nowMs, postedBuckets: [], myDailyId: "ab12", dailyIdsToday: ["ab12"] }).remaining, 0);
+    assert.equal(board.anonAllowance({ nowMs, postedBuckets: [], myDailyId: "ab12", dailyIdsToday: ["cd34"] }).remaining, 1);
+    assert.equal(board.anonAllowance({ nowMs, postedBuckets: [20734] }).remaining, 0);
+  });
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
