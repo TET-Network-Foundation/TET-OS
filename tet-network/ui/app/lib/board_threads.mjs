@@ -51,47 +51,31 @@ export const NAME_MAX = 32;
 const NAME_RE = /^name: ([^\n]*)$/;
 const RESERVED = /\bid\b|anonymous|verified|named|noname|no name|proof|名無し|匿名|記名|検証|無名|具名|證明|証明/i;
 /**
- * Letters from other scripts that look like Latin ones (and O/o like 0), read as Latin for the
- * skeleton check. Not complete — no list is — so mixed scripts are refused outright (below) and the
- * page always shows the post's real ID in its own style beside the name.
+ * The characters a name may hold, as fixed code-point ranges (not Unicode property tables, which
+ * differ between browsers): ASCII letters, digits, space and a little punctuation; hiragana,
+ * katakana, ー, 々 and ・; CJK ideographs; Hangul syllables. Everything else is dropped, so a
+ * name looks the same in every browser and can't hide look-alike or invisible characters.
  */
-const LOOKALIKE = Object.fromEntries(
-  [..."аеорсухіјѕԁԛԝһӏьЬАВЕКМНОРСТХІЈЅοΟνΑΒΕΖΗΙΚΜΝΡΤΥΧαεϲκτυɑƅɗɡıȷᴅꞵ"].map((c, i) => [c, "aeopcyxijsdqwhlbbABEKMHOPCTXIJSoOvABEZHIKMNPTYXaecktuabdgijdb"[i]]),
-);
-// Invisible or format characters, whatever the list of the day: controls, format characters (bidi
-// overrides, zero-width joiners, tags), private-use, unassigned, default-ignorables (Hangul fillers,
-// variation selectors), line and paragraph separators.
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Co}\p{Cn}\p{Cs}\p{Default_Ignorable_Code_Point}\p{Variation_Selector}\p{Zl}\p{Zp}]/gu;
-// Scripts a name may mix with Latin (Japanese, Chinese and Korean names often do).
-const MIXES_WITH_LATIN = /[\p{Script=Common}\p{Script=Inherited}\p{Script=Latin}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const NOT_ALLOWED = /[^A-Za-z0-9 ._'!?&\-\u3005\u3041-\u3096\u309d\u309e\u30a1-\u30fa\u30fb\u30fc-\u30fe\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3]/gu;
 
 /**
- * A display name as shown: without invisible or format characters (which could make text display
- * reversed or hide inside a word), NFKC-normalised, spaces collapsed, at most NAME_MAX characters;
- * "" means none (shown as 名無しさん / "No name"). A name that could pass for an ID or a status label
- * is no name. Names aren't checked by anyone: the page always shows the post's ID beside it.
+ * A display name as shown: width-normalised (ＡＢＣ → ABC, ｶﾅ → カナ), accents off (José → Jose),
+ * only the allowed characters above, spaces collapsed, at most NAME_MAX characters; "" means none
+ * (shown as 名無しさん / "No name"). A name that could pass for an ID or a status label is no name.
+ * Names aren't checked by anyone: the page always shows the post's ID beside it.
  * @param {unknown} raw
  */
 export function cleanName(raw) {
   const s = String(raw ?? "")
-    .replace(INVISIBLE, "")
     .normalize("NFKC")
-    .replace(INVISIBLE, "")
-    .replace(/\s+/g, " ")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
+    .replace(NOT_ALLOWED, "")
+    .replace(/ +/g, " ")
     .trim();
-  const name = [...s].slice(0, NAME_MAX).join("");
-  // Latin mixed with another alphabet (Cyrillic, Greek, Armenian, Cherokee …) is the usual
-  // look-alike trick: refused.
-  const letters = [...name].filter((c) => /\p{L}/u.test(c));
-  if (letters.some((c) => /\p{Script=Latin}/u.test(c)) && letters.some((c) => !MIXES_WITH_LATIN.test(c))) return "";
-  // The skeleton: accents and marks off, no spaces or punctuation, look-alikes read as Latin.
-  const skeleton = [
-    ...name
-      .normalize("NFKD")
-      .replace(/[\p{M}\s\p{P}\p{S}]/gu, ""),
-  ]
-    .map((c) => LOOKALIKE[c] ?? c)
-    .join("");
+  const name = [...s].slice(0, NAME_MAX).join("").trim();
+  const skeleton = name.replace(/[^A-Za-z0-9\u3005\u3041-\u30ff\u3400-\u9fff\uac00-\ud7a3]/g, "");
   if (/[0-9a-f]{6,}/i.test(skeleton) || RESERVED.test(skeleton) || RESERVED.test(name)) return "";
   return name;
 }

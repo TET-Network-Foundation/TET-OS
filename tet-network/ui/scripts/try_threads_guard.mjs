@@ -209,12 +209,19 @@ await check("control: a name cleaner that keeps bidi overrides is caught", () =>
 // ── Names can't pose as an ID or a label, and never ride on an anonymous post ──────────────────
 function namesCantSpoof(clean) {
   for (const bad of ["Anon\u{E0100}ymous", "01ba\u{E0100}bab8", "Anon\u{E0041}ymous", "An\u0585nymous", "\u13AAnonymous", "\u00c1nonymous", "Ano\u0301nymous", "01\u044c\u0430\u044c\u0430\u044c8", "0\u0251b\u0251b\u0251b8", "Anon\u180bymous", "01babab\u20338", "01b\u0430b\u0430b8", "\u0410n\u043enym\u043eus", "名 無しさん", "名・無しさん", "N o n a m e", "id 01ba", "01babab8", "ID:01ba bab8", "ab12 cd34", "Anonymous", "名無しさん", "匿名", "記名", "anonymous · verified", "ＩＤ：ａｂ１２ｃｄ", "Mo\u200bnar\u200b ab\u200b12cd"]) {
-    assert.equal(clean(bad), "", `"${bad}" passes for an ID or a label`);
+    // Either no name, or what's left (allowed characters only) reads as neither an ID nor a label.
+    const c = clean(bad);
+    assert.ok(c === "" || (!/[0-9a-f]{6,}/i.test(c.replace(/[^0-9A-Za-z]/g, "")) && !/anonymous|verified|named|\bid\b|名無し|匿名|記名/i.test(c)), `"${bad}" → "${c}" passes for an ID or a label`);
   }
   assert.equal(clean("Mo\u200bnar"), "Monar", "zero-width characters are removed");
   assert.equal(clean("モナー"), "モナー");
   assert.equal(clean("Sakura 2"), "Sakura 2");
-  for (const ok of ["Ida", "Иван", "Ελένη", "陈小明", "김철수", "Café Zoë", "José", "モナーA", "ひろゆきX", "Александр"]) assert.equal(clean(ok), ok, `an ordinary name "${ok}" is refused`);
+  for (const ok of ["Ida", "陈小明", "김철수", "モナーA", "ひろゆきX", "佐々木", "Sakura 2"]) assert.equal(clean(ok), ok, `an ordinary name "${ok}" is refused`);
+  assert.equal(clean("José"), "Jose", "accents come off");
+  assert.equal(clean("ＭＯＮＡ"), "MONA", "full width is normalised");
+  assert.equal(clean("ｶﾞｯ"), "ガッ", "half-width kana is normalised");
+  // Outside the allowed ranges, a name is dropped (decision: Cyrillic and Greek names show as 名無しさん).
+  assert.equal(clean("Иван"), "");
 }
 await check("a name can't pose as an ID or a status label", () => namesCantSpoof(t.cleanName));
 
@@ -236,6 +243,28 @@ function noNameDifferential(clean, parse, encode, n) {
     assert.equal(byHand.name, clean(s.replace(/\n/g, "")), `hand-written ${JSON.stringify(s)}`);
   }
 }
+// A name holds only the allowed code points, whatever comes in: the same in every browser.
+function onlyAllowed(clean, n) {
+  const ok = /^[A-Za-z0-9 ._'!?&\-\u3005\u3041-\u3096\u309d\u309e\u30a1-\u30fa\u30fb\u30fc-\u30fe\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3]*$/u;
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  for (let i = 0; i < n; i++) {
+    let s = "";
+    for (let k = 1 + Math.floor(rnd() * 10); k > 0; k--) {
+      // Mostly anywhere in Unicode, sometimes plain ASCII so real names are in the mix.
+      const cp = rnd() < 0.3 ? 0x20 + Math.floor(rnd() * 0x5f) : Math.floor(rnd() * 0x10ffff);
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      s += String.fromCodePoint(cp);
+    }
+    const c = clean(s);
+    assert.match(c, ok, `${JSON.stringify(s)} → ${JSON.stringify(c)} holds a character outside the allowed ranges`);
+  }
+}
+await check("SECURITY: a name holds only the allowed code points (50,000 random inputs)", () => onlyAllowed(t.cleanName, 50000));
+await check("control: a blocklist cleaner (the previous design) is caught", () =>
+  assert.throws(() => onlyAllowed((x) => String(x).replace(/[\u0000-\u001f\u200b-\u200f\u202a-\u202e]/g, "").trim(), 50000)),
+);
+
 await check("SECURITY: no name is read differently by the parser and the cleaner (20,000 inputs)", () =>
   noNameDifferential(t.cleanName, t.parseThreadPost, t.encodeThreadPost, 20000),
 );
