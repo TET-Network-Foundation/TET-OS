@@ -1540,7 +1540,7 @@ export default function NexusOS() {
       ].slice(0, 200),
     );
     appendLedger([
-      "[Worker] Start Mining (GPU) pressed — Worker Daemon earning flow armed.",
+      "[Worker] Start Mining (GPU) pressed — Worker Daemon work loop armed.",
       "[Worker] Keep tet-core worker daemon running; successful AI jobs settle as TET rewards.",
     ]);
   }
@@ -1733,7 +1733,7 @@ export default function NexusOS() {
                   onClick: () => {
                     setHybridSignerSession(null);
                     clearSession();
-                    router.push("/");
+                    router.push("/os/start");
                   },
                 },
               ]}
@@ -1782,7 +1782,7 @@ export default function NexusOS() {
                 type="button"
                 onClick={() => {
                   clearSession();
-                  router.push("/");
+                  router.push("/os/start");
                 }}
                 className={`${winBtn} ${panel} px-2 py-0.5 text-sm`}
               >
@@ -2039,7 +2039,7 @@ export default function NexusOS() {
 {`TET Network v0.1
 Thermodynamic Execution Tree
 
-TET is an execution network for AI demand. Prompts are routed into a decentralized worker mesh, priced as physical compute, and settled on a thermodynamic L1 where useful inference consumes scarce ledger value.
+TET is an execution network for AI demand. Prompts are routed into a decentralized worker mesh, measured as physical compute, and recorded on a testnet L1. Testnet TET is a practice unit with no monetary value.
 
 Security model:
 - Ed25519 signs the wallet identity and transaction envelope.

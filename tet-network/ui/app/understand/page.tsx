@@ -83,12 +83,6 @@ export default function UnderstandTET() {
                 <p>{t("understand.ctaBody")}</p>
                 <div className="not-prose flex flex-wrap gap-3">
                   <a
-                    href="/participate"
-                    className="inline-flex items-center justify-center rounded-md bg-slate-900 px-5 py-3 text-sm font-semibold text-white hover:bg-slate-800 transition"
-                  >
-                    {t("understand.ctaParticipate")}
-                  </a>
-                  <a
                     href={t("understand.ctaGithubUrl")}
                     target="_blank"
                     rel="noopener noreferrer"
