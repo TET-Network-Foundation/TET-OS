@@ -22,6 +22,7 @@ import {
   newBoardSeed,
   parseInvite,
   postLabel,
+  shownOnBoard,
 } from "./board.mjs";
 import { generateDisposableWords } from "./disposable_wallet.mjs";
 import { fetchAnonLeaves, makeHelperProver, runAnonPost } from "./anon_poster.mjs";
@@ -138,6 +139,7 @@ export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100):
   const out: BoardPost[] = [];
   for (const row of r.messages) {
     const base = { msgId: row.msg_id, sentAtMs: row.sent_at_ms, label: postLabel(row) };
+    if (!shownOnBoard(base.label)) continue;
     if (!row.e2ee) {
       out.push({ ...base, state: "unreadable" });
       continue;
@@ -164,7 +166,7 @@ export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100):
 /** Where a Tmail goes: a wallet id and its messaging public keys. */
 export type Recipient = { walletId: string; x25519Pub: Uint8Array; mlkemPub: Uint8Array };
 
-const boardRecipient = (board: OpenBoard): Recipient => ({
+export const boardRecipient = (board: OpenBoard): Recipient => ({
   walletId: board.boardWalletId,
   x25519Pub: board.keys.x25519_pub,
   mlkemPub: board.keys.mlkem_pub,
@@ -245,6 +247,7 @@ export async function postAnonymousTo(
   to: Recipient,
   text: string,
   onState: (s: AnonSendState) => void,
+  memberTree?: { leaves: Uint8Array[]; rootHex: string },
 ): Promise<AnonSendState> {
   const ks = getTmailKeySession();
   if (!ks) return { state: "failed", reason: "Create a disposable wallet first." };
@@ -275,7 +278,7 @@ export async function postAnonymousTo(
       now: () => Date.now(),
       onState,
     },
-    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text, memberTree },
   )) as AnonSendState;
 }
 

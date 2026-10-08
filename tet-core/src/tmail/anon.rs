@@ -263,6 +263,14 @@ pub fn verify_anonymous_proof(
     let Ok(image_id) = decode_image_id_hex(&anon.anchor_proof.image_id_hex) else {
         return fail("malformed image_id_hex");
     };
+    // The receipt must come from TET's own membership program: a valid receipt from any other
+    // program proves nothing about membership. Checked before any proof work.
+    if !anon_program_accepted(&image_id) {
+        return fail(&format!(
+            "proof from an unrecognised proving program (image id {})",
+            encode_image_id_hex(&image_id)
+        ));
+    }
     let receipt_b64 = base64::engine::general_purpose::STANDARD.encode(receipt_bytes);
     let verified = match crate::zk_verifier::verify_tx_receipt_and_journal(
         image_id,
@@ -277,9 +285,13 @@ pub fn verify_anonymous_proof(
         _ => return fail("receipt proves a different claim than anonymous membership"),
     };
 
-    // 3. is the root one we accept?
+    // 3. is the root one we accept? The node's own anonymity-set roots, or, for a members-only
+    // poll, the root its own wallet registered for exactly this receiver and day (tmail/poll.rs).
     let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
-    if !store.accepts_anon_root(&journal.merkle_root, bucket) {
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+    );
+    if !anon_root_accepted_for(store, &env.receiver_wallet_id, &journal.merkle_root, bucket, now_bucket) {
         return fail("registry root not recognised, or outside the acceptance window");
     }
 
@@ -340,3 +352,47 @@ pub fn registration_eligible_at_ms(
     let admitted_epoch = stored.admitted_at_ms / epoch_ms;
     Some((admitted_epoch + 1) * epoch_ms)
 }
+
+/// The anonymous-membership proving programs this node accepts, as `encode_image_id_hex` strings.
+///
+/// Pinned, not taken from the build: the seeds build without the guest (`RISC0_SKIP_BUILD=1`), so
+/// their `methods::NEXUS_GUEST_ID` is a stub. The entry is the membership program as built from this
+/// repository (the image id the prover returns). Changing the guest means adding its id here; the
+/// `zk-real` workflow fails if a real-guest build produces an id that isn't listed.
+pub const ANON_GUEST_IMAGE_IDS: &[&str] = &["fb25a2eb80df841a7191f025a46bf19a93bc19a228998d7bb4ea4c85bf1d49b5"];
+
+/// Is `id` a membership program this node accepts: a pinned id, this build's own real guest (never
+/// the all-zero stub of a guest-less build), or one the operator added in
+/// `TET_ANON_ACCEPTED_IMAGE_IDS` (comma-separated)?
+pub fn anon_program_accepted(id: &[u32; 8]) -> bool {
+    let h = encode_image_id_hex(id);
+    if ANON_GUEST_IMAGE_IDS.iter().any(|x| x.eq_ignore_ascii_case(&h)) {
+        return true;
+    }
+    if methods::NEXUS_GUEST_ID.iter().any(|w| *w != 0) && *id == methods::NEXUS_GUEST_ID {
+        return true;
+    }
+    std::env::var("TET_ANON_ACCEPTED_IMAGE_IDS")
+        .map(|v| v.split(',').any(|x| x.trim().eq_ignore_ascii_case(&h)))
+        .unwrap_or(false)
+}
+
+/// Is `root` an acceptable membership root for a proof to `receiver` in `bucket`?
+///
+/// A poll's wallet follows the poll's rules (`tmail::poll::poll_accepts`): its day only, checked
+/// on that day; a members-only poll's own root only (the node's anonymity-set roots don't count
+/// there, or anyone in the set could vote). Every other receiver accepts the node's anonymity-set
+/// roots, as before.
+pub fn anon_root_accepted_for(
+    store: &crate::tmail::store::TmailStore,
+    receiver: &str,
+    root: &[u8; 32],
+    bucket: u64,
+    now_bucket: u64,
+) -> bool {
+    match store.get_poll_root(receiver) {
+        Some(p) => crate::tmail::poll::poll_accepts(&p, root, bucket, now_bucket, || store.accepts_anon_root(root, bucket)),
+        None => store.accepts_anon_root(root, bucket),
+    }
+}
+

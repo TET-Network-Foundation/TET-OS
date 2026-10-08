@@ -178,7 +178,7 @@ export async function fetchAnonLeaves(node) {
  *   onState?: (s: AnonPostState) => void,
  *   proveBudgetMs?: number,
  * }} deps
- * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string }} input
+ * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string, memberTree?: { leaves: Uint8Array[], rootHex: string } }} input
  * @returns {Promise<AnonPostState>}
  */
 export async function runAnonPost(deps, input) {
@@ -194,12 +194,17 @@ export async function runAnonPost(deps, input) {
     if (!/^[0-9a-f]{64}$/.test(receiver)) return fail("recipient wallet id must be 64 hex chars");
 
     emit({ state: "loading_set" });
-    const set = await fetchAnonLeaves(deps.node);
+    // A members-only poll proves against its own member tree (the root its wallet registered with
+    // the node, tet-core tmail/poll.rs); everything else against this node's anonymity set. Either
+    // way the leaves must reproduce that exact root before anything is proven.
+    const set = input.memberTree
+      ? { leaves: input.memberTree.leaves, rootHex: input.memberTree.rootHex, nextEpochAtMs: 0 }
+      : await fetchAnonLeaves(deps.node);
     const mine = toHex(anonCommitment(input.memberSecret));
     const index = set.leaves.findIndex((l) => toHex(l) === mine);
     const { root, siblings } = anonRootAndPath(set.leaves, index);
     if (toHex(root) !== String(set.rootHex).toLowerCase()) {
-      return fail("the downloaded registry does not reproduce this node's root");
+      return fail(input.memberTree ? "the poll's member list does not reproduce its registered root" : "the downloaded registry does not reproduce this node's root");
     }
     if (index < 0 || !siblings) {
       return emit({ state: "not_in_set", nextEpochAtMs: set.nextEpochAtMs });

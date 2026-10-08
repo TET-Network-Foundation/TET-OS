@@ -64,6 +64,9 @@
 		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/keys/[^/%]+$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/read-receipt$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/anon/register$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/poll/root$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/poll/root/[^/%]+$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/commitment/[^/%]+$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/root$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/leaves$")) ||
 		({method} == "PUT" && {path}.matches("^/tet-node-api/tmail/anon/receipt$")) ||

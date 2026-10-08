@@ -30,6 +30,7 @@ const TREE_BY_MSG_ID: &str = "tmail_by_msg_id_v1";
 const TREE_KEYS: &str = "tmail_keys_v1";
 /// Anonymity-set registrations: key `wallet_id`, value = `TmailAnonRegistrationV1` JSON.
 const TREE_ANON_REGISTRY: &str = "tmail_anon_registry_v1";
+const TREE_POLL_ROOTS: &str = "tmail_poll_roots_v1";
 /// Verdict per anonymous message: key `msg_id`, value = [`AnonVerdict`] JSON.
 const TREE_ANON_VERDICT: &str = "tmail_anon_verdict_v1";
 /// Content-addressed receipt cache: key = SHA-256 of the receipt, value = receipt bytes.
@@ -141,6 +142,8 @@ pub enum TmailStoreError {
     Full(usize),
     #[error("key registration verification failed: {0}")]
     KeyVerify(String),
+    #[error("this wallet is a poll: {0}")]
+    PollBallot(String),
 }
 
 pub struct TmailStore {
@@ -151,9 +154,16 @@ pub struct TmailStore {
     anon_verdict: sled::Tree,
     anon_receipts: sled::Tree,
     anon_nullifiers: sled::Tree,
+    /// Members-only poll roots, by poll wallet (tmail/poll.rs). Immutable once set.
+    poll_roots: sled::Tree,
     /// Memoised `(epoch, root)`. Purely a cache — a miss is recomputed from the registry, so
     /// losing it (restart, eviction, flood) costs time and never acceptance.
     anon_roots: std::sync::Mutex<Vec<(u64, [u8; 32])>>,
+    /// Serialises an anonymous send's check → store → (on failure) release, so a release can never
+    /// interleave with another store of the same message and free a nullifier a stored post holds.
+    /// Serialises [`Self::send_anonymous`] (check → store → release). Only ever taken on a
+    /// blocking thread, never on the async runtime.
+    anon_send_lock: std::sync::Mutex<()>,
 }
 
 fn now_ms() -> u64 {
@@ -249,7 +259,9 @@ impl TmailStore {
             anon_verdict: db.open_tree(TREE_ANON_VERDICT)?,
             anon_receipts: db.open_tree(TREE_ANON_RECEIPTS)?,
             anon_nullifiers: db.open_tree(TREE_ANON_NULLIFIERS)?,
+            poll_roots: db.open_tree(TREE_POLL_ROOTS)?,
             anon_roots: std::sync::Mutex::new(Vec::new()),
+            anon_send_lock: std::sync::Mutex::new(()),
         })
     }
 
@@ -263,6 +275,17 @@ impl TmailStore {
     /// already present (idempotent duplicate). Callers MUST have run
     /// [`crate::tmail::envelope::verify_tmail_envelope_v1`] first.
     pub fn store_tmail(&self, env: &TmailEnvelopeV1) -> Result<bool, TmailStoreError> {
+        self.store_tmail_inner(env, true)
+    }
+
+    /// Tests only: store as `store_tmail` does but without the poll-ballot gate, to fill a poll's
+    /// inbox without real proofs.
+    #[cfg(test)]
+    pub fn store_tmail_ungated_for_tests(&self, env: &TmailEnvelopeV1) -> Result<bool, TmailStoreError> {
+        self.store_tmail_inner(env, false)
+    }
+
+    fn store_tmail_inner(&self, env: &TmailEnvelopeV1, poll_gate: bool) -> Result<bool, TmailStoreError> {
         let msg_id = env.msg_id.trim();
         if msg_id.is_empty() {
             return Err(TmailStoreError::EmptyMsgId);
@@ -285,9 +308,26 @@ impl TmailStore {
         }
         let val = serde_json::to_vec(env).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
         let key = receiver_index_key(&receiver, env.sent_at_ms, msg_id);
-        self.by_receiver.insert(key, val)?;
-        self.by_msg_id
-            .insert(msg_id.as_bytes(), receiver.as_bytes())?;
+        // A poll's wallet stores only anonymous ballots this node verified (tmail/poll.rs), so junk
+        // can't crowd real ballots out. Gossip and REST both come through here. Checked after
+        // everything that can refuse for other reasons, because it claims the ballot's nullifier.
+        let claimed = if poll_gate && self.get_poll_root(&receiver).is_some() {
+            Some(self.poll_ballot_gate(env).map_err(TmailStoreError::PollBallot)?)
+        } else {
+            None
+        };
+        let written = self
+            .by_receiver
+            .insert(key, val)
+            .and_then(|_| self.by_msg_id.insert(msg_id.as_bytes(), receiver.as_bytes()));
+        if let Err(e) = written {
+            // Not stored: give the nullifier back, or the member's vote is lost (a resend would be
+            // refused as a replay).
+            if let Some(nullifier) = claimed {
+                self.release_anon_nullifier(&nullifier, msg_id);
+            }
+            return Err(e.into());
+        }
         // Retention is applied at write time so the store never holds more than the rule allows,
         // even if nothing ever calls `GET /tmail/inbox`. Enforcing it only on read would make the
         // cap a display convention again -- exactly what S7-0 exists to stop being true.
@@ -307,8 +347,9 @@ impl TmailStore {
         if !is_wallet_id_64hex(&receiver) {
             return Ok(0);
         }
-        let keep = anon_retain_per_receiver();
+        let keep = self.anon_keep_for(&receiver);
         let mut rows: Vec<(u64, Vec<u8>, String, u64)> = Vec::new();
+        let verified = |msg_id: &str| matches!(self.get_anon_verdict(msg_id), Some(AnonVerdict::Verified { .. }));
         for item in self.by_receiver.scan_prefix(receiver.as_bytes()) {
             let Ok((k, v)) = item else { continue };
             let Ok(env) = serde_json::from_slice::<TmailEnvelopeV1>(&v) else {
@@ -323,7 +364,9 @@ impl TmailStore {
         if rows.len() <= keep {
             return Ok(0);
         }
-        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        // Verified posts first, then newest: unverified (pending) envelopes can never push a verified
+        // post out, however many arrive.
+        rows.sort_by(|a, b| verified(&b.2).cmp(&verified(&a.2)).then_with(|| b.0.cmp(&a.0)).then_with(|| b.1.cmp(&a.1)));
         let mut removed = 0usize;
         for (_sent, key, msg_id, expire_at) in rows.into_iter().skip(keep) {
             if matches!(self.by_receiver.remove(&key), Ok(Some(_))) {
@@ -437,7 +480,7 @@ impl TmailStore {
         }
         let now = now_ms();
         let keep = retain_per_conversation();
-        let anon_keep = anon_retain_per_receiver();
+        let anon_keep = self.anon_keep_for(&receiver);
         let mut anon_seen = 0usize;
         let mut per_conversation: std::collections::HashMap<String, usize> =
             std::collections::HashMap::new();
@@ -578,6 +621,17 @@ impl TmailStore {
     ///
     /// Callers MUST have authorized the revoke first
     /// ([`crate::tmail::burn::authorize_burn_revoke`]) — this method does no policy check.
+    /// Remove a message entirely, leaving no tombstone (a later delivery may store it again).
+    pub fn forget_by_msg_id(&self, msg_id: &str) -> Result<bool, TmailStoreError> {
+        let msg_id = msg_id.trim();
+        let Some(key) = self.index_key_for_msg_id(msg_id) else {
+            return Ok(false);
+        };
+        let removed = self.by_receiver.remove(&key)?.is_some();
+        self.by_msg_id.remove(msg_id.as_bytes())?;
+        Ok(removed)
+    }
+
     pub fn delete_by_msg_id(&self, msg_id: &str) -> Result<bool, TmailStoreError> {
         let msg_id = msg_id.trim();
         let Some(key) = self.index_key_for_msg_id(msg_id) else {
@@ -767,6 +821,80 @@ impl TmailStore {
         wallet_id: &str,
     ) -> Option<crate::tmail::anon::TmailAnonRegistrationV1> {
         self.get_stored_anon(wallet_id).map(|s| s.registration)
+    }
+
+    /// Register a members-only poll (signature already verified). The node computes the root from
+    /// **its own registry**: every listed wallet must be a registered member, and its registered
+    /// commitment is the leaf; the creator supplies no leaves. `Ok(true)` stored, `Ok(false)` the
+    /// same list was already registered; a different list for the same poll is refused.
+    pub fn register_poll_root(&self, r: &crate::tmail::poll::TmailPollRootV1) -> Result<bool, String> {
+        let key = r.poll_wallet_id.trim().to_ascii_lowercase();
+        if r.members.is_empty() {
+            if let Some(existing) = self.get_poll_root(&key) {
+                if existing.root_hex.is_none() && existing.poll.bucket_index == r.bucket_index {
+                    return Ok(false);
+                }
+                return Err("this poll already has a different member list; a poll's members can't be changed".into());
+            }
+            let stored = crate::tmail::poll::StoredPollRoot { poll: r.clone(), root_hex: None };
+            let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
+            self.poll_roots.insert(key.as_bytes(), bytes).map_err(|e| e.to_string())?;
+            let _ = self.poll_roots.flush();
+            return Ok(true);
+        }
+        let mut leaves = Vec::with_capacity(r.members.len());
+        for m in &r.members {
+            let Some(reg) = self.get_anon_registration(m) else {
+                return Err(format!("{}… is not a registered member", &m[..8.min(m.len())]));
+            };
+            let bytes: [u8; 32] = hex::decode(reg.commitment_hex.trim())
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .ok_or("a member's registered commitment is malformed")?;
+            leaves.push(bytes);
+        }
+        let root_hex = Some(hex::encode(crate::tmail::anon::AnonMerkleTree::build(leaves).root()));
+        if let Some(existing) = self.get_poll_root(&key) {
+            if existing.root_hex == root_hex && existing.poll.bucket_index == r.bucket_index {
+                return Ok(false);
+            }
+            return Err("this poll already has a different member list; a poll's members can't be changed".into());
+        }
+        let stored = crate::tmail::poll::StoredPollRoot { poll: r.clone(), root_hex };
+        let bytes = serde_json::to_vec(&stored).map_err(|e| e.to_string())?;
+        self.poll_roots.insert(key.as_bytes(), bytes).map_err(|e| e.to_string())?;
+        let _ = self.poll_roots.flush();
+        Ok(true)
+    }
+
+    /// A poll's wallet takes an envelope only if it's an anonymous ballot whose receipt is here and
+    /// verifies now. The verdict is recorded (and the nullifier claimed) on the way.
+    fn poll_ballot_gate(&self, env: &TmailEnvelopeV1) -> Result<String, String> {
+        let Some(anon) = env.anonymous.as_ref().filter(|_| env.flags.anonymous) else {
+            return Err("it takes only anonymous ballots".into());
+        };
+        let Some(receipt) = self.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex) else {
+            return Err("a ballot's proof receipt must be deposited first".into());
+        };
+        match crate::tmail::anon::verify_anonymous_proof(self, env, &receipt) {
+            AnonVerdict::Verified { nullifier_hex, verified_at_ms } => {
+                let _ = self.set_anon_verdict(env.msg_id.trim(), &AnonVerdict::Verified { nullifier_hex: nullifier_hex.clone(), verified_at_ms });
+                Ok(nullifier_hex)
+            }
+            AnonVerdict::Failed { reason, .. } => Err(format!("ballot refused: {reason}")),
+            other => Err(format!("ballot not verified: {other:?}")),
+        }
+    }
+
+    /// How many anonymous messages to keep for `receiver`: a poll keeps all its (verified, so one
+    /// per member) ballots; everyone else the newest [`ANON_RETAIN_PER_RECEIVER`].
+    fn anon_keep_for(&self, receiver: &str) -> usize {
+        if self.get_poll_root(receiver).is_some() { usize::MAX } else { anon_retain_per_receiver() }
+    }
+
+    pub fn get_poll_root(&self, poll_wallet_id: &str) -> Option<crate::tmail::poll::StoredPollRoot> {
+        let v = self.poll_roots.get(poll_wallet_id.trim().to_ascii_lowercase().as_bytes()).ok()??;
+        serde_json::from_slice(&v).ok()
     }
 
     pub fn anon_member_count(&self) -> usize {
@@ -1014,6 +1142,39 @@ impl TmailStore {
 // Anonymous message verdicts — verify on ARRIVAL, read the stored verdict later.
 // ---------------------------------------------------------------------------
 
+/// Is an anonymous proof failure the same on every node (a bad receipt, a journal that doesn't
+/// match, another program, a repeat)? Not when the only problem is that this node doesn't (yet)
+/// recognise the registry root the proof was made against.
+pub fn failure_is_definitive(reason: &str) -> bool {
+    !reason.starts_with("registry root not recognised")
+}
+
+/// Why [`TmailStore::send_anonymous`] didn't store a post.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnonSendError {
+    /// The envelope says anonymous but carries no proof.
+    NoProof,
+    /// The proof's receipt wasn't deposited first.
+    NoReceipt,
+    /// The proof doesn't verify (a repeat on the same board and day included).
+    Refused(String),
+    /// It verified, but the poll's rules refuse this ballot (the claim was released): a 403.
+    Ballot(String),
+    /// It verified but couldn't be stored (the claim was released).
+    Store(String),
+}
+
+impl AnonSendError {
+    /// A verified post that `store_tmail` refused: a poll's rules (a 403 with the reason), or a
+    /// store failure (a 500).
+    pub fn from_store(e: TmailStoreError) -> Self {
+        match e {
+            TmailStoreError::PollBallot(_) => AnonSendError::Ballot(e.to_string()),
+            other => AnonSendError::Store(other.to_string()),
+        }
+    }
+}
+
 /// What this node concluded about an anonymous message's proof.
 ///
 /// Stored when the message arrives, not computed when it is read. That is what keeps the root
@@ -1035,9 +1196,24 @@ impl TmailStore {
         env_usize("TET_TMAIL_ANON_RECEIPT_CACHE", DEFAULT_ANON_RECEIPT_CACHE)
     }
 
+    /// Record a verdict. **A Failed verdict also deletes the envelope** (tombstoned, so a gossip
+    /// re-delivery can't bring it back): an anonymous post whose proof doesn't verify is never kept,
+    /// served or counted, whichever path delivered it. Every verdict path goes through here.
     pub fn set_anon_verdict(&self, msg_id: &str, verdict: &AnonVerdict) -> Result<(), TmailStoreError> {
         let val = serde_json::to_vec(verdict).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
         self.anon_verdict.insert(msg_id.trim().as_bytes(), val)?;
+        // Every failure deletes: nothing failed is kept, served or counted. A definite failure is
+        // tombstoned, so a re-delivery can't bring it back. "Root not recognised" depends on this
+        // node's view of the registry, so that one is deleted WITHOUT a tombstone: if the post is
+        // genuine and arrives again once this node knows the root, it can still be checked and kept.
+        // (Keeping it instead would let anyone post with a proof against a tree they made up.)
+        if let AnonVerdict::Failed { reason, .. } = verdict {
+            if failure_is_definitive(reason) {
+                self.delete_by_msg_id(msg_id)?;
+            } else {
+                self.forget_by_msg_id(msg_id)?;
+            }
+        }
         Ok(())
     }
 
@@ -1051,6 +1227,45 @@ impl TmailStore {
     ///
     /// Re-claiming for the same `msg_id` is idempotent, so a duplicate delivery of one message does
     /// not look like a replay.
+    /// Check, store and (on a failed store) release, as one unit under `anon_send_lock`: an
+    /// anonymous post from a client is kept only if its proof verifies now (its receipt was
+    /// deposited first). Blocking: call it on a blocking thread. `Ok(true)` stored, `Ok(false)` the
+    /// same message was already stored.
+    pub fn send_anonymous(&self, env: &TmailEnvelopeV1) -> Result<bool, AnonSendError> {
+        let _g = self.anon_send_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let anon = env.anonymous.as_ref().ok_or(AnonSendError::NoProof)?;
+        let bytes = self.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex).ok_or(AnonSendError::NoReceipt)?;
+        let nullifier_hex = match crate::tmail::anon::verify_anonymous_proof(self, env, &bytes) {
+            AnonVerdict::Verified { nullifier_hex, verified_at_ms } => {
+                let v = AnonVerdict::Verified { nullifier_hex: nullifier_hex.clone(), verified_at_ms };
+                match self.store_tmail(env) {
+                    Ok(stored) => {
+                        let _ = self.set_anon_verdict(env.msg_id.trim(), &v);
+                        return Ok(stored);
+                    }
+                    Err(e) => {
+                        // Not stored: give the nullifier back (only this message's claim), or the
+                        // member's post for the day is used up with nothing posted.
+                        if self.get_by_msg_id(env.msg_id.trim()).is_none() {
+                            self.release_anon_nullifier(&nullifier_hex, env.msg_id.trim());
+                        }
+                        return Err(AnonSendError::from_store(e));
+                    }
+                }
+            }
+            AnonVerdict::Failed { reason, .. } => reason,
+            AnonVerdict::Pending => "couldn't be checked yet".to_string(),
+        };
+        Err(AnonSendError::Refused(nullifier_hex))
+    }
+
+    /// Undo [`Self::claim_anon_nullifier`] for a message that wasn't stored after all. Only the
+    /// claim by this `msg_id` is removed; anyone else's stands.
+    pub fn release_anon_nullifier(&self, nullifier_hex: &str, msg_id: &str) {
+        let key = nullifier_hex.trim().to_ascii_lowercase();
+        let _ = self.anon_nullifiers.compare_and_swap(key.as_bytes(), Some(msg_id.trim().as_bytes()), None as Option<&[u8]>);
+    }
+
     pub fn claim_anon_nullifier(
         &self,
         nullifier_hex: &str,

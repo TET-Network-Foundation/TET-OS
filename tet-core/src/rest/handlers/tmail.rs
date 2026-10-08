@@ -62,38 +62,48 @@ pub async fn post_tmail_send(
     {
         return crate::rest::helpers::hidden_by_operator();
     }
-    match state.tmail.store_tmail(&env) {
-        Ok(true) => {}
-        Ok(false) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "ok": false,
-                    "msg_id": env.msg_id,
-                    "status": "duplicate",
-                })),
-            )
-                .into_response();
+    // An anonymous post is checked BEFORE it's stored or relayed: this node holds the receipt the
+    // sender just deposited. A post whose proof doesn't verify (a repeat on the same board and day
+    // included) is refused with the reason, never kept or relayed. The check, the store and any
+    // release run as one unit on a blocking thread (`TmailStore::send_anonymous`), so neither a
+    // burst of sends nor a client hanging up mid-check can split them.
+    let stored = if env.flags.anonymous {
+        let (store, e2) = (state.tmail.clone(), env.clone());
+        match tokio::task::spawn_blocking(move || store.send_anonymous(&e2)).await {
+            Ok(Ok(stored)) => stored,
+            Ok(Err(crate::tmail::store::AnonSendError::NoProof)) => return (StatusCode::BAD_REQUEST, "an anonymous envelope needs its proof").into_response(),
+            Ok(Err(crate::tmail::store::AnonSendError::NoReceipt)) => {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "deposit the proof's receipt first" }))).into_response();
+            }
+            Ok(Err(crate::tmail::store::AnonSendError::Refused(reason))) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": format!("the anonymous proof doesn't verify: {reason}") }))).into_response();
+            }
+            // A ballot the poll's rules refuse (closed, not a member list's root, …): the reason, not a 500.
+            Ok(Err(crate::tmail::store::AnonSendError::Ballot(reason))) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": reason }))).into_response();
+            }
+            Ok(Err(crate::tmail::store::AnonSendError::Store(e))) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
+            Err(j) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")).into_response(),
         }
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response();
+    } else {
+        match state.tmail.store_tmail(&env) {
+            Ok(s) => s,
+            Err(e @ crate::tmail::store::TmailStoreError::PollBallot(_)) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+            }
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
         }
-    }
-    // An anonymous message gets a verdict here too, not only on the receiving node. The sender's
-    // node holds the receipt it just deposited, so there is nothing to pull and no reason to leave
-    // its own copy reading "pending" -- which would otherwise look like a failure to the sender.
-    if env.flags.anonymous
-        && let Some(anon) = env.anonymous.as_ref()
-    {
-        let verdict = match state
-            .tmail
-            .get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex)
-        {
-            Some(bytes) => crate::tmail::anon::verify_anonymous_proof(&state.tmail, &env, &bytes),
-            // No receipt deposited: honestly pending, and the pull will resolve it.
-            None => crate::tmail::store::AnonVerdict::Pending,
-        };
-        let _ = state.tmail.set_anon_verdict(env.msg_id.trim(), &verdict);
+    };
+    if !stored {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "ok": false,
+                "msg_id": env.msg_id,
+                "status": "duplicate",
+            })),
+        )
+            .into_response();
     }
 
     // Propagate to peers so an offline receiver's node can buffer it too.
@@ -142,10 +152,9 @@ pub async fn get_tmail_inbox(
     if state.operator_hide.is_wallet_hidden(&w) {
         return crate::rest::helpers::hidden_by_operator();
     }
-    let limit = q
-        .limit
-        .unwrap_or(INBOX_DEFAULT_LIMIT)
-        .clamp(1, INBOX_MAX_LIMIT);
+    // A poll's wallet holds only verified ballots, one per member; a tally reads them all at once.
+    let max = if state.tmail.get_poll_root(&w).is_some() { crate::tmail::poll::POLL_MAX_MEMBERS } else { INBOX_MAX_LIMIT };
+    let limit = q.limit.unwrap_or(INBOX_DEFAULT_LIMIT).clamp(1, max);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -582,5 +591,46 @@ pub async fn get_tmail_anon_receipt(
             Json(serde_json::json!({ "ok": false, "error": "not held by this node" })),
         )
             .into_response(),
+    }
+}
+
+/// `POST /tmail/poll/root` — register a members-only poll's member root (tmail/poll.rs), signed by
+/// the poll's own wallet. Immutable once set; the poll must be open today (UTC).
+pub async fn post_tmail_poll_root(State(state): State<RestState>, Json(r): Json<crate::tmail::poll::TmailPollRootV1>) -> Response {
+    if let Err(e) = crate::tmail::poll::verify_tmail_poll_root_v1(&r) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+    }
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+    );
+    if r.bucket_index != now_bucket {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "a poll is registered on the UTC day it opens" }))).into_response();
+    }
+    match state.tmail.register_poll_root(&r) {
+        Ok(stored) => {
+            let root_hex = state.tmail.get_poll_root(&r.poll_wallet_id).map(|p| p.root_hex);
+            (StatusCode::ACCEPTED, Json(serde_json::json!({ "ok": true, "stored": stored, "root_hex": root_hex }))).into_response()
+        }
+        Err(e) => {
+            let status = if e.starts_with("this poll already") { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST };
+            (status, Json(serde_json::json!({ "ok": false, "error": e }))).into_response()
+        }
+    }
+}
+
+/// `GET /tmail/poll/root/:wallet_id` — a poll's registered member root, or 404.
+pub async fn get_tmail_poll_root(State(state): State<RestState>, Path(wallet_id): Path<String>) -> Response {
+    match state.tmail.get_poll_root(&wallet_id) {
+        Some(r) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "poll_root": r }))).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false }))).into_response(),
+    }
+}
+
+/// `GET /tmail/anon/commitment/:wallet_id` — a member's public commitment (registrations are
+/// public), so a poll's creator can build the poll's member tree.
+pub async fn get_tmail_anon_commitment(State(state): State<RestState>, Path(wallet_id): Path<String>) -> Response {
+    match state.tmail.get_anon_registration(&wallet_id) {
+        Some(r) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "wallet_id": r.wallet_id, "commitment_hex": r.commitment_hex }))).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false, "error": "not a registered member" }))).into_response(),
     }
 }

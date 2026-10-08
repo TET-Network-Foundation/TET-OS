@@ -20,12 +20,15 @@ import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib
 import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
-import { tmailBucketIndex } from "../lib/anon_tree.mjs";
+import { anonNullifier, fromHex, tmailBucketIndex, toHex } from "../lib/anon_tree.mjs";
+import { getTmailKeySession } from "../lib/tmail_session";
 import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
 import { getUi, setUi } from "../lib/device_store";
 import { useLang, type T } from "./i18n";
+import { PollBox, PollMaker } from "./PollBox";
+import { parsePoll } from "../lib/poll";
 
 const FEED_POLL_MS = 8_000;
 /** Room for the thread header inside one Tmail message. */
@@ -168,6 +171,7 @@ export default function BoardPanel(props: {
   const [err, setErr] = useState("");
   const [named, setNamed] = useState(false);
   const [sage, setSage] = useState(false);
+  const [makingPoll, setMakingPoll] = useState(false);
   const [text, setTextState] = useState("");
   // The composer's draft, kept on this device only for a PUBLIC board (device_store: plain UI
   // state). An invite-only board's draft stays in this tab: a stored draft would leave a lasting
@@ -294,7 +298,11 @@ export default function BoardPanel(props: {
   const patch = (id: string, p: Partial<Outgoing>) =>
     mounted.current && setOutgoing((o) => o.map((x) => (x.id === id ? { ...x, ...p, stepAtMs: p.step ? Date.now() : x.stepAtMs } : x)));
 
-  const allowance = anonAllowance({ nowMs: now, postedBuckets });
+  // This member's daily ID on this board today, and the verified daily IDs already posted today.
+  const bucketNow = tmailBucketIndex(now);
+  const myDailyId = anon?.member && getTmailKeySession() ? toHex(anonNullifier(getTmailKeySession()!.anonMemberSecret, fromHex(board.boardWalletId), bucketNow)).slice(0, 4) : null;
+  const dailyIdsToday = posts.filter((p) => p.label.dailyId && tmailBucketIndex(p.sentAtMs) === bucketNow).map((p) => p.label.dailyId as string);
+  const allowance = anonAllowance({ nowMs: now, postedBuckets, myDailyId, dailyIdsToday });
   // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
   const anonymous = prover !== "missing" && !named;
   // Anonymous posting needs membership; until then the one button is the (separate) join.
@@ -372,6 +380,11 @@ export default function BoardPanel(props: {
   const link = typeof window !== "undefined" ? inviteUrl(window.location.origin, board.invite) : "";
   const titleOf = (th: Thread | undefined) => (th ? (th.threadId === "" ? t("Posts without a thread") : (th.title ?? t("Untitled (its first post has dropped out)"))) : "");
   const mine = outgoing.filter((o) => o.threadId === open);
+  // A poll counts only as a named post by the thread's own (named) author.
+  const starter = thread?.posts[0]?.label;
+  const pollOf = (p: { label: Label; body: string }) =>
+    starter?.kind === "named" && p.label.kind === "named" && p.label.author === starter.author ? parsePoll(p.body) : null;
+  const iStarted = !!wallet && starter?.kind === "named" && starter.author === wallet.walletId;
 
   const copyInvite = (
     <Button
@@ -393,6 +406,17 @@ export default function BoardPanel(props: {
         {open === "new" ? (
           <div className="mb-2">
             <Input label={t("Thread title")} value={newTitle} onChange={setNewTitle} placeholder={t("One line, up to {n} characters…", { n: THREAD_TITLE_MAX })} />
+          </div>
+        ) : null}
+        {makingPoll && open && open !== "new" ? (
+          <div className="mb-2">
+            <PollMaker
+              post={async (body) => {
+                await postNamed(BASE, board, encodeThreadPost({ threadId: open, body, sage: false }));
+                void refresh();
+              }}
+              onDone={() => setMakingPoll(false)}
+            />
           </div>
         ) : null}
         <TextArea
@@ -433,6 +457,11 @@ export default function BoardPanel(props: {
           {prover === "found" ? (
             <Button kind="quiet" onClick={() => setNamed(!named)}>
               {named ? t("post anonymously instead") : t("post named instead")}
+            </Button>
+          ) : null}
+          {iStarted && open !== "new" && !makingPoll ? (
+            <Button kind="quiet" onClick={() => setMakingPoll(true)}>
+              {t("Add a poll")}
             </Button>
           ) : null}
           {open !== "new" ? (
@@ -591,7 +620,10 @@ export default function BoardPanel(props: {
                         {b.text}
                       </Badge>
                     </Meta>
-                    <Body text={p.body} onRef={onRef} />
+                    {(() => {
+                      const def = pollOf(p);
+                      return def ? <PollBox def={def} now={now} /> : <Body text={p.body} onRef={onRef} />;
+                    })()}
                   </li>
                 );
               })}

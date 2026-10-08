@@ -47,6 +47,11 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/tmail/read-receipt"),
     // Anonymous mode: registration and the poster's path (never the wallet-keyed /anon/path).
     ("POST", "/tmail/anon/register"),
+    // Members-only polls (tmail/poll.rs): register a poll's member root; read it; read a member's
+    // public commitment to build a poll's tree.
+    ("POST", "/tmail/poll/root"),
+    ("GET", "/tmail/poll/root/:wallet_id"),
+    ("GET", "/tmail/anon/commitment/:wallet_id"),
     ("GET", "/tmail/anon/root"),
     ("GET", "/tmail/anon/leaves"),
     ("PUT", "/tmail/anon/receipt"),

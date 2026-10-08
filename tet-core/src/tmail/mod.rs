@@ -15,5 +15,6 @@ pub mod anon;
 pub mod burn;
 pub mod envelope;
 pub mod keys;
+pub mod poll;
 pub mod store;
 pub mod timelock;
