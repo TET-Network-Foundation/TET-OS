@@ -682,6 +682,7 @@ pub async fn get_explorer_tx(
             "source": "tx_index_v1",
             "hash": row.hash,
             "block_height": row.block_height,
+            "canonical": row.canonical,
             "tx_index": row.tx_index,
             "tx_kind": row.tx_kind,
             "workload_flag": row.workload_flag,

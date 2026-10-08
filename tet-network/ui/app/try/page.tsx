@@ -16,6 +16,7 @@ import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
 import DirectoryPanel from "./DirectoryPanel";
 import AboutPanel from "./AboutPanel";
 import LivePanel from "./LivePanel";
+import SignPanel from "./SignPanel";
 import BoardPanel from "./BoardPanel";
 import FilesTryPanel from "./FilesTryPanel";
 import MailPanel from "./MailPanel";
@@ -40,6 +41,7 @@ const TOOLS = [
   { id: "directory", label: "Public boards", group: "boards" },
   { id: "questions", label: "Questions for humans", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
+  { id: "sign", label: "sign", group: "tools" },
   { id: "files", label: "files", group: "tools" },
   { id: "mail", label: "DM", group: "tools" },
   { id: "live", label: "live", group: "tools" },
@@ -184,6 +186,7 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
       <h2 className="mx-2 mb-1 mt-4 text-[13px] font-semibold text-[#5d646d]">{t("tools")}</h2>
       <ul>
         {item({ tool: "verify" }, "/", t("verify"))}
+        {item({ tool: "sign" }, "/", t("sign"))}
         {item({ tool: "files" }, "/", t("files"))}
         {item({ tool: "mail" }, "/", t("DM"))}
         {item({ tool: "live" }, "/", t("live"))}
@@ -348,6 +351,7 @@ function TryApp() {
     directory: t("Public boards"),
     questions: t("Questions for humans"),
     verify: t("verify"),
+    sign: t("sign"),
     files: t("files"),
     mail: t("DM"),
     new: t("start or open a board"),
@@ -437,6 +441,7 @@ function TryApp() {
           {panel({ tool: "new" }, <NewBoardPanel directory={directory} onOpen={addBoard} onListed={() => directory && void refreshDirectory(directory)} />)}
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
+          {panel({ tool: "sign" }, <SignPanel />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           {panel({ tool: "about" }, <AboutPanel />)}

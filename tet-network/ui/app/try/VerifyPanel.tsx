@@ -11,6 +11,8 @@ import { gradedVerdict } from "../lib/verify_anything.mjs";
 import { mldsa44Verify } from "../lib/pqc";
 import { Badge, Button, FOCUS, FilePick, INK, Input, PanelHead, PinnedNotice, TextArea, cx } from "./ui";
 import { useLang } from "./i18n";
+import { checkStamp, type StampCheck } from "../lib/sign_anything";
+import { fetchExplorerTx } from "./SignPanel";
 
 type Step = { n: 1 | 2 | 3; status: "ok" | "failed" | "skipped"; text: string };
 type Verdict = { level: 0 | 1 | 2 | 3; steps: Step[]; chainLabel: string };
@@ -94,6 +96,9 @@ export default function VerifyPanel(props: { baseUrl: string }) {
   const [manFile, setManFile] = useState<File | null>(null);
   const [pin, setPin] = useState("");
   const [verdict, setVerdict] = useState<Verdict | null>(null);
+  const [stampText, setStampText] = useState("");
+  const [stampFile, setStampFile] = useState<File | null>(null);
+  const [stamp, setStamp] = useState<StampCheck | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -150,6 +155,20 @@ export default function VerifyPanel(props: { baseUrl: string }) {
         mldsa44Verify,
       });
       setVerdict({ ...r, chainLabel: `${chain.chainId} (${chain.genesisHash.slice(0, 12)}…)` });
+      // A stamp receipt, if given: checked against the exact .sig.json bytes and this node's chain.
+      const stampRaw = stampFile ? await stampFile.text() : stampText;
+      if (stampRaw.trim()) {
+        let receipt: { tx_hash?: unknown };
+        try {
+          receipt = JSON.parse(stampRaw);
+        } catch {
+          throw new Error(t("The stamp receipt is not valid JSON."));
+        }
+        const sigBytes = sigFile ? new Uint8Array(await sigFile.arrayBuffer()) : new TextEncoder().encode(sigText);
+        setStamp(await checkStamp({ sigBytes, receipt, fetchTx: fetchExplorerTx }));
+      } else {
+        setStamp(null);
+      }
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -177,6 +196,7 @@ export default function VerifyPanel(props: { baseUrl: string }) {
         </button>
         {showMore ? (
           <div className="space-y-3 rounded-md bg-[#fafbfc] p-3">
+            <FileOrPaste label={t("Stamp receipt (.stamp.json)")} text={stampText} onText={setStampText} file={stampFile} onFile={setStampFile} placeholder={t("…or paste the stamp receipt")} />
             <FileOrPaste label={t("Owner's manifest")} text={manText} onText={setManText} file={manFile} onFile={setManFile} placeholder={t("…or paste the manifest JSON")} />
             {slot("Pinned key", <Input ariaLabel={t("Pinned key")} value={pin} onChange={setPin} mono placeholder={t("ed25519 hex, tet-mldsa44 key id, or pin.json…")} />)}
             {slot(
@@ -218,6 +238,20 @@ export default function VerifyPanel(props: { baseUrl: string }) {
               <p className={cx("mt-1 break-words text-[15px] leading-relaxed", st.status === "skipped" ? "text-[#5d646d]" : "text-[#1c1f23]")}>{st.text}</p>
             </li>
           ))}
+          {stamp ? (
+            <li className="border-b border-[#eceef1] py-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[14px] font-semibold text-[#5d646d]">+</span>
+                <span className="text-base font-semibold">{t("The .sig.json was stamped on chain")}</span>
+                <Badge tone={stamp.state === "anchored" ? "ok" : "bad"}>{stamp.state === "anchored" ? t("proven") : t("failed")}</Badge>
+              </div>
+              <p className="mt-1 break-words text-[15px] leading-relaxed text-[#1c1f23]">
+                {stamp.state === "anchored"
+                  ? t("Its fee transaction is in block {height} of this node's chain, so this exact .sig.json existed by then. It doesn't show who made it.", { height: stamp.height.toLocaleString() })
+                  : t("Not anchored: {reason}", { reason: stamp.reason })}
+              </p>
+            </li>
+          ) : null}
           <li className="py-2.5 text-[14px] text-[#5d646d]">{t("Checked against chain {chain}.", { chain: verdict.chainLabel })}</li>
         </ol>
       ) : null}

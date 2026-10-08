@@ -153,6 +153,8 @@ export type BuildFileEnvelopeOpts = {
   ttlMs?: number;
   /** The receiving node's cap on the encrypted body; default the network-wide 5 MiB. */
   maxBodyBytes?: number;
+  /** A chosen file id (a "stamp" derives it from a hash); default a random v4 UUID. */
+  fileId?: string;
 };
 
 export type BuiltFileEnvelope = {
@@ -200,7 +202,10 @@ export async function buildFileEnvelopeV1(opts: BuildFileEnvelopeOpts): Promise<
   const feeMicro = opts.feeMicro ?? FILE_FEE_MICRO;
   const ttlMs = opts.ttlMs ?? FILE_DEFAULT_TTL_MS;
   const createdAtMs = Date.now();
-  const fileId = newFileId();
+  if (opts.fileId !== undefined && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(opts.fileId)) {
+    throw new Error("fileId must be a lowercase UUID.");
+  }
+  const fileId = opts.fileId ?? newFileId();
 
   const { chainId, genesisHash } = await expectedChainBinding(opts.baseUrl);
   const msg = fileEnvelopeAuthMessageBytes({

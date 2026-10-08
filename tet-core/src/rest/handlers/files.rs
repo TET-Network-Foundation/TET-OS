@@ -112,6 +112,9 @@ pub async fn post_files_upload(State(state): State<RestState>, mut multipart: Mu
 
     match state.files.store_with_blob(&env, &body) {
         Ok(_) => {}
+        Err(crate::files::storage::FileStoreError::IdTaken(_)) => {
+            return (StatusCode::CONFLICT, "this file id is already used by another file").into_response();
+        }
         Err(crate::files::storage::FileStoreError::StorageFull { .. }) => {
             return (
                 StatusCode::INSUFFICIENT_STORAGE,
@@ -416,6 +419,8 @@ pub async fn post_demo_sponsor_fee(
     if let Err(e) = verify_envelope_v1(&env) {
         return refuse(Refusal::Submit(e));
     }
+    // The fee transaction's hash, as the tx index will key it: the try page's "stamp" receipt.
+    let tx_hash = crate::consensus::tx_hash_for_env(&env).ok();
     if let Err(e) = state.submit_local_tx(env).await {
         return refuse(Refusal::Submit(e.to_string()));
     }
@@ -427,6 +432,7 @@ pub async fn post_demo_sponsor_fee(
             "sponsored": true,
             "file_id": req.file_id.trim(),
             "fee_micro": FILE_FEE_MICRO,
+            "tx_hash": tx_hash,
         })),
     )
         .into_response()

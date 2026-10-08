@@ -13204,6 +13204,9 @@ async fn demo_sponsor_pays_once_for_its_own_upload_and_only_for_the_sender() {
     let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
     assert_eq!(st, StatusCode::ACCEPTED, "{body}");
     assert_eq!(sponsored_fee_txs(&f).await, vec![(f.sponsor.wallet_id().to_string(), fid.clone())]);
+    // The receipt the try page keeps for a "stamp": the hash the tx index will key this fee by.
+    let queued = f.state.mempool.lock().await.iter().find(|e| matches!(e.tx, crate::protocol::TxV1::FileFee { .. })).cloned().unwrap();
+    assert_eq!(body["tx_hash"].as_str(), Some(crate::consensus::tx_hash_for_env(&queued).unwrap().as_str()), "{body}");
 
     let (st, body) = sponsor_post(&f, &sponsor_request(&alice, &alice.wallet_id, &fid, now), peer).await;
     assert_eq!((st, body["reason"].as_str()), (StatusCode::NOT_FOUND, Some("not_sponsorable")), "paid twice");
@@ -13624,6 +13627,57 @@ async fn public_mode_charges_uploads_per_client_per_day_and_needs_a_length() {
     assert_eq!(r.headers().get("connection").map(|v| v.to_str().unwrap()), Some("close"), "a refusal closes at once");
 }
 
+/// **SECURITY REGRESSION GUARD: a file id belongs to the first envelope stored under it.** A stamp
+/// derives its id from a hash anyone holding the .sig.json can compute, so another sender (or another
+/// body) under the same id must be refused, never overwrite the stored body; the identical envelope
+/// may be stored again. Negative control: drop the id check → FAILED (the body is replaced).
+#[test]
+fn a_file_id_cannot_be_taken_over_by_another_envelope() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (_l, store) = new_file_store();
+    let alice = file_test_wallet();
+    let mallory = file_test_wallet();
+    let blob = b"alice's .sig.json, encrypted".to_vec();
+    let env = build_signed_file_envelope(&alice, &alice.wallet_id, &blob, file_now_ms());
+    store.store_with_blob(&env, &blob).expect("first store");
+    store.store_with_blob(&env, &blob).expect("the identical envelope may be stored again");
+    let evil = b"mallory's replacement".to_vec();
+    let mut takeover = build_signed_file_envelope(&mallory, &mallory.wallet_id, &evil, file_now_ms());
+    takeover.file_id = env.file_id;
+    assert!(
+        matches!(store.store_with_blob(&takeover, &evil), Err(crate::files::storage::FileStoreError::IdTaken(_))),
+        "another envelope under a taken id must be refused"
+    );
+    assert_eq!(store.get_blob(&env.file_id.to_string()).as_deref(), Some(blob.as_slice()), "the first body must be intact");
+}
+
+/// **SECURITY REGRESSION GUARD: two uploads racing for one file id can't both win.** The id check and
+/// the write happen under one lock, so of many concurrent envelopes under the same id exactly one is
+/// stored and its body is the one kept. Negative control: drop the lock → FAILED (more than one
+/// "stored", or a body that doesn't match the winner).
+#[test]
+fn racing_uploads_for_one_file_id_have_exactly_one_winner() {
+    let _g = env_lock();
+    set_test_env_base();
+    let (_l, store) = new_file_store();
+    let store = std::sync::Arc::new(store);
+    let id = uuid::Uuid::new_v4();
+    let mut handles = Vec::new();
+    for i in 0..16u8 {
+        let store = store.clone();
+        handles.push(std::thread::spawn(move || {
+            let w = file_test_wallet();
+            let blob = vec![i; 4096];
+            let mut env = build_signed_file_envelope(&w, &w.wallet_id.clone(), &blob, file_now_ms());
+            env.file_id = id;
+            store.store_with_blob(&env, &blob).ok().map(|_| blob)
+        }));
+    }
+    let winners: Vec<Vec<u8>> = handles.into_iter().filter_map(|h| h.join().unwrap()).collect();
+    assert_eq!(winners.len(), 1, "exactly one envelope may own the id");
+    assert_eq!(store.get_blob(&id.to_string()), Some(winners[0].clone()), "the stored body is the winner's");
+}
 
 /// **SECURITY REGRESSION GUARD: a transaction signed by another wallet is refused everywhere.**
 /// A valid hybrid signature proves only which key signed. Every kind that names a wallet it acts

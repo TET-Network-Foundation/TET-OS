@@ -34,6 +34,7 @@
 		({method} == "GET" && {path}.matches("^/tet-node-api/chain$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/ledger/state$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/ledger/balance/[^/%]+$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/explorer/tx/[^/%]+$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/status/live$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/send$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/inbox/[^/%]+$")) ||
