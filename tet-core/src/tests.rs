@@ -136,6 +136,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         demo_sponsor: None,
         operator_hide: crate::operator_hide::OperatorHide::open(&hide_db).unwrap(),
+        sites: std::sync::Arc::new(crate::sites::SiteStore::open(&hide_db).unwrap()),
     }
 }
 
@@ -13786,7 +13787,7 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     unsafe { std::env::set_var("TET_OPERATOR_LOG", &log) };
 
     // Every public GET is classified; content routes are the ones this test exercises.
-    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id"];
+    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id"];
     const NOT_CONTENT: &[&str] = &[
         "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/status/live",
         "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
@@ -13890,6 +13891,23 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     assert_eq!(get(format!("/files/fetch/{fid}")).await.0, StatusCode::GONE);
     assert!(!crate::files::serve_peer_fetch(&state.files, fenv.file_id).found, "a peer was served a hidden file");
 
+    // A site: served, then not served and taking no edits once its wallet is hidden.
+    let site_w = crate::wallet::generate_mnemonic_12().unwrap();
+    let (site_words, site_id) = (site_w.mnemonic_12.clone().unwrap(), site_w.address_hex.to_ascii_lowercase());
+    let s0 = signed_site_edit_for_tests(&site_words, &site_id, 0, &"0".repeat(64), r#"{"op":"meta","title":"t","lang":"en"}"#);
+    state.sites.append(&s0).unwrap();
+    assert_eq!(get(format!("/sites/{site_id}")).await.0, StatusCode::OK);
+    assert_eq!(hide(HideKind::Wallet, &site_id).await.status(), StatusCode::OK);
+    assert_eq!(get(format!("/sites/{site_id}")).await.0, StatusCode::GONE);
+    let s1 = signed_site_edit_for_tests(&site_words, &site_id, 1, &crate::sites::site_edit_hash(&s0), r#"{"op":"add","block":{"type":"text","text":"late"}}"#);
+    let resp = router
+        .clone()
+        .oneshot(axum::http::Request::builder().method("POST").uri("/sites/edit").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&s1).unwrap())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::GONE, "an edit to a hidden site was accepted");
+    assert_eq!(state.sites.edits(&site_id).len(), 1, "an edit to a hidden site was stored");
+
     // Unhide serves it again; the chain never moved.
     let un = crate::rest::handlers::operator::post_operator_unhide(
         State(state.clone()), local, admin.clone(),
@@ -13902,7 +13920,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
 
     // Every use is in the operator log.
     let lines = std::fs::read_to_string(&log).unwrap();
-    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"hide\"")).count(), 4, "{lines}");
+    // msg, two wallets, file, and the site's wallet.
+    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"hide\"")).count(), 5, "{lines}");
     assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"unhide\"")).count(), 1, "{lines}");
     unsafe { std::env::remove_var("TET_OPERATOR_LOG") };
     let _ = std::fs::remove_file(&log);
@@ -14296,6 +14315,235 @@ async fn recent_blocks_route_serves_real_linked_headers_and_no_tx_content() {
     }
     let text = String::from_utf8_lossy(&body);
     assert!(!text.contains(&sender_wallet_id) && !text.contains(&recipient), "a wallet id leaked");
+}
+
+fn signed_site_edit_for_tests(words: &str, site: &str, seq: u64, prev: &str, body: &str) -> crate::sites::SiteEditV1 {
+    use base64::Engine as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let mut e = crate::sites::SiteEditV1 {
+        v: 1,
+        kind: crate::sites::SITE_EDIT_KIND.to_string(),
+        site_wallet_id: site.to_string(),
+        seq,
+        prev_hash: prev.to_string(),
+        body: body.to_string(),
+        created_at_ms: tmail_now_ms_for_tests(),
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: hex::encode(ed_sk.verifying_key().to_bytes()),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::sites::site_edit_auth_message_bytes(&e, &pk);
+    e.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    e.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    e
+}
+
+/// **SECURITY REGRESSION GUARD: a site is exactly the chain its own key signed.**
+/// An edit is accepted only if the site's own wallet signed it (another key, or a body changed
+/// after signing, is refused) and it extends the chain exactly: next `seq`, `prev` = the current
+/// head's hash. A replayed, reordered or forked edit is refused, so the order can't be rewritten.
+/// Bodies must be an op object; the per-edit and per-site quotas hold.
+/// Negative controls (run by hand): the signer check removed → FAILED; the prev check removed →
+/// FAILED.
+#[test]
+fn a_site_is_exactly_the_chain_its_own_key_signed() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let site = crate::wallet::generate_mnemonic_12().unwrap();
+    let (sw, sid) = (site.mnemonic_12.clone().unwrap(), site.address_hex.to_ascii_lowercase());
+    let other = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let zero = "0".repeat(64);
+    let add = |t: &str| format!(r#"{{"op":"add","block":{{"type":"text","text":"{t}"}}}}"#);
+    let ok = |e: &crate::sites::SiteEditV1| crate::sites::verify_site_edit_v1(e).and_then(|_| store.append(e));
+
+    let e0 = signed_site_edit_for_tests(&sw, &sid, 0, &zero, r#"{"op":"meta","title":"Home","lang":"en"}"#);
+    let h0 = ok(&e0).expect("the first edit, signed by the site");
+    assert_eq!(h0.head_hash, crate::sites::site_edit_hash(&e0));
+
+    // Another key signing for this site; a body changed after signing.
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&other, &sid, 1, &h0.head_hash, &add("x"))), Err(crate::sites::SiteEditError::SignerMismatch));
+    let mut tampered = signed_site_edit_for_tests(&sw, &sid, 1, &h0.head_hash, &add("signed"));
+    tampered.body = add("changed");
+    assert!(matches!(crate::sites::verify_site_edit_v1(&tampered), Err(crate::sites::SiteEditError::Signature(_))));
+
+    // Chain position: replayed first edit, skipped seq, wrong prev — all refused.
+    assert!(matches!(store.append(&e0), Err(crate::sites::SiteEditError::NotNext { .. })), "a replayed edit was appended");
+    assert!(matches!(ok(&signed_site_edit_for_tests(&sw, &sid, 2, &h0.head_hash, &add("skip"))), Err(crate::sites::SiteEditError::NotNext { .. })));
+    assert!(matches!(ok(&signed_site_edit_for_tests(&sw, &sid, 1, &"ab".repeat(32), &add("fork"))), Err(crate::sites::SiteEditError::NotNext { .. })), "a fork was appended");
+    let e1 = signed_site_edit_for_tests(&sw, &sid, 1, &h0.head_hash, &add("hello"));
+    let h1 = ok(&e1).expect("the next edit");
+    assert_eq!(store.edits(&sid).len(), 2);
+    assert_eq!(store.head(&sid).unwrap(), h1);
+
+    // Bodies.
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&sw, &sid, 2, &h1.head_hash, r#"{"op":"script"}"#)), Err(crate::sites::SiteEditError::Body));
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&sw, &sid, 2, &h1.head_hash, "not json")), Err(crate::sites::SiteEditError::Body));
+    let big = format!(r#"{{"op":"add","pad":"{}"}}"#, "a".repeat(crate::sites::EDIT_MAX_BODY_BYTES));
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&sw, &sid, 2, &h1.head_hash, &big)), Err(crate::sites::SiteEditError::TooBig));
+
+    // The per-site quota: edits of ~1.4 MB until the site is full.
+    let chunk = format!(r#"{{"op":"add","pad":"{}"}}"#, "b".repeat(1_400_000));
+    let mut head = h1;
+    let mut refused = false;
+    for seq in 2..8 {
+        match ok(&signed_site_edit_for_tests(&sw, &sid, seq, &head.head_hash, &chunk)) {
+            Ok(h) => head = h,
+            Err(crate::sites::SiteEditError::SiteFull) => {
+                refused = true;
+                break;
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+    assert!(refused && head.bytes <= crate::sites::SITE_MAX_BYTES, "a site grew past its quota: {head:?}");
+}
+
+/// **SECURITY REGRESSION GUARD: nobody can fill the site store.** In public mode a site edit is
+/// charged, by its declared length, to the client's daily upload budget (the same one as Files)
+/// before its body is read; a length-less one is refused. And the store has a node-wide byte cap:
+/// once it's reached, new edits are refused, whoever sends them.
+/// Negative controls (run by hand): the gate not charging /sites/edit → FAILED; the total cap
+/// removed → FAILED.
+#[tokio::test]
+async fn nobody_can_fill_the_site_store() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _b = EnvVarGuard::set("TET_PUBLIC_UPLOAD_BYTES_PER_DAY", "1000");
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "1000");
+    let (router, _e) = public_router_for_tests(true);
+    let send = |len: Option<&str>| {
+        let mut b = axum::http::Request::builder()
+            .method("POST")
+            .uri("/sites/edit")
+            .extension(axum::extract::ConnectInfo(TEST_PROXY_PEER.parse::<std::net::SocketAddr>().unwrap()))
+            .header("x-forwarded-for", "203.0.113.91")
+            .header("content-type", "application/json");
+        if let Some(l) = len {
+            b = b.header("content-length", l);
+        }
+        b.body(axum::body::Body::from("{}")).unwrap()
+    };
+    assert_eq!(router.clone().oneshot(send(None)).await.unwrap().status(), StatusCode::LENGTH_REQUIRED);
+    assert_ne!(router.clone().oneshot(send(Some("900"))).await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS, "900 bytes fit");
+    assert_eq!(router.clone().oneshot(send(Some("200"))).await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS, "a site edit wasn't charged to the budget");
+
+    // The node-wide cap.
+    let _cap = EnvVarGuard::set("TET_SITES_MAX_TOTAL_BYTES", "20000");
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let mut refused = false;
+    for _ in 0..10 {
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+        let e = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), &format!(r#"{{"op":"add","pad":"{}"}}"#, "c".repeat(80)));
+        match store.append(&e) {
+            Ok(_) => {}
+            Err(crate::sites::SiteEditError::StoreFull) => {
+                refused = true;
+                break;
+            }
+            Err(x) => panic!("{x}"),
+        }
+    }
+    assert!(refused, "the store grew past its total cap");
+    assert!(store.total_bytes() > 0 && store.total_bytes() <= 20000, "{}", store.total_bytes());
+}
+
+/// **SECURITY REGRESSION GUARD: quotas count what's stored, and a full store frees up.** A site's
+/// bytes are its edits as stored (body and signatures), so tiny bodies can't hide ~5 KB of
+/// signatures each from the quota. A site expires a TTL after its last edit: it stops being served,
+/// and when the store is full its space is reclaimed for the next site.
+/// Negative controls (run by hand): quotas counting body bytes only → FAILED; no pruning when full
+/// → FAILED.
+#[test]
+fn site_quotas_count_stored_bytes_and_expired_sites_free_space() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+    let e = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), r#"{"op":"remove","index":0}"#);
+    let h = store.append(&e).unwrap();
+    assert!(h.bytes >= serde_json::to_vec(&e).unwrap().len() && h.bytes > 4000, "only the body was counted: {}", h.bytes);
+    assert_eq!(store.total_bytes(), h.bytes as u64);
+
+    // Expiry: with a tiny TTL the site stops being served, and a full store reclaims its space.
+    let _ttl = EnvVarGuard::set("TET_SITES_TTL_MS", "1");
+    let _cap = EnvVarGuard::set("TET_SITES_MAX_TOTAL_BYTES", &(h.bytes + 100).to_string());
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let w2 = crate::wallet::generate_mnemonic_12().unwrap();
+    let (words2, id2) = (w2.mnemonic_12.clone().unwrap(), w2.address_hex.to_ascii_lowercase());
+    let e2 = signed_site_edit_for_tests(&words2, &id2, 0, &"0".repeat(64), r#"{"op":"remove","index":0}"#);
+    store.append(&e2).expect("the expired site's space was not reclaimed");
+    assert!(store.edits(&id).is_empty(), "an expired site's edits are still stored");
+    drop(_ttl);
+    assert!(store.head(&id).is_none(), "an expired site is still served");
+    assert!(store.head(&id2).is_some());
+}
+
+/// **SECURITY REGRESSION GUARD: expiry can't be used to roll a site back, lose it on upgrade, or
+/// drift the quota.** An edit's signed time must be close to the node's clock, so a site's old
+/// (public) signed edits can't be replayed once it has expired to bring back a version its owner
+/// replaced. A head stored before times were kept never counts as expired. Reading an expired site
+/// changes nothing (deletes and the byte total only move under the append lock).
+/// Negative controls (run by hand): the freshness check removed → FAILED; a missing time counted as
+/// old → FAILED; `head` pruning on read again → FAILED.
+#[test]
+fn site_expiry_cannot_roll_back_lose_or_drift() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+
+    // Stale: an edit signed an hour ago.
+    let mut old = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), r#"{"op":"meta","title":"t","lang":"en"}"#);
+    old.created_at_ms -= 3_600_000;
+    let old = signed_site_edit_for_tests_at(&words, &id, 0, &"0".repeat(64), &old.body, old.created_at_ms);
+    assert_eq!(store.append(&old), Err(crate::sites::SiteEditError::Stale));
+
+    // Replay after expiry: v1 then a replacing edit; once expired, replaying v1's edits is refused.
+    let _skew = EnvVarGuard::set("TET_SITES_EDIT_SKEW_MS", "50");
+    let e0 = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"text","text":"v1"}}"#);
+    let h0 = store.append(&e0).unwrap();
+    let e1 = signed_site_edit_for_tests(&words, &id, 1, &h0.head_hash, r#"{"op":"remove","index":0}"#);
+    let h1 = store.append(&e1).unwrap();
+    let total = store.total_bytes();
+    let _ttl = EnvVarGuard::set("TET_SITES_TTL_MS", "1");
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    // A read treats it as gone and changes nothing.
+    assert!(store.head(&id).is_none());
+    assert_eq!(store.edits(&id).len(), 2, "a read deleted edits");
+    assert_eq!(store.total_bytes(), total, "a read moved the byte total");
+    assert_eq!(store.append(&e0), Err(crate::sites::SiteEditError::Stale), "an expired site's old edit was replayed");
+    drop(_ttl);
+    let _ = h1;
+
+    // A head from before times were kept is never expired.
+    let legacy = crate::sites::SiteHead { len: 1, head_hash: "ab".repeat(32), bytes: 10, updated_at_ms: 0 };
+    assert!(!crate::sites::SiteStore::expired(&legacy), "a legacy head would be deleted on upgrade");
+}
+
+fn signed_site_edit_for_tests_at(words: &str, site: &str, seq: u64, prev: &str, body: &str, at_ms: u64) -> crate::sites::SiteEditV1 {
+    use base64::Engine as _;
+    let mut e = signed_site_edit_for_tests(words, site, seq, prev, body);
+    e.created_at_ms = at_ms;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let msg = crate::sites::site_edit_auth_message_bytes(&e, &e.hybrid_sig.mldsa_pubkey_b64.clone());
+    e.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    e.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    e
 }
 
 /// **SECURITY REGRESSION GUARD: an anonymous post whose proof doesn't verify is never kept, served,

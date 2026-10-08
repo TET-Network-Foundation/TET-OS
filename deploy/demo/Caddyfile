@@ -56,6 +56,8 @@
 		({method} == "GET" && {path}.matches("^/tet-node-api/ledger/balance/[^/%]+$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/explorer/tx/[^/%]+$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/explorer/blocks/recent$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/sites/edit$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/sites/[^/%]+$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/status/live$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/tmail/send$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/inbox/[^/%]+$")) ||

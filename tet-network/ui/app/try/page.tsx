@@ -32,6 +32,7 @@ import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
 import { LangProvider, LangSwitch, useLang } from "./i18n";
 import LiveStrip from "./LiveStrip";
+import SitePanel from "./SitePanel";
 import WhatPanel from "./WhatPanel";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
@@ -51,6 +52,7 @@ const TOOLS = [
   { id: "sign", label: "sign", group: "tools" },
   { id: "qr", label: "qr", group: "tools" },
   { id: "files", label: "files", group: "tools" },
+  { id: "site", label: "site", group: "tools" },
   { id: "mail", label: "DM", group: "tools" },
   { id: "live", label: "live", group: "tools" },
   { id: "about", label: "About", group: "footer" },
@@ -292,6 +294,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
     [{ tool: "sign" }, t("sign")],
     [{ tool: "qr" }, t("qr")],
     [{ tool: "files" }, t("files")],
+    [{ tool: "site" }, t("site")],
     [{ tool: "mail" }, t("DM")],
     [{ tool: "live" }, t("live")],
   ];
@@ -465,6 +468,7 @@ function TryApp() {
     sign: t("sign"),
     qr: t("qr"),
     files: t("files"),
+    site: t("site"),
     mail: t("DM"),
     new: t("start or open a board"),
     home: t("TET: start here"),
@@ -574,6 +578,7 @@ function TryApp() {
           )}
           {panel({ tool: "what" }, <WhatPanel go={(tool) => go({ tool: tool as ToolId })} />)}
           {panel({ tool: "qr" }, <QrPanel />)}
+          {panel({ tool: "site" }, <SitePanel />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           {panel({ tool: "about" }, <AboutPanel />)}

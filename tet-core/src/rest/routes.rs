@@ -317,6 +317,8 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/explorer/tx/:hash",
             axum::routing::get(super::handlers::ledger::get_explorer_tx),
         )
+        .route("/sites/edit", axum::routing::post(super::handlers::sites::post_site_edit))
+        .route("/sites/:site_id", axum::routing::get(super::handlers::sites::get_site))
         .route(
             "/explorer/blocks/recent",
             axum::routing::get(super::handlers::ledger::get_explorer_recent_blocks),
