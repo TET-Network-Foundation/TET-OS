@@ -14049,5 +14049,6 @@ fn a_released_claim_never_belongs_to_a_stored_post() {
         store.release_anon_nullifier(&n, "race-msg");
     }
     assert!(!store.claim_anon_nullifier(&n, "another-msg").unwrap(), "a stored post's nullifier was freed for another message");
-    assert!(src.contains("state.tmail.anon_send_lock.lock()"), "anonymous sends are no longer serialised");
+    assert!(src.contains("state.tmail.anon_send_lock.lock().await"), "anonymous sends are no longer serialised (with an async lock)");
+    assert!(src.contains("tokio::task::spawn_blocking(move || crate::tmail::anon::verify_anonymous_proof"), "the proof check runs on the async runtime");
 }

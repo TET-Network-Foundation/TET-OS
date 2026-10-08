@@ -66,7 +66,7 @@ pub async fn post_tmail_send(
     // sender just deposited, so there is nothing to wait for. A post whose proof doesn't verify (a
     // repeat on the same board and day included) is refused with the reason, never kept or relayed.
     // Held from the proof check through the store (and any release): see `anon_send_lock`.
-    let anon_guard = env.flags.anonymous.then(|| state.tmail.anon_send_lock.lock().unwrap_or_else(|p| p.into_inner()));
+    let anon_guard = if env.flags.anonymous { Some(state.tmail.anon_send_lock.lock().await) } else { None };
     let anon_verdict = if env.flags.anonymous {
         let Some(anon) = env.anonymous.as_ref() else {
             return (StatusCode::BAD_REQUEST, "an anonymous envelope needs its proof").into_response();
@@ -74,7 +74,12 @@ pub async fn post_tmail_send(
         let Some(bytes) = state.tmail.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex) else {
             return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "deposit the proof's receipt first" }))).into_response();
         };
-        match crate::tmail::anon::verify_anonymous_proof(&state.tmail, &env, &bytes) {
+        // The receipt check is CPU work: off the async runtime.
+        let (store, e2) = (state.tmail.clone(), env.clone());
+        let verdict = tokio::task::spawn_blocking(move || crate::tmail::anon::verify_anonymous_proof(&store, &e2, &bytes))
+            .await
+            .unwrap_or_else(|j| crate::tmail::store::AnonVerdict::Failed { reason: format!("the check didn't finish: {j}"), failed_at_ms: 0 });
+        match verdict {
             v @ crate::tmail::store::AnonVerdict::Verified { .. } => Some(v),
             crate::tmail::store::AnonVerdict::Failed { reason, .. } => {
                 return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": format!("the anonymous proof doesn't verify: {reason}") }))).into_response();
