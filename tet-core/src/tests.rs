@@ -13786,6 +13786,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         // A membership proof's receipt: no message text, no sender.
         "/tmail/anon/receipt/:hash",
         "/files/upload-budget",
+        // Block headers and tx hash, kind and shortened signatures: chain metadata, no content.
+        "/explorer/blocks/recent",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -13927,4 +13929,52 @@ async fn public_mode_lets_operator_routes_through_from_loopback_only() {
         let (s, refused) = public_call_from_for_tests(&router, "POST", near, None, "127.0.0.1:4000").await;
         assert!(refused && s == StatusCode::NOT_FOUND, "near miss {near} from loopback: {s} refused={refused}");
     }
+}
+
+/// **The home page's live strip reads real blocks, and only their public metadata.**
+/// `GET /explorer/blocks/recent` walks the canonical chain from the tip: at most 6 blocks however
+/// many are asked for, newest first, each one's `parent_block_id` equal to the next block's id;
+/// per transaction only its hash, kind and two shortened signatures (no wallet, amount or
+/// payload); `producer_signed: false`, because blocks carry no producer signature yet.
+/// Negative control (run by hand): the handler returning each tx's full envelope → FAILED.
+#[tokio::test]
+async fn recent_blocks_route_serves_real_linked_headers_and_no_tx_content() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (ledger_a, _ledger_b, state_a, _state_b, sender_words, sender_wallet_id) = two_synced_nodes_with_funded_sender();
+    let recipient = crate::wallet::generate_mnemonic_12().unwrap().address_hex.to_ascii_lowercase();
+    let mut parent: Option<String> = None;
+    for height in 1u64..=8 {
+        let env = signed_transfer_env_for_tests(&sender_words, &sender_wallet_id, &recipient, height * crate::ledger::STEVEMON);
+        let gossip = build_remote_block_for_tests(&ledger_a, height, parent.clone(), env);
+        crate::consensus::apply_remote_block_from_gossip(ledger_a.clone(), state_a.mempool.clone(), gossip.clone()).await.unwrap();
+        parent = Some(gossip.block_id.clone());
+    }
+    let router = crate::rest::routes::build_router(state_a);
+    let r = router.oneshot(axum::http::Request::builder().uri("/explorer/blocks/recent?n=50").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let blocks = j["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 6, "at most 6 blocks");
+    assert_eq!(blocks[0]["height"], 8, "newest first");
+    assert_eq!(blocks[0]["block_id"].as_str(), parent.as_deref());
+    for w in blocks.windows(2) {
+        assert_eq!(w[0]["parent_block_id"], w[1]["block_id"], "each block links to the next one down");
+        assert_eq!(w[0]["height"].as_u64().unwrap(), w[1]["height"].as_u64().unwrap() + 1);
+    }
+    for b in blocks {
+        assert_eq!(b["producer_signed"], false);
+        assert_eq!(b["tx_count"], 1);
+        for tx in b["txs"].as_array().unwrap() {
+            let mut keys: Vec<&str> = tx.as_object().unwrap().keys().map(String::as_str).collect();
+            keys.sort();
+            assert_eq!(keys, ["ed25519_sig", "hash", "kind", "mldsa44_sig"], "a tx exposed more than its metadata");
+            assert_eq!(tx["kind"], "transfer");
+            assert!(tx["ed25519_sig"].as_str().unwrap().len() <= 16);
+        }
+    }
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains(&sender_wallet_id) && !text.contains(&recipient), "a wallet id leaked");
 }

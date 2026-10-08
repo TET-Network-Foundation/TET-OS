@@ -18,7 +18,8 @@ import AboutPanel from "./AboutPanel";
 import TermsPanel from "./TermsPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
-import LandingPanel from "./LandingPanel";
+import HomePanel from "./HomePanel";
+import HowPanel from "./HowPanel";
 import { getUi, setUi } from "../lib/device_store";
 import QrPanel from "./QrPanel";
 import BoardPanel from "./BoardPanel";
@@ -30,6 +31,8 @@ import VerifyPanel from "./VerifyPanel";
 import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
 import { LangProvider, LangSwitch, useLang } from "./i18n";
+import LiveStrip from "./LiveStrip";
+import WhatPanel from "./WhatPanel";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -53,7 +56,7 @@ const TOOLS = [
   { id: "about", label: "About", group: "footer" },
   { id: "terms", label: "Terms", group: "footer" },
 ] as const;
-type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home";
+type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home" | "how" | "what";
 /** What the middle column shows: a board (by invite) or a tool. */
 type View = { board: string } | { tool: ToolId };
 const viewKey = (v: View) => ("board" in v ? `b:${v.board}` : `t:${v.tool}`);
@@ -155,64 +158,9 @@ function WalletLine() {
   );
 }
 
-/** The channel list: the sidebar on wide screens, the switcher menu on a phone. */
-function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => void }) {
-  const { t } = useLang();
-  const item = (v: View, prefix: string, label: string) => {
-    const on = viewKey(v) === viewKey(props.view);
-    return (
-      <li key={viewKey(v)}>
-        <button
-          type="button"
-          onClick={() => props.go(v)}
-          aria-current={on ? "page" : undefined}
-          className={cx(FOCUS, "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[15px]", on ? "bg-[#e2e5e9] font-semibold" : "hover:bg-[#e8eaed]")}
-        >
-          <span aria-hidden="true" className={cx(MONO, "text-[#5d646d]")}>
-            {prefix}
-          </span>
-          <span className="truncate">{label}</span>
-        </button>
-      </li>
-    );
-  };
-  return (
-    <nav aria-label={t("Channels")} data-channels>
-      <ul className="mt-2">{item({ tool: "home" }, "~", t("TET: start here"))}</ul>
-      <h2 className="mx-2 mb-1 mt-3 text-[13px] font-semibold text-[#5d646d]">{t("boards")}</h2>
-      <ul>
-        {item({ tool: "directory" }, "/", t("Public boards"))}
-        {props.boards.map((b) => item({ board: b.invite }, "#", b.name || t("Untitled board")))}
-        {item({ tool: "questions" }, "#", t("Questions for humans"))}
-      </ul>
-      <p className="mx-2 mt-1 text-[13.5px]">
-        <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "new" })}>
-          {t("start or open a board")}
-        </button>
-      </p>
-      <h2 className="mx-2 mb-1 mt-4 text-[13px] font-semibold text-[#5d646d]">{t("tools")}</h2>
-      <ul>
-        {item({ tool: "verify" }, "/", t("verify"))}
-        {item({ tool: "sign" }, "/", t("sign"))}
-        {item({ tool: "qr" }, "/", t("qr"))}
-        {item({ tool: "files" }, "/", t("files"))}
-        {item({ tool: "mail" }, "/", t("DM"))}
-        {item({ tool: "live" }, "/", t("live"))}
-      </ul>
-      <p className="mx-2 mt-4 text-[13.5px]">
-        <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "about" })}>
-          {t("About")}
-        </button>
-        {" · "}
-        <button type="button" className={cx(FOCUS, "rounded text-[#3d434a] underline")} onClick={() => props.go({ tool: "terms" })}>
-          {t("Terms")}
-        </button>
-      </p>
-    </nav>
-  );
-}
 
-function Rail(props: { node: ReturnType<typeof useNode> }) {
+/** This node's facts and this page's provenance: the right rail on inner pages, behind "this node" on home. */
+function NodeFacts(props: { node: ReturnType<typeof useNode> }) {
   const { t } = useLang();
   const { wallet, anon, prover } = useTryWallet();
   const { chain, height, down } = props.node;
@@ -223,7 +171,7 @@ function Rail(props: { node: ReturnType<typeof useNode> }) {
     </>
   );
   return (
-    <aside aria-label={t("Node facts")} className="hidden border-l border-[#e3e5e8] px-4 py-4 text-[14px] xl:block">
+    <>
       <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This node")}</h2>
       <dl className="mb-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         {row(t("chain"), chain?.chainId ?? "…")}
@@ -264,7 +212,132 @@ function Rail(props: { node: ReturnType<typeof useNode> }) {
           {t("source")}
         </a>
       </p>
-    </aside>
+    </>
+  );
+}
+
+
+/** Inner pages' top bar: a small logo (home), the search box, and the wallet in one short line. */
+function TopBar(props: { go: (v: View) => void; onSearch: (q: string) => void }) {
+  const { t } = useLang();
+  const [q, setQ] = useState("");
+  return (
+    <header className="sticky top-0 z-20 border-b border-[#e3e5e8] bg-white">
+      <div className="mx-auto flex max-w-[48rem] items-center gap-3 px-4 py-2 md:px-5">
+        <button type="button" onClick={() => props.go({ tool: "home" })} className={cx(FOCUS, "shrink-0 rounded-full")} aria-label={t("TET home")}>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/tet-logo.svg" width={30} height={30} alt="" className="tet-logo h-[30px] w-[30px]" />
+        </button>
+        <form
+          role="search"
+          className="min-w-0 flex-1"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (q.trim()) props.onSearch(q.trim());
+          }}
+        >
+          <input
+            aria-label={t("Search")}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder={t("Search public threads")}
+            className={cx(FOCUS, "w-full rounded-full border border-[#c9ced4] bg-white px-3.5 py-1.5 text-[15px]")}
+          />
+        </form>
+        <CompactWallet />
+      </div>
+    </header>
+  );
+}
+
+/** "a1b2c3d4 · save 12 words": this tab's wallet in one short line (the rest is under "this node"). */
+function CompactWallet() {
+  const { t } = useLang();
+  const { wallet } = useTryWallet();
+  if (!wallet) return null;
+  const save = () => {
+    const url = URL.createObjectURL(new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tet-testnet-wallet-${wallet.walletId.slice(0, 8)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  return (
+    <span className="shrink-0 text-[13px] text-[#5d646d]">
+      <span translate="no" title={wallet.walletId} className={cx(MONO, INK.named)}>
+        {wallet.walletId.slice(0, 8)}
+      </span>
+      <span className="hidden sm:inline">
+        {" · "}
+        <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={save}>
+          {t("save 12 words")}
+        </button>
+      </span>
+    </span>
+  );
+}
+
+/** Every page's footer: the other tools and open boards, the IP note, "this node", About · Terms, language. */
+function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => void; ipNote: string; boards: OpenBoard[] }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const link = cx(FOCUS, "rounded-sm underline underline-offset-2");
+  const tools: [View, string][] = [
+    [{ tool: "what" }, t("What is TET")],
+    [{ tool: "directory" }, t("Public boards")],
+    [{ tool: "questions" }, t("Questions for humans")],
+    [{ tool: "new" }, t("start or open a board")],
+    [{ tool: "verify" }, t("verify")],
+    [{ tool: "sign" }, t("sign")],
+    [{ tool: "qr" }, t("qr")],
+    [{ tool: "files" }, t("files")],
+    [{ tool: "mail" }, t("DM")],
+    [{ tool: "live" }, t("live")],
+  ];
+  const line = (items: [View, string][]) =>
+    items.map(([v, label], i) => (
+      <span key={i}>
+        {i ? " · " : ""}
+        <button type="button" className={link} onClick={() => props.go(v)}>
+          {label}
+        </button>
+      </span>
+    ));
+  return (
+    <footer className="border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
+      <nav aria-label={t("Tools")} className="mb-2 leading-relaxed">
+        {line(tools)}
+      </nav>
+      {props.boards.length ? (
+        <p className="mb-2 leading-relaxed">
+          {t("open boards:")} {line(props.boards.map((b) => [{ board: b.invite }, b.name || t("Untitled board")] as [View, string]))}
+        </p>
+      ) : null}
+      <p>{props.ipNote}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button type="button" aria-expanded={open} aria-controls="node-facts" className={link} onClick={() => setOpen(!open)}>
+          {t("this node")}
+        </button>
+        <button type="button" className={link} onClick={() => props.go({ tool: "about" })}>
+          {t("About")}
+        </button>
+        <button type="button" className={link} onClick={() => props.go({ tool: "terms" })}>
+          {t("Terms")}
+        </button>
+        <div className="ml-auto">
+          <LangSwitch />
+        </div>
+      </div>
+      {open ? (
+        <div id="node-facts" className="mt-3 max-w-md space-y-4 text-[14px] text-[#1c1f23]">
+          <WalletLine />
+          <div>
+            <NodeFacts node={props.node} />
+          </div>
+        </div>
+      ) : null}
+    </footer>
   );
 }
 
@@ -286,9 +359,11 @@ function TryApp() {
     }, 0);
     return () => clearTimeout(t0);
   }, []);
-  const [view, setView] = useState<View>({ tool: "new" });
-  const [opened, setOpened] = useState<Set<string>>(() => new Set());
-  const [menu, setMenu] = useState(false);
+  // Home from the first paint (server and client alike), so nothing else flashes before it; a board
+  // link or ?tab= moves on from here once it resolves.
+  const [view, setView] = useState<View>({ tool: "home" });
+  const [opened, setOpened] = useState<Set<string>>(() => new Set(["t:home"]));
+  const [homeSearch, setHomeSearch] = useState<{ q: string; n: number } | undefined>(undefined);
   const [boardErr, setBoardErr] = useState("");
   const [directory, setDirectory] = useState<OpenBoard | null>(null);
   const [listings, setListings] = useState<Awaited<ReturnType<typeof readDirectory>> | null>(null);
@@ -336,7 +411,6 @@ function TryApp() {
     chosen.current = true;
     setView(v);
     setOpened((o) => (o.has(viewKey(v)) ? o : new Set(o).add(viewKey(v))));
-    setMenu(false);
     const url = new URL(window.location.href);
     if ("tool" in v && v.tool !== "new") url.searchParams.set("tab", v.tool);
     else url.searchParams.delete("tab");
@@ -357,7 +431,7 @@ function TryApp() {
   // First load: the board in the `#`, or the tool in `?tab=`.
   useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab");
-    const tool = TOOLS.find((t) => t.id === tab)?.id;
+    const tool: ToolId | undefined = TOOLS.find((t) => t.id === tab)?.id ?? (tab === "home" || tab === "how" || tab === "what" ? tab : undefined);
     const h = window.location.hash;
     let live = true;
     if (h.startsWith("#board=")) {
@@ -392,78 +466,66 @@ function TryApp() {
     mail: t("DM"),
     new: t("start or open a board"),
     home: t("TET: start here"),
+    how: t("How it works"),
+    what: t("What is TET"),
     about: t("About"),
     terms: t("Terms"),
     live: t("live"),
   };
+  const isHome = "tool" in view && view.tool === "home";
+  const ipNote = t("Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.");
   const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || t("Untitled board") : TOOL_LABEL[view.tool];
 
   // Once opened, a panel stays mounted (hidden), so switching back keeps its state.
   const panel = (v: View, el: ReactNode) =>
     opened.has(viewKey(v)) ? (
-      <div key={viewKey(v)} className={cx(viewKey(v) !== viewKey(view) && "hidden")}>
+      <div key={viewKey(v)} className={viewKey(v) !== viewKey(view) ? "hidden" : "tool" in v && v.tool === "home" ? "flex flex-1 flex-col" : undefined}>
         {el}
       </div>
     ) : null;
 
+  const boardName = (inv: string) => boards.find((b) => b.invite === inv)?.name || t("Untitled board");
+  const crumbs: { label: string; v?: View }[] =
+    "board" in view
+      ? [{ label: t("Public boards"), v: { tool: "directory" } }, { label: boardName(view.board) }]
+      : [{ label: title }];
+
   return (
-    <div className="try-root min-h-screen touch-manipulation bg-white text-base text-[#1c1f23] [-webkit-tap-highlight-color:transparent] [font-family:ui-sans-serif,system-ui,-apple-system,'Segoe_UI',Roboto,sans-serif]">
+    <div id="top" className="try-root flex min-h-screen flex-col touch-manipulation bg-white text-base text-[#1c1f23] [-webkit-tap-highlight-color:transparent] [font-family:ui-sans-serif,system-ui,-apple-system,'Segoe_UI',Roboto,sans-serif]">
       <a href="#panel" className={cx(FOCUS, "sr-only rounded bg-white px-3 py-2 focus:not-sr-only focus:absolute focus:left-4 focus:top-2 focus:z-30")}>
         {t("Skip to the panel")}
       </a>
 
-      {/* Phone: one top bar with the switcher. */}
-      <header className="sticky top-0 z-20 border-b border-[#e3e5e8] bg-white md:hidden">
-        <div className="flex items-center gap-3 px-3.5 py-2.5">
-          <button
-            type="button"
-            aria-expanded={menu}
-            aria-controls="try-menu"
-            onClick={() => setMenu(!menu)}
-            className={cx(FOCUS, "flex min-h-10 min-w-0 items-center gap-2 rounded-md border border-[#c9ced4] px-3 text-[15px]")}
-          >
-            <span aria-hidden="true">≡</span>
-            <span className="truncate">{title}</span>
-            <span aria-hidden="true" className="text-[11px]">
-              ▾
-            </span>
-          </button>
-          <span className={cx(MONO, "ml-auto shrink-0 text-[13px] text-[#5d646d]")}>
-            {node.down ? <span className={INK.bad}>{t("node down")}</span> : <span className="tabular-nums">{t("height {n}", { n: node.height?.toLocaleString() ?? "…" })}</span>}
-          </span>
-        </div>
-        {menu ? (
-          <div id="try-menu" className="max-h-[75vh] overflow-y-auto border-t border-[#e3e5e8] bg-[#f1f2f4] px-2 pb-3">
-            <Channels boards={boards} view={view} go={go} />
-            <div className="mx-2 mt-4 space-y-3">
-              <WalletLine />
-              <LangSwitch />
-            </div>
-          </div>
-        ) : null}
-      </header>
+      {isHome ? null : (
+        <TopBar
+          go={go}
+          onSearch={(q) => {
+            setHomeSearch({ q, n: Date.now() });
+            go({ tool: "home" });
+          }}
+        />
+      )}
 
-      <div className="md:grid md:min-h-screen md:grid-cols-[14.5rem_minmax(0,1fr)] xl:grid-cols-[14.5rem_minmax(0,1fr)_16.5rem]">
-        <aside className="hidden border-r border-[#e3e5e8] bg-[#f1f2f4] px-2.5 py-3.5 md:block">
-          <div className="sticky top-3.5">
-            <h1 className="mx-2 text-[16px] font-bold">
-              <button type="button" onClick={() => go({ tool: "home" })} className={cx(FOCUS, "inline-flex items-center gap-2 rounded-sm text-left")}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src="/brand/tet-logo.svg" width={20} height={20} alt="" className="tet-logo h-5 w-5" />
-                <span>
-                  Try TET <span className="text-[14px] font-normal text-[#5d646d]">{t("testnet")}</span>
-                </span>
-              </button>
-            </h1>
-            <Channels boards={boards} view={view} go={go} />
-            <div className="mx-2 mt-6 space-y-3 border-t border-[#dcdfe3] pt-3">
-              <WalletLine />
-              <LangSwitch />
-            </div>
-          </div>
-        </aside>
-
-        <main id="panel" className="flex min-w-0 scroll-mt-16 flex-col">
+      <main id="panel" className={cx("flex min-w-0 flex-1 scroll-mt-16 flex-col", !isHome && "mx-auto w-full max-w-[48rem]")}>
+        {isHome ? null : (
+          <nav aria-label={t("Breadcrumb")} className="px-4 pt-3 text-[13.5px] text-[#5d646d] md:px-5">
+            <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={() => go({ tool: "home" })}>
+              TET
+            </button>
+            {crumbs.map((c, i) => (
+              <span key={i}>
+                {" › "}
+                {c.v ? (
+                  <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={() => go(c.v!)}>
+                    {c.label}
+                  </button>
+                ) : (
+                  <span aria-current="page">{c.label}</span>
+                )}
+              </span>
+            ))}
+          </nav>
+        )}
           {boardErr ? <p className={cx("px-4 py-2 text-[15px]", INK.bad)}>{t("This invite didn't open: {reason}", { reason: boardErr })}</p> : null}
           {boards.map((b) =>
             panel(
@@ -488,31 +550,43 @@ function TryApp() {
           {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
           {panel(
             { tool: "home" },
-            <LandingPanel
+            <HomePanel
+              go={(tool) => go({ tool: tool as ToolId })}
+              search={homeSearch}
+              listings={listings}
+              listingsError={dirErr}
+              onBoard={addBoard}
+              lastBoard={lastBoard}
+              onOpenBoard={(invite) => void openBoard(BASE, invite).then(addBoard).catch((e: unknown) => setBoardErr(e instanceof Error ? e.message : String(e)))}
+            />,
+          )}
+          {panel(
+            { tool: "how" },
+            <HowPanel
               go={(tool, hint) => {
                 setSignHint(hint ?? "");
                 go({ tool: tool as ToolId });
               }}
-              lastBoard={lastBoard}
-              onOpenBoard={(invite) => void openBoard(BASE, invite).then(addBoard).catch((e: unknown) => setBoardErr(e instanceof Error ? e.message : String(e)))}
-              listings={listings}
-              listingsError={dirErr}
-              onBoard={addBoard}
             />,
           )}
+          {panel({ tool: "what" }, <WhatPanel go={(tool) => go({ tool: tool as ToolId })} />)}
           {panel({ tool: "qr" }, <QrPanel />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
           {panel({ tool: "about" }, <AboutPanel />)}
           {panel({ tool: "terms" }, <TermsPanel />)}
           {panel({ tool: "live" }, <LivePanel />)}
-          <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
-            {t("Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.")}
+        {isHome ? null : (
+          <p className="px-4 py-4 text-[14px] md:px-5">
+            <a href="#top" className={cx(FOCUS, "rounded-sm underline underline-offset-2")}>
+              {t("← back to top")}
+            </a>
           </p>
-        </main>
+        )}
+      </main>
 
-        <Rail node={node} />
-      </div>
+      {isHome ? <LiveStrip /> : null}
+      <PageFooter node={node} go={go} ipNote={ipNote} boards={boards} />
     </div>
   );
 }
