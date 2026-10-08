@@ -136,6 +136,34 @@ pub enum TxV1 {
 }
 
 impl TxV1 {
+    /// The wallet this transaction acts for: the one it debits, registers, enrolls or claims for.
+    /// Its envelope must be signed by that wallet (`signer_acts_for_itself`); `None` only for a
+    /// kind whose actor *is* the signer (`VerifyZkProof`).
+    pub fn acting_wallet(&self) -> Option<&str> {
+        match self {
+            TxV1::SignerLink { wallet_id, .. } => Some(wallet_id),
+            TxV1::FoundingMemberEnroll { member_wallet } => Some(member_wallet),
+            TxV1::Transfer { from_wallet, .. } => Some(from_wallet),
+            TxV1::GenesisBridge { founder_wallet, .. } => Some(founder_wallet),
+            TxV1::InitialAirdrop { wallet_id } => Some(wallet_id),
+            TxV1::FileFee { from_wallet, .. } => Some(from_wallet),
+            TxV1::WorkerRegister { wallet_id, .. } => Some(wallet_id),
+            TxV1::EnterpriseInference { enterprise_wallet_id, .. } => Some(enterprise_wallet_id),
+            TxV1::VerifyZkProof { .. } => None,
+        }
+    }
+}
+
+/// Is `env` signed by the wallet its transaction acts for? A valid signature only proves which key
+/// signed; this binds that key to the wallet whose balance or registration the transaction changes.
+pub fn signer_acts_for_itself(env: &SignedTxEnvelopeV1) -> bool {
+    match env.tx.acting_wallet() {
+        Some(w) => w.trim().eq_ignore_ascii_case(env.sig.ed25519_pubkey_hex.trim()),
+        None => true,
+    }
+}
+
+impl TxV1 {
     pub fn workload_flag(&self) -> WorkloadFlag {
         match self {
             Self::EnterpriseInference { workload_flag, .. }

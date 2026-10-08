@@ -13679,3 +13679,78 @@ fn racing_uploads_for_one_file_id_have_exactly_one_winner() {
     assert_eq!(store.get_blob(&id.to_string()), Some(winners[0].clone()), "the stored body is the winner's");
 }
 
+/// **SECURITY REGRESSION GUARD: a transaction signed by another wallet is refused everywhere.**
+/// A valid hybrid signature proves only which key signed. Every kind that names a wallet it acts
+/// for (debits, registers, enrolls, claims for) must be signed by that wallet: refused at envelope
+/// verification (so REST admission, gossip, mining and received blocks), and again by the ledger's
+/// block preview and apply, which refuse the same blocks so their roots can't diverge. A mempool
+/// row saved before this rule is dropped at restart. The same transactions signed by the right
+/// wallet still pass. Negative control (run by hand): with the checks removed this test FAILS —
+/// the forged transfer moves the victim's balance.
+#[tokio::test]
+async fn a_tx_signed_by_another_wallet_is_refused_everywhere() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let new_wallet = || {
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase())
+    };
+    let (victim_words, victim) = new_wallet();
+    let (mallory_words, mallory) = new_wallet();
+    ledger.admin_rest_faucet(&victim, 100 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+
+    use crate::protocol::TxV1;
+    let acting_for_victim = vec![
+        TxV1::Transfer { from_wallet: victim.clone(), to_wallet: mallory.clone(), amount_micro: 50 * crate::ledger::STEVEMON, fee_bps: 100 },
+        TxV1::FileFee { from_wallet: victim.clone(), storage_wallet: mallory.clone(), file_id: uuid::Uuid::new_v4().to_string(), fee_micro: crate::files::FILE_FEE_MICRO },
+        TxV1::WorkerRegister { wallet_id: victim.clone(), hardware_id_hex: "ab".repeat(32), hardware_profile: "cpu".into(), capabilities: vec![], tflops_declared: 1.0 },
+        TxV1::InitialAirdrop { wallet_id: victim.clone() },
+        TxV1::EnterpriseInference { enterprise_wallet_id: victim.clone(), prompt: "p".into(), model: "m".into(), amount_micro: 1, nonce: 1, prompt_sha256_hex: "00".repeat(32), workload_flag: 0, attestation_required: false },
+        TxV1::SignerLink { wallet_id: victim.clone() },
+        TxV1::FoundingMemberEnroll { member_wallet: victim.clone() },
+        TxV1::GenesisBridge { founder_wallet: victim.clone(), to_wallet: mallory.clone(), amount_micro: 1 },
+    ];
+    for tx in &acting_for_victim {
+        let forged = signed_env_for_tests(tx.clone(), &mallory_words, &mallory);
+        let err = crate::rest::helpers::verify_envelope_v1(&forged).expect_err(&format!("{tx:?} signed by another wallet verified"));
+        assert!(err.contains("signer must be the wallet"), "{err}");
+        let own = signed_env_for_tests(tx.clone(), &victim_words, &victim);
+        crate::rest::helpers::verify_envelope_v1(&own).unwrap_or_else(|e| panic!("{tx:?} signed by its own wallet: {e}"));
+    }
+
+    let forged = signed_env_for_tests(acting_for_victim[0].clone(), &mallory_words, &mallory);
+    let before = ledger.balance_micro(&victim).unwrap();
+
+    // REST admission.
+    let res = crate::rest::handlers::ledger::post_tx_submit(axum::extract::State(state.clone()), axum::http::HeaderMap::new(), axum::Json(forged.clone())).await;
+    assert!(!res.status().is_success(), "REST admitted it: {}", res.status());
+    assert!(state.mempool.lock().await.is_empty());
+
+    // Gossip admission.
+    let outcome = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, forged.clone()).await;
+    assert!(matches!(outcome, crate::p2p::TxGossipOutcome::Rejected { .. }), "{outcome:?}");
+    assert!(state.mempool.lock().await.is_empty());
+
+    // The ledger, given the block directly (a producer that skipped the checks).
+    let h = "0x".to_string() + &"ee".repeat(32);
+    assert!(ledger.compute_state_root_after_remote_block(std::slice::from_ref(&forged), "producer-x", 0).is_err(), "preview accepted it");
+    assert!(ledger.apply_consensus_block_batch(1, std::slice::from_ref(&forged), &[h], "producer-x", 0).is_err(), "apply accepted it");
+    assert_eq!(ledger.balance_micro(&victim).unwrap(), before, "the victim's balance moved");
+
+    // A row saved before the rule is dropped at restart; a good one is kept.
+    let good = signed_env_for_tests(acting_for_victim[0].clone(), &victim_words, &victim);
+    ledger.mempool_persist("0xforged", &forged);
+    ledger.mempool_persist("0xgood", &good);
+    let restored: Vec<String> = ledger.mempool_restore().into_iter().map(|(h, _)| h).collect();
+    assert_eq!(restored, vec!["0xgood".to_string()]);
+
+    // The victim's own transfer still mines.
+    state.submit_local_tx(good.clone()).await.unwrap();
+    crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string()).await.expect("mine");
+    assert!(ledger.is_tx_applied(&crate::consensus::tx_hash_for_env(&good).unwrap()).unwrap());
+    assert_eq!(ledger.balance_micro(&victim).unwrap(), before - 50 * crate::ledger::STEVEMON);
+}
