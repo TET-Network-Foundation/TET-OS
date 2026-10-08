@@ -602,7 +602,7 @@ Added `cb355da` (2026-06-02), the largest single un-started idea in the repo. Ph
 - **REST:** `GET /tns/resolve/:name`, `/tns/lookup/:wallet_id`, `/tns/dns/:domain`, `/tns/auctions`; `POST /tns/{register,renew,transfer,dispute}`.
 - **Phasing:** 0.5a (Oct–Nov 2026) registry + resolution cache + REST + Tmail autocomplete, 5+ chars · 0.5b (Dec 2026) DNS bridge, short-name auction, ZK-Court disputes, Files integration · Phase 1 (2027 Q1) worker registration, avatar CIDs, mobile · Phase 2 (2027 Q2–Q3) Anonymous TNS (ZK), ENS bridge, Unicode.
 - **Open problems:** DNS hijacking → on-chain pin; squatting → ZK-Court + time-based release; short-name pricing → Dutch auction; ENS migration → Phase 2 bridge with proof-of-control; Unicode → punycode + visual confusion detection.
-- **Positioning:** *"ENS solves 'send 0.1 ETH to vitalik.eth'. TNS solves 'send your story to nytimes.tmail anonymously, have them verify it's a legitimate journalist, and ensure quantum-safe end-to-end encryption' — all from one name."*
+- **Positioning:** *"ENS solves 'send 0.1 ETH to vitalik.eth'. TNS solves 'send your story to nytimes.tmail anonymously, have them verify it's a legitimate journalist, and ensure quantum-resistant end-to-end encryption' — all from one name."*
 
 ## 4.5 `docs/SOVEREIGN_OS_PHASE0_SPEC.md` Part D — post-Phase-0 scope
 

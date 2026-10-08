@@ -27,7 +27,7 @@ A Fluid Protocol for Peer-to-Peer Computational and Energy Resources · AI-Nativ
 §9 Zero-waste compute; Cockroach Doctrine resilience across PoR mesh.
 §10 ML-DSA (FIPS 204) base-layer signatures from block zero.
 §11 Tokenomics — 10B TET cap; 25/50/25 genesis allocation; 50% fee burn (§11.2).
-§12 Applications (binding: §12.1–12.4) — RaaS, inference marketplace, autonomous agents, quantum-secure DeFi.
+§12 Applications (binding: §12.1–12.4) — RaaS, inference marketplace, autonomous agents, quantum-resistant DeFi.
 §12.5–12.7 [Future Work] — World Brain, Sentient Assets, Agent-Gate (state channels / M2M settlement).
 §13 Roadmap — Phase 0 inference wedge → Phase 1 CAAC + ZK-Court → Phase 2 fluid grid.
 §14 Threat model — lazy evaluation (ZK-Court), probabilistic hardware fingerprinting, economic finality (S = λ·R_expected).

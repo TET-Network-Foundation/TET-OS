@@ -439,4 +439,5 @@ export const ZH_HK: Record<string, string> = {
   "A delivered file proves the sender's key signed it and only the recipient can open it. It doesn't prove who holds that key, or that the file is what its name says.": "送達的檔案證明由寄件人的鑰匙簽署，而且只有收件人能開啟。它不證明誰持有該鑰匙，亦不證明檔案內容與名稱相符。",
   "A message proves which key sent it, or for an anonymous one, that a member did. It doesn't prove who holds that key.": "訊息證明是哪條鑰匙發出的；若是匿名訊息，則證明由某位成員發出。它不證明誰持有該鑰匙。",
   "Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.": "測試網。示範節點看得到你的 IP 位址，但不會寫入任何記錄；只會暫存在記憶體中以限制請求次數。如需保護 IP，請使用 Tor 或你自己的節點。由一人營運；這裡的一切都未經審計。",
+  "TET is a blockchain with quantum-resistant signatures (ML-DSA): every transaction is signed twice, with Ed25519 and with ML-DSA-44, so it stays secure once quantum computers can break today's signatures. TET does not use a quantum computer.": "TET 是採用抗量子簽名（ML-DSA）的區塊鏈：每宗交易都以 Ed25519 及 ML-DSA-44 簽署兩次，因此即使量子電腦日後能破解現有簽名，仍然安全。TET 本身並不使用量子電腦。",
 };
