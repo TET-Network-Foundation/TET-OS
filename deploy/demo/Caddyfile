@@ -14,8 +14,28 @@
 # 4. Only the /try page, its static files and the allow-listed node API are served; everything
 #    else, the UI's own /api/* routes included, is 404. One `route` block, so the order below is the
 #    order of evaluation.
+# 5. No client address in any log. There is no access log (no `log` in the site block), and the
+#    default logger, which carries Caddy's error entries with the whole request, drops every field
+#    that holds an address. The page says "the demo node sees your IP address and doesn't log it";
+#    this is what makes that true for Caddy. TLS handshake errors name the client in their message
+#    text, which no field filter reaches; Caddy logs them only at DEBUG, so never run the demo at
+#    DEBUG. Checked by demo-node.test.sh, with a control that runs the Caddyfile without this block.
 {
 	email {$TET_DEMO_ACME_EMAIL}
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>remote_ip delete
+				request>remote_port delete
+				request>client_ip delete
+				request>headers>X-Forwarded-For delete
+				request>headers>X-Real-Ip delete
+				request>headers>Forwarded delete
+			}
+		}
+	}
 }
 
 {$TET_DEMO_DOMAIN} {

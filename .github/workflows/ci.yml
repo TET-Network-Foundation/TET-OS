@@ -443,6 +443,13 @@ jobs:
         name: try page — a page signature verifies and a stamp anchors only its own .sig.json
         run: node --experimental-strip-types scripts/try_sign_guard.mjs
 
+      # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
+      # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in
+      # every language; each feature keeps its proves / doesn't-prove line. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — privacy wording claims no more than is true
+        run: node --experimental-strip-types scripts/try_privacy_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).

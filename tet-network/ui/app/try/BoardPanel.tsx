@@ -132,6 +132,7 @@ function Meta(props: { n: number; children: React.ReactNode }) {
 export const BOARD_NOTICE = (members: number | null, t: T) => [
   t("Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so."),
   t("You are anonymous among the registered members only ({members} on this node). Joining the set is public, and it is a separate step: posting right after you join makes the post easier to link to your join.", { members: members ?? "?" }),
+  t("Posting anonymously unlinks the post from your key: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."),
   t("One anonymous post per board per UTC day (up to 3 around 00:00 UTC)."),
   t("The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title."),
   t("Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time."),

@@ -153,7 +153,33 @@ if docker info >/dev/null 2>&1; then
   expect GET    "//tet-node-api/status" 400
   expect GET    "/tet-node-api/files/fetch/%252e%252e" 400
   expect GET    /try/anything 404
-  docker rm -f "edge-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
+  # Rule 5: no client address in any log. A failed upstream makes Caddy log the whole request as an
+  # error; the entry must exist and hold no address, no forwarding header and not the marker.
+  # Control: the same request through the Caddyfile without its log filter does show the client,
+  # so this check can fail.
+  docker stop "ui-$$" >/dev/null 2>&1
+  client_logged() {  # CONTAINER PORT → prints "yes" if its log names the client, "no-error" if nothing was logged
+    curl -s -o /dev/null -H "X-Forwarded-For: 203.0.113.77" "http://127.0.0.1:$2/try"
+    sleep 1
+    local log; log=$(docker logs "$1" 2>&1)
+    if ! grep -q '"level":"error"' <<<"$log"; then echo no-error
+    elif grep -qE 'remote_ip|client_ip|203\.0\.113\.77|X-Forwarded-For' <<<"$log"; then echo yes
+    else echo no; fi
+  }
+  got=$(client_logged "edge-$$" 18080)
+  if [ "$got" = no ]; then pass "caddy logs an upstream failure without the client's address"
+  else flunk "caddy logs an upstream failure without the client's address" "got: $got"; fi
+  unfiltered=$(mktemp)
+  sed '/^\tlog default {/,/^\t}/d' deploy/demo/Caddyfile > "$unfiltered"
+  docker run -d --rm --name "edge0-$$" --network "$net" -p 127.0.0.1:18082:8080 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
+    -v "$unfiltered:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18082/ && break; sleep 1; done
+  got=$(client_logged "edge0-$$" 18082)
+  if [ "$got" = yes ]; then pass "control: without the log filter the client's address is logged"
+  else flunk "control: without the log filter the client's address is logged" "got: $got"; fi
+  rm -f "$unfiltered"
+  docker rm -f "edge-$$" "edge0-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
 elif [ -n "${CI:-}" ]; then
   flunk "caddy behaviour" "no Docker daemon in CI"
 else

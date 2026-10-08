@@ -44,6 +44,7 @@ const limits = (t: (en: string) => string) => [
   t("Your own messages show from this tab only: what you send is encrypted to the recipient, so the node can't give it back to you. Close the tab and they are gone from this view."),
   t("A conversation keeps its newest 5 messages; messages expire after 7 days."),
   t("Publishing your messaging keys is public: it shows this wallet can receive."),
+  t("A message proves which key sent it, or for an anonymous one, that a member did. It doesn't prove who holds that key."),
 ];
 
 function toLocalInput(ms: number): string {
