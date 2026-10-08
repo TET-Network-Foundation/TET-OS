@@ -37,11 +37,11 @@ they write.
 Site builder (#22) for something to index → per-list member roots (#21, option A) → vouching flow →
 search service. TetSearch is last.
 
-## Decisions for you
+## Decided (2026-10-08)
 
-1. One shared member set with the Shelter corner, or a separate one for TetSearch?
-2. How many people may one member vouch for (per month)?
-3. Hosting: a separate small service behind Caddy on the demo host, or its own host?
+- One member set, **shared with the Shelter corner**.
+- Each member can vouch for **at most 3 people** (in total).
+- Hosted **on the demo host**, behind its Caddy, at search.stevenexus.org.
 
 Size: the largest item in the queue; several PRs (index service, vouching, search UI), each with its
 own plan once #21 and #22 are settled.

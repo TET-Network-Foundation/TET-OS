@@ -11,6 +11,21 @@ Sign a work (art, text, photo, music, a dataset), get a link and a QR anyone can
 
 Both lines are on the badge page and on the printed QR label, word for word.
 
+## Two use cases
+
+**PDF (first: TET's own whitepaper).** The last page of a PDF carries the QR and the verify link.
+The badge signs the exact PDF file as published. The whitepaper is the first one: the published
+`WHITEPAPER.md`-built PDF gets a badge, and its last page says how to check it.
+
+**Artwork.** An artist signs each work with one key. Over time the badges show that this set of
+works was signed by the same key.
+
+- **Proves:** this key signed this exact file at block N; an artist's works share one key.
+- **Doesn't prove:** that a physical work is authentic, or who made it.
+- **Re-compressed images won't verify.** A photo of the work, or the file after a site re-compresses
+  it, is different bytes. Verify the original file, or open the TET link. The badge page says this
+  in one line.
+
 ## What it reuses (all merged)
 
 - **Sign** (#59): hybrid Ed25519 + ML-DSA-44 signature over the agent-payload pre-image.
@@ -40,7 +55,7 @@ Both lines are on the badge page and on the printed QR label, word for word.
 - The two lines are present in en/ja/zh on the badge page and the label (privacy guard pattern).
 - The stamp still counts only for this exact `.sig.json` (existing `try_sign_guard`).
 
-## Decisions for you
+## Open decisions
 
 1. Publish the `.sig.json` to a public badges board (7-day retention) or download-only for v1?
 2. Should the badge show the stamp's block time as a date, or only the block number? (A date reads

@@ -12,6 +12,15 @@ signed by the site's key and versioned.
   version you are looking at.
 - **Doesn't prove:** who holds the key, or that a human wrote the text.
 
+## Public or members only, per page
+
+Each page is one or the other, chosen when it's created:
+
+- **Public:** signed, served openly, and search engines may index it.
+- **Members only:** end-to-end encrypted to the site's member set, not indexed, not served on any
+  public route in readable form. Same encryption as DM (hybrid X25519 + Kyber round 3, not yet the
+  final ML-KEM standard); the page says that, and never "perfect encryption" or "unbreakable".
+
 ## Shape
 
 - **A site** = a key (its own 12 words, like a board) + an ordered list of signed edits.
@@ -42,11 +51,14 @@ Board posts last 7 days and keep 5 per sender; files last 7 days. A site has to 
   text can't produce a `<script>` or an event attribute (control: a renderer that passes HTML).
 - The proves line is on every rendered page's footer.
 
-## Decisions for you
+## Decided (2026-10-08)
 
-1. Hosting: A (demo node store), B (export only) first, or both?
-2. Images: inline in the site store (counts against the quota) or via Files (7 days, so they'd
+- Hosting: **both**, a store on the demo node with a size cap, plus export.
+
+## Open
+
+1. Images: inline in the site store (counts against the quota) or via Files (7 days, so they'd
    expire)?
-3. Domain: pages at `try.stevenexus.org/s/<site>` or a separate host?
+2. Domain: pages at `try.stevenexus.org/s/<site>` or a separate host?
 
-Size: B alone is one UI PR; A adds a node PR with its own tests.
+Size: a node PR (the store, with tests and controls) and a UI PR (builder, renderer, export).

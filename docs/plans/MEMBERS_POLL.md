@@ -42,10 +42,13 @@ A poll only listed members can vote in. One vote per nullifier, results public, 
 - The tally page names no key and no nullifier beyond the 4-hex daily ID.
 - Wording guard: no "nobody can see your IP"-type claim (privacy guard covers it).
 
-## Decisions for you
+## Decided (2026-10-08)
 
-1. Gap 1: option A (node registers poll roots)?
-2. Gap 2: option A (same-day polls) for v1, B at Phase 1?
-3. Who can see results before the poll closes: everyone, or nobody until close?
+- Gap 1: **option A**, the node accepts per-poll member roots.
+- Gap 2: **option A**, a poll closes at the end of the UTC day it opens.
+
+## Open
+
+- Who can see results before the poll closes: everyone, or nobody until close?
 
 Size: node PR (poll roots, with tests and controls) + UI PR.
