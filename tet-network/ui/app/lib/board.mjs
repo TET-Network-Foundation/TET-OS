@@ -170,6 +170,14 @@ export function dailyIdOf(verdict) {
   return /^[0-9a-f]{64}$/.test(n) ? n.slice(0, 4) : null;
 }
 
+/**
+ * Is this post shown on the board? An anonymous post whose proof failed never is (the node no longer
+ * keeps one either); a pending one is, marked as being checked.
+ */
+export function shownOnBoard(label) {
+  return !(label?.kind === "anonymous" && label?.tone === "bad");
+}
+
 export function postLabel(row) {
   if (row?.flags?.anonymous !== true) {
     const sender = String(row?.sender_wallet_id ?? "");
@@ -225,11 +233,13 @@ export function boardPostPlan(o) {
  * The anonymous allowance: one post per member per board per UTC day (the node refuses a second
  * nullifier for the same day). Computed from the clock and what this tab already posted.
  *
- * @param {{ nowMs: number, postedBuckets: Set<number> | number[] }} o
+ * @param {{ nowMs: number, postedBuckets: Set<number> | number[], myDailyId?: string | null, dailyIdsToday?: string[] }} o
  */
 export function anonAllowance(o) {
   const bucket = tmailBucketIndex(o.nowMs);
-  const used = new Set(o.postedBuckets).has(bucket);
+  // Used if this tab posted today, or if the board already shows a verified post with this member's
+  // daily ID for today (another tab, a reload): the node would refuse a second one as a repeat.
+  const used = new Set(o.postedBuckets).has(bucket) || (!!o.myDailyId && (o.dailyIdsToday ?? []).includes(o.myDailyId));
   const resetsAtMs = (bucket + 1) * TMAIL_BUCKET_MS;
   return { bucket, remaining: used ? 0 : 1, resetsAtMs };
 }
