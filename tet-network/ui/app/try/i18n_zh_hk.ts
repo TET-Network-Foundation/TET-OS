@@ -575,4 +575,13 @@ export const ZH_HK: Record<string, string> = {
   "node down: {why}": "節點離線：{why}",
   "last {n} events on this node": "此節點最近 {n} 個事件",
   "nothing yet": "暫時沒有",
+  "continue:": "繼續：",
+  "open your remembered key": "開啟已記住的鑰匙",
+  "key options": "鑰匙選項",
+  "This node's newest blocks": "此節點的最新區塊",
+  "node not answering: {why}": "節點沒有回應：{why}",
+  "newest blocks on this node · blocks aren't signed by their producer yet; the signatures shown are each transaction's signer's (ed25519 · ML-DSA-44)": "此節點的最新區塊 · 區塊尚未由產生者簽署；顯示的簽名屬於各交易的簽署者（ed25519 · ML-DSA-44）",
+  "no blocks yet": "尚未有區塊",
+  "matches the hash on the line above": "與上一行的雜湊相符",
+  "this node": "此節點",
 };

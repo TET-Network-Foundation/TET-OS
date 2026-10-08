@@ -31,6 +31,7 @@ import VerifyPanel from "./VerifyPanel";
 import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
 import { LangProvider, LangSwitch, useLang } from "./i18n";
+import LiveStrip from "./LiveStrip";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -213,7 +214,8 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
   );
 }
 
-function Rail(props: { node: ReturnType<typeof useNode> }) {
+/** This node's facts and this page's provenance: the right rail on inner pages, behind "this node" on home. */
+function NodeFacts(props: { node: ReturnType<typeof useNode> }) {
   const { t } = useLang();
   const { wallet, anon, prover } = useTryWallet();
   const { chain, height, down } = props.node;
@@ -224,7 +226,7 @@ function Rail(props: { node: ReturnType<typeof useNode> }) {
     </>
   );
   return (
-    <aside aria-label={t("Node facts")} className="hidden border-l border-[#e3e5e8] px-4 py-4 text-[14px] xl:block">
+    <>
       <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This node")}</h2>
       <dl className="mb-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
         {row(t("chain"), chain?.chainId ?? "…")}
@@ -265,7 +267,47 @@ function Rail(props: { node: ReturnType<typeof useNode> }) {
           {t("source")}
         </a>
       </p>
+    </>
+  );
+}
+
+function Rail(props: { node: ReturnType<typeof useNode> }) {
+  const { t } = useLang();
+  return (
+    <aside aria-label={t("Node facts")} className="hidden border-l border-[#e3e5e8] px-4 py-4 text-[14px] xl:block">
+      <NodeFacts node={props.node} />
     </aside>
+  );
+}
+
+/** Home's footer: the IP note, then "this node" (opens the node facts), language, About · Terms. */
+function HomeFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => void; ipNote: string }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const link = cx(FOCUS, "rounded-sm underline underline-offset-2");
+  return (
+    <footer className="border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
+      <p>{props.ipNote}</p>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+        <button type="button" aria-expanded={open} aria-controls="home-node-facts" className={link} onClick={() => setOpen(!open)}>
+          {t("this node")}
+        </button>
+        <button type="button" className={link} onClick={() => props.go({ tool: "about" })}>
+          {t("About")}
+        </button>
+        <button type="button" className={link} onClick={() => props.go({ tool: "terms" })}>
+          {t("Terms")}
+        </button>
+        <div className="ml-auto">
+          <LangSwitch />
+        </div>
+      </div>
+      {open ? (
+        <div id="home-node-facts" className="mt-3 max-w-md text-[14px] text-[#1c1f23]">
+          <NodeFacts node={props.node} />
+        </div>
+      ) : null}
+    </footer>
   );
 }
 
@@ -398,12 +440,14 @@ function TryApp() {
     terms: t("Terms"),
     live: t("live"),
   };
+  const isHome = "tool" in view && view.tool === "home";
+  const ipNote = t("Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.");
   const title = "board" in view ? boards.find((b) => b.invite === view.board)?.name || t("Untitled board") : TOOL_LABEL[view.tool];
 
   // Once opened, a panel stays mounted (hidden), so switching back keeps its state.
   const panel = (v: View, el: ReactNode) =>
     opened.has(viewKey(v)) ? (
-      <div key={viewKey(v)} className={cx(viewKey(v) !== viewKey(view) && "hidden")}>
+      <div key={viewKey(v)} className={viewKey(v) !== viewKey(view) ? "hidden" : "tool" in v && v.tool === "home" ? "flex flex-1 flex-col" : undefined}>
         {el}
       </div>
     ) : null;
@@ -414,8 +458,8 @@ function TryApp() {
         {t("Skip to the panel")}
       </a>
 
-      {/* Phone: one top bar with the switcher. */}
-      <header className="sticky top-0 z-20 border-b border-[#e3e5e8] bg-white md:hidden">
+      {/* Phone: one top bar with the switcher (not on home, which stands alone). */}
+      <header className={cx("sticky top-0 z-20 border-b border-[#e3e5e8] bg-white md:hidden", isHome && "hidden")}>
         <div className="flex items-center gap-3 px-3.5 py-2.5">
           <button
             type="button"
@@ -445,8 +489,8 @@ function TryApp() {
         ) : null}
       </header>
 
-      <div className="md:grid md:min-h-screen md:grid-cols-[14.5rem_minmax(0,1fr)] xl:grid-cols-[14.5rem_minmax(0,1fr)_16.5rem]">
-        <aside className="hidden border-r border-[#e3e5e8] bg-[#f1f2f4] px-2.5 py-3.5 md:block">
+      <div className={isHome ? "flex min-h-screen flex-col" : "md:grid md:min-h-screen md:grid-cols-[14.5rem_minmax(0,1fr)] xl:grid-cols-[14.5rem_minmax(0,1fr)_16.5rem]"}>
+        <aside className={cx("hidden border-r border-[#e3e5e8] bg-[#f1f2f4] px-2.5 py-3.5", !isHome && "md:block")}>
           <div className="sticky top-3.5">
             <h1 className="mx-2 text-[16px] font-bold">
               <button type="button" onClick={() => go({ tool: "home" })} className={cx(FOCUS, "inline-flex items-center gap-2 rounded-sm text-left")}>
@@ -465,7 +509,7 @@ function TryApp() {
           </div>
         </aside>
 
-        <main id="panel" className="flex min-w-0 scroll-mt-16 flex-col">
+        <main id="panel" className={cx("flex min-w-0 scroll-mt-16 flex-col", isHome && "flex-1")}>
           {boardErr ? <p className={cx("px-4 py-2 text-[15px]", INK.bad)}>{t("This invite didn't open: {reason}", { reason: boardErr })}</p> : null}
           {boards.map((b) =>
             panel(
@@ -514,12 +558,17 @@ function TryApp() {
           {panel({ tool: "about" }, <AboutPanel />)}
           {panel({ tool: "terms" }, <TermsPanel />)}
           {panel({ tool: "live" }, <LivePanel />)}
-          <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
-            {t("Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.")}
-          </p>
+          {isHome ? (
+            <div className="mt-auto">
+              <LiveStrip />
+              <HomeFooter node={node} go={go} ipNote={ipNote} />
+            </div>
+          ) : (
+            <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">{ipNote}</p>
+          )}
         </main>
 
-        <Rail node={node} />
+        {isHome ? null : <Rail node={node} />}
       </div>
     </div>
   );

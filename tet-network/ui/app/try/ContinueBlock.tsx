@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * The returning visitor's block on the home view: this tab's key, the last public board, and the
- * opt-in "remember my key on this device" (passphrase-encrypted, lib/device_store.ts).
+ * The home view's one small "continue" line: the last public board, and behind "key options" the
+ * opt-in "remember my key on this device" (passphrase-encrypted, lib/device_store.ts), opening a
+ * remembered key, and "forget this device".
  */
 import { useEffect, useState } from "react";
 import { forgetDevice, getUi, hasRememberedKey, openRememberedKey, rememberKey, setUi } from "../lib/device_store";
-import { Button, FOCUS, INK, Input, MONO, cx } from "./ui";
+import { Button, FOCUS, Input, cx } from "./ui";
 import { useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 
-const H = "mb-1.5 border-b border-[#e3e5e8] pb-1 text-[15px] font-semibold";
 const LINK = cx(FOCUS, "rounded-sm underline underline-offset-2");
 
 export default function ContinueBlock(props: { lastBoard: { name: string; invite: string | null } | null; onOpenBoard: (invite: string) => void }) {
@@ -23,6 +23,7 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [showRemember, setShowRemember] = useState(false);
+  const [keysOpen, setKeysOpen] = useState(false);
 
   useEffect(() => {
     // Read once after mount: storage may be missing, and the server render must match the first one.
@@ -34,7 +35,6 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     return () => clearTimeout(t0);
   }, []);
 
-  const collapsed = returning || !!wallet;
   const open = async () => {
     setMsg("");
     setBusy(true);
@@ -67,36 +67,36 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     }
   };
 
+  const keyOptions = (!wallet && remembered) || (wallet && !remembered) || remembered || returning;
+  if (!props.lastBoard && !keyOptions) return null;
   return (
-    <>
-      {collapsed ? (
-        <div>
-          <h2 className={H}>{t("Continue")}</h2>
-          <ul className="space-y-1">
-            {wallet ? (
-              <li>
-                {t("Your key in this tab:")}{" "}
-                <span translate="no" className={cx(MONO, INK.named)}>
-                  {wallet.walletId.slice(0, 8)}
-                </span>
-              </li>
+    <div className="text-[13.5px] text-[#5d646d]">
+      <p>
+        {props.lastBoard ? (
+          <>
+            {t("continue:")}{" "}
+            {props.lastBoard.invite ? (
+              <button type="button" className={LINK} onClick={() => props.onOpenBoard(props.lastBoard!.invite!)}>
+                {props.lastBoard.name}
+              </button>
             ) : (
-              <li>{t("No key in this tab yet: your first post makes one.")}</li>
+              <span>
+                {props.lastBoard.name} {t("(invite-only: open it with its invite link)")}
+              </span>
             )}
-            {props.lastBoard ? (
-              <li>
-                {t("Last board:")}{" "}
-                {props.lastBoard.invite ? (
-                  <button type="button" className={LINK} onClick={() => props.onOpenBoard(props.lastBoard!.invite!)}>
-                    {props.lastBoard.name}
-                  </button>
-                ) : (
-                  <span>
-                    {props.lastBoard.name} <span className="text-[#5d646d]">{t("(invite-only: open it with its invite link)")}</span>
-                  </span>
-                )}
-              </li>
-            ) : null}
+          </>
+        ) : null}
+        {keyOptions ? (
+          <>
+            {props.lastBoard ? " · " : ""}
+            <button type="button" aria-expanded={keysOpen} className={LINK} onClick={() => setKeysOpen(!keysOpen)}>
+              {!wallet && remembered ? t("open your remembered key") : t("key options")}
+            </button>
+          </>
+        ) : null}
+      </p>
+      {keysOpen ? (
+        <ul className="mt-2 space-y-1 text-left text-[15px] text-[#1c1f23]">
             {!wallet && remembered ? (
               <li className="space-y-1.5 pt-1">
                 <p>{t("A key is remembered on this device. Open it with your passphrase:")}</p>
@@ -142,11 +142,9 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
                 </button>
               </li>
             ) : null}
-          </ul>
-          {msg ? <p className="mt-1 text-[14px]">{msg}</p> : null}
-        </div>
+        </ul>
       ) : null}
-
-    </>
+      {msg ? <p className="mt-1">{msg}</p> : null}
+    </div>
   );
 }
