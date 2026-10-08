@@ -13943,8 +13943,11 @@ async fn public_mode_lets_operator_routes_through_from_loopback_only() {
 /// until its receipt is pulled) is deleted the moment its verdict is Failed, and tombstoned so a
 /// re-delivery can't bring it back. And unverified posts can't push verified ones out of a board:
 /// the per-receiver cap keeps verified posts first.
+/// A failure that depends on this node's view (a registry root it doesn't know yet) is kept, hidden
+/// and uncounted, not deleted for good.
 /// Negative controls (run by hand): the send storing before checking again → FAILED; a Failed
-/// verdict not deleting → FAILED; the cap ranking newest-only again → FAILED.
+/// verdict not deleting → FAILED; the cap ranking newest-only again → FAILED; every failure
+/// deleting → FAILED.
 #[tokio::test]
 async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
     use tower::ServiceExt as _;
@@ -13987,6 +13990,14 @@ async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
     state.tmail.set_anon_verdict("anon-bad-proof", &crate::tmail::store::AnonVerdict::Failed { reason: "replay".into(), failed_at_ms: 1 }).unwrap();
     assert!(state.tmail.get_inbox(&board, 200).is_empty(), "a failed post is still served");
     assert!(!state.tmail.store_tmail(&b).unwrap(), "a failed post came back on re-delivery");
+
+    // A root this node doesn't know yet depends on its view: kept (hidden, not counted), not deleted.
+    let mut c = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [3u8; 32], "anon-root-unknown", tmail_now_ms_for_tests());
+    c.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    resign_tmail_env_for_tests(&mut c, &ew);
+    assert!(state.tmail.store_tmail(&c).unwrap());
+    state.tmail.set_anon_verdict("anon-root-unknown", &crate::tmail::store::AnonVerdict::Failed { reason: "registry root not recognised, or outside the acceptance window".into(), failed_at_ms: 1 }).unwrap();
+    assert!(state.tmail.get_by_msg_id("anon-root-unknown").is_some(), "a post failing only on this node's view of the root was deleted for good");
 
     // The cap keeps verified posts first: 3 verified (older), then 6 pending (newer), cap 3.
     let _cap = EnvVarGuard::set("TET_TMAIL_ANON_RETAIN_PER_RECEIVER", "3");

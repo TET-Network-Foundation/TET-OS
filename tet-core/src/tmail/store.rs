@@ -1023,6 +1023,13 @@ impl TmailStore {
 // Anonymous message verdicts — verify on ARRIVAL, read the stored verdict later.
 // ---------------------------------------------------------------------------
 
+/// Is an anonymous proof failure the same on every node (a bad receipt, a journal that doesn't
+/// match, another program, a repeat)? Not when the only problem is that this node doesn't (yet)
+/// recognise the registry root the proof was made against.
+pub fn failure_is_definitive(reason: &str) -> bool {
+    !reason.starts_with("registry root not recognised")
+}
+
 /// Why [`TmailStore::send_anonymous`] didn't store a post.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnonSendError {
@@ -1063,7 +1070,12 @@ impl TmailStore {
     pub fn set_anon_verdict(&self, msg_id: &str, verdict: &AnonVerdict) -> Result<(), TmailStoreError> {
         let val = serde_json::to_vec(verdict).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
         self.anon_verdict.insert(msg_id.trim().as_bytes(), val)?;
-        if matches!(verdict, AnonVerdict::Failed { .. }) {
+        // Only a definite failure deletes. "Root not recognised" depends on this node's view of the
+        // registry (another node may know the root already), so such a post is kept, hidden and not
+        // counted, rather than deleted for good.
+        if let AnonVerdict::Failed { reason, .. } = verdict
+            && failure_is_definitive(reason)
+        {
             self.delete_by_msg_id(msg_id)?;
         }
         Ok(())
