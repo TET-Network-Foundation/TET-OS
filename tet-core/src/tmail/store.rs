@@ -154,6 +154,9 @@ pub struct TmailStore {
     /// Memoised `(epoch, root)`. Purely a cache — a miss is recomputed from the registry, so
     /// losing it (restart, eviction, flood) costs time and never acceptance.
     anon_roots: std::sync::Mutex<Vec<(u64, [u8; 32])>>,
+    /// Serialises an anonymous send's check → store → (on failure) release, so a release can never
+    /// interleave with another store of the same message and free a nullifier a stored post holds.
+    pub anon_send_lock: std::sync::Mutex<()>,
 }
 
 fn now_ms() -> u64 {
@@ -250,6 +253,7 @@ impl TmailStore {
             anon_receipts: db.open_tree(TREE_ANON_RECEIPTS)?,
             anon_nullifiers: db.open_tree(TREE_ANON_NULLIFIERS)?,
             anon_roots: std::sync::Mutex::new(Vec::new()),
+            anon_send_lock: std::sync::Mutex::new(()),
         })
     }
 

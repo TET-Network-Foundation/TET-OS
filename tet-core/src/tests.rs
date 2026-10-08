@@ -14024,3 +14024,30 @@ fn an_anonymous_post_that_is_not_stored_does_not_use_up_the_day() {
     let src = include_str!("rest/handlers/tmail.rs");
     assert!(src.contains("state.tmail.release_anon_nullifier(nullifier_hex, env.msg_id.trim());"), "the send no longer releases the claim when the store fails");
 }
+
+/// **SECURITY REGRESSION GUARD: a released claim can never belong to a stored post.** The send's
+/// check → store → release runs under one lock, and releases only when the message isn't stored.
+/// Two requests for the same anonymous message racing (one failing to store, one storing) can't
+/// leave its nullifier free while the post is kept.
+/// Negative control (run by hand): the release without the "not stored" check → FAILED.
+#[test]
+fn a_released_claim_never_belongs_to_a_stored_post() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let (_rw, board) = tmail_party_for_tests();
+    let env = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [6u8; 32], "race-msg", tmail_now_ms_for_tests());
+    let n = hex::encode([6u8; 32]);
+    // Both requests claimed (same message: idempotent); the second stored it.
+    assert!(store.claim_anon_nullifier(&n, "race-msg").unwrap());
+    assert!(store.store_tmail(&env).unwrap());
+    // The first now hits its store failure and runs the handler's release rule.
+    let src = include_str!("rest/handlers/tmail.rs");
+    assert!(src.contains("&& state.tmail.get_by_msg_id(env.msg_id.trim()).is_none()"), "the release no longer checks the message isn't stored");
+    if store.get_by_msg_id("race-msg").is_none() {
+        store.release_anon_nullifier(&n, "race-msg");
+    }
+    assert!(!store.claim_anon_nullifier(&n, "another-msg").unwrap(), "a stored post's nullifier was freed for another message");
+    assert!(src.contains("state.tmail.anon_send_lock.lock()"), "anonymous sends are no longer serialised");
+}
