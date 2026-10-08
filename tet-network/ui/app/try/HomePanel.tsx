@@ -15,7 +15,7 @@ import { FOCUS, MONO, cx } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 import ContinueBlock from "./ContinueBlock";
-import { SignatureResults, useSignaturesBoard } from "./ProofCode";
+import { SignatureResults } from "./ProofCode";
 import { parseProofCode } from "../lib/proof_code";
 
 const LINK = cx(FOCUS, "rounded-sm underline underline-offset-2");
@@ -36,9 +36,21 @@ export default function HomePanel(props: {
   const { ensureWallet } = useTryWallet();
   const [q, setQ] = useState(props.initialQuery ?? "");
   const [asked, setAsked] = useState(props.initialQuery ?? "");
-  const sigBoard = useSignaturesBoard();
   // A proof code, a file SHA-256 or a signer key looks up signatures; anything else searches threads.
-  const signatureQuery = !!asked && (!!parseProofCode(asked) || /^(0x)?[0-9a-f]{64}$/i.test(asked));
+  const [byFile, setByFile] = useState(false);
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const fromMs = from ? new Date(`${from}T00:00:00`).getTime() : undefined;
+  const toMs = to ? new Date(`${to}T23:59:59.999`).getTime() : undefined;
+  const signatureQuery = !!asked && (asked === "@dates" || !!parseProofCode(asked) || /^(0x)?[0-9a-f]{64}$/i.test(asked));
+  async function onFile(f: File | undefined) {
+    if (!f) return;
+    // Hashed here, in this tab: the file itself is never uploaded.
+    const h = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await f.arrayBuffer())), (x) => x.toString(16).padStart(2, "0")).join("");
+    setByFile(true);
+    setQ(h);
+    setAsked(h);
+  }
   const [threads, setThreads] = useState<PublicThread[] | null>(null);
 
   // Read the public boards only once someone searches for words (the node rate-limits reads).
@@ -60,6 +72,7 @@ export default function HomePanel(props: {
   }, [props.search]);
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    setByFile(false);
     setAsked(q.trim());
   };
 
@@ -101,11 +114,51 @@ export default function HomePanel(props: {
             {t("Verify")}
           </button>
         </p>
+        <details className="text-[13.5px] text-[#5d646d]">
+          <summary className={cx(FOCUS, "cursor-pointer rounded-sm")}>{t("Find signatures by file or date")}</summary>
+          <div className="mt-2 space-y-2 text-left">
+            <label className="block">
+              {t("Drop or choose a file: its SHA-256 is computed in this tab, and the file is never uploaded.")}
+              <input type="file" aria-label={t("A file to find its signatures")} onChange={(e) => void onFile(e.target.files?.[0])} className="mt-1 block text-[13.5px]" />
+            </label>
+            <p>{t("Exact files only: re-compressed or edited copies won't match.")}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <label>
+                {t("published from")} <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="rounded border border-[#c9ced4] px-1" />
+              </label>
+              <label>
+                {t("to")} <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="rounded border border-[#c9ced4] px-1" />
+              </label>
+              <button
+                type="button"
+                className={cx(FOCUS, "rounded-sm underline underline-offset-2")}
+                disabled={!from && !to}
+                onClick={() => {
+                  setByFile(false);
+                  setAsked("@dates");
+                }}
+              >
+                {t("list signatures in these dates")}
+              </button>
+            </div>
+            <p>{t("Only signatures their signers chose to publish are listed. Anonymous posts and votes are never in it.")}</p>
+          </div>
+        </details>
         <ContinueBlock lastBoard={props.lastBoard} onOpenBoard={props.onOpenBoard} />
 
         {signatureQuery ? (
           <div aria-live="polite" className="text-left">
-            <SignatureResults query={asked} board={sigBoard.board} boardError={sigBoard.error} />
+            <SignatureResults
+              query={asked}
+              fromMs={fromMs}
+              toMs={toMs}
+              byFile={byFile}
+              onSigner={(k) => {
+                setByFile(false);
+                setQ(k);
+                setAsked(k);
+              }}
+            />
           </div>
         ) : asked ? (
           <div aria-live="polite" className="text-left">

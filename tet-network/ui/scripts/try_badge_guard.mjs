@@ -9,6 +9,9 @@
 //    record, so a full signature can't skip its content comparison that way.
 // 3. A proof code is `TET-XXXX-XXXX` from the record's bytes: stable, normalises typed input
 //    (case, O→0, I/L→1), and any changed byte changes it.
+// 4b. Publishing always sends the signer's consent for exactly the record (tet-core refuses without
+//    it); a lookup honours its date bounds; the file search says exact files only and that the
+//    file is never uploaded. Controls.
 // 4. A lookup lists every matching record and checks each: a record whose signature was tampered
 //    with is listed as not verified, never as signed. Control: a lookup that trusts the code alone
 //    is caught.
@@ -99,8 +102,9 @@ async function listsAndChecks(find) {
   assert.equal(byHash.length, 2, "every record for that hash is listed");
   assert.deepEqual(byHash.map((f) => f.verified), [true, false], "the tampered record must be listed as not verified");
   let askedPrefix;
-  const byCode = await find({ query: pc.proofCode(rec.bytes), chain, records: (p) => ((askedPrefix = p), records()), mldsa44Verify });
-  assert.equal(askedPrefix, sa.stampFileId(rec.bytes).replace(/-/g, "").slice(0, 10), "a code lookup must ask only for its file");
+  const byCode = await find({ query: pc.proofCode(rec.bytes), chain, records: (q) => ((askedPrefix = q.codePrefix), records()), mldsa44Verify });
+  // The registry indexes records by the first 40 bits of their hash: a code lookup asks only for those.
+  assert.equal(askedPrefix, sa.stampFileId(rec.bytes).replace(/-/g, "").slice(0, 10), "a code lookup must ask only for its own 40 bits");
   assert.equal(byCode.length, 1);
   assert.equal(byCode[0].verified, true);
   assert.equal(byCode[0].signerEd25519, wallet);
@@ -113,6 +117,31 @@ await check("control: a lookup that trusts the code alone is caught", async () =
   const trusting = async (o) => (await pc.findSignatures(o)).map((f) => ({ ...f, verified: true }));
   await assert.rejects(() => listsAndChecks(trusting));
 });
+
+// ── 4b. Publishing carries the signer's consent; dates bound a lookup; exact files only ────────
+const PC_SRC = readFileSync(new URL("../app/lib/proof_code.ts", import.meta.url), "utf8");
+const PUB = PC_SRC.slice(PC_SRC.indexOf("export async function publishRecord"), PC_SRC.indexOf("export type RecordQuery"));
+const consents = (src) => {
+  assert.ok(/signContent\(sha256\(recordBytes\), CONSENT_PAYLOAD_TYPE/.test(src), "publishing doesn't sign a consent over the record's hash");
+  assert.ok(/consent_b64:/.test(src), "publishing doesn't send the consent");
+  assert.ok(PC_SRC.includes('CONSENT_PAYLOAD_TYPE = "tet sig publish v1"'), "the consent type differs from tet-core's");
+};
+await check("publishing always sends the signer's consent for exactly this record", () => consents(PUB));
+await check("control: publishing without a consent is caught", () => assert.throws(() => consents(PUB.replace(/consent_b64:[^}]*/, ""))));
+await check("a lookup honours its date bounds", async () => {
+  const all = await pc.findSignatures({ query: rec.fileSha256, chain, records, mldsa44Verify });
+  const t = all[0].publishedAtMs;
+  assert.equal((await pc.findSignatures({ query: rec.fileSha256, chain, fromMs: t + 1, records, mldsa44Verify })).length, 0, "a record before the range was listed");
+  assert.ok((await pc.findSignatures({ query: rec.fileSha256, chain, fromMs: t, toMs: t, records, mldsa44Verify })).length >= 1);
+});
+const HOME = readFileSync(new URL("../app/try/HomePanel.tsx", import.meta.url), "utf8");
+const PCX = readFileSync(new URL("../app/try/ProofCode.tsx", import.meta.url), "utf8");
+const exactLine = (srcs) => {
+  for (const src of srcs) assert.ok(src.includes("Exact files only: re-compressed or edited copies won't match."), "the exact-files line is gone");
+  assert.ok(HOME.includes("the file is never uploaded"), "the file search doesn't say the file stays in the tab");
+};
+await check("file search says exact files only, and that the file is never uploaded", () => exactLine([HOME, PCX]));
+await check("control: a page without the exact-files line is caught", () => assert.throws(() => exactLine([HOME.replace("Exact files only: re-compressed or edited copies won't match.", "")])));
 
 // ── 5. Wording ─────────────────────────────────────────────────────────────────────────────────
 const KEY_WORDING = /proof[- ]key|code[- ]key|key code|証明キー|証明鍵|證明鑰匙|證明金鑰/i;

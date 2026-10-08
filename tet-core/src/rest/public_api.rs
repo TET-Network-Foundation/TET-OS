@@ -36,6 +36,9 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/explorer/tx/:hash"),
     // The home page's live strip: the newest canonical block headers and tx hash/kind/signatures.
     ("GET", "/explorer/blocks/recent"),
+    // The public signature registry (sigs.rs): publish a hash-only record; search records.
+    ("POST", "/sigs/publish"),
+    ("GET", "/sigs/search"),
     // Signed sites (sites.rs): append a signed edit; read a site's chain.
     ("POST", "/sites/edit"),
     ("GET", "/sites/:site_id"),
@@ -351,7 +354,7 @@ pub async fn public_api_gate(
     // Uploads are charged by their declared length, before the body is read. A refusal answers at
     // once and closes the connection: nothing is buffered or read for a request that won't be served.
     // Site edits are charged to the same daily budget: a site holds bytes as lastingly as a file.
-    if req.method() == Method::POST && (req.uri().path() == "/files/upload" || req.uri().path() == "/sites/edit") {
+    if req.method() == Method::POST && (req.uri().path() == "/files/upload" || req.uri().path() == "/sites/edit" || req.uri().path() == "/sigs/publish") {
         let refuse = |status: StatusCode, msg: &'static str| {
             (status, [(GATE_HEADER, "upload-refused"), ("connection", "close")], msg).into_response()
         };

@@ -161,14 +161,14 @@ Hiding a wallet also hides everything it sent (its directory listing included) a
 posts and files to or from it. Copies other nodes already hold stay on those nodes. Reports go to
 abuse@stevenexus.org and are reviewed within 48 hours.
 
-## 11. Proof codes (the signatures board)
+## 11. Proof codes (the public signature registry)
 
-Optional. Proof codes (Sign → **Get a proof code**, and the home search) find hash-only signature
-records stored as small files to one board's wallet (`tet-network/ui/app/lib/proof_code.ts`).
+Nothing to set up. Proof codes (Sign → **Get a proof code**, and the home search) live in the
+node's public signature registry (`tet-core/src/sigs.rs`, `POST /sigs/publish`, `GET /sigs/search`).
 
-1. On the try page, **Start or open a board** → **Invite only**, named "Signatures (proof codes)".
-2. Put its invite link in the demo host's `.env` as `TET_SIGNATURES_INVITE=<the whole link>` and
-   rebuild the UI (`up -d --build ui`).
-3. The invite is published (the page carries it), so anyone can read the records; that is the
-   point. Records are files, so the demo's file limits apply: kept 7 days. Without the invite the
-   page says "Proof codes aren't set up on this node." and offers no code.
+- A record is stored only with its signer's consent for exactly its bytes, so nobody can publish a
+  `.sig.json` they were given. Search by proof code, file SHA-256, signer and date.
+- Limits: 16 KB per record, 1,000 per signer, a node-wide total (`TET_SIGS_MAX_TOTAL_BYTES`,
+  default 256 MiB); each publish is charged to the client's daily upload budget. Records don't
+  expire.
+- Takedown: hiding a signer's wallet (§10) stops their records being listed.

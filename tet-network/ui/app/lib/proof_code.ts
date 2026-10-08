@@ -10,21 +10,18 @@
  *   with the same code. So a lookup lists *every* record with that code and verifies each one's
  *   signatures; only verified records are shown as signed. "The code finds it; the signature proves
  *   it." It is never called a key, and the secret key stays one per person.
- * - **Where records live today:** as small files sent to a public "signatures" board's wallet on this
- *   node (`NEXT_PUBLIC_TET_SIGNATURES_INVITE`); the board's invite is published, so anyone can read
- *   them. A record is ~5 KB (the ML-DSA-44 signature and key), more than a board post holds, hence a
- *   file. Files are kept 7 days on the demo. Keep the `.sig.json`.
+ * - **Where records live:** in this node's public signature registry (tet-core `sigs.rs`). A record
+ *   is there only because its signer published it: publishing sends the record together with the
+ *   signer's **consent**, a second signature by the same keys over the record's exact SHA-256, so
+ *   nobody else can publish a `.sig.json` they were given. The registry finds records by proof
+ *   code, file SHA-256, signer and date; every result is re-checked here. Keep the `.sig.json`.
+ * - **Exact files only:** a file search hashes the file in this tab (it is never uploaded), and only
+ *   a byte-identical file has that hash: re-compressed or edited copies won't match.
  */
 import { sha256 } from "@noble/hashes/sha2";
 import { HASH_PAYLOAD_TYPE, verifyEnvelope } from "./verify_anything.mjs";
-import { signContent, sigJsonBytes, stampFileId, type Chain, type SigEnvelope } from "./sign_anything";
-import { type OpenBoard } from "./try_board";
-import { buildFileEnvelopeV1 } from "./files";
-import { decryptFileForReceiver } from "./files_e2ee";
-import { settleFileFee } from "./files_fee";
-import { b64ToBytes } from "./encoding";
-import { getFilesFetch, getFilesInbox, postFilesUpload } from "./tet_core_http";
-import { getHybridSignerSession } from "./hybrid_signer_session";
+import { signContent, sigJsonBytes, type Chain, type SigEnvelope } from "./sign_anything";
+import { tetCoreUrl } from "./tet_core_http";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 export const PROOF_CODE_RE = /^TET-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/;
@@ -41,9 +38,8 @@ function hex(b: Uint8Array): string {
 }
 
 /**
- * `TET-XXXX-XXXX`: 40 bits of SHA-256(record bytes), Crockford base32. The record is stored as a
- * file whose id is that same hash (`stampFileId`), so a code lookup fetches only the file whose id
- * starts with the code's 40 bits instead of every record (the node rate-limits reads).
+ * `TET-XXXX-XXXX`: 40 bits of SHA-256(record bytes), Crockford base32. The registry indexes records
+ * by those same 40 bits, so a code lookup reads only the records that share them.
  */
 export function proofCode(recordBytes: Uint8Array): string {
   const h = sha256(recordBytes);
@@ -62,34 +58,6 @@ export function parseProofCode(input: string): string | null {
   return `TET-${body.slice(0, 4)}-${body.slice(4)}`;
 }
 
-const RECORD_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-/**
- * Publish a record as a small file to the signatures board's wallet (readable by anyone with the
- * board's published invite); returns its proof code. The demo's sponsor pays the file fee when it
- * can; the file is delivered either way.
- */
-export async function publishRecord(baseUrl: string, board: OpenBoard, recordBytes: Uint8Array): Promise<string> {
-  const sess = getHybridSignerSession();
-  if (!sess) throw new Error("No wallet in this tab.");
-  const built = await buildFileEnvelopeV1({
-    senderWalletId: sess.walletIdHex64,
-    receiverWalletId: board.boardWalletId,
-    fileBytes: recordBytes,
-    filename: "record.sig.json",
-    mimeType: "application/json",
-    receiverX25519Pub: board.keys.x25519_pub,
-    receiverMlkemPub: board.keys.mlkem_pub,
-    baseUrl,
-    ttlMs: RECORD_TTL_MS,
-    fileId: stampFileId(recordBytes),
-  });
-  const up = await postFilesUpload(baseUrl, built.envelope, built.bodyCiphertext);
-  if (!up.ok) throw new Error(up.text || `the node refused the record (HTTP ${up.status})`);
-  void settleFileFee({ mode: "demo-sponsor", baseUrl, fileId: built.envelope.file_id, senderWalletId: sess.walletIdHex64, storageWallet: up.storageWallet ?? "" }).catch(() => undefined);
-  return proofCode(recordBytes);
-}
-
 /** The 10 hex digits (40 bits) a code stands for: the start of the record's hash and file id. */
 export function codePrefixHex(code: string): string | null {
   const c = parseProofCode(code);
@@ -99,42 +67,52 @@ export function codePrefixHex(code: string): string | null {
   return bits.toString(16).padStart(10, "0");
 }
 
+/** The payload type of a signer's consent to publish one record (tet-core `sigs::CONSENT_PAYLOAD_TYPE`). */
+export const CONSENT_PAYLOAD_TYPE = "tet sig publish v1";
+
+function b64(bytes: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
 /**
- * The signatures board's records, decrypted with the board's (published) keys; newest first.
- * With `fileIdPrefix` (a code lookup) only files whose id starts with it are fetched; otherwise
- * only the newest `scan` records, to stay inside the node's read limits.
+ * Publish a record to this node's signature registry, with the tab key's consent for exactly these
+ * bytes (signed now, by the same keys as the record). Returns its proof code.
  */
-export async function loadRecords(baseUrl: string, board: OpenBoard, fileIdPrefix?: string, scan = 20): Promise<{ bytes: Uint8Array; publishedAtMs: number }[]> {
-  const inbox = await getFilesInbox(baseUrl, board.boardWalletId, 200);
-  if (!inbox.ok) throw new Error(inbox.text || `HTTP ${inbox.status}`);
-  const wanted = fileIdPrefix
-    ? inbox.files.filter((f) => f.file_id.replace(/-/g, "").startsWith(fileIdPrefix))
-    : [...inbox.files].sort((a, b) => b.created_at_ms - a.created_at_ms).slice(0, scan);
-  const out: { bytes: Uint8Array; publishedAtMs: number }[] = [];
-  for (const env of wanted) {
+export async function publishRecord(baseUrl: string, recordBytes: Uint8Array, chain: Chain): Promise<string> {
+  const consent = await signContent(sha256(recordBytes), CONSENT_PAYLOAD_TYPE, chain);
+  const r = await fetch(tetCoreUrl(baseUrl, "/sigs/publish"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ record_b64: b64(recordBytes), consent_b64: b64(sigJsonBytes(consent)) }),
+  });
+  if (r.status !== 202) {
+    let why = `HTTP ${r.status}`;
     try {
-      const blob = await getFilesFetch(baseUrl, env.file_id);
-      if (!blob.ok || !blob.bytes) continue;
-      const d = await decryptFileForReceiver(
-        {
-          client_ephemeral_pub: b64ToBytes(env.e2ee.client_ephemeral_pub_b64),
-          mlkem_ciphertext: b64ToBytes(env.e2ee.mlkem_ciphertext_b64),
-          filename_nonce: b64ToBytes(env.e2ee.filename_nonce_b64),
-          mime_nonce: b64ToBytes(env.e2ee.mime_nonce_b64),
-          body_nonce: b64ToBytes(env.e2ee.body_nonce_b64),
-          filename_ciphertext: b64ToBytes(env.filename_encrypted_b64),
-          mime_ciphertext: b64ToBytes(env.mime_type_encrypted_b64),
-          body_ciphertext: blob.bytes,
-        },
-        board.keys.x25519_sk,
-        board.keys.mlkem_sk,
-      );
-      out.push({ bytes: d.fileBytes, publishedAtMs: env.created_at_ms });
+      why = String(((await r.json()) as { error?: string }).error ?? why);
     } catch {
-      /* an unreadable file is skipped */
+      /* not JSON */
     }
+    throw new Error(`the node refused the record: ${why}`);
   }
-  return out.sort((a, b) => b.publishedAtMs - a.publishedAtMs);
+  return proofCode(recordBytes);
+}
+
+export type RecordQuery = { codePrefix?: string; file?: string; signer?: string; fromMs?: number; toMs?: number };
+
+/** Published records matching `q`, from this node's registry (not yet checked), newest first. */
+export async function registryRecords(baseUrl: string, q: RecordQuery): Promise<{ bytes: Uint8Array; publishedAtMs: number }[]> {
+  const params: Record<string, string> = {};
+  if (q.codePrefix) params.code = q.codePrefix;
+  if (q.file) params.file = q.file;
+  if (q.signer) params.signer = q.signer;
+  if (q.fromMs !== undefined) params.from = String(q.fromMs);
+  if (q.toMs !== undefined) params.to = String(q.toMs);
+  const r = await fetch(tetCoreUrl(baseUrl, "/sigs/search", params));
+  if (!r.ok) throw new Error(`the registry didn't answer (HTTP ${r.status})`);
+  const j = (await r.json()) as { records?: { record_b64: string; published_at_ms: number }[] };
+  return (j.records ?? []).map((x) => ({ bytes: Uint8Array.from(atob(x.record_b64), (c) => c.charCodeAt(0)), publishedAtMs: x.published_at_ms }));
 }
 
 export type FoundSignature = {
@@ -149,23 +127,37 @@ export type FoundSignature = {
 };
 
 /**
- * Records matching `query`: a proof code, a file SHA-256 or a signer key (64 hex). Every match is
- * listed and its signatures checked (no file needed: a record signs a hash). `records` is injected
- * (the page passes `loadRecords`), and so is `mldsa44Verify` (lib/pqc).
+ * Records matching `query`: a proof code, a file SHA-256 or a signer key (64 hex), optionally
+ * between two dates. Every match is listed and its signatures checked (no file needed: a record
+ * signs a hash). `records` is injected (the page passes `registryRecords`), and so is
+ * `mldsa44Verify` (lib/pqc).
  */
 export async function findSignatures(o: {
   query: string;
   chain: Chain;
-  /** Called with the code's file-id prefix for a code lookup, without one otherwise. */
-  records: (fileIdPrefix?: string) => Promise<{ bytes: Uint8Array; publishedAtMs: number }[]>;
+  fromMs?: number;
+  toMs?: number;
+  records: (q: RecordQuery) => Promise<{ bytes: Uint8Array; publishedAtMs: number }[]>;
   mldsa44Verify: (pubB64: string, sigB64: string, msg: Uint8Array) => Promise<boolean>;
 }): Promise<FoundSignature[]> {
   const code = parseProofCode(o.query);
   const h = o.query.trim().toLowerCase().replace(/^0x/, "");
   const isHex = /^[0-9a-f]{64}$/.test(h);
-  if (!code && !isHex) return [];
+  if (!code && !isHex && o.fromMs === undefined && o.toMs === undefined) return [];
+  const dates = { fromMs: o.fromMs, toMs: o.toMs };
+  // A 64-hex query is either a file's SHA-256 or a signer's key: ask for both.
+  const batches = code
+    ? [await o.records({ codePrefix: codePrefixHex(code) ?? undefined, ...dates })]
+    : isHex
+      ? [await o.records({ file: h, ...dates }), await o.records({ signer: h, ...dates })]
+      : [await o.records(dates)];
+  const seen = new Set<string>();
+  const recs = batches.flat().filter((r) => {
+    const k = proofCode(r.bytes) + r.bytes.length;
+    return seen.has(k) ? false : (seen.add(k), true);
+  });
   const out: FoundSignature[] = [];
-  for (const rec of await o.records(code ? (codePrefixHex(code) ?? undefined) : undefined)) {
+  for (const rec of recs) {
     const text = new TextDecoder().decode(rec.bytes);
     let env: SigEnvelope;
     try {
@@ -182,7 +174,9 @@ export async function findSignatures(o: {
       continue;
     }
     const signer = String(env.tet?.agent_ed25519_pubkey_hex ?? "").toLowerCase();
-    const hit = code ? c === code : fileHash === h || signer === h;
+    const hit = code ? c === code : isHex ? fileHash === h || signer === h : true;
+    if (o.fromMs !== undefined && rec.publishedAtMs < o.fromMs) continue;
+    if (o.toMs !== undefined && rec.publishedAtMs > o.toMs) continue;
     if (!hit) continue;
     const v = await verifyEnvelope({ envelope: env, content: new Uint8Array(), recordOnly: true, chain: o.chain, mldsa44Verify: o.mldsa44Verify });
     out.push({ code: c, fileSha256: fileHash, signerEd25519: signer, publishedAtMs: rec.publishedAtMs, verified: v.ok === true, reason: v.ok ? undefined : v.reason, recordBytes: rec.bytes });

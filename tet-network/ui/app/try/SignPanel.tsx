@@ -15,7 +15,7 @@ import { Button, FilePick, INK, KeysBanner, MONO, PanelHead, PinnedNotice, TextA
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 import { SigQr } from "./QrPanel";
-import { ProofCodeBox, useSignaturesBoard } from "./ProofCode";
+import { ProofCodeBox } from "./ProofCode";
 import { publishRecord, signFileHash } from "../lib/proof_code";
 import { sigSha256 } from "../lib/tet_qr";
 
@@ -46,7 +46,6 @@ export default function SignPanel(props: { hint?: string } = {}) {
   const [text, setText] = useState("");
   const [signed, setSigned] = useState<{ name: string; env: SigEnvelope; bytes: Uint8Array; chain: { chainId: string; genesisHash: string } } | null>(null);
   const [showQr, setShowQr] = useState(false);
-  const sigBoard = useSignaturesBoard();
   const [proof, setProof] = useState<{ code: string; bytes: Uint8Array } | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -92,13 +91,13 @@ export default function SignPanel(props: { hint?: string } = {}) {
 
   /** Sign the file's SHA-256 (not the file) and publish that record: its proof code finds it. */
   async function onProofCode() {
-    if (!signed || !sigBoard.board) return;
+    if (!signed) return;
     setErr("");
     setBusy(t("Publishing the record…"));
     try {
       const content = Uint8Array.from(atob(signed.env.payload), (c) => c.charCodeAt(0));
       const rec = await signFileHash(content, signed.chain);
-      const code = await publishRecord(BASE, sigBoard.board, rec.bytes);
+      const code = await publishRecord(BASE, rec.bytes, signed.chain);
       setProof({ code, bytes: rec.bytes });
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -218,7 +217,7 @@ export default function SignPanel(props: { hint?: string } = {}) {
               <Button kind="secondary" onClick={() => setShowQr((v) => !v)}>
                 {showQr ? t("Hide the QR") : t("Show as a QR")}
               </Button>
-              {sigBoard.board && !proof ? (
+              {!proof ? (
                 <Button disabled={!!busy} onClick={() => void onProofCode()}>
                   {busy || t("Get a proof code")}
                 </Button>
@@ -235,7 +234,6 @@ export default function SignPanel(props: { hint?: string } = {}) {
               </p>
             ) : null}
             {proof ? <ProofCodeBox code={proof.code} recordBytes={proof.bytes} name={signed.name.replace(/\.sig\.json$/, "")} /> : null}
-            {!sigBoard.board && sigBoard.error === "not set up" ? <p className="text-[14px] text-[#5d646d]">{t("Proof codes aren't set up on this node.")}</p> : null}
             {showQr ? (
               <SigQr
                 name={signed.name.replace(/\.sig\.json$/, "")}

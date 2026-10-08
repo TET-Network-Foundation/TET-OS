@@ -10,6 +10,11 @@
 //    log it; anonymous posting unlinks the post from your key and doesn't hide your IP; for IP
 //    privacy, Tor or your own node. Control: a dictionary missing the line is caught.
 // 3. Each feature keeps its "proves / doesn't prove" line. Control: a panel without it is caught.
+// 4. Vouching wording (TetSearch): nothing claims "AI cannot create keys", "AI cannot access" or
+//    "humans only, guaranteed" (anyone, or any program, can make a key; a vouch limits who
+//    publishes, not what they write), in English, Japanese or Chinese; and any page that describes
+//    vouched publishing says "Keys without a human vouch can't publish." Controls: a claim, and a
+//    vouch page without the line, are caught.
 //
 // "Doesn't log it" is made true for Caddy by its log filter (deploy/demo/Caddyfile rule 5, checked
 // with a real Caddy and a control in deploy/tests/demo-node.test.sh); tet-core logs no client address.
@@ -92,6 +97,60 @@ await check("control: an overclaim is caught; a denial of one isn't", () => {
   assert.equal(overclaims([["x.tsx", "It doesn't hide your IP address from the node."]]).length, 0);
   assert.equal(overclaims([["x.tsx", "IPを隠したいときはTorか自分のノードを使ってください。"]]).length, 0);
   assert.equal(overclaims([["x.yml", '# no "untraceable" claim anywhere']]).length, 0);
+});
+
+// ── 4. Vouching wording ──────────────────────────────────────────────────────────────────────────
+export const VOUCH_OVERCLAIM = new RegExp(
+  [
+    "AI (?:cannot|can't|can not|is unable to) (?:create|make|generate) (?:a )?keys?",
+    "AI (?:cannot|can't|can not) access",
+    "humans? only,? guaranteed",
+    "guaranteed (?:to be )?humans? only",
+    "AI(?:は|には)鍵を(?:作れ|作ることができ)(?:ない|ません)",
+    "人間だけ(?:を|が)?保証",
+    "AI\\s*(?:無法|不能)(?:建立|製造|產生)(?:鑰匙|金鑰)",
+    "保證只有人類",
+  ].join("|"),
+  "i",
+);
+function vouchOverclaims(list) {
+  const found = [];
+  for (const [path, text] of list) {
+    if (path === "tet-network/ui/scripts/try_privacy_guard.mjs") continue;
+    text.split("\n").forEach((line, i) => {
+      const m = VOUCH_OVERCLAIM.exec(line);
+      if (m && !DENIAL.test(line.slice(0, m.index))) found.push(`${path}:${i + 1}: ${line.trim().slice(0, 120)}`);
+    });
+  }
+  return found;
+}
+const VOUCH_LINE = "Keys without a human vouch can't publish.";
+/** Page files that describe vouched publishing but don't carry the line. */
+function vouchPagesMissingLine(list) {
+  return list
+    .filter(([p, text]) => /^tet-network\/ui\/app\/.*\.tsx$/.test(p) && /vouch[^.\n]{0,60}publish|publish[^.\n]{0,60}vouch/i.test(text))
+    .filter(([, text]) => !text.includes(VOUCH_LINE))
+    .map(([p]) => p);
+}
+await check("SECURITY: nothing claims AI can't make keys, or humans only, guaranteed", () => {
+  const found = vouchOverclaims(files);
+  assert.equal(found.length, 0, found.join("\n     "));
+});
+await check("control: a vouching overclaim is caught; a denial of one isn't", () => {
+  for (const claim of ["AI cannot create keys here.", "TetSearch: humans only, guaranteed.", "AIは鍵を作れません。", "AI 無法建立鑰匙。"]) {
+    assert.equal(vouchOverclaims([["x.tsx", claim]]).length, 1, claim);
+  }
+  assert.equal(vouchOverclaims([["x.md", 'Never say "AI cannot create keys": anyone can make a key.']]).length, 0);
+});
+await check("every page about vouched publishing says keys without a human vouch can't publish", () => {
+  const missing = vouchPagesMissingLine(files);
+  assert.equal(missing.length, 0, missing.join(", "));
+});
+await check("control: a vouch page without the line is caught", () => {
+  const page = ["tet-network/ui/app/try/SearchPanel.tsx", "Only vouched people can publish to TetSearch."];
+  assert.deepEqual(vouchPagesMissingLine([["tet-network/ui/app/try/X.tsx", "The owner vouched for the agent. Later you can publish it."]]), [], "a vouch and a publish in different sentences isn't a vouched-publishing claim");
+  assert.deepEqual(vouchPagesMissingLine([page]), ["tet-network/ui/app/try/SearchPanel.tsx"]);
+  assert.deepEqual(vouchPagesMissingLine([[page[0], page[1] + " " + VOUCH_LINE]]), []);
 });
 
 // ── 2. Required statements, in every language ─────────────────────────────────────────────────
