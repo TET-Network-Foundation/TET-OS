@@ -18,6 +18,8 @@ import AboutPanel from "./AboutPanel";
 import TermsPanel from "./TermsPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
+import LandingPanel from "./LandingPanel";
+import { getUi, setUi } from "../lib/device_store";
 import QrPanel from "./QrPanel";
 import BoardPanel from "./BoardPanel";
 import FilesTryPanel from "./FilesTryPanel";
@@ -51,7 +53,7 @@ const TOOLS = [
   { id: "about", label: "About", group: "footer" },
   { id: "terms", label: "Terms", group: "footer" },
 ] as const;
-type ToolId = (typeof TOOLS)[number]["id"] | "new";
+type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home";
 /** What the middle column shows: a board (by invite) or a tool. */
 type View = { board: string } | { tool: ToolId };
 const viewKey = (v: View) => ("board" in v ? `b:${v.board}` : `t:${v.tool}`);
@@ -176,6 +178,7 @@ function Channels(props: { boards: OpenBoard[]; view: View; go: (v: View) => voi
   };
   return (
     <nav aria-label={t("Channels")} data-channels>
+      <ul className="mt-2">{item({ tool: "home" }, "~", t("TET: start here"))}</ul>
       <h2 className="mx-2 mb-1 mt-3 text-[13px] font-semibold text-[#5d646d]">{t("boards")}</h2>
       <ul>
         {item({ tool: "directory" }, "/", t("Public boards"))}
@@ -269,12 +272,35 @@ function TryApp() {
   const { t } = useLang();
   const node = useNode();
   const [boards, setBoards] = useState<OpenBoard[]>([]);
+  /** The landing's "try this" hint for Sign, and the last board this device opened (device_store). */
+  const [signHint, setSignHint] = useState("");
+  const [lastBoard, setLastBoard] = useState<{ name: string; invite: string | null } | null>(null);
+  useEffect(() => {
+    const t0 = setTimeout(() => {
+      try {
+        const v = JSON.parse(getUi("tet.ui.v1.lastBoard") ?? "null");
+        if (v && typeof v.name === "string") setLastBoard({ name: v.name, invite: typeof v.invite === "string" ? v.invite : null });
+      } catch {
+        /* nothing remembered */
+      }
+    }, 0);
+    return () => clearTimeout(t0);
+  }, []);
   const [view, setView] = useState<View>({ tool: "new" });
   const [opened, setOpened] = useState<Set<string>>(() => new Set());
   const [menu, setMenu] = useState(false);
   const [boardErr, setBoardErr] = useState("");
   const [directory, setDirectory] = useState<OpenBoard | null>(null);
   const [listings, setListings] = useState<Awaited<ReturnType<typeof readDirectory>> | null>(null);
+  // Remember the last PUBLIC board read (device_store, plain UI state; its invite is public anyway).
+  // An invite-only board leaves no record on the device, not even its name (commit security
+  // review of #70).
+  useEffect(() => {
+    if (!("board" in view)) return;
+    const b = boards.find((x) => x.invite === view.board);
+    if (!b || !listings?.some((l) => l.boardWalletId === b.boardWalletId)) return;
+    setUi("tet.ui.v1.lastBoard", JSON.stringify({ name: b.name || b.boardWalletId.slice(0, 8), invite: b.invite }));
+  }, [view, boards, listings]);
   const [dirErr, setDirErr] = useState("");
   /** The 12 words of boards this tab created (to list them again); kept in memory only. */
   const [boardWords, setBoardWords] = useState<Record<string, string>>({});
@@ -347,7 +373,7 @@ function TryApp() {
     const t =
       tool || !h.startsWith("#board=")
         ? setTimeout(() => {
-            if (!chosen.current) go(tool ? { tool } : { tool: "new" });
+            if (!chosen.current) go(tool ? { tool } : { tool: "home" });
           }, 0)
         : undefined;
     return () => {
@@ -365,6 +391,7 @@ function TryApp() {
     files: t("files"),
     mail: t("DM"),
     new: t("start or open a board"),
+    home: t("TET: start here"),
     about: t("About"),
     terms: t("Terms"),
     live: t("live"),
@@ -420,7 +447,13 @@ function TryApp() {
         <aside className="hidden border-r border-[#e3e5e8] bg-[#f1f2f4] px-2.5 py-3.5 md:block">
           <div className="sticky top-3.5">
             <h1 className="mx-2 text-[16px] font-bold">
-              Try TET <span className="text-[14px] font-normal text-[#5d646d]">{t("testnet")}</span>
+              <button type="button" onClick={() => go({ tool: "home" })} className={cx(FOCUS, "inline-flex items-center gap-2 rounded-sm text-left")}>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src="/brand/tet-logo.svg" width={20} height={20} alt="" className="tet-logo h-5 w-5" />
+                <span>
+                  Try TET <span className="text-[14px] font-normal text-[#5d646d]">{t("testnet")}</span>
+                </span>
+              </button>
             </h1>
             <Channels boards={boards} view={view} go={go} />
             <div className="mx-2 mt-6 space-y-3 border-t border-[#dcdfe3] pt-3">
@@ -452,7 +485,21 @@ function TryApp() {
           {panel({ tool: "new" }, <NewBoardPanel directory={directory} onOpen={addBoard} onListed={() => directory && void refreshDirectory(directory)} />)}
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
-          {panel({ tool: "sign" }, <SignPanel />)}
+          {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
+          {panel(
+            { tool: "home" },
+            <LandingPanel
+              go={(tool, hint) => {
+                setSignHint(hint ?? "");
+                go({ tool: tool as ToolId });
+              }}
+              lastBoard={lastBoard}
+              onOpenBoard={(invite) => void openBoard(BASE, invite).then(addBoard).catch((e: unknown) => setBoardErr(e instanceof Error ? e.message : String(e)))}
+              listings={listings}
+              listingsError={dirErr}
+              onBoard={addBoard}
+            />,
+          )}
           {panel({ tool: "qr" }, <QrPanel />)}
           {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
           {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}

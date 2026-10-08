@@ -467,6 +467,13 @@ jobs:
         name: try page — the node proxy never forwards operator routes
         run: node --experimental-strip-types scripts/try_proxy_guard.mjs
 
+      # What /try remembers on a device (lib/device_store.ts): only listed UI keys in plain storage;
+      # the key only as passphrase ciphertext (PBKDF2-SHA-256 ≥ 600k, AES-GCM); a wrong passphrase
+      # opens nothing; the KDF can't be weakened; no other /try lib touches storage. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the device store keeps only UI state and an encrypted key
+        run: node --experimental-strip-types scripts/try_storage_guard.mjs
+
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
       # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).

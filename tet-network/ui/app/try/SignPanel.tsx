@@ -37,7 +37,7 @@ export async function fetchExplorerTx(hash: string) {
   return r.json();
 }
 
-export default function SignPanel() {
+export default function SignPanel(props: { hint?: string } = {}) {
   const { t } = useLang();
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
   const [file, setFile] = useState<File | null>(null);
@@ -155,6 +155,7 @@ export default function SignPanel() {
         />
       ) : null}
       <div className="max-w-[46rem] space-y-3 px-4 pb-6 md:px-5">
+        {props.hint ? <p className="border-l-2 border-[#c9ced4] pl-3 text-[15px]">{props.hint}</p> : null}
         <PinnedNotice
           lines={[
             t("A signature proves that this wallet's two keys (Ed25519 and ML-DSA-44) signed these exact bytes. Not who holds the wallet, and not when."),

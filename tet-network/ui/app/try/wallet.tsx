@@ -38,6 +38,8 @@ type Ctx = {
   joinAnon: () => Promise<void>;
   /** The wallet id, making the wallet first if there is none. */
   ensureWallet: () => Promise<string>;
+  /** Open the wallet from 12 words this device remembered (encrypted; see lib/device_store.ts). */
+  openWithWords: (words: string) => Promise<string>;
   /** Publish this wallet's messaging keys once (needed to receive Tmail and files). */
   ensureMessagingKeys: () => Promise<void>;
   /** Whether this wallet's messaging keys are published ("unknown" until checked or with no wallet). */
@@ -68,6 +70,21 @@ export function WalletProvider(props: { children: ReactNode }) {
       current.current = null;
       throw e;
     });
+    return (await current.current).walletId;
+  }, []);
+
+  /** Open the tab's wallet from existing words (a key remembered on this device). */
+  const openWithWords = useCallback(async (words: string) => {
+    current.current = (async () => {
+      const w = { words, walletId: await activateTryWallet(words) };
+      setWallet(w);
+      return w;
+    })().catch((e: unknown) => {
+      current.current = null;
+      throw e;
+    });
+    keysFor.current = null;
+    setKeys("unknown");
     return (await current.current).walletId;
   }, []);
 
@@ -138,8 +155,8 @@ export function WalletProvider(props: { children: ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, keys, checkKeys, prover, forget }),
-    [wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, keys, checkKeys, prover, forget],
+    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget }),
+    [wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget],
   );
   return <WalletCtx.Provider value={value}>{props.children}</WalletCtx.Provider>;
 }
