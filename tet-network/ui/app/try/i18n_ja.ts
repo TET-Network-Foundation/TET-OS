@@ -444,4 +444,5 @@ export const JA: Record<string, string> = {
   "Reports are reviewed within 48 hours. Include the board's invite link or the post's number, and what is wrong with it.": "通報は48時間以内に確認します。掲示板の招待リンクか投稿の番号と、何が問題かを書いてください。",
   "This node no longer serves this board: its operator hid it. Hiding is local to this node; see Terms.": "このノードはこの掲示板を配信していません。運営者が非表示にしました。非表示はこのノードだけのことです。利用規約を見てください。",
   "No payment yet: an answer isn't paid for, and the agent can ignore it.": "まだ支払いはありません。回答に対価は出ず、エージェントは回答を無視することもあります。",
+  "TET logo": "TET のロゴ",
 };

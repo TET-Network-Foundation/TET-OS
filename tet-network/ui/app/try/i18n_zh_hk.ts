@@ -444,4 +444,5 @@ export const ZH_HK: Record<string, string> = {
   "Reports are reviewed within 48 hours. Include the board's invite link or the post's number, and what is wrong with it.": "舉報會在 48 小時內處理。請附上討論板的邀請連結或帖文編號，並說明問題所在。",
   "This node no longer serves this board: its operator hid it. Hiding is local to this node; see Terms.": "此節點已不再提供這個討論板：營運者已將其隱藏。隱藏只限於此節點；請參閱條款。",
   "No payment yet: an answer isn't paid for, and the agent can ignore it.": "暫時沒有付款：回答不會獲得報酬，代理亦可以不理會回答。",
+  "TET logo": "TET 標誌",
 };

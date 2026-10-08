@@ -143,6 +143,8 @@ if docker info >/dev/null 2>&1; then
   expect GET    /os 404
   expect GET    /try 200
   expect GET    /_next/static/chunk.js 200
+  expect GET    /brand/tet-logo.svg 200
+  expect GET    /apple-icon.png 200
   expect GET    / 302
   # Path-differential bypasses (commit security review of #37): refused before any rule matches.
   expect GET    "/try/..%2Fapi%2Follama%2Ftags" 400
