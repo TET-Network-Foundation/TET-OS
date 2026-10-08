@@ -13,6 +13,7 @@ import { Badge, Button, FOCUS, FilePick, INK, Input, PanelHead, PinnedNotice, Te
 import { useLang } from "./i18n";
 import { checkStamp, type StampCheck } from "../lib/sign_anything";
 import { fetchExplorerTx } from "./SignPanel";
+import { parseQrFragment, qrNamesThese, type QrLink } from "../lib/tet_qr";
 
 type Step = { n: 1 | 2 | 3; status: "ok" | "failed" | "skipped"; text: string };
 type Verdict = { level: 0 | 1 | 2 | 3; steps: Step[]; chainLabel: string };
@@ -83,7 +84,9 @@ function FileOrPaste(props: {
 
 export default function VerifyPanel(props: { baseUrl: string }) {
   const { t } = useLang();
-  const [showMore, setShowMore] = useState(false);
+  /** Opened from a TET QR (the `#tetqr=` fragment): the .sig.json it names and its stamp, if any. */
+  const [qr] = useState<QrLink | null>(() => (typeof window === "undefined" ? null : parseQrFragment(window.location.hash)));
+  const [showMore, setShowMore] = useState(!!qr?.stampTx);
   const [nodeChain, setNodeChain] = useState<Chain | null>(null);
   const [useOther, setUseOther] = useState(false);
   const [otherChainId, setOtherChainId] = useState("");
@@ -96,9 +99,10 @@ export default function VerifyPanel(props: { baseUrl: string }) {
   const [manFile, setManFile] = useState<File | null>(null);
   const [pin, setPin] = useState("");
   const [verdict, setVerdict] = useState<Verdict | null>(null);
-  const [stampText, setStampText] = useState("");
+  const [stampText, setStampText] = useState(qr?.stampTx ? JSON.stringify({ tx_hash: qr.stampTx }) : "");
   const [stampFile, setStampFile] = useState<File | null>(null);
   const [stamp, setStamp] = useState<StampCheck | null>(null);
+  const [qrMatch, setQrMatch] = useState<boolean | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -145,6 +149,7 @@ export default function VerifyPanel(props: { baseUrl: string }) {
           throw new Error(t("The manifest is not valid JSON."));
         }
       }
+      setQrMatch(qr ? qrNamesThese(qr, sigFile ? new Uint8Array(await sigFile.arrayBuffer()) : new TextEncoder().encode(sigRaw)) : null);
       const r = await gradedVerdict({
         content,
         envelope,
@@ -188,6 +193,28 @@ export default function VerifyPanel(props: { baseUrl: string }) {
       <PanelHead title={t("Verify")} sub={t("checked in this tab")} todo={t("Add a file (or text) and its .sig.json, then press Verify.")} />
       <div className="max-w-[46rem] space-y-3 px-4 pb-6 md:px-5">
       <PinnedNotice lines={LIMITS(t)} />
+      {qr ? (
+        <div className="rounded-md border border-[#c9d6e6] bg-[#f3f7fc] px-3 py-2.5 text-[15px] leading-relaxed">
+          <p className="font-semibold">{t("Opened from a TET QR")}</p>
+          <p>
+            {t("Add the .sig.json it names (SHA-256 below) and the file. The QR says the signer is key {key}; that is proven only when the .sig.json is checked.", { key: `${qr.signerEd25519.slice(0, 16)}…` })}
+          </p>
+          <p translate="no" className="break-all font-mono text-[12px] text-[#5d646d]">
+            {qr.sigSha256}
+          </p>
+          {qr.stampTx ? <p>{t("Its stamp receipt is filled in below.")}</p> : null}
+          {nodeChain && (qr.chainId !== nodeChain.chainId || qr.genesisHash !== nodeChain.genesisHash) ? (
+            // The QR's author chose its chain, so the page never switches to it: checking another
+            // chain is the reader's choice (the "another chain" option), made knowingly.
+            <p role="alert" className={INK.bad}>
+              {t("The QR names chain {qrChain}, not this node's chain {nodeChain}. Verify checks against this node's chain; a signature for another chain fails here.", {
+                qrChain: `${qr.chainId} (${qr.genesisHash.slice(0, 12)}…)`,
+                nodeChain: `${nodeChain.chainId} (${nodeChain.genesisHash.slice(0, 12)}…)`,
+              })}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <div className="space-y-3">
         <FileOrPaste label={t("1. The file or text")} text={contentText} onText={setContentText} file={contentFile} onFile={setContentFile} placeholder={t("…or paste the exact text that was signed")} />
         <FileOrPaste label={t("2. Its .sig.json")} text={sigText} onText={setSigText} file={sigFile} onFile={setSigFile} placeholder={t("…or paste the .sig.json")} />
@@ -238,6 +265,18 @@ export default function VerifyPanel(props: { baseUrl: string }) {
               <p className={cx("mt-1 break-words text-[15px] leading-relaxed", st.status === "skipped" ? "text-[#5d646d]" : "text-[#1c1f23]")}>{st.text}</p>
             </li>
           ))}
+          {qr && qrMatch !== null ? (
+            <li className="border-b border-[#eceef1] py-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[14px] font-semibold text-[#5d646d]">+</span>
+                <span className="text-base font-semibold">{t("The .sig.json is the one the QR names")}</span>
+                <Badge tone={qrMatch ? "ok" : "bad"}>{qrMatch ? t("proven") : t("failed")}</Badge>
+              </div>
+              <p className="mt-1 break-words text-[15px] leading-relaxed text-[#1c1f23]">
+                {qrMatch ? t("Its SHA-256 is the one in the QR.") : t("Its SHA-256 differs from the QR's: this is another .sig.json, or a copy that was changed (even re-indented).")}
+              </p>
+            </li>
+          ) : null}
           {stamp ? (
             <li className="border-b border-[#eceef1] py-2.5">
               <div className="flex flex-wrap items-center gap-2">
