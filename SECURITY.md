@@ -86,6 +86,13 @@ anonymously* sent the wallet id to the node
 user's own wallet. Anyone who used anonymous mode from the desktop before then should treat those
 messages as signed by their own wallet. Anonymous sends from the step scripts were not affected.
 
+**Fixed: a transaction did not have to be signed by the wallet it acts for.** Until 2026-10-08 a
+validly signed transaction was accepted without checking that its signer was the wallet it debits,
+registers or claims for. Since 01d7192, deployed on both seeds on 2026-10-08, every node refuses such
+a transaction at admission and when it applies a block. The whole chain up to block 104,006 was
+checked before the fix was deployed: no transaction had been signed by a wallet other than the one it
+acts for.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about
