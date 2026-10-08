@@ -10170,7 +10170,8 @@ fn install_capture_log() -> bool {
 
 /// **SECURITY REGRESSION GUARD: an anonymous post names no poster to the node.** Replays the exact
 /// request sequence `tet-network/ui/app/lib/anon_poster.mjs` makes (download the whole registry,
-/// deposit the receipt, send the envelope) through the real router, then looks for the poster's
+/// deposit the receipt, send the envelope) through the real router (the placeholder receipt is
+/// refused at send, so the envelope is also stored the way gossip delivers it), then looks for the poster's
 /// wallet id and registry commitment in everything the node saw or kept: the requests, the `log`
 /// output, the node's live log feed, and every sled tree except the registry, where the
 /// registration is public by design.
@@ -10261,9 +10262,15 @@ async fn anonymous_post_names_no_poster_to_the_node() {
         &eph_words, &ephemeral, &receiver, nullifier, "anon-trace-1", sent_at,
     );
     env.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = receipt_hash;
-    let (status, _) =
+    let (status, body) =
         call("POST", "/tmail/send".into(), Some(serde_json::to_value(&env).unwrap())).await;
-    assert!(status.is_success(), "the anonymous envelope is accepted: {status}");
+    // The trace's receipt is a placeholder, so since anonymous posts are checked before they're
+    // stored, the node refuses it (and keeps nothing); the refusal path must name no poster either.
+    assert_eq!(status, StatusCode::FORBIDDEN, "a post whose proof doesn't verify must be refused: {body}");
+    assert!(state.tmail.get_by_msg_id("anon-trace-1").is_none(), "a refused anonymous post was stored");
+    // A peer can still deliver it over gossip, where it waits as pending for its receipt: store it
+    // the way that path does, so the scan below covers a kept anonymous post too.
+    assert!(state.tmail.store_tmail(&env).unwrap());
 
     let needles = [poster.clone(), poster.to_ascii_uppercase(), commitment.clone()];
     let hit = |hay: &str| needles.iter().find(|n| hay.contains(n.as_str())).cloned();
@@ -13926,5 +13933,74 @@ async fn public_mode_lets_operator_routes_through_from_loopback_only() {
     for near in ["/operator/hide/", "/operator/HIDE", "/operator//hide", "/operator/hide/../hidden", "/operator"] {
         let (s, refused) = public_call_from_for_tests(&router, "POST", near, None, "127.0.0.1:4000").await;
         assert!(refused && s == StatusCode::NOT_FOUND, "near miss {near} from loopback: {s} refused={refused}");
+    }
+}
+
+/// **SECURITY REGRESSION GUARD: an anonymous post whose proof doesn't verify is never kept, served,
+/// relayed or counted.** At `POST /tmail/send` the proof is checked before anything is stored: no
+/// receipt → refused; a receipt that doesn't verify (a repeat on the same board and day included)
+/// → refused with the reason, nothing stored. A post that arrives some other way (gossip, pending
+/// until its receipt is pulled) is deleted the moment its verdict is Failed, and tombstoned so a
+/// re-delivery can't bring it back. And unverified posts can't push verified ones out of a board:
+/// the per-receiver cap keeps verified posts first.
+/// Negative controls (run by hand): the send storing before checking again → FAILED; a Failed
+/// verdict not deleting → FAILED; the cap ranking newest-only again → FAILED.
+#[tokio::test]
+async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let (_rw, board) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let send = |env: crate::tmail::envelope::TmailEnvelopeV1| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(axum::http::Request::builder().method("POST").uri("/tmail/send").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&env).unwrap())).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+
+    // No receipt deposited.
+    let a = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [1u8; 32], "anon-no-receipt", tmail_now_ms_for_tests());
+    assert_eq!(send(a).await, StatusCode::BAD_REQUEST);
+    assert!(state.tmail.get_by_msg_id("anon-no-receipt").is_none());
+
+    // A receipt that doesn't verify.
+    let junk = b"not a receipt".to_vec();
+    let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
+    state.tmail.put_anon_receipt(&jh, &junk).unwrap();
+    let mut b = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [2u8; 32], "anon-bad-proof", tmail_now_ms_for_tests());
+    b.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    resign_tmail_env_for_tests(&mut b, &ew);
+    assert_eq!(send(b.clone()).await, StatusCode::FORBIDDEN);
+    assert!(state.tmail.get_by_msg_id("anon-bad-proof").is_none(), "a post whose proof failed was stored");
+    assert!(state.tmail.get_inbox(&board, 200).is_empty());
+
+    // Delivered another way (gossip: pending), then Failed: deleted, and a re-delivery stays out.
+    assert!(state.tmail.store_tmail(&b).unwrap());
+    state.tmail.set_anon_verdict("anon-bad-proof", &crate::tmail::store::AnonVerdict::Failed { reason: "replay".into(), failed_at_ms: 1 }).unwrap();
+    assert!(state.tmail.get_inbox(&board, 200).is_empty(), "a failed post is still served");
+    assert!(!state.tmail.store_tmail(&b).unwrap(), "a failed post came back on re-delivery");
+
+    // The cap keeps verified posts first: 3 verified (older), then 6 pending (newer), cap 3.
+    let _cap = EnvVarGuard::set("TET_TMAIL_ANON_RETAIN_PER_RECEIVER", "3");
+    let (_rw2, board2) = tmail_party_for_tests();
+    let base = tmail_now_ms_for_tests();
+    for i in 0..9u8 {
+        let env = anon_env_with_nullifier_for_tests(&ew, &eid, &board2, [10 + i; 32], &format!("cap-{i}"), base + i as u64);
+        if i < 3 {
+            state.tmail.set_anon_verdict(&format!("cap-{i}"), &crate::tmail::store::AnonVerdict::Verified { nullifier_hex: hex::encode([10 + i; 32]), verified_at_ms: 1 }).unwrap();
+        }
+        state.tmail.store_tmail(&env).unwrap();
+    }
+    let kept: std::collections::BTreeSet<String> = state.tmail.get_inbox(&board2, 200).into_iter().map(|e| e.msg_id).collect();
+    for i in 0..3 {
+        assert!(kept.contains(&format!("cap-{i}")), "a verified post was pushed out by pending ones: kept {kept:?}");
     }
 }

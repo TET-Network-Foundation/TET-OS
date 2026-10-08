@@ -22,6 +22,7 @@ import {
   newBoardSeed,
   parseInvite,
   postLabel,
+  shownOnBoard,
 } from "./board.mjs";
 import { generateDisposableWords } from "./disposable_wallet.mjs";
 import { fetchAnonLeaves, makeHelperProver, runAnonPost } from "./anon_poster.mjs";
@@ -138,6 +139,7 @@ export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100):
   const out: BoardPost[] = [];
   for (const row of r.messages) {
     const base = { msgId: row.msg_id, sentAtMs: row.sent_at_ms, label: postLabel(row) };
+    if (!shownOnBoard(base.label)) continue;
     if (!row.e2ee) {
       out.push({ ...base, state: "unreadable" });
       continue;

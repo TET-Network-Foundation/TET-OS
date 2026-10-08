@@ -62,6 +62,28 @@ pub async fn post_tmail_send(
     {
         return crate::rest::helpers::hidden_by_operator();
     }
+    // An anonymous post is checked BEFORE it's stored or relayed: this node holds the receipt the
+    // sender just deposited, so there is nothing to wait for. A post whose proof doesn't verify (a
+    // repeat on the same board and day included) is refused with the reason, never kept or relayed.
+    let anon_verdict = if env.flags.anonymous {
+        let Some(anon) = env.anonymous.as_ref() else {
+            return (StatusCode::BAD_REQUEST, "an anonymous envelope needs its proof").into_response();
+        };
+        let Some(bytes) = state.tmail.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex) else {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "deposit the proof's receipt first" }))).into_response();
+        };
+        match crate::tmail::anon::verify_anonymous_proof(&state.tmail, &env, &bytes) {
+            v @ crate::tmail::store::AnonVerdict::Verified { .. } => Some(v),
+            crate::tmail::store::AnonVerdict::Failed { reason, .. } => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": format!("the anonymous proof doesn't verify: {reason}") }))).into_response();
+            }
+            crate::tmail::store::AnonVerdict::Pending => {
+                return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "the anonymous proof couldn't be checked yet" }))).into_response();
+            }
+        }
+    } else {
+        None
+    };
     match state.tmail.store_tmail(&env) {
         Ok(true) => {}
         Ok(false) => {
@@ -79,21 +101,9 @@ pub async fn post_tmail_send(
             return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response();
         }
     }
-    // An anonymous message gets a verdict here too, not only on the receiving node. The sender's
-    // node holds the receipt it just deposited, so there is nothing to pull and no reason to leave
-    // its own copy reading "pending" -- which would otherwise look like a failure to the sender.
-    if env.flags.anonymous
-        && let Some(anon) = env.anonymous.as_ref()
-    {
-        let verdict = match state
-            .tmail
-            .get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex)
-        {
-            Some(bytes) => crate::tmail::anon::verify_anonymous_proof(&state.tmail, &env, &bytes),
-            // No receipt deposited: honestly pending, and the pull will resolve it.
-            None => crate::tmail::store::AnonVerdict::Pending,
-        };
-        let _ = state.tmail.set_anon_verdict(env.msg_id.trim(), &verdict);
+    // Its (verified) verdict is stored with it, so the sender's own copy reads checked at once.
+    if let Some(v) = anon_verdict {
+        let _ = state.tmail.set_anon_verdict(env.msg_id.trim(), &v);
     }
 
     // Propagate to peers so an offline receiver's node can buffer it too.

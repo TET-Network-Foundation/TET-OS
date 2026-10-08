@@ -309,6 +309,7 @@ impl TmailStore {
         }
         let keep = anon_retain_per_receiver();
         let mut rows: Vec<(u64, Vec<u8>, String, u64)> = Vec::new();
+        let verified = |msg_id: &str| matches!(self.get_anon_verdict(msg_id), Some(AnonVerdict::Verified { .. }));
         for item in self.by_receiver.scan_prefix(receiver.as_bytes()) {
             let Ok((k, v)) = item else { continue };
             let Ok(env) = serde_json::from_slice::<TmailEnvelopeV1>(&v) else {
@@ -323,7 +324,9 @@ impl TmailStore {
         if rows.len() <= keep {
             return Ok(0);
         }
-        rows.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+        // Verified posts first, then newest: unverified (pending) envelopes can never push a verified
+        // post out, however many arrive.
+        rows.sort_by(|a, b| verified(&b.2).cmp(&verified(&a.2)).then_with(|| b.0.cmp(&a.0)).then_with(|| b.1.cmp(&a.1)));
         let mut removed = 0usize;
         for (_sent, key, msg_id, expire_at) in rows.into_iter().skip(keep) {
             if matches!(self.by_receiver.remove(&key), Ok(Some(_))) {
@@ -1035,9 +1038,15 @@ impl TmailStore {
         env_usize("TET_TMAIL_ANON_RECEIPT_CACHE", DEFAULT_ANON_RECEIPT_CACHE)
     }
 
+    /// Record a verdict. **A Failed verdict also deletes the envelope** (tombstoned, so a gossip
+    /// re-delivery can't bring it back): an anonymous post whose proof doesn't verify is never kept,
+    /// served or counted, whichever path delivered it. Every verdict path goes through here.
     pub fn set_anon_verdict(&self, msg_id: &str, verdict: &AnonVerdict) -> Result<(), TmailStoreError> {
         let val = serde_json::to_vec(verdict).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
         self.anon_verdict.insert(msg_id.trim().as_bytes(), val)?;
+        if matches!(verdict, AnonVerdict::Failed { .. }) {
+            self.delete_by_msg_id(msg_id)?;
+        }
         Ok(())
     }
 
