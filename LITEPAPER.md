@@ -30,7 +30,7 @@ TET is a decentralized, censorship-resistant AI supercomputer network: a global 
   - Spend TET to access AI/compute APIs.
   - Can source TET via the network’s peer-to-peer marketplace instead of traditional banks.
 
-### The Quantum-Proof P2P DEX (No Banks)
+### The Quantum-Resistant P2P DEX (No Banks)
 To bypass fiat rails and minimize censorship risk, TET ships a **P2P orderbook DEX**:
 - **Maker/Taker order book**: makers post orders; takers fill them.
 - **TET-only escrow**: protocol escrows TET atomically; external stablecoin settlement happens off-ledger.

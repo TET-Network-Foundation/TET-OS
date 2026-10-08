@@ -163,7 +163,7 @@ Startups and researchers can route LLM queries through TET at a fraction of cent
 
 Smart contracts can natively invoke PoC nodes running local AI models — analyzing on-chain data, executing trades, and initiating governance proposals, all without human intervention at each decision point. The AI execution layer is not an external oracle. It is part of the consensus model.
 
-### 12.4 Quantum-Secure Financial Primitives
+### 12.4 Quantum-Resistant Financial Primitives
 
 DeFi applications deployed on TET inherit ML-DSA security without additional configuration. As quantum capability advances, TET-native financial contracts remain mathematically sound while ECDSA-based chains face an existential migration event.
 

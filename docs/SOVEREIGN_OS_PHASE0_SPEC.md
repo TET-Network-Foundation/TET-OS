@@ -1608,7 +1608,7 @@ vs DNS: trusted authority; TNS self-sovereign, on-chain
 
 TNS is not just naming. It is Sovereign Identity — the missing layer in Web3 that bundles addressing with post-quantum messaging, file sharing, AI compute, and anonymous-but-verifiable communication into a single human-readable handle.
 
-ENS solves "send 0.1 ETH to vitalik.eth". TNS solves "send your story to nytimes.tmail anonymously, have them verify it's a legitimate journalist, and ensure quantum-safe end-to-end encryption" — all from one name.
+ENS solves "send 0.1 ETH to vitalik.eth". TNS solves "send your story to nytimes.tmail anonymously, have them verify it's a legitimate journalist, and ensure quantum-resistant end-to-end encryption" — all from one name.
 
 Bridge between Web2 familiarity and Web3 sovereignty.
 

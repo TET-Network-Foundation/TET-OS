@@ -20,7 +20,7 @@ export default function AboutPanel() {
         <div>
           <h3 className="mb-1 text-[15px] font-semibold">{t("What TET is")}</h3>
           <ol className="list-decimal space-y-1 pl-5">
-            <li>{t("TET is a blockchain meant to stay secure once quantum computers can break today's signatures: every transaction is signed twice, with Ed25519 and with ML-DSA-44.")}</li>
+            <li>{t("TET is a blockchain with quantum-resistant signatures (ML-DSA): every transaction is signed twice, with Ed25519 and with ML-DSA-44, so it stays secure once quantum computers can break today's signatures. TET does not use a quantum computer.")}</li>
             <li>{t("On top of it run Tmail (end-to-end encrypted messages and files) and boards where you can post anonymously with a zero-knowledge proof.")}</li>
             <li>{t("It is a testnet: the coins have no value, and the network is a handful of nodes.")}</li>
             <li>{t("The code is open source. None of it has been audited yet, and binding both keys to one wallet id is still Phase 1 work.")}</li>

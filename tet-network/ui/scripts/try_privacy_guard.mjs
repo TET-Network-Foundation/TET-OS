@@ -10,6 +10,12 @@
 //    log it; anonymous posting unlinks the post from your key and doesn't hide your IP; for IP
 //    privacy, Tor or your own node. Control: a dictionary missing the line is caught.
 // 3. Each feature keeps its "proves / doesn't prove" line. Control: a panel without it is caught.
+// 4. Quantum wording: TET has quantum-resistant signatures (ML-DSA); it is not and does not use a
+//    quantum computer. Nothing says or implies it does ("quantum-powered", "runs on a quantum
+//    computer", "quantum blockchain"), nothing overclaims ("quantum-proof", "quantum-safe",
+//    "quantum-secure", "unbreakable"), in en/ja/zh; archive/ is the historical record and is not
+//    rewritten. About says "quantum-resistant signatures (ML-DSA)". Controls: each kind is caught;
+//    accurate wording and a denial ("never 'unbreakable'") are not.
 //
 // "Doesn't log it" is made true for Caddy by its log filter (deploy/demo/Caddyfile rule 5, checked
 // with a real Caddy and a control in deploy/tests/demo-node.test.sh); tet-core logs no client address.
@@ -137,6 +143,72 @@ function keepsProvesLines(read1) {
 await check("each feature keeps its proves / doesn't-prove line", () => keepsProvesLines((f) => read(`tet-network/ui/app/try/${f}`)));
 await check("control: a panel without its line is caught", () => {
   assert.throws(() => keepsProvesLines((f) => (f === "MailPanel.tsx" ? "" : read(`tet-network/ui/app/try/${f}`))));
+});
+
+// ── 4. Quantum wording ──────────────────────────────────────────────────────────────────────────
+export const QUANTUM_OVERCLAIM = new RegExp(
+  [
+    "quantum[- ]powered",
+    "powered by (?:a |the )?quantum",
+    "(?:runs?|running|built|operates?) on (?:a |the )?quantum",
+    "uses? (?:a |the )?quantum comput",
+    // "post-quantum chain" is accurate (a chain with post-quantum cryptography); "quantum chain" isn't.
+    "(?<!post-)(?<!post )quantum (?:blockchain|chain|ledger)",
+    "quantum computing (?:network|platform|blockchain|chain)",
+    "\\bTET is (?:a )?quantum\\b",
+    "quantum[- ](?:proof|safe|secure)",
+    "\\bunbreakable\\b",
+    "量子コンピュータ(?:で動|を使っ|を利用|上で動)",
+    "量子ブロックチェーン",
+    "(?:絶対に|決して)破られない",
+    "量子(?:電腦|计算机)(?:驅動|運行|上運行)|以量子電腦",
+    "量子區塊鏈",
+    "無法破解|牢不可破",
+  ].join("|"),
+  "i",
+);
+// A denial in the same sentence is fine; a list of banned words may sit between "never" and the word.
+const QDENIAL = /(?:doesn't|does not|don't|never|not|no|ません|しない|ではありません|不會|不能|並不|並非)[^.!?。！？]{0,72}$/i;
+
+function quantumOverclaims(files) {
+  const found = [];
+  for (const [path, text] of files) {
+    if (NOT_CLAIMS.has(path) || path.startsWith("archive/")) continue;
+    text.split("\n").forEach((line, i) => {
+      const m = QUANTUM_OVERCLAIM.exec(line);
+      if (m && !QDENIAL.test(line.slice(0, m.index))) found.push(`${path}:${i + 1}: ${line.trim().slice(0, 120)}`);
+    });
+  }
+  return found;
+}
+
+await check("TET is never said to be or use a quantum computer, and nothing overclaims (en/ja/zh)", () => {
+  const found = quantumOverclaims(files);
+  assert.equal(found.length, 0, found.join("\n     "));
+});
+
+await check("control: each quantum overclaim is caught; accurate wording and denials aren't", () => {
+  for (const claim of ["TET is a quantum-powered blockchain.", "It runs on a quantum computer.", "The first quantum blockchain.", "Quantum-proof signatures.", "Quantum-safe messaging.", "Unbreakable encryption.", "TET is quantum.", "量子コンピュータで動くチェーン", "絶対に破られない署名", "以量子電腦運行", "無法破解的加密"]) {
+    assert.equal(quantumOverclaims([["x.tsx", claim]]).length, 1, claim);
+  }
+  for (const ok of [
+    "quantum-resistant signatures (ML-DSA)",
+    "secure once quantum computers can break today's signatures",
+    "a post-quantum signature is too big for a QR",
+    "the one classical component in a post-quantum chain",
+    'the page says that, and never "perfect encryption" or "unbreakable".',
+    "TET does not use a quantum computer.",
+  ]) {
+    assert.equal(quantumOverclaims([["x.tsx", ok]]).length, 0, ok);
+  }
+});
+
+const ABOUT_QR = "quantum-resistant signatures (ML-DSA)";
+await check("About says \"quantum-resistant signatures (ML-DSA)\", in every language", () => {
+  const about = read("tet-network/ui/app/try/AboutPanel.tsx");
+  const line = about.match(/t\("(TET is a blockchain with quantum-resistant signatures \(ML-DSA\)[^"]*)"\)/);
+  assert.ok(line, `About lacks "${ABOUT_QR}"`);
+  for (const [lang, d] of Object.entries(dicts)) assert.ok(d.includes(JSON.stringify(line[1])), `${lang} lacks the About line`);
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
