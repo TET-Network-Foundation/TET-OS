@@ -29,6 +29,8 @@ import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha2";
 
 export const PAE_DOMAIN = "tet agent payload v1";
+/** A signature over a file's SHA-256 instead of the file (signature badge, proof codes). */
+export const HASH_PAYLOAD_TYPE = "application/vnd.tet.sha256";
 export const ED_PREFIX = "tet-ed25519:";
 export const ML_PREFIX = "tet-mldsa44:";
 export const AGENT_MANIFEST_PAYLOAD_TYPE = "tet agent manifest v1";
@@ -134,7 +136,7 @@ const no = (reason) => ({ ok: false, reason });
 /**
  * Step 1: is `content` exactly what the envelope signed, and do both signatures verify on `chain`?
  *
- * @param {{ envelope: any, content: Uint8Array, chain: { chainId: string, genesisHash: string },
+ * @param {{ envelope: any, content: Uint8Array, recordOnly?: boolean, chain: { chainId: string, genesisHash: string },
  *           mldsa44Verify: (pub: string, sig: string, msg: Uint8Array) => Promise<boolean> }} o
  * @returns {Promise<{ ok: true, edHex: string, mldsaPubB64: string, mldsaKeyId: string, payloadType: string }
  *                   | { ok: false, reason: string }>}
@@ -181,7 +183,17 @@ export async function verifyEnvelope(o) {
   if (b64ToBytes(mlPub).length !== MLDSA44_PUB) return no("ml-dsa key is not ML-DSA-44");
   if (mlSig.length !== MLDSA44_SIG) return no("ml-dsa signature is not ML-DSA-44");
 
-  if (!sameBytes(payload, o.content)) {
+  if (o.recordOnly) {
+    // Checking a published hash-only record without the file (proof-code lookup): allowed only for
+    // the hash type, so no other envelope can skip its content comparison this way.
+    if (e.payloadType.trim() !== HASH_PAYLOAD_TYPE) return no("only a hash-only record can be checked without its file");
+    if (payload.length !== 32) return no("a hash-only signature must carry exactly 32 bytes");
+  } else if (e.payloadType.trim() === HASH_PAYLOAD_TYPE) {
+    // A hash-only signature (signature badge, proof codes): the payload is the file's SHA-256, and
+    // only a file that hashes to exactly it matches. The file itself was never signed or published.
+    if (payload.length !== 32) return no("a hash-only signature must carry exactly 32 bytes");
+    if (!sameBytes(payload, sha256(o.content))) return no("the file's SHA-256 differs from the one that was signed");
+  } else if (!sameBytes(payload, o.content)) {
     return no(`the content differs from what was signed (signed ${payload.length} bytes, given ${o.content.length})`);
   }
   const msg = agentPayloadAuthMessageBytes(o.chain, e.payloadType, payload);

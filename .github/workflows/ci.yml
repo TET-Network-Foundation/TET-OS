@@ -480,6 +480,13 @@ jobs:
         name: try page — the home search matches every word, and nothing for an empty query
         run: node --experimental-strip-types scripts/try_search_guard.mjs
 
+      # Signature badge and proof codes: a hash-only signature matches only a file with that SHA-256;
+      # record-only checks only for hash records; a code lookup lists every match, verifies each,
+      # and fetches only its own file; a proof code is never called a key. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — proof codes find; signatures prove
+        run: node --experimental-strip-types scripts/try_badge_guard.mjs
+
       # "What is TET": no "first" claims in any language (QRL and others already use post-quantum
       # signatures: TET claims the combination); no dates beyond Phase 1; the honest lines stay
       # (weaker today, demo is partial, volunteer project); every string translated. Controls.

@@ -15,6 +15,8 @@ import { FOCUS, MONO, cx } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 import ContinueBlock from "./ContinueBlock";
+import { SignatureResults, useSignaturesBoard } from "./ProofCode";
+import { parseProofCode } from "../lib/proof_code";
 
 const LINK = cx(FOCUS, "rounded-sm underline underline-offset-2");
 
@@ -25,23 +27,30 @@ export default function HomePanel(props: {
   onBoard: (b: OpenBoard) => void;
   lastBoard: { name: string; invite: string | null } | null;
   onOpenBoard: (invite: string) => void;
+  /** A query to search on arrival (a `#code=` link). */
+  initialQuery?: string;
   /** A search handed over from an inner page's top bar (a new `n` runs it again). */
   search?: { q: string; n: number };
 }) {
   const { t } = useLang();
   const { ensureWallet } = useTryWallet();
-  const [q, setQ] = useState("");
-  const [asked, setAsked] = useState("");
+  const [q, setQ] = useState(props.initialQuery ?? "");
+  const [asked, setAsked] = useState(props.initialQuery ?? "");
+  const sigBoard = useSignaturesBoard();
+  // A proof code, a file SHA-256 or a signer key looks up signatures; anything else searches threads.
+  const signatureQuery = !!asked && (!!parseProofCode(asked) || /^(0x)?[0-9a-f]{64}$/i.test(asked));
   const [threads, setThreads] = useState<PublicThread[] | null>(null);
 
+  // Read the public boards only once someone searches for words (the node rate-limits reads).
+  const wantThreads = !!asked && !signatureQuery;
   useEffect(() => {
-    if (!props.listings) return;
+    if (!props.listings || !wantThreads || threads) return;
     let on = true;
     void readPublicThreads(BASE, props.listings).then((th) => on && setThreads(th));
     return () => {
       on = false;
     };
-  }, [props.listings]);
+  }, [props.listings, wantThreads, threads]);
 
   const hits = useMemo(() => (threads && asked ? searchThreads(threads, asked) : []), [threads, asked]);
   useEffect(() => {
@@ -68,7 +77,7 @@ export default function HomePanel(props: {
             aria-label={t("Search")}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder={t("Search public threads")}
+            placeholder={t("Search threads, or enter a proof code")}
             className={cx(FOCUS, "min-w-0 flex-1 rounded-full border border-[#c9ced4] bg-white px-4 py-2.5 text-[16px]")}
           />
           <button type="submit" className={cx(FOCUS, "rounded-full border border-[#c9ced4] px-4 py-2.5 text-[15px] hover:bg-[#fafbfc]")}>
@@ -94,7 +103,11 @@ export default function HomePanel(props: {
         </p>
         <ContinueBlock lastBoard={props.lastBoard} onOpenBoard={props.onOpenBoard} />
 
-        {asked ? (
+        {signatureQuery ? (
+          <div aria-live="polite" className="text-left">
+            <SignatureResults query={asked} board={sigBoard.board} boardError={sigBoard.error} />
+          </div>
+        ) : asked ? (
           <div aria-live="polite" className="text-left">
             {props.listingsError && props.listings === null ? (
               <p className="text-[14px] text-[#5d646d]">{t("The public-board directory didn't open on this node, so there is nothing to search.")}</p>

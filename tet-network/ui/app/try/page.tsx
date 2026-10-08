@@ -347,6 +347,8 @@ function TryApp() {
   const [boards, setBoards] = useState<OpenBoard[]>([]);
   /** The landing's "try this" hint for Sign, and the last board this device opened (device_store). */
   const [signHint, setSignHint] = useState("");
+  // A proof-code link (`/try#code=TET-…`): search it on the home view. After the #, so never sent.
+  const [codeQuery] = useState(() => (typeof window !== "undefined" && window.location.hash.startsWith("#code=") ? decodeURIComponent(window.location.hash.slice(6)) : ""));
   const [lastBoard, setLastBoard] = useState<{ name: string; invite: string | null } | null>(null);
   useEffect(() => {
     const t0 = setTimeout(() => {
@@ -558,6 +560,7 @@ function TryApp() {
               onBoard={addBoard}
               lastBoard={lastBoard}
               onOpenBoard={(invite) => void openBoard(BASE, invite).then(addBoard).catch((e: unknown) => setBoardErr(e instanceof Error ? e.message : String(e)))}
+              initialQuery={codeQuery}
             />,
           )}
           {panel(
