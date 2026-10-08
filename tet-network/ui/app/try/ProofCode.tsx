@@ -6,32 +6,12 @@
  * finds a published record; the record's signatures prove it. Never called a key.
  */
 import { useEffect, useState } from "react";
-import { findSignatures, loadRecords, type FoundSignature } from "../lib/proof_code";
-import { openBoard, type OpenBoard } from "../lib/try_board";
+import { findSignatures, registryRecords, type FoundSignature } from "../lib/proof_code";
 import { mldsa44Verify } from "../lib/pqc";
 import { qrSvgPath } from "../lib/tet_qr";
 import { Badge, Button, MONO, cx } from "./ui";
 import { BASE } from "./wallet";
 import { useLang } from "./i18n";
-
-export const SIGNATURES_INVITE = (process.env.NEXT_PUBLIC_TET_SIGNATURES_INVITE ?? "").trim();
-
-/** The signatures board, opened from its published invite (null while opening or if not set up). */
-export function useSignaturesBoard(): { board: OpenBoard | null; error: string } {
-  const [board, setBoard] = useState<OpenBoard | null>(null);
-  const [error, setError] = useState(SIGNATURES_INVITE ? "" : "not set up");
-  useEffect(() => {
-    if (!SIGNATURES_INVITE) return;
-    let on = true;
-    void openBoard(BASE, SIGNATURES_INVITE)
-      .then((b) => on && setBoard(b))
-      .catch((e: unknown) => on && setError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      on = false;
-    };
-  }, []);
-  return { board, error };
-}
 
 export function codeLink(code: string): string {
   return `${window.location.origin}/try#code=${code}`;
@@ -63,7 +43,7 @@ export function ProofCodeBox(props: { code: string; recordBytes: Uint8Array; nam
       </svg>
       <p className="text-[14px]">{t("The code finds it; the signature proves it.")}</p>
       <p className="text-[14px] text-[#5d646d]">{t("Proves this key signed this file's SHA-256, and that it was published on this node at that time. Doesn't prove the work is original or that a person made it.")}</p>
-      <p className="text-[14px] text-[#5d646d]">{t("This node keeps the record for 7 days. Keep the .sig.json: with it and the file, anyone can check the signature in Verify.")}</p>
+      <p className="text-[14px] text-[#5d646d]">{t("Published in this node's public signature registry, at your request. Keep the .sig.json: with it and the file, anyone can check the signature in Verify.")}</p>
       <div className="flex flex-wrap gap-2">
         <Button kind="secondary" onClick={() => void navigator.clipboard?.writeText(url)}>
           {t("Copy the link")}
@@ -79,20 +59,20 @@ export function ProofCodeBox(props: { code: string; recordBytes: Uint8Array; nam
   );
 }
 
-/** Search results for a proof code, a file SHA-256 or a signer key. */
-export function SignatureResults(props: { query: string; board: OpenBoard | null; boardError: string }) {
+/** Search results for a proof code, a file SHA-256 or a signer key, optionally between two dates. */
+export function SignatureResults(props: { query: string; fromMs?: number; toMs?: number; byFile?: boolean; onSigner?: (key: string) => void }) {
   const { t } = useLang();
   const [hits, setHits] = useState<FoundSignature[] | null>(null);
   const [err, setErr] = useState("");
   useEffect(() => {
-    if (!props.board) return;
     let on = true;
+    setHits(null);
+    setErr("");
     void (async () => {
       try {
         const c = await (await fetch(`${BASE}/chain`)).json();
         const chain = { chainId: String(c.chain_id), genesisHash: String(c.genesis_hash) };
-        const board = props.board!;
-        const found = await findSignatures({ query: props.query, chain, records: (prefix) => loadRecords(BASE, board, prefix), mldsa44Verify });
+        const found = await findSignatures({ query: props.query, chain, fromMs: props.fromMs, toMs: props.toMs, records: (q) => registryRecords(BASE, q), mldsa44Verify });
         if (on) setHits(found);
       } catch (e: unknown) {
         if (on) setErr(e instanceof Error ? e.message : String(e));
@@ -101,14 +81,18 @@ export function SignatureResults(props: { query: string; board: OpenBoard | null
     return () => {
       on = false;
     };
-  }, [props.query, props.board]);
+  }, [props.query, props.fromMs, props.toMs]);
 
-  if (!props.board) {
-    return <p className="text-[14px] text-[#5d646d]">{props.boardError === "not set up" ? t("Proof codes aren't set up on this node.") : props.boardError ? t("The signatures board didn't open: {why}", { why: props.boardError }) : t("Opening the signatures board…")}</p>;
-  }
   if (err) return <p className="text-[14px] text-[#8a1f1f]">{t("The lookup failed: {why}", { why: err })}</p>;
   if (!hits) return <p className="text-[14px] text-[#5d646d]">{t("Looking up signatures…")}</p>;
-  if (hits.length === 0) return <p className="text-[14px] text-[#5d646d]">{t("No published signature matches. Records are kept 7 days on this node.")}</p>;
+  const exact = props.byFile ? <p className="text-[13px] text-[#5d646d]">{t("Exact files only: re-compressed or edited copies won't match.")}</p> : null;
+  if (hits.length === 0)
+    return (
+      <div>
+        <p className="text-[14px] text-[#5d646d]">{t("No published signature matches. Only signatures their signers chose to publish are listed.")}</p>
+        {exact}
+      </div>
+    );
   return (
     <div className="space-y-2">
       <ol className="space-y-2">
@@ -121,7 +105,14 @@ export function SignatureResults(props: { query: string; board: OpenBoard | null
               <Badge tone={h.verified ? "ok" : "bad"}>{h.verified ? t("signature valid") : t("signature invalid")}</Badge>
             </p>
             <p>
-              {t("Signed by key")} <span className={MONO}>{h.signerEd25519.slice(0, 16)}…</span> · {t("published")} <span className={MONO}>{new Date(h.publishedAtMs).toLocaleString()}</span>
+              {t("Signed by key")}{" "}
+              {props.onSigner ? (
+                <button type="button" title={t("Show this key's public signatures")} className={cx(MONO, "underline underline-offset-2")} onClick={() => props.onSigner!(h.signerEd25519)}>
+                  {h.signerEd25519.slice(0, 16)}…
+                </button>
+              ) : (
+                <span className={MONO}>{h.signerEd25519.slice(0, 16)}…</span>
+              )} · {t("published")} <span className={MONO}>{new Date(h.publishedAtMs).toLocaleString()}</span>
             </p>
             <p className="break-all text-[#5d646d]">
               {t("File SHA-256")} <span className={MONO}>{h.fileSha256}</span>
@@ -134,6 +125,7 @@ export function SignatureResults(props: { query: string; board: OpenBoard | null
         ))}
       </ol>
       <p className="text-[13px] text-[#5d646d]">{t("The code finds it; the signature proves it.")} {t("To check a file against a record, put both into Verify.")}</p>
+      {exact}
     </div>
   );
 }

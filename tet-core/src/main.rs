@@ -35,6 +35,7 @@ mod rest;
 mod swarm_health;
 mod sync;
 mod tee_compute;
+mod sigs;
 mod sites;
 mod tmail;
 mod updater;
@@ -716,6 +717,10 @@ async fn main() -> Result<(), AnyErr> {
         }),
         sites: Arc::new(crate::sites::SiteStore::open(&ledger_for_hide).unwrap_or_else(|e| {
             eprintln!("[startup] site store: {e}");
+            std::process::exit(2);
+        })),
+        sigs: Arc::new(crate::sigs::SigStore::open(&ledger_for_hide).unwrap_or_else(|e| {
+            eprintln!("[startup] signature registry: {e}");
             std::process::exit(2);
         })),
     };

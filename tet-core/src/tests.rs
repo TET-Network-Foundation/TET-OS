@@ -137,6 +137,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         demo_sponsor: None,
         operator_hide: crate::operator_hide::OperatorHide::open(&hide_db).unwrap(),
         sites: std::sync::Arc::new(crate::sites::SiteStore::open(&hide_db).unwrap()),
+        sigs: std::sync::Arc::new(crate::sigs::SigStore::open(&hide_db).unwrap()),
     }
 }
 
@@ -13787,7 +13788,7 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     unsafe { std::env::set_var("TET_OPERATOR_LOG", &log) };
 
     // Every public GET is classified; content routes are the ones this test exercises.
-    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id"];
+    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id", "/sigs/search"];
     const NOT_CONTENT: &[&str] = &[
         "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/status/live",
         "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
@@ -13908,6 +13909,16 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     assert_eq!(resp.status(), StatusCode::GONE, "an edit to a hidden site was accepted");
     assert_eq!(state.sites.edits(&site_id).len(), 1, "an edit to a hidden site was stored");
 
+    // A published signature record: listed, then not listed once its signer's wallet is hidden.
+    let sig_w = crate::wallet::generate_mnemonic_12().unwrap();
+    let sig_words = sig_w.mnemonic_12.clone().unwrap();
+    let rec = hash_record_for_tests(&sig_words, b"a signed file", crate::sigs::HASH_PAYLOAD_TYPE);
+    let (stored_rec, _) = state.sigs.publish(&rec, &consent_for_tests(&sig_words, &rec), 1).unwrap();
+    let search = || get(format!("/sigs/search?signer={}", stored_rec.signer_ed25519));
+    assert!(search().await.1.contains(&stored_rec.record_sha256));
+    assert_eq!(hide(HideKind::Wallet, &stored_rec.signer_ed25519).await.status(), StatusCode::OK);
+    assert!(!search().await.1.contains(&stored_rec.record_sha256), "a hidden signer's record was listed");
+
     // Unhide serves it again; the chain never moved.
     let un = crate::rest::handlers::operator::post_operator_unhide(
         State(state.clone()), local, admin.clone(),
@@ -13920,8 +13931,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
 
     // Every use is in the operator log.
     let lines = std::fs::read_to_string(&log).unwrap();
-    // msg, two wallets, file, and the site's wallet.
-    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"hide\"")).count(), 5, "{lines}");
+    // msg, two wallets, file, the site's wallet, and the signer's wallet.
+    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"hide\"")).count(), 6, "{lines}");
     assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"unhide\"")).count(), 1, "{lines}");
     unsafe { std::env::remove_var("TET_OPERATOR_LOG") };
     let _ = std::fs::remove_file(&log);
@@ -14544,6 +14555,113 @@ fn signed_site_edit_for_tests_at(words: &str, site: &str, seq: u64, prev: &str, 
     e.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
     e.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
     e
+}
+
+/// A real hash-only signature record (the page's `.sig.json`), as exact bytes.
+fn hash_record_for_tests(words: &str, file: &[u8], payload_type: &str) -> Vec<u8> {
+    use sha2::Digest as _;
+    envelope_for_tests(words, payload_type, &sha2::Sha256::digest(file))
+}
+
+/// The signer's consent to publish exactly `record`.
+fn consent_for_tests(words: &str, record: &[u8]) -> Vec<u8> {
+    use sha2::Digest as _;
+    envelope_for_tests(words, crate::sigs::CONSENT_PAYLOAD_TYPE, &sha2::Sha256::digest(record))
+}
+
+/// A `.sig.json` envelope over `payload`, signed with both keys from `words`.
+fn envelope_for_tests(words: &str, payload_type: &str, payload: &[u8]) -> Vec<u8> {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let ed_hex = hex::encode(ed_sk.verifying_key().to_bytes());
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = kp.public_key();
+    let payload = payload.to_vec();
+    let msg = crate::agent::agent_payload_auth_message_bytes(payload_type, &payload);
+    let rec = serde_json::json!({
+        "payloadType": payload_type,
+        "payload": b64.encode(&payload),
+        "signatures": [
+            { "keyid": format!("tet-ed25519:{ed_hex}"), "sig": b64.encode(ed_sk.sign(msg.as_slice()).to_bytes()) },
+            { "keyid": format!("tet-mldsa44:{}", hex::encode(sha2::Sha256::digest(&pk))), "sig": b64.encode(crate::wallet::mldsa_sign_deterministic(&kp, msg.as_slice()).unwrap()) },
+        ],
+        "tet": { "v": 1, "pae": crate::sigs::PAE_DOMAIN, "agent_ed25519_pubkey_hex": ed_hex, "agent_mldsa44_pubkey_b64": b64.encode(&pk) },
+    });
+    serde_json::to_vec(&rec).unwrap()
+}
+
+/// **SECURITY REGRESSION GUARD: the signature registry holds only real, public, hash-only records
+/// their signers chose to publish, and finds them by code, file, signer and date.** Publishing
+/// needs the record's own signer's consent for exactly its bytes: without it, with a stranger's,
+/// or with another record's (a re-encoded copy) it's refused. A record is stored only if both its signatures
+/// verify over the hash-only pre-image (a tampered payload, a full-file signature, a wrong keyid
+/// are refused); its exact bytes are kept, so its proof code is stable; publishing it again is a
+/// no-op. Search by the code's 40 bits, the file's SHA-256, the signer and a date range finds it;
+/// a date-only search walks the time index and stops at the limit. The node-wide byte cap holds.
+/// Negative controls (run by hand): the signature check skipped → FAILED; search ignoring the date
+/// range → FAILED; the consent check skipped → FAILED.
+#[test]
+fn the_signature_registry_holds_real_records_and_finds_them() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sigs::SigStore::open(&ledger.sled_db()).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let rec = hash_record_for_tests(&words, b"lab notebook, page 12", crate::sigs::HASH_PAYLOAD_TYPE);
+    let ok = consent_for_tests(&words, &rec);
+    let (r, stored) = store.publish(&rec, &ok, 1_000).expect("a real record, with its signer's consent");
+    assert!(stored);
+    assert_eq!(store.publish(&rec, &ok, 2_000).unwrap().1, false, "publishing again is a no-op");
+
+    // Consent: none, someone else's, or for another byte string (a re-encoding) is refused.
+    let stranger = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let rec2 = hash_record_for_tests(&words, b"page 13", crate::sigs::HASH_PAYLOAD_TYPE);
+    assert!(matches!(store.publish(&rec2, &consent_for_tests(&stranger, &rec2), 1_500), Err(crate::sigs::SigsError::Consent(_))), "a stranger published someone's record");
+    assert!(matches!(store.publish(&rec2, &ok, 1_500), Err(crate::sigs::SigsError::Consent(_))), "one record's consent published another");
+    let mut reencoded: serde_json::Value = serde_json::from_slice(&rec).unwrap();
+    reencoded["tet"]["v"] = serde_json::json!(1);
+    let reencoded = serde_json::to_vec_pretty(&reencoded).unwrap();
+    assert_ne!(reencoded, rec);
+    assert!(matches!(store.publish(&reencoded, &ok, 1_500), Err(crate::sigs::SigsError::Consent(_))), "a re-encoded copy was stored on the original's consent");
+    assert!(matches!(store.publish(&rec2, &rec2, 1_500), Err(crate::sigs::SigsError::Consent(_))), "the record itself isn't a consent");
+    let rh = hex::encode(sha2::Sha256::digest(&rec));
+    assert_eq!(r.record_sha256, rh);
+    let file = hex::encode(sha2::Sha256::digest(b"lab notebook, page 12"));
+    assert_eq!(r.file_sha256, file);
+
+    // Refusals.
+    let mut tampered: serde_json::Value = serde_json::from_slice(&rec).unwrap();
+    tampered["payload"] = serde_json::json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, sha2::Sha256::digest(b"another file")));
+    let t = serde_json::to_vec(&tampered).unwrap();
+    assert!(matches!(store.publish(&t, &consent_for_tests(&words, &t), 3_000), Err(crate::sigs::SigsError::Signature(_))));
+    let plain = hash_record_for_tests(&words, b"x", "text/plain");
+    assert_eq!(store.publish(&plain, &consent_for_tests(&words, &plain), 3_000), Err(crate::sigs::SigsError::NotHashOnly));
+    let mut wrong_id: serde_json::Value = serde_json::from_slice(&rec).unwrap();
+    wrong_id["signatures"][0]["keyid"] = serde_json::json!(format!("tet-ed25519:{}", "ab".repeat(32)));
+    let w2 = serde_json::to_vec(&wrong_id).unwrap();
+    assert!(matches!(store.publish(&w2, &consent_for_tests(&words, &w2), 3_000), Err(crate::sigs::SigsError::Malformed(_))));
+
+    // Search.
+    let other = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let o = hash_record_for_tests(&other, b"something else", crate::sigs::HASH_PAYLOAD_TYPE);
+    store.publish(&o, &consent_for_tests(&other, &o), 5_000).unwrap();
+    let q = |q: crate::sigs::SigQuery| store.search(&q).into_iter().map(|r| r.record_sha256).collect::<Vec<_>>();
+    assert_eq!(q(crate::sigs::SigQuery { code_prefix: Some(rh[..10].to_string()), ..Default::default() }), vec![rh.clone()]);
+    assert_eq!(q(crate::sigs::SigQuery { file_sha256: Some(file.clone()), ..Default::default() }), vec![rh.clone()]);
+    assert_eq!(q(crate::sigs::SigQuery { signer: Some(r.signer_ed25519.clone()), ..Default::default() }), vec![rh.clone()]);
+    assert_eq!(q(crate::sigs::SigQuery { from_ms: Some(4_000), ..Default::default() }).len(), 1, "date range");
+    assert_eq!(q(crate::sigs::SigQuery { to_ms: Some(1_500), ..Default::default() }), vec![rh.clone()], "date range");
+    assert!(q(crate::sigs::SigQuery { file_sha256: Some(file), from_ms: Some(4_000), ..Default::default() }).is_empty(), "file and date together");
+
+    // The node-wide cap.
+    let _cap = EnvVarGuard::set("TET_SIGS_MAX_TOTAL_BYTES", &(store.total_bytes() + 10).to_string());
+    let third = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let th = hash_record_for_tests(&third, b"one more", crate::sigs::HASH_PAYLOAD_TYPE);
+    assert_eq!(store.publish(&th, &consent_for_tests(&third, &th), 6_000).map(|_| ()), Err(crate::sigs::SigsError::StoreFull));
 }
 
 /// **SECURITY REGRESSION GUARD: an anonymous post whose proof doesn't verify is never kept, served,

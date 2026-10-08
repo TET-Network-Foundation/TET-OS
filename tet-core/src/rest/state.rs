@@ -82,6 +82,8 @@ pub struct RestState {
     pub operator_hide: crate::operator_hide::OperatorHide,
     /// Signed sites: node-local edit chains (`sites.rs`).
     pub sites: Arc<crate::sites::SiteStore>,
+    /// The public signature registry (`sigs.rs`).
+    pub sigs: Arc<crate::sigs::SigStore>,
 }
 
 #[derive(Debug, Clone)]
