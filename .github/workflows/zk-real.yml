@@ -115,6 +115,7 @@ jobs:
             s8_measure_receipt_size_against_the_gossip_ceiling
             s8_anon_membership_executor_cost
             replayed_nullifier_over_a_swarm_is_refused_and_the_node_keeps_serving
+            s8_real_guest_image_id_is_pinned
           )
           fail=0
           for t in "${tests[@]}"; do
