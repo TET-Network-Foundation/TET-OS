@@ -493,6 +493,13 @@ jobs:
         name: try page — mark as genuine is exact, plain and sends no file
         run: node --experimental-strip-types scripts/try_genuine_guard.mjs
 
+      # Sealed predictions: the seal is exact (text, date, salt); a fresh salt each time; the card,
+      # share link and X post carry no hidden text; a reveal counts only a verified fingerprint
+      # match; the honest lines and the 1–30 day limit stay. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a sealed prediction is exact and hides its text until revealed
+        run: node --experimental-strip-types scripts/try_seal_guard.mjs
+
       # Anonymous polls: the page signs tet-core's poll pre-image field for field; a members-only
       # poll sends wallet ids only (the node builds the root from its own registry); a voter proves
       # against the node's root, not the post's; the tally counts only verified ballots. Controls.
