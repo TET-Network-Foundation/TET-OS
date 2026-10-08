@@ -206,11 +206,10 @@ No age, no school. No personal email: the two addresses above are the only ones 
 
 | en | ja |
 |---|---|
-| Testnet TET is a practice unit. It has no monetary value and cannot be bought. | テストネットの TET は練習用の単位です。金銭的な価値はなく、購入することもできません。 |
+| Testnet TET is a practice unit. It has no monetary value and cannot be bought. | テストネットの TET は練習用の単位です。金銭的な価値はなく、お金で手に入れることもできません。 |
 
-The Japanese line deliberately avoids 購入 as a claim of buying: it denies it. `try_money_guard`
-is strict (no denial exception), so the Japanese FAQ line will be checked by hand and allow-listed
-by its exact text when the landing is built.
+The Japanese line avoids 購入 on purpose: `try_money_guard` is strict (no exception even for a
+denial), and this wording needs none.
 
 ## Returning visitors
 
