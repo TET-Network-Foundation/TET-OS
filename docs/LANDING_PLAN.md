@@ -13,6 +13,10 @@ bold with a rule under them, like a text-board index. One accent colour for link
 
 Every claim below is something the code does today, or is marked **planned** in the copy itself.
 
+**Money.** The TET token is not featured in any main section. Nowhere on the page: prices, "earn",
+"invest", buying (`try_money_guard.mjs` enforces it, PR #66). The FAQ has exactly one line about it
+(below).
+
 ---
 
 ## Text wireframe
@@ -21,7 +25,7 @@ Phone (360px), one column, top to bottom:
 
 ```
 ──────────────────────────────────────────
- TET  v0.2 · testnet                 [≡]
+ (logo) TET v0.2 · testnet            [≡]
 ──────────────────────────────────────────
  A board you write to with a key you
  hold. Nothing to sign up for.
@@ -69,8 +73,10 @@ Returning visitor (see the end): the intro block (sections 1–2) collapses to o
 
 ## 1. Name and one line
 
-Decided: the mark is the word **TET** set in the page's own type, bold, followed by the version.
-A hand-drawn mark replaces it later.
+Decided (2026-10-08): **the TET logo** (the founder's design: a black disc with a grid of white
+square rings), traced exactly to `public/brand/tet-logo.svg`, at the top left, about 40px, followed
+by "TET v0.2 · testnet". Small sizes (favicon, app icon) use a simplified variant once the founder
+approves it.
 
 | | en | ja |
 |---|---|---|
@@ -152,7 +158,7 @@ claims I'd have to keep current). Every TET cell is true today or says planned.
 | Anonymous posting | membership proof with hashes only (zero-knowledge) | usually none, or a separate system |
 | Who makes blocks | **one producer today** (Helsinki); more producers **planned** | many |
 | Audited | no | the large ones, yes |
-| Money | testnet, no value | real value |
+| Value | testnet: a practice unit, no monetary value | real value |
 
 The table's honest rows (one producer, not audited, no value) stay in it.
 
@@ -195,6 +201,16 @@ Unchanged from the About panel (#53), shortened:
 No age, no school. No personal email: the two addresses above are the only ones published.
 
 ---
+
+## FAQ (one money line, word for word)
+
+| en | ja |
+|---|---|
+| Testnet TET is a practice unit. It has no monetary value and cannot be bought. | テストネットの TET は練習用の単位です。金銭的な価値はなく、購入することもできません。 |
+
+The Japanese line deliberately avoids 購入 as a claim of buying: it denies it. `try_money_guard`
+is strict (no denial exception), so the Japanese FAQ line will be checked by hand and allow-listed
+by its exact text when the landing is built.
 
 ## Returning visitors
 
