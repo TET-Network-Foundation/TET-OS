@@ -645,4 +645,5 @@ export const ZH_HK: Record<string, string> = {
   "open boards:": "已開啟的討論區：",
   "Breadcrumb": "導覽路徑",
   "← back to top": "← 返回頁首",
+  "Search public threads": "搜尋公開主題",
 };

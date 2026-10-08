@@ -645,4 +645,5 @@ export const JA: Record<string, string> = {
   "open boards:": "開いている掲示板:",
   "Breadcrumb": "現在地",
   "← back to top": "← ページの先頭へ",
+  "Search public threads": "公開スレッドを検索",
 };
