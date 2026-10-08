@@ -364,8 +364,10 @@ function TryApp() {
     }, 0);
     return () => clearTimeout(t0);
   }, []);
-  const [view, setView] = useState<View>({ tool: "new" });
-  const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  // Home from the first paint (server and client alike), so nothing else flashes before it; a board
+  // link or ?tab= moves on from here once it resolves.
+  const [view, setView] = useState<View>({ tool: "home" });
+  const [opened, setOpened] = useState<Set<string>>(() => new Set(["t:home"]));
   const [homeSearch, setHomeSearch] = useState<{ q: string; n: number } | undefined>(undefined);
   const [boardErr, setBoardErr] = useState("");
   const [directory, setDirectory] = useState<OpenBoard | null>(null);
