@@ -6,15 +6,15 @@
 // shows talks like money: no prices, no "earn", no "invest", no buying, no yield, in English,
 // Japanese or Chinese. Strict: there is no exception for denials ("earns nothing" is rephrased).
 //
-// 1. No such wording in anything /try shows: its panels, the libraries it takes text from, and the
-//    ja / zh-HK dictionaries. Control: each kind of wording is caught.
+// 1. No such wording in anything /try or the /os corner shows: their pages (/os/start included),
+//    the libraries they import, and the ja / zh-HK dictionaries. Control: each kind is caught.
 // 2. Where the landing plan exists, its FAQ carries the one sanctioned line, word for word:
 //    "Testnet TET is a practice unit. It has no monetary value and cannot be bought."
 //    Control: the line itself doesn't trip check 1; a plan without it is caught.
 //
-// Not covered, on purpose: the older home, "participate" and /os pages (app/i18n/translations.ts,
-// app/os). The demo serves only /try (deploy/demo/Caddyfile), and their wording is a separate
-// decision; see the PR.
+// The old home and "participate" pages are gone (the founder's decision, 2026-10-08); /os stays as a
+// hidden corner and is covered. The remaining old pages (understand, setup, whitepaper, …) are not
+// served by the demo and are not covered.
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import assert from "node:assert/strict";
@@ -64,12 +64,17 @@ function moneyWording(files) {
   return found;
 }
 
-// What /try shows: its panels and dictionaries, and the lib modules those panels import.
-const tryDir = new URL("app/try/", UI);
-const panels = readdirSync(tryDir).filter((n) => /\.(?:tsx?|mjs)$/.test(n));
+// What /try and the /os corner show: their pages and dictionaries, and the lib modules they import.
+const DIRS = ["app/try/", "app/os/", "app/os/start/"];
+const pages = [];
+for (const d of DIRS) {
+  const dir = new URL(d, UI);
+  if (!existsSync(dir)) continue;
+  for (const n of readdirSync(dir).filter((n) => /\.(?:tsx?|mjs)$/.test(n))) pages.push(`${d}${n}`);
+}
 const libs = new Set();
-for (const n of panels) {
-  for (const m of read(new URL(n, tryDir)).matchAll(/from "\.\.\/lib\/([a-z_./]+)"/g)) {
+for (const p of pages) {
+  for (const m of read(new URL(p, UI)).matchAll(/from "(?:\.\.\/)+lib\/([A-Za-z_./]+)"/g)) {
     for (const ext of ["", ".ts", ".mjs", ".tsx"]) {
       const u = new URL(`app/lib/${m[1]}${ext}`, UI);
       if (existsSync(u) && !u.pathname.endsWith("/")) {
@@ -79,9 +84,9 @@ for (const n of panels) {
     }
   }
 }
-const files = [...panels.map((n) => [`app/try/${n}`, read(new URL(n, tryDir))]), ...[...libs].map((p) => [p, read(new URL(p, UI))])];
+const files = [...pages.map((p) => [p, read(new URL(p, UI))]), ...[...libs].map((p) => [p, read(new URL(p, UI))])];
 
-await check(`no money wording in what /try shows (${files.length} files)`, () => {
+await check(`no money wording in what /try and /os show (${files.length} files)`, () => {
   const found = moneyWording(files);
   assert.equal(found.length, 0, found.join("\n     "));
 });
