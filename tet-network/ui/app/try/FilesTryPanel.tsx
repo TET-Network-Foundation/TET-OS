@@ -37,6 +37,7 @@ const LIMITS = (t: (en: string) => string) => [
   t("Each connection can upload up to 200 MB a day, and the demo keeps up to 10 GB in all; when it is full, uploads wait for older files to expire."),
   t("The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid."),
   t("The node sees sender, recipient, size and time; not the contents or the file name. The page offers photos, PDFs and videos, but the node can't check what a file is."),
+  t("A delivered file proves the sender's key signed it and only the recipient can open it. It doesn't prove who holds that key, or that the file is what its name says."),
 ];
 
 export default function FilesTryPanel(props: { demoContact: string }) {

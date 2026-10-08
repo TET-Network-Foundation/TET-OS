@@ -443,6 +443,12 @@ jobs:
         name: try page — a page signature verifies and a stamp anchors only its own .sig.json
         run: node --experimental-strip-types scripts/try_sign_guard.mjs
 
+      # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
+      # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in
+      # every language; each feature keeps its proves / doesn't-prove line. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — privacy wording claims no more than is true
+        run: node --experimental-strip-types scripts/try_privacy_guard.mjs
       # TET QR: nothing about the document before the `#`; only a well-formed link pre-fills Verify;
       # the QR names only the exact .sig.json bytes. Control.
       - if: needs.gate.outputs.code == 'true'

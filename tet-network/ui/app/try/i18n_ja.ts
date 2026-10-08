@@ -434,4 +434,9 @@ export const JA: Record<string, string> = {
   "Its SHA-256 differs from the QR's: this is another .sig.json, or a copy that was changed (even re-indented).": "その SHA-256 はQRのものと違います。別の .sig.json か、変更された（インデントを変えただけでも）コピーです。",
   "qr": "QR",
   "The QR names chain {qrChain}, not this node's chain {nodeChain}. Verify checks against this node's chain; a signature for another chain fails here.": "このQRはチェーン {qrChain} を指していますが、このノードのチェーンは {nodeChain} です。検証はこのノードのチェーンで行うため、別のチェーン向けの署名はここでは失敗します。",
+  "Posting anonymously unlinks the post from your key: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node.": "匿名で投稿すると、投稿とあなたの鍵の結びつきが切れます。証明が示すのは「メンバーの誰かが書いた」ことで、誰かは示しません。ノードからIPアドレスを隠すものではありません。IPを隠したいときはTorか自分のノードを使ってください。",
+  "A listing proves the board's own key listed it. It doesn't prove who runs the board or that its name is true.": "掲載は、その掲示板自身の鍵が掲載したことを証明します。誰が運営しているかや、名前が本当かは証明しません。",
+  "A delivered file proves the sender's key signed it and only the recipient can open it. It doesn't prove who holds that key, or that the file is what its name says.": "届いたファイルは、送り主の鍵が署名したことと、受け取った人だけが開けることを証明します。その鍵を誰が持っているかや、ファイルが名前どおりの中身かは証明しません。",
+  "A message proves which key sent it, or for an anonymous one, that a member did. It doesn't prove who holds that key.": "メッセージは、どの鍵が送ったか（匿名ならメンバーの誰かが送ったこと）を証明します。その鍵を誰が持っているかは証明しません。",
+  "Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.": "テストネットです。デモノードはあなたのIPアドレスを見ますが、ログには書きません。リクエスト数の制限のためにメモリに置くだけです。IPを隠したいときはTorか自分のノードを使ってください。運営は一人で、監査は受けていません。",
 };

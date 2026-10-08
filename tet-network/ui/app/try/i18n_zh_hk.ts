@@ -434,4 +434,9 @@ export const ZH_HK: Record<string, string> = {
   "Its SHA-256 differs from the QR's: this is another .sig.json, or a copy that was changed (even re-indented).": "其 SHA-256 與 QR 中的不同：這是另一份 .sig.json，或是被改動過（即使只是重新縮排）的副本。",
   "qr": "QR",
   "The QR names chain {qrChain}, not this node's chain {nodeChain}. Verify checks against this node's chain; a signature for another chain fails here.": "此 QR 指明的區塊鏈是 {qrChain}，而非此節點的區塊鏈 {nodeChain}。驗證會以此節點的區塊鏈進行；為其他區塊鏈所作的簽名在此不會通過。",
+  "Posting anonymously unlinks the post from your key: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node.": "匿名發文會切斷帖文與你的鑰匙之間的關聯：證明只顯示由某位成員所寫，不顯示是哪一位。它不會向節點隱藏你的 IP 位址；如需要，請使用 Tor 或你自己的節點。",
+  "A listing proves the board's own key listed it. It doesn't prove who runs the board or that its name is true.": "列出證明是該討論板自己的鑰匙所列出。它不證明誰在營運該討論板，亦不證明其名稱屬實。",
+  "A delivered file proves the sender's key signed it and only the recipient can open it. It doesn't prove who holds that key, or that the file is what its name says.": "送達的檔案證明由寄件人的鑰匙簽署，而且只有收件人能開啟。它不證明誰持有該鑰匙，亦不證明檔案內容與名稱相符。",
+  "A message proves which key sent it, or for an anonymous one, that a member did. It doesn't prove who holds that key.": "訊息證明是哪條鑰匙發出的；若是匿名訊息，則證明由某位成員發出。它不證明誰持有該鑰匙。",
+  "Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.": "測試網。示範節點看得到你的 IP 位址，但不會寫入任何記錄；只會暫存在記憶體中以限制請求次數。如需保護 IP，請使用 Tor 或你自己的節點。由一人營運；這裡的一切都未經審計。",
 };

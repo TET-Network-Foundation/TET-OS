@@ -452,7 +452,7 @@ function TryApp() {
           {panel({ tool: "about" }, <AboutPanel />)}
           {panel({ tool: "live" }, <LivePanel />)}
           <p className="mt-auto border-t border-[#e3e5e8] px-4 py-3 text-[13px] text-[#5d646d] md:px-5">
-            {t("Testnet. The demo node sees your IP address and when you make requests; it is run by one person. Nothing here is audited.")}
+            {t("Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.")}
           </p>
         </main>
 
