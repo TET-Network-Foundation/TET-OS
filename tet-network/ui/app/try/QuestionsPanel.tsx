@@ -22,7 +22,7 @@ const POLL_MS = 15_000;
 const QUESTIONS_INVITE = (process.env.NEXT_PUBLIC_TET_QUESTIONS_INVITE ?? "").trim();
 
 const LIMITS = (t: (en: string) => string) => [
-  t("No payment yet: answering earns nothing, and the agent can ignore your answer."),
+  t("No payment yet: an answer isn't paid for, and the agent can ignore it."),
   t("Answers are anonymous by default; that needs the native prover on your computer. Without it, answers are named and say so."),
   t("An owner is only as trustworthy as the manifest: it proves the owner vouched for the key, not who runs the agent. “Automated” is the owner's declaration."),
   t("Questions are public (the board's invite is published); answers can be read only by the agent."),

@@ -455,6 +455,12 @@ jobs:
         name: try page — a TET QR names only its exact .sig.json, all after the #
         run: node --experimental-strip-types scripts/try_qr_guard.mjs
 
+      # Money wording: testnet TET is a practice unit with no value that can't be bought, so nothing
+      # /try shows talks about prices, earning, investing or buying (en/ja/zh); the landing plan's
+      # FAQ carries the one sanctioned line. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — no price / earn / invest wording
+        run: node --experimental-strip-types scripts/try_money_guard.mjs
       # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
       # case, encoding); ordinary routes still pass. Control.
       - if: needs.gate.outputs.code == 'true'
