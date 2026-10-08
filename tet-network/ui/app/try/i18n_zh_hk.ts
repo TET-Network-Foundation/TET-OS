@@ -883,4 +883,5 @@ export const ZH_HK: Record<string, string> = {
   "Keep this ID? Save your passphrase (12 words)": "保留此 ID？儲存你的密語（12 個字）",
   "This is a testnet. Data may be reset.": "這是測試網，資料可能會被重設。",
   "No name": "無名氏",
+  "Chosen by the poster, not checked. The ID beside it is what counts.": "由發文者自行填寫，未經核實。旁邊的 ID 才是依據。",
 };

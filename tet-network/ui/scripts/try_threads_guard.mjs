@@ -208,7 +208,7 @@ await check("control: a name cleaner that keeps bidi overrides is caught", () =>
 
 // ── Names can't pose as an ID or a label, and never ride on an anonymous post ──────────────────
 function namesCantSpoof(clean) {
-  for (const bad of ["Anon\u{E0100}ymous", "01ba\u{E0100}bab8", "Anon\u{E0041}ymous", "An\u0585nymous", "\u13AAnonymous", "\u00c1nonymous", "Ano\u0301nymous", "01\u044c\u0430\u044c\u0430\u044c8", "0\u0251b\u0251b\u0251b8", "Anon\u180bymous", "01babab\u20338", "01b\u0430b\u0430b8", "\u0410n\u043enym\u043eus", "名 無しさん", "名・無しさん", "N o n a m e", "id 01ba", "01babab8", "ID:01ba bab8", "ab12 cd34", "Anonymous", "名無しさん", "匿名", "記名", "anonymous · verified", "ＩＤ：ａｂ１２ｃｄ", "Mo\u200bnar\u200b ab\u200b12cd"]) {
+  for (const bad of ["0lbabab8", "O1babab8", "01ba-bab8", "An0nymous", "Anonyrnous", "Verlfied", "1D ab12", "lD:ab12", "Anon\u{E0100}ymous", "01ba\u{E0100}bab8", "Anon\u{E0041}ymous", "An\u0585nymous", "\u13AAnonymous", "\u00c1nonymous", "Ano\u0301nymous", "01\u044c\u0430\u044c\u0430\u044c8", "0\u0251b\u0251b\u0251b8", "Anon\u180bymous", "01babab\u20338", "01b\u0430b\u0430b8", "\u0410n\u043enym\u043eus", "名 無しさん", "名・無しさん", "N o n a m e", "id 01ba", "01babab8", "ID:01ba bab8", "ab12 cd34", "Anonymous", "名無しさん", "匿名", "記名", "anonymous · verified", "ＩＤ：ａｂ１２ｃｄ", "Mo\u200bnar\u200b ab\u200b12cd"]) {
     // Either no name, or what's left (allowed characters only) reads as neither an ID nor a label.
     const c = clean(bad);
     assert.ok(c === "" || (!/[0-9a-f]{6,}/i.test(c.replace(/[^0-9A-Za-z]/g, "")) && !/anonymous|verified|named|\bid\b|名無し|匿名|記名/i.test(c)), `"${bad}" → "${c}" passes for an ID or a label`);

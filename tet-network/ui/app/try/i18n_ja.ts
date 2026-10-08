@@ -883,4 +883,5 @@ export const JA: Record<string, string> = {
   "Keep this ID? Save your passphrase (12 words)": "この ID を残しますか？パスフレーズ（12語）を保存",
   "This is a testnet. Data may be reset.": "これはテストネットです。データはリセットされることがあります。",
   "No name": "名無しさん",
+  "Chosen by the poster, not checked. The ID beside it is what counts.": "投稿者が付けた名前で、確認されていません。隣の ID が本人の印です。",
 };

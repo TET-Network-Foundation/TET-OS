@@ -76,7 +76,14 @@ export function cleanName(raw) {
     .trim();
   const name = [...s].slice(0, NAME_MAX).join("").trim();
   const skeleton = name.replace(/[^A-Za-z0-9\u3005\u3041-\u30ff\u3400-\u9fff\uac00-\ud7a3]/g, "");
-  if (/[0-9a-f]{6,}/i.test(skeleton) || RESERVED.test(skeleton) || RESERVED.test(name)) return "";
+  // ASCII look-alikes, read both ways: as hex digits for the ID check (O o → 0, l I → 1), and as
+  // letters for the label check (0 → o, 1 → l and i, rn → m, vv → w).
+  const asHex = skeleton.replace(/[Oo]/g, "0").replace(/[lI|]/g, "1");
+  const asWords = [skeleton, name].flatMap((x) => {
+    const w = x.toLowerCase().replace(/0/g, "o").replace(/rn/g, "m").replace(/vv/g, "w");
+    return [w, w.replace(/[1l]/g, "i"), w.replace(/[1i]/g, "l")];
+  });
+  if (/[0-9a-f]{6,}/i.test(asHex) || asWords.some((x) => RESERVED.test(x))) return "";
   return name;
 }
 

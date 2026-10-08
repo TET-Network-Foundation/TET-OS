@@ -624,7 +624,10 @@ export default function BoardPanel(props: {
                     className={cx("-mx-2 border-b border-[#eceef1] px-2 py-2.5 transition-colors", highlight === n && "bg-[#fff6dc]")}
                   >
                     <Meta n={n}>
-                      <span className="font-semibold text-[#1f5132]" title={p.label.author ? undefined : t("No DM: an anonymous post doesn't say who wrote it.")}>
+                      <span
+                        className="font-semibold text-[#1f5132]"
+                        title={p.label.author ? t("Chosen by the poster, not checked. The ID beside it is what counts.") : t("No DM: an anonymous post doesn't say who wrote it.")}
+                      >
                         {shownName(p, t)}
                       </span>
                       <Author walletId={p.label.author} onDm={props.onDm} />
