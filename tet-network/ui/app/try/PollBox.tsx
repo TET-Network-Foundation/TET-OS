@@ -81,7 +81,7 @@ export function PollBox(props: { def: PollDef; now: number }) {
       </p>
       <p className="text-[13px] text-[#5d646d]">
         {def.members
-          ? t("Your vote is hidden only among the {n} listed members. The poll's maker chose the list: if they control most of those wallets, they can work out how the others voted.", { n: def.members })
+          ? t("Your vote is hidden only among the {n} listed members. The poll's maker chose the list: if they control most of those IDs, they can work out how the others voted.", { n: def.members })
           : t("Your vote is hidden among this node's anonymity set.")}{" "}
         {t("One vote per member. Anyone who can read this thread sees votes as they arrive, so when few people vote, the timing can give a vote away. The node sees your IP address.")}
       </p>
@@ -138,16 +138,16 @@ export function PollMaker(props: { post: (text: string) => Promise<void>; onDone
       </label>
       <label className="flex items-center gap-2 text-[14px]">
         <input type="checkbox" checked={membersOnly} onChange={(e) => setMembersOnly(e.target.checked)} />
-        {t("Members-only: list the wallets that may vote")}
+        {t("Members-only: list the IDs that may vote")}
       </label>
       {membersOnly ? (
         <label className="block text-[14px]">
-          {t("Wallet ids, one per line, at least 3. Each must have joined the anonymity set on this node.")}
+          {t("IDs, one per line, at least 3. Each must have joined the anonymity set on this node.")}
           <textarea value={members} onChange={(e) => setMembers(e.target.value)} rows={4} className={cx(field, "font-mono text-[13px]")} />
         </label>
       ) : null}
       <p className="text-[13px] text-[#5d646d]">{t("The poll is open until 00:00 UTC today. Its options and member list can't be changed after it's made.")}
-        {membersOnly ? ` ${t("The member list is public: anyone can see which wallets may vote, not how they voted.")}` : ""}</p>
+        {membersOnly ? ` ${t("The member list is public: anyone can see which IDs may vote, not how they voted.")}` : ""}</p>
       <div className="flex gap-2">
         <Button kind="primary" disabled={busy || !question.trim()} onClick={() => void onCreate()}>
           {busy ? t("Making the poll…") : t("Make the poll")}

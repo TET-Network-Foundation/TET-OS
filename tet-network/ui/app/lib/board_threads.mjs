@@ -44,7 +44,49 @@ export function checkThreadTitle(title) {
   return { ok: true, title: t };
 }
 
-/** The plaintext for a post in a thread; `title` only when opening it. */
+/** The most characters a display name holds. */
+export const NAME_MAX = 32;
+// The rest of the line, whatever it holds (cleanName decides what's shown), so a raw name line
+// can't be read one way here and another way by the cleaner.
+const NAME_RE = /^name: ([^\n]*)$/;
+const RESERVED = /\bid\b|anonymous|verified|named|noname|no name|proof|名無し|匿名|記名|検証|無名|具名|證明|証明/i;
+/**
+ * The characters a name may hold, as fixed code-point ranges (not Unicode property tables, which
+ * differ between browsers): ASCII letters, digits, space and a little punctuation; hiragana,
+ * katakana, ー, 々 and ・; CJK ideographs; Hangul syllables. Everything else is dropped, so a
+ * name looks the same in every browser and can't hide look-alike or invisible characters.
+ */
+const NOT_ALLOWED = /[^A-Za-z0-9 ._'!?&\-\u3005\u3041-\u3096\u309d\u309e\u30a1-\u30fa\u30fb\u30fc-\u30fe\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7a3]/gu;
+
+/**
+ * A display name as shown: width-normalised (ＡＢＣ → ABC, ｶﾅ → カナ), accents off (José → Jose),
+ * only the allowed characters above, spaces collapsed, at most NAME_MAX characters; "" means none
+ * (shown as 名無しさん / "No name"). A name that could pass for an ID or a status label is no name.
+ * Names aren't checked by anyone: the page always shows the post's ID beside it.
+ * @param {unknown} raw
+ */
+export function cleanName(raw) {
+  const s = String(raw ?? "")
+    .normalize("NFKC")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .normalize("NFC")
+    .replace(NOT_ALLOWED, "")
+    .replace(/ +/g, " ")
+    .trim();
+  const name = [...s].slice(0, NAME_MAX).join("").trim();
+  const skeleton = name.replace(/[^A-Za-z0-9\u3005\u3041-\u30ff\u3400-\u9fff\uac00-\ud7a3]/g, "");
+  // ASCII look-alikes, read both ways: as hex digits for the ID check (O o → 0, l I → 1), and as
+  // letters for the label check (0 → o, 1 → l and i, rn → m, vv → w).
+  const asHex = skeleton.replace(/[Oo]/g, "0").replace(/[lI|]/g, "1");
+  const asWords = [skeleton, name].flatMap((x) => {
+    const w = x.toLowerCase().replace(/0/g, "o").replace(/rn/g, "m").replace(/vv/g, "w");
+    return [w, w.replace(/[1l]/g, "i"), w.replace(/[1i]/g, "l")];
+  });
+  if (/[0-9a-f]{6,}/i.test(asHex) || asWords.some((x) => RESERVED.test(x))) return "";
+  return name;
+}
+
 export function encodeThreadPost(o) {
   if (!/^[0-9a-f]{16}$/.test(o.threadId ?? "")) throw new Error("bad thread id");
   const lines = [`${THREAD_HEADER} ${o.threadId}${o.sage && o.title == null ? " sage" : ""}`];
@@ -53,6 +95,8 @@ export function encodeThreadPost(o) {
     if (!c.ok) throw new Error(c.reason);
     lines.push(`title: ${c.title}`);
   }
+  const name = cleanName(o.name);
+  if (name) lines.push(`name: ${name}`);
   return `${lines.join("\n")}\n\n${String(o.body ?? "")}`;
 }
 
@@ -65,7 +109,7 @@ export function parseThreadPost(text) {
   const nl = s.indexOf("\n");
   const first = nl === -1 ? s : s.slice(0, nl);
   const m = HEADER_RE.exec(first);
-  if (!m) return { threadId: null, title: null, sage: false, body: s };
+  if (!m) return { threadId: null, title: null, sage: false, name: "", body: s };
   let rest = nl === -1 ? "" : s.slice(nl + 1);
   let title = null;
   const nl2 = rest.indexOf("\n");
@@ -76,10 +120,18 @@ export function parseThreadPost(text) {
     title = c.ok ? c.title : null;
     rest = nl2 === -1 ? "" : rest.slice(nl2 + 1);
   }
+  let name = "";
+  const nl3 = rest.indexOf("\n");
+  const third = nl3 === -1 ? rest : rest.slice(0, nl3);
+  const nm = NAME_RE.exec(third);
+  if (nm) {
+    name = cleanName(nm[1]);
+    rest = nl3 === -1 ? "" : rest.slice(nl3 + 1);
+  }
   // The blank line between the header and the body.
   if (rest.startsWith("\n")) rest = rest.slice(1);
   // A thread's opener can't be sage: it is what the thread starts from.
-  return { threadId: m[1], title, sage: !!m[2] && title === null, body: rest };
+  return { threadId: m[1], title, sage: !!m[2] && title === null, name, body: rest };
 }
 
 const byTime = (a, b) => a.sentAtMs - b.sentAtMs || String(a.msgId).localeCompare(String(b.msgId));
@@ -96,7 +148,7 @@ export function groupThreads(posts) {
     const parsed = parseThreadPost(p.text);
     const id = parsed.threadId ?? "";
     if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push({ ...p, body: parsed.body, title: parsed.title, sage: parsed.sage });
+    groups.get(id).push({ ...p, body: parsed.body, title: parsed.title, sage: parsed.sage, name: parsed.name });
   }
   const threads = [...groups.entries()].map(([threadId, ps]) => {
     ps.sort(byTime);

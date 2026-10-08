@@ -41,16 +41,16 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     try {
       await openWithWords(await openRememberedKey(pass));
       setPass("");
-      setMsg(t("Your key is open in this tab."));
+      setMsg(t("Your ID is open in this tab."));
     } catch (e: unknown) {
-      setMsg(e instanceof Error && e.message === "Wrong passphrase." ? t("Wrong passphrase. Try again, or open with your 12 words.") : t("This device can't open the remembered key. Open with your 12 words instead."));
+      setMsg(e instanceof Error && e.message === "Wrong passphrase." ? t("Wrong device password. Try again, or open with your passphrase (12 words).") : t("This device can't open your remembered ID. Open it with your passphrase (12 words) instead."));
     } finally {
       setBusy(false);
     }
   };
   const remember = async () => {
     setMsg("");
-    if (pass !== pass2) return setMsg(t("The two passphrases differ. Type them again."));
+    if (pass !== pass2) return setMsg(t("The two device passwords differ. Type them again."));
     if (!wallet) return;
     setBusy(true);
     try {
@@ -59,9 +59,9 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
       setPass2("");
       setRemembered(true);
       setShowRemember(false);
-      setMsg(t("Remembered on this device, encrypted with your passphrase."));
+      setMsg(t("Remembered on this device, encrypted with your device password."));
     } catch (e: unknown) {
-      setMsg(e instanceof Error && /at least 8/.test(e.message) ? t("Use a passphrase of at least 8 characters.") : t("This browser won't let the page remember anything."));
+      setMsg(e instanceof Error && /at least 8/.test(e.message) ? t("Use a device password of at least 8 characters.") : t("This browser won't let the page remember anything."));
     } finally {
       setBusy(false);
     }
@@ -90,7 +90,7 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
           <>
             {props.lastBoard ? " · " : ""}
             <button type="button" aria-expanded={keysOpen} className={LINK} onClick={() => setKeysOpen(!keysOpen)}>
-              {!wallet && remembered ? t("open your remembered key") : t("key options")}
+              {!wallet && remembered ? t("open your remembered ID") : t("ID options")}
             </button>
           </>
         ) : null}
@@ -99,9 +99,9 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
         <ul className="mt-2 space-y-1 text-left text-[15px] text-[#1c1f23]">
             {!wallet && remembered ? (
               <li className="space-y-1.5 pt-1">
-                <p>{t("A key is remembered on this device. Open it with your passphrase:")}</p>
+                <p>{t("An ID is remembered on this device. Open it with your device password:")}</p>
                 <div className="flex max-w-sm gap-2">
-                  <Input ariaLabel={t("Passphrase")} type="password" value={pass} onChange={setPass} placeholder={t("Passphrase")} />
+                  <Input ariaLabel={t("Device password")} type="password" value={pass} onChange={setPass} placeholder={t("Device password")} />
                   <Button disabled={busy || !pass} onClick={() => void open()}>
                     {t("Open")}
                   </Button>
@@ -112,16 +112,16 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
               <li className="pt-1">
                 {showRemember ? (
                   <div className="max-w-sm space-y-1.5">
-                    <p className="text-[14px] text-[#5d646d]">{t("Anyone with this device and your passphrase can use your key. A script injected into this page could read it while it's open.")}</p>
-                    <Input ariaLabel={t("Passphrase")} type="password" value={pass} onChange={setPass} placeholder={t("Passphrase (8 characters or more)")} />
-                    <Input ariaLabel={t("Passphrase again")} type="password" value={pass2} onChange={setPass2} placeholder={t("Passphrase again")} />
+                    <p className="text-[14px] text-[#5d646d]">{t("Anyone with this device and your device password can use your ID. A script injected into this page could read it while it's open.")}</p>
+                    <Input ariaLabel={t("Device password")} type="password" value={pass} onChange={setPass} placeholder={t("Device password (8 characters or more)")} />
+                    <Input ariaLabel={t("Device password again")} type="password" value={pass2} onChange={setPass2} placeholder={t("Device password again")} />
                     <Button disabled={busy || !pass} onClick={() => void remember()}>
-                      {t("Remember my key on this device")}
+                      {t("Remember my ID on this device")}
                     </Button>
                   </div>
                 ) : (
                   <button type="button" className={LINK} onClick={() => setShowRemember(true)}>
-                    {t("Remember my key on this device (optional, encrypted)")}
+                    {t("Remember my ID on this device (optional, encrypted)")}
                   </button>
                 )}
               </li>

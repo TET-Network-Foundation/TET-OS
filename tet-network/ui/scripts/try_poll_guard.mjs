@@ -146,7 +146,7 @@ await mustThrow("registration only for members-only polls is caught", () =>
 // 7. honest anonymity
 const LINES = [
   "Your vote is hidden only among the {n} listed members.",
-  "The poll's maker chose the list: if they control most of those wallets, they can work out how the others voted.",
+  "The poll's maker chose the list: if they control most of those IDs, they can work out how the others voted.",
   "the timing can give a vote away",
   "The node sees your IP address.",
 ];
@@ -154,7 +154,7 @@ const honest = (src) => {
   for (const l of LINES) assert.ok(src.includes(l), `the poll box lost: ${l}`);
 };
 await check("the poll box says how anonymous a vote is", () => honest(BOX));
-await mustThrow("a box missing the maker line is caught", () => honest(BOX.replace("The poll's maker chose the list: if they control most of those wallets, they can work out how the others voted.", "")));
+await mustThrow("a box missing the maker line is caught", () => honest(BOX.replace("The poll's maker chose the list: if they control most of those IDs, they can work out how the others voted.", "")));
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

@@ -500,6 +500,13 @@ jobs:
         name: try page — a sealed prediction is exact and hides its text until revealed
         run: node --experimental-strip-types scripts/try_seal_guard.mjs
 
+      # Plain words for non-technical people: the everyday pages say ID, passphrase (12 words),
+      # inbox, proof file — never wallet, .sig.json, nullifier or "your key"; "nullifier" only on
+      # How it works. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — plain words on everyday pages
+        run: node scripts/try_plain_guard.mjs
+
       # Anonymous polls: the page signs tet-core's poll pre-image field for field; a members-only
       # poll sends wallet ids only (the node builds the root from its own registry); a voter proves
       # against the node's root, not the post's; the tally counts only verified ballots. Controls.

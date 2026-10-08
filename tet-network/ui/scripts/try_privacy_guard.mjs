@@ -156,7 +156,7 @@ await check("control: a vouch page without the line is caught", () => {
 // ── 2. Required statements, in every language ─────────────────────────────────────────────────
 const REQUIRED = [
   ["the footer: the demo node sees your IP and doesn't log it; Tor or your own node", "Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited."],
-  ["the board: anonymous posting unlinks post from key, doesn't hide IP", "Posting anonymously unlinks the post from your key: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."],
+  ["the board: anonymous posting unlinks post from key, doesn't hide IP", "Posting anonymously unlinks the post from your ID: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."],
 ];
 const dicts = {
   ja: read("tet-network/ui/app/try/i18n_ja.ts"),
@@ -180,13 +180,13 @@ await check("control: a dictionary missing the line is caught", () => {
 
 // ── 3. Every feature keeps its "proves / doesn't prove" line ───────────────────────────────────
 const PROVES = {
-  "BoardPanel.tsx": "Posting anonymously unlinks the post from your key",
+  "BoardPanel.tsx": "Posting anonymously unlinks the post from your ID",
   "VerifyPanel.tsx": "A valid signature proves which key signed, not who holds it.",
   "SignPanel.tsx": "A signature proves that this wallet's two keys",
   "QrPanel.tsx": "The QR doesn't contain the signature",
-  "FilesTryPanel.tsx": "A delivered file proves the sender's key signed it",
-  "MailPanel.tsx": "A message proves which key sent it",
-  "DirectoryPanel.tsx": "A listing proves the board's own key listed it.",
+  "FilesTryPanel.tsx": "A delivered file proves which ID sent it",
+  "MailPanel.tsx": "A message proves which ID sent it",
+  "DirectoryPanel.tsx": "A listing proves the board's own ID listed it.",
   "QuestionsPanel.tsx": "it proves the owner vouched for the key, not who runs the agent.",
   "LivePanel.tsx": "Never what it said, who wrote it, or an IP address.",
 };

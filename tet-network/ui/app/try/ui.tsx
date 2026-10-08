@@ -209,10 +209,10 @@ export function KeysBanner(props: { what: string; onPublish: () => void; busy: b
   return (
     <div className="mx-4 my-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-[#c5cbef] bg-[#f3f4fd] px-3 py-2 text-[14.5px] md:mx-5">
       <span>
-        {props.what} {t("Publishing them is public: it shows this wallet can receive.")}
+        {props.what} {t("Turning it on is public: it shows this ID can receive messages.")}
       </span>
       <Button className="min-h-9 px-3 text-[14px]" disabled={props.busy} onClick={props.onPublish}>
-        {props.busy ? t("Publishing…") : t("Publish keys")}
+        {props.busy ? t("Publishing…") : t("Turn on inbox")}
       </Button>
       {props.error ? (
         <span role="alert" className={INK.bad}>

@@ -21,10 +21,10 @@ const STATS_FOR = 12;
 
 const directoryNotice = (t: (en: string) => string) => [
   t("A public board's invite is published here, so anyone can read every post on it."),
-  t("Only a board's own wallet can list it: listings by anyone else are ignored. Nobody can list your invite-only board."),
-  t("A listing lasts 7 days after its newest announcement; to keep a board listed, announce it again with the board's 12 words."),
+  t("Only a board's own ID can list it: listings by anyone else are ignored. Nobody can list your invite-only board."),
+  t("A listing lasts 7 days after its newest announcement; to keep a board listed, announce it again with the board's passphrase (12 words)."),
   t("This page reads the directory's newest 200 posts. Anyone can list a board, and names are not checked: a name says nothing about who runs a board."),
-  t("A listing proves the board's own key listed it. It doesn't prove who runs the board or that its name is true."),
+  t("A listing proves the board's own ID listed it. It doesn't prove who runs the board or that its name is true."),
 ];
 
 export default function DirectoryPanel(props: { directory: OpenBoard | null; listings: Listing[] | null; error: string; onOpen: (b: OpenBoard) => void }) {
