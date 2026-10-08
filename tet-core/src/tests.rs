@@ -14085,3 +14085,62 @@ fn a_released_claim_never_belongs_to_a_stored_post() {
         assert!(store.get_by_msg_id(id).is_none(), "{id} was stored");
     }
 }
+
+/// **SECURITY REGRESSION GUARD: an anonymous receipt counts only from TET's membership program.**
+/// The node used to check a receipt against whatever program id the envelope carried. Now an id
+/// outside the pinned list is refused before any proof work, with a reason naming it; the pinned id
+/// gets past that check; the pinned constant round-trips through the node's id encoding.
+/// Negative control (run by hand): the check removed → FAILED (the refusal reason changes).
+#[test]
+fn anonymous_receipt_from_an_unpinned_program_is_refused() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (eph_words, ephemeral) = tmail_party_for_tests();
+    let receipt = b"placeholder receipt bytes".to_vec();
+    let with_program = |hex_id: &str| {
+        let mut env = anon_env_with_nullifier_for_tests(&eph_words, &ephemeral, &receiver, [7u8; 32], "anon-pin", tmail_now_ms_for_tests());
+        let a = env.anonymous.as_mut().unwrap();
+        a.anchor_proof.image_id_hex = hex_id.to_string();
+        a.anchor_proof.receipt_sha256_hex = hex::encode(sha2::Sha256::digest(&receipt));
+        resign_tmail_env_for_tests(&mut env, &eph_words);
+        env
+    };
+    let reason = |v: crate::tmail::store::AnonVerdict| match v {
+        crate::tmail::store::AnonVerdict::Failed { reason, .. } => reason,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+
+    let unknown = "11".repeat(32);
+    let r = reason(crate::tmail::anon::verify_anonymous_proof(&store, &with_program(&unknown), &receipt));
+    assert!(r.contains("unrecognised proving program") && r.contains(&unknown), "{r}");
+
+    let pinned = crate::tmail::anon::ANON_GUEST_IMAGE_IDS[0];
+    let r = reason(crate::tmail::anon::verify_anonymous_proof(&store, &with_program(pinned), &receipt));
+    assert!(!r.contains("unrecognised proving program"), "the pinned program was refused: {r}");
+
+    let mut words = [0u32; 8];
+    for (i, w) in words.iter_mut().enumerate() {
+        *w = u32::from_le_bytes(hex::decode(&pinned[i * 8..i * 8 + 8]).unwrap().try_into().unwrap());
+    }
+    assert_eq!(crate::tmail::anon::encode_image_id_hex(&words), pinned);
+    assert!(crate::tmail::anon::anon_program_accepted(&words));
+    assert!(!crate::tmail::anon::anon_program_accepted(&[0u32; 8]), "the all-zero stub id must never be accepted");
+}
+
+/// **A real-guest build's membership program is one the node pins.** Run by `zk-real` (it needs the
+/// embedded guest). If the guest or the toolchain changes the program id, this goes red instead of
+/// seeds silently refusing every member's anonymous post; the fix is to add the new id to
+/// `tmail::anon::ANON_GUEST_IMAGE_IDS` deliberately.
+#[test]
+#[ignore = "needs a zk build with the real guest embedded"]
+fn s8_real_guest_image_id_is_pinned() {
+    let id = crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID);
+    assert!(methods::NEXUS_GUEST_ID.iter().any(|w| *w != 0), "this build has the all-zero stub guest");
+    assert!(
+        crate::tmail::anon::ANON_GUEST_IMAGE_IDS.iter().any(|x| x.eq_ignore_ascii_case(&id)),
+        "the real guest's id {id} is not in ANON_GUEST_IMAGE_IDS"
+    );
+}
