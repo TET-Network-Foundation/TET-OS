@@ -114,6 +114,18 @@ function u64le(n) {
  * @param {Uint8Array} receiver32
  * @param {number} bucket
  */
+/**
+ * A member's nullifier for one receiver and UTC day, as nexus-protocol `tet_anon_nullifier_v1`:
+ * SHA-256("tet-null-v1" ‖ secret ‖ receiver ‖ bucket as u64 little-endian). Its first 4 hex digits
+ * are the daily ID a verified post shows, so a member can recognise their own post on a board.
+ * @param {Uint8Array} secret32 @param {Uint8Array} receiver32 @param {number} bucket
+ */
+export function anonNullifier(secret32, receiver32, bucket) {
+  const b = new Uint8Array(8);
+  new DataView(b.buffer).setBigUint64(0, BigInt(bucket), true);
+  return sha256(new Uint8Array([...new TextEncoder().encode("tet-null-v1"), ...secret32, ...receiver32, ...b]));
+}
+
 export function tmailEphemeralSeed(anchor32, receiver32, bucket) {
   const info = concat(enc.encode("tet-ephemeral-v1"), receiver32, u64le(bucket));
   return hkdf(sha256, anchor32, undefined, info, 32);
