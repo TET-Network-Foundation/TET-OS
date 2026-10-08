@@ -18,6 +18,12 @@ export default function AboutPanel() {
     <section aria-label={t("About")}>
       <PanelHead title={t("About")} todo={t("What TET is, who runs it, and how to reach them.")} />
       <div className="max-w-[40rem] space-y-5 px-4 py-4 text-base leading-relaxed md:px-5">
+        <div className="flex items-center gap-3">
+          {/* The TET logo: the founder's design, traced exactly (public/brand/tet-logo.svg). */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/brand/tet-logo.svg" width={56} height={56} alt={t("TET logo")} className="h-14 w-14" />
+          <p className="text-[15px] font-semibold">TET v0.2 · testnet</p>
+        </div>
         <div>
           <h3 className="mb-1 text-[15px] font-semibold">{t("What TET is")}</h3>
           <ol className="list-decimal space-y-1 pl-5">
