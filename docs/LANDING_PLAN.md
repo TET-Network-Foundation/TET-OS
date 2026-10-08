@@ -69,8 +69,8 @@ Returning visitor (see the end): the intro block (sections 1–2) collapses to o
 
 ## 1. Name and one line
 
-No logo file exists in the repo (only `favicon.ico`), so the mark is the word **TET** set in the
-page's own type, bold, followed by the version. If you want a drawn logo, it needs a file from you.
+Decided: the mark is the word **TET** set in the page's own type, bold, followed by the version.
+A hand-drawn mark replaces it later.
 
 | | en | ja |
 |---|---|---|
@@ -203,29 +203,27 @@ intro collapses to one line ("TET v0.2 · testnet — you have a key in this tab
 shows: the last board opened in this tab, unsent drafts in this tab, and the key's short id. All of
 it lives in the page's memory; a new tab starts fresh.
 
-**Remembering the key on this device (opt-in)** needs a decision from you first, because it changes
-a rule the code enforces today: `try_wallet_guard` check 2 forbids browser storage anywhere in
-`app/try/` and the wallet code, so the key never touches the disk. Options:
+**Remembering things on this device** (decided 2026-10-08): a separate storage module with its own
+guard; `try_wallet_guard` stays exactly as it is for everything else.
 
-1. **Keep the rule** (recommended for now): no remembering. Returning means "Open with your 12
-   words" on one line. Simple, and nothing on the device to steal.
-2. **Allow one narrow exception:** a separate module (`app/lib/key_vault.ts`) that stores only
-   ciphertext: the 12 words encrypted with a key derived from your passphrase (scrypt or Argon2id,
-   parameters stated on screen), opt-in per device, with "forget this device" next to it. Its own
-   guard: the plaintext words and the passphrase never reach storage, a wrong passphrase opens
-   nothing, the KDF parameters can't silently drop. `try_wallet_guard` check 2 stays exactly as it
-   is for everything else. The page would say: "Anyone with this device and your passphrase can use
-   your key. A script injected into this page could read it while it's open."
-
-The same applies to (e)'s once-per-tab flag and (h)'s tab-only nicknames: both need sessionStorage,
-which check 2 also forbids in `app/try/`. Same proposal: tiny separate modules with their own guards
-(the flag holds a boolean; nicknames never leave the tab), not a change to check 2.
+- **Plain storage, non-secret UI state only:** last board, drafts, language. Nothing that is or
+  derives from a key.
+- **The key, opt-in only, encrypted:** the 12 words encrypted with WebCrypto (AES-GCM under a key
+  derived from the user's passphrase with PBKDF2-SHA-256 at a stated iteration count; parameters
+  shown on screen), with "forget this device" next to it. The page says: "Anyone with this device
+  and your passphrase can use your key. A script injected into this page could read it while it's
+  open."
+- **Its guard, with negative controls:** the words and the passphrase never reach storage in
+  plain text; only ciphertext is written; a wrong passphrase opens nothing; the KDF parameters can't
+  drop below the stated floor; only the listed UI-state keys may be stored in plain storage.
+  Controls: a module that stores the words in plain text, or a key outside the list, is caught.
+- (e)'s once-per-tab flag and (h)'s nicknames use the same module's plain UI-state store.
 
 ## Open questions for you
 
-1. Logo: a typeset "TET" (as planned), or will you provide a drawn mark?
-2. Remembering the key: option 1 or 2 above.
-3. Section 6: keep "most public chains" as a class, or name specific chains (needs sources I keep
+Decided: typeset logo; storage as above.
+
+1. Section 6: keep "most public chains" as a class, or name specific chains (needs sources I keep
    current)?
-4. Data science "try this": ship with today's Sign (embeds the file), or add the hash-only mode
+2. Data science "try this": ship with today's Sign (embeds the file), or add the hash-only mode
    first?
