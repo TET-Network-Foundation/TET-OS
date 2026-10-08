@@ -292,14 +292,14 @@ function TryApp() {
   const [boardErr, setBoardErr] = useState("");
   const [directory, setDirectory] = useState<OpenBoard | null>(null);
   const [listings, setListings] = useState<Awaited<ReturnType<typeof readDirectory>> | null>(null);
-  // Remember the board being read (device_store, plain UI state): a public board's invite is public
-  // anyway; an invite-only board's invite is its key, so only its name is kept.
+  // Remember the last PUBLIC board read (device_store, plain UI state; its invite is public anyway).
+  // An invite-only board leaves no record on the device, not even its name (commit security
+  // review of #70).
   useEffect(() => {
     if (!("board" in view)) return;
     const b = boards.find((x) => x.invite === view.board);
-    if (!b) return;
-    const isPublic = !!listings?.some((l) => l.boardWalletId === b.boardWalletId);
-    setUi("tet.ui.v1.lastBoard", JSON.stringify({ name: b.name || b.boardWalletId.slice(0, 8), invite: isPublic ? b.invite : null }));
+    if (!b || !listings?.some((l) => l.boardWalletId === b.boardWalletId)) return;
+    setUi("tet.ui.v1.lastBoard", JSON.stringify({ name: b.name || b.boardWalletId.slice(0, 8), invite: b.invite }));
   }, [view, boards, listings]);
   const [dirErr, setDirErr] = useState("");
   /** The 12 words of boards this tab created (to list them again); kept in memory only. */

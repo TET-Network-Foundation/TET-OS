@@ -169,10 +169,15 @@ export default function BoardPanel(props: {
   const [named, setNamed] = useState(false);
   const [sage, setSage] = useState(false);
   const [text, setTextState] = useState("");
-  // The composer's draft for this board, kept on this device (device_store: plain, non-secret UI state).
+  // The composer's draft, kept on this device only for a PUBLIC board (device_store: plain UI
+  // state). An invite-only board's draft stays in this tab: a stored draft would leave a lasting
+  // record on the device of a private board and of what was written there (possibly anonymously).
+  // Commit security review of #70; try_storage_guard checks this gate.
+  const persistDrafts = props.isPublic;
   const setText = useCallback(
     (v: string) => {
       setTextState(v);
+      if (!persistDrafts) return;
       try {
         const all = JSON.parse(getUi("tet.ui.v1.drafts") ?? "{}") as Record<string, string>;
         if (v.trim()) all[board.boardWalletId] = v.slice(0, 4000);
@@ -183,19 +188,28 @@ export default function BoardPanel(props: {
         setUi("tet.ui.v1.drafts", null);
       }
     },
-    [board.boardWalletId],
+    [board.boardWalletId, persistDrafts],
   );
   useEffect(() => {
     const t0 = setTimeout(() => {
       try {
-        const d = (JSON.parse(getUi("tet.ui.v1.drafts") ?? "{}") as Record<string, string>)[board.boardWalletId];
+        const all = JSON.parse(getUi("tet.ui.v1.drafts") ?? "{}") as Record<string, string>;
+        if (!persistDrafts) {
+          // Never keep an invite-only board's draft; drop one left by an earlier version.
+          if (board.boardWalletId in all) {
+            delete all[board.boardWalletId];
+            setUi("tet.ui.v1.drafts", Object.keys(all).length ? JSON.stringify(all) : null);
+          }
+          return;
+        }
+        const d = all[board.boardWalletId];
         if (d) setTextState(d);
       } catch {
         /* no draft */
       }
     }, 0);
     return () => clearTimeout(t0);
-  }, [board.boardWalletId]);
+  }, [board.boardWalletId, persistDrafts]);
   const [newTitle, setNewTitle] = useState("");
   /** null = the thread list; "new" = the new-thread form; otherwise a thread id ("" = no thread). */
   const [open, setOpen] = useState<string | null>(null);

@@ -135,5 +135,20 @@ await check("control: another lib that touches storage is caught", () => {
   assert.deepEqual(storageUsers([["app/lib/y.mjs", "// nothing here persists: no localStorage"]]), [], "a comment counted as use");
 });
 
+// ── 6. Drafts are kept only for public boards (commit security review of #70) ───────────────────
+/** The board composer must return before writing drafts unless the board is public. */
+function draftsGatedOnPublic(src) {
+  const writer = src.indexOf('setUi("tet.ui.v1.drafts"');
+  assert.ok(writer > 0, "no drafts writer found");
+  const gate = src.indexOf("if (!persistDrafts) return;");
+  assert.ok(gate > 0 && gate < writer, "drafts are written without the public-board gate");
+  assert.match(src, /const persistDrafts = props\.isPublic;/);
+}
+const boardSrc = readFileSync(new URL("app/try/BoardPanel.tsx", UI), "utf8");
+await check("SECURITY: board drafts are kept on the device only for public boards", () => draftsGatedOnPublic(boardSrc));
+await check("control: a composer without the gate is caught", () => {
+  assert.throws(() => draftsGatedOnPublic(boardSrc.replace("if (!persistDrafts) return;", "")));
+});
+
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
