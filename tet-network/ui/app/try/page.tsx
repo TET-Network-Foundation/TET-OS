@@ -117,7 +117,7 @@ function WalletLine() {
     const t = setTimeout(() => setConfirmForget(false), 5_000);
     return () => clearTimeout(t);
   }, [confirmForget]);
-  if (!wallet) return <p className="text-[13.5px] text-[#5d646d]">{t("No wallet yet: your first post or message makes one in this tab.")}</p>;
+  if (!wallet) return <p className="text-[13.5px] text-[#5d646d]">{t("No ID yet: your first post or message makes one in this tab.")}</p>;
   function onDownload() {
     if (!wallet) return;
     const url = URL.createObjectURL(new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" }));
@@ -131,13 +131,13 @@ function WalletLine() {
     <div className="text-[13.5px]">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span>
-          {t("wallet")}{" "}
+          {t("your ID")}{" "}
           <span translate="no" className={cx(MONO, INK.named)}>
             {wallet.walletId.slice(0, 8)}
           </span>
         </span>
         <Button kind="quiet" className="text-[13.5px]" onClick={() => setShown(!shown)}>
-          {shown ? t("hide words") : t("12 words")}
+          {shown ? t("hide passphrase") : t("passphrase")}
         </Button>
         <Button kind="quiet" className="text-[13.5px]" onClick={onDownload}>
           {t("save")}
@@ -159,7 +159,7 @@ function WalletLine() {
           {wallet.words}
         </p>
       ) : null}
-      <p className="mt-1 text-[12.5px] text-[#5d646d]">{t("Made in this tab, never sent anywhere. Close the tab without saving the words and it is gone.")}</p>
+      <p className="mt-1 text-[12.5px] text-[#5d646d]">{t("Made in this tab, never sent anywhere. Close the tab without saving the passphrase and it is gone.")}</p>
     </div>
   );
 }
@@ -191,12 +191,12 @@ function NodeFacts(props: { node: ReturnType<typeof useNode> }) {
               {wallet.walletId.slice(0, 8)}
             </span>
           ) : (
-            t("no wallet yet")
+            t("no ID yet")
           ),
         )}
         {row(
           t("anon set"),
-          anon ? (anon.member ? t("{n} members · you're in", { n: anon.members }) : t("{n} members", { n: anon.members })) : wallet ? "…" : t("shown once you have a wallet"),
+          anon ? (anon.member ? t("{n} members · you're in", { n: anon.members }) : t("{n} members", { n: anon.members })) : wallet ? "…" : t("shown once you have an ID"),
         )}
         {row(t("prover"), prover === "found" ? t("found (this computer)") : prover === "missing" ? t("not found") : t("checking…"))}
       </dl>
@@ -257,9 +257,17 @@ function TopBar(props: { go: (v: View) => void; onSearch: (q: string) => void })
 }
 
 /** "a1b2c3d4 · save 12 words": this tab's wallet in one short line (the rest is under "this node"). */
+/** Read once, before this visit marks itself visited (ContinueBlock): is this a returning visitor? */
+const RETURNING = typeof window !== "undefined" && getUi("tet.ui.v1.visited") === "1";
+
+/**
+ * This tab's ID in one short line. Keeping it ("save your passphrase") is offered when the visitor
+ * asks (tap the ID) or on a returning visit — not pushed on the first one.
+ */
 function CompactWallet() {
   const { t } = useLang();
   const { wallet } = useTryWallet();
+  const [offer, setOffer] = useState(RETURNING);
   if (!wallet) return null;
   const save = () => {
     const url = URL.createObjectURL(new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" }));
@@ -271,15 +279,17 @@ function CompactWallet() {
   };
   return (
     <span className="shrink-0 text-[13px] text-[#5d646d]">
-      <span translate="no" title={wallet.walletId} className={cx(MONO, INK.named)}>
+      <button type="button" aria-expanded={offer} title={t("your ID")} onClick={() => setOffer(!offer)} className={cx(FOCUS, MONO, INK.named, "rounded-sm")}>
         {wallet.walletId.slice(0, 8)}
-      </span>
-      <span className="hidden sm:inline">
-        {" · "}
-        <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={save}>
-          {t("save 12 words")}
-        </button>
-      </span>
+      </button>
+      {offer ? (
+        <>
+          {" · "}
+          <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={save}>
+            {t("Keep this ID? Save your passphrase (12 words)")}
+          </button>
+        </>
+      ) : null}
     </span>
   );
 }
@@ -323,6 +333,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
           {t("open boards:")} {line(props.boards.map((b) => [{ board: b.invite }, b.name || t("Untitled board")] as [View, string]))}
         </p>
       ) : null}
+      <p className="font-semibold text-[#6b4e00]">{t("This is a testnet. Data may be reset.")}</p>
       <p>{props.ipNote}</p>
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
         <button type="button" aria-expanded={open} aria-controls="node-facts" className={link} onClick={() => setOpen(!open)}>

@@ -8,7 +8,7 @@ import { groupThreads } from "./board_threads.mjs";
 import { openBoard, readBoard, type OpenBoard } from "./try_board";
 
 export type PublicListing = { name: string; invite: string; boardWalletId: string };
-export type PublicThread = { title: string; board: string; invite: string; count: number; lastAtMs: number; text: string };
+export type PublicThread = { title: string; board: string; invite: string; count: number; lastAtMs: number; createdAtMs: number; text: string };
 
 /** The threads of the newest `boards` public boards, newest activity first. */
 export async function readPublicThreads(baseUrl: string, listings: PublicListing[], boards = 8): Promise<PublicThread[]> {
@@ -29,6 +29,7 @@ export async function readPublicThreads(baseUrl: string, listings: PublicListing
         invite: l.invite,
         count: th.count,
         lastAtMs: th.lastAtMs,
+        createdAtMs: th.posts[0]?.sentAtMs ?? th.lastAtMs,
         text: th.posts.map((p: { body?: string }) => p.body ?? "").join("\n"),
       });
     }

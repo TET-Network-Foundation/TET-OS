@@ -17,7 +17,7 @@
  */
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
-import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
+import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, NAME_MAX, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
 import { tmailBucketIndex } from "../lib/anon_tree.mjs";
@@ -46,7 +46,7 @@ type Outgoing = {
 };
 
 type Label = BoardPost["label"];
-type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string; sage?: boolean };
+type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string; sage?: boolean; name?: string };
 type Thread = { threadId: string; title: string | null; posts: ThreadPost[]; count: number; lastAtMs: number };
 
 function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
@@ -64,7 +64,8 @@ function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
 function Author(props: { walletId: string | null; onDm?: (walletId: string) => void }) {
   const { t } = useLang();
   // The default name for an anonymous post (2ch's 名無しさん).
-  if (!props.walletId) return <span title={t("No DM: an anonymous post doesn't say who wrote it.")}>{t("Anonymous")}</span>;
+  // An anonymous post's name (名無しさん / Anonymous) is shown beside it; there is no ID to DM.
+  if (!props.walletId) return null;
   const id = props.walletId;
   return props.onDm ? (
     <button
@@ -135,13 +136,13 @@ function Meta(props: { n: number; children: React.ReactNode }) {
 export const BOARD_NOTICE = (members: number | null, t: T) => [
   t("Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so."),
   t("You are anonymous among the registered members only ({members} on this node). Joining the set is public, and it is a separate step: posting right after you join makes the post easier to link to your join.", { members: members ?? "?" }),
-  t("Posting anonymously unlinks the post from your key: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."),
+  t("Posting anonymously unlinks the post from your ID: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."),
   t("One anonymous post per board per UTC day (up to 3 around 00:00 UTC)."),
   t("The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title."),
   t("Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time."),
   t("The node and the first relaying peer see your IP. Posts are not on the chain."),
-  t("An anonymous post's ID (ID:ab12) is the first 4 hex digits of its proof's nullifier: one per member, board and UTC day, so it changes tomorrow. It comes out of the proof, not from whoever runs the node, and the node shows it only after checking the proof. A member can post anonymously once per board per day, so an ID marks one post; two members can share an ID by chance."),
-  t("Tap a named post's id to DM its wallet. Anonymous posts have no DM: nothing in them says who wrote them."),
+  t("An anonymous post's ID (ID:ab12) comes from its proof: the same for one member on one board for one UTC day, and different tomorrow. Nobody running the node chooses it, and it appears only after the proof is checked. A member can post anonymously once per board per day, so an ID marks one post; two members can share an ID by chance."),
+  t("Tap a named post's ID to send it a message. Anonymous posts can't be messaged: nothing in them says who wrote them."),
   t("Anyone with the invite link can read every post. An invite cannot be revoked: start a new board."),
   t(TMAIL_ANON_DISCLOSURE),
 ];
@@ -168,8 +169,12 @@ export default function BoardPanel(props: {
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
   const [feedErr, setFeedErr] = useState("");
   const [err, setErr] = useState("");
-  const [named, setNamed] = useState(false);
+  // 2ch-style by default: a post goes out at once with a name and an ID (made silently on the first
+  // post). Posting with an anonymous proof (membership, the native prover) is one tap away.
+  const [named, setNamed] = useState(true);
   const [sage, setSage] = useState(false);
+  // A display name for this tab's posts (blank: Anonymous / 名無しさん). Not stored, not checked.
+  const [name, setName] = useState("");
   const [makingPoll, setMakingPoll] = useState(false);
   const [text, setTextState] = useState("");
   // The composer's draft, kept on this device only for a PUBLIC board (device_store: plain UI
@@ -298,7 +303,7 @@ export default function BoardPanel(props: {
     mounted.current && setOutgoing((o) => o.map((x) => (x.id === id ? { ...x, ...p, stepAtMs: p.step ? Date.now() : x.stepAtMs } : x)));
 
   const allowance = anonAllowance({ nowMs: now, postedBuckets });
-  // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
+  // Named (name + ID) by default; anonymous when chosen and a prover is here.
   const anonymous = prover !== "missing" && !named;
   // Anonymous posting needs membership; until then the one button is the (separate) join.
   const needsJoin = anonymous && prover === "found" && !anon?.member;
@@ -340,7 +345,7 @@ export default function BoardPanel(props: {
       setErr(t("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC."));
       return;
     }
-    const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage });
+    const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage, name });
     const id = `${Date.now()}-${Math.random()}`;
     const t0 = Date.now();
     setOutgoing((o) => [...o, { id, threadId, text: body, mode: plan.action === "anonymous" ? "anonymous" : "named", step: "sending", stepAtMs: t0 }]);
@@ -414,6 +419,18 @@ export default function BoardPanel(props: {
             />
           </div>
         ) : null}
+        <div className="mb-2 max-w-[18rem]">
+          <Input label={t("Name (optional)")} value={name} onChange={(v) => setName(v.slice(0, NAME_MAX))} placeholder={t("Anonymous")} />
+        </div>
+        <div
+          onKeyDown={(e) => {
+            // Cmd/Ctrl+Enter posts.
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !needsJoin) {
+              e.preventDefault();
+              void onPost();
+            }
+          }}
+        >
         <TextArea
           label={open === "new" ? t("First post") : t("Your post")}
           value={text}
@@ -422,6 +439,7 @@ export default function BoardPanel(props: {
           maxLength={BODY_MAX}
           placeholder={open === "new" ? t("The first post of the thread…") : t("Write a post (>>2 replies to post 2)…")}
         />
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-[14px] text-[#5d646d]">
           {needsJoin ? (
             <Button
@@ -438,15 +456,7 @@ export default function BoardPanel(props: {
             </Button>
           ) : (
             <Button disabled={!text.trim() || (open === "new" && !newTitle.trim()) || prover === "unknown"} onClick={() => void onPost()}>
-              {prover === "unknown"
-                ? t("Checking for the prover…")
-                : open === "new"
-                  ? anonymous
-                    ? t("Start the thread anonymously")
-                    : t("Start the thread named")
-                  : anonymous
-                    ? t("Post anonymously")
-                    : t("Post named")}
+              {prover === "unknown" ? t("Checking for the prover…") : open === "new" ? t("Start the thread") : t("Post")}
             </Button>
           )}
           {prover === "found" ? (
@@ -467,7 +477,7 @@ export default function BoardPanel(props: {
           <span>
             {prover === "missing" ? (
               <>
-                {t("No prover here, so posts show your wallet id.")}{" "}
+                {t("No prover here, so posts show your ID.")}{" "}
                 <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
                   {t("How to run the prover to post anonymously")}
                 </a>
@@ -479,7 +489,7 @@ export default function BoardPanel(props: {
             ) : anonymous ? (
               <span className="tabular-nums">{t("{n} anonymous post left today · about 30 s to prove", { n: allowance.remaining })}</span>
             ) : (
-              <>{t("shows your wallet id")}</>
+              <>{t("shows your ID")}</>
             )}
           </span>
         </div>
@@ -515,13 +525,13 @@ export default function BoardPanel(props: {
                   <span className={INK.ok}>{t("Listed again for 7 days.")}</span>
                 ) : relist === "closed" ? (
                   <Button kind="quiet" onClick={() => (props.boardWords ? void relistNow(props.boardWords) : setRelist("open"))}>
-                    {t("list this board again (needs the board's 12 words)")}
+                    {t("list this board again (needs the board's passphrase)")}
                   </Button>
                 ) : (
                   <div className="flex flex-wrap items-end gap-2">
                     {props.boardWords ? null : (
                       <div className="min-w-[16rem] flex-1">
-                        <Input ariaLabel={t("The board's 12 words")} value={relistWords} onChange={setRelistWords} mono placeholder={t("The board's 12 words…")} />
+                        <Input ariaLabel={t("The board's passphrase (12 words)")} value={relistWords} onChange={setRelistWords} mono placeholder={t("The board's passphrase (12 words)…")} />
                       </div>
                     )}
                     <Button className="min-h-9 px-3 text-[14px]" disabled={relist === "busy"} onClick={() => void relistNow(props.boardWords ?? relistWords)}>
@@ -603,6 +613,9 @@ export default function BoardPanel(props: {
                     className={cx("-mx-2 border-b border-[#eceef1] px-2 py-2.5 transition-colors", highlight === n && "bg-[#fff6dc]")}
                   >
                     <Meta n={n}>
+                      <span className="font-semibold text-[#1f5132]" title={p.label.author ? undefined : t("No DM: an anonymous post doesn't say who wrote it.")}>
+                        {p.name || t("Anonymous")}
+                      </span>
                       <Author walletId={p.label.author} onDm={props.onDm} />
                       {p.label.dailyId ? (
                         <span translate="no" title={t("Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.")}>

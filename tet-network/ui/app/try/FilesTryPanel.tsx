@@ -35,9 +35,9 @@ const LIMITS = (t: (en: string) => string) => [
   t("Why not more: the demo node stores every file itself, on its own disk, for everyone. There is no storage market yet that pays nodes to keep files, so this one keeps the limits small."),
   t("Files over 5 MB stay on the demo node only: other nodes accept up to 5 MB, so they neither relay nor keep a copy."),
   t("Each connection can upload up to 200 MB a day, and the demo keeps up to 10 GB in all; when it is full, uploads wait for older files to expire."),
-  t("The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per wallet a day. Past that the file still arrives; its fee shows as unpaid."),
+  t("The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per ID a day. Past that the file still arrives; its fee shows as unpaid."),
   t("The node sees sender, recipient, size and time; not the contents or the file name. The page offers photos, PDFs and videos, but the node can't check what a file is."),
-  t("A delivered file proves the sender's key signed it and only the recipient can open it. It doesn't prove who holds that key, or that the file is what its name says."),
+  t("A delivered file proves which ID sent it and that only the recipient can open it. It doesn't prove who is behind that ID, or that the file is what its name says."),
 ];
 
 export default function FilesTryPanel(props: { demoContact: string }) {
@@ -110,11 +110,11 @@ export default function FilesTryPanel(props: { demoContact: string }) {
       setBusy(t("Encrypting…"));
       const me = await ensureWallet();
       const recipient = to === "self" ? me : to === "demo" ? props.demoContact : normalizeWalletId64(other);
-      if (!recipient) throw new Error(t("The recipient must be a 64-character wallet id."));
+      if (!recipient) throw new Error(t("The recipient must be a 64-character ID."));
       const keys = await getTmailKeys(BASE, recipient);
       if (!keys.ok) throw new Error(keys.text || `could not look up the recipient (HTTP ${keys.status})`);
       if (!keys.registration) {
-        throw new Error(recipient === me ? t("Publish your keys first (the banner above), then you can send files to yourself.") : t("That wallet has not published messaging keys yet, so it cannot receive."));
+        throw new Error(recipient === me ? t("Turn on your inbox first (the banner above), then you can send files to yourself.") : t("That ID hasn't turned on its inbox yet, so it can't receive messages."));
       }
       const built = await buildFileEnvelopeV1({
         senderWalletId: me,
@@ -193,7 +193,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
   const options = [
     { label: t("Yourself"), value: "self" },
     ...(props.demoContact ? [{ label: t("The demo inbox"), value: "demo" }] : []),
-    { label: t("Another wallet"), value: "other" },
+    { label: t("Another ID"), value: "other" },
   ];
 
   return (
@@ -201,7 +201,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
       <PanelHead title={t("Files")} sub={t("encrypted · up to 100 MB · 7 days")} todo={t("Choose a file and who gets it, then send it.")} />
       {keys !== "published" ? (
         <KeysBanner
-          what={t("To receive files, publish your messaging keys.")}
+          what={t("To receive files, turn on your inbox.")}
           busy={publishing}
           error={publishErr}
           onPublish={() => {
@@ -218,7 +218,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
       <PinnedNotice lines={LIMITS(t)} />
       <div className="space-y-2">
         <Chips options={options} value={to} onChange={setTo} />
-        {to === "other" ? <Input ariaLabel={t("Recipient wallet id")} value={other} onChange={setOther} mono placeholder={t("64 hex characters, e.g. 3f9a…")} /> : null}
+        {to === "other" ? <Input ariaLabel={t("Recipient's ID")} value={other} onChange={setOther} mono placeholder={t("64 hex characters, e.g. 3f9a…")} /> : null}
         <FilePick
           ref={inputRef}
           onFile={setFile}
@@ -235,7 +235,7 @@ export default function FilesTryPanel(props: { demoContact: string }) {
 
       <div>
         <h3 className="mb-1 text-[15px] font-semibold">{t("Received")}</h3>
-        {!wallet ? <p className="text-[15px] text-[#5d646d]">{t("Send something first: that makes your wallet and its inbox.")}</p> : null}
+        {!wallet ? <p className="text-[15px] text-[#5d646d]">{t("Send something first: that makes your ID and its inbox.")}</p> : null}
         {wallet && items.length === 0 ? <p className="text-[15px] text-[#5d646d]">{t("Nothing yet. Try sending yourself a file.")}</p> : null}
         <ol className="border-t border-[#eceef1] empty:hidden">
           {items.map((it) => (

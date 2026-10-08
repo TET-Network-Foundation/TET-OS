@@ -45,6 +45,23 @@ export function checkThreadTitle(title) {
 }
 
 /** The plaintext for a post in a thread; `title` only when opening it. */
+/** The most characters a display name holds. */
+export const NAME_MAX = 32;
+const NAME_RE = /^name: (.*)$/;
+
+/**
+ * A display name as shown: trimmed, without control or bidi-override characters (which could make
+ * text display reversed), at most NAME_MAX characters; "" means none (shown as 名無しさん /
+ * Anonymous). Names aren't checked by anyone: the page always shows the post's ID beside it.
+ * @param {unknown} raw
+ */
+export function cleanName(raw) {
+  const s = String(raw ?? "")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "")
+    .trim();
+  return [...s].slice(0, NAME_MAX).join("");
+}
+
 export function encodeThreadPost(o) {
   if (!/^[0-9a-f]{16}$/.test(o.threadId ?? "")) throw new Error("bad thread id");
   const lines = [`${THREAD_HEADER} ${o.threadId}${o.sage && o.title == null ? " sage" : ""}`];
@@ -53,6 +70,8 @@ export function encodeThreadPost(o) {
     if (!c.ok) throw new Error(c.reason);
     lines.push(`title: ${c.title}`);
   }
+  const name = cleanName(o.name);
+  if (name) lines.push(`name: ${name}`);
   return `${lines.join("\n")}\n\n${String(o.body ?? "")}`;
 }
 
@@ -65,7 +84,7 @@ export function parseThreadPost(text) {
   const nl = s.indexOf("\n");
   const first = nl === -1 ? s : s.slice(0, nl);
   const m = HEADER_RE.exec(first);
-  if (!m) return { threadId: null, title: null, sage: false, body: s };
+  if (!m) return { threadId: null, title: null, sage: false, name: "", body: s };
   let rest = nl === -1 ? "" : s.slice(nl + 1);
   let title = null;
   const nl2 = rest.indexOf("\n");
@@ -76,10 +95,18 @@ export function parseThreadPost(text) {
     title = c.ok ? c.title : null;
     rest = nl2 === -1 ? "" : rest.slice(nl2 + 1);
   }
+  let name = "";
+  const nl3 = rest.indexOf("\n");
+  const third = nl3 === -1 ? rest : rest.slice(0, nl3);
+  const nm = NAME_RE.exec(third);
+  if (nm) {
+    name = cleanName(nm[1]);
+    rest = nl3 === -1 ? "" : rest.slice(nl3 + 1);
+  }
   // The blank line between the header and the body.
   if (rest.startsWith("\n")) rest = rest.slice(1);
   // A thread's opener can't be sage: it is what the thread starts from.
-  return { threadId: m[1], title, sage: !!m[2] && title === null, body: rest };
+  return { threadId: m[1], title, sage: !!m[2] && title === null, name, body: rest };
 }
 
 const byTime = (a, b) => a.sentAtMs - b.sentAtMs || String(a.msgId).localeCompare(String(b.msgId));
@@ -96,7 +123,7 @@ export function groupThreads(posts) {
     const parsed = parseThreadPost(p.text);
     const id = parsed.threadId ?? "";
     if (!groups.has(id)) groups.set(id, []);
-    groups.get(id).push({ ...p, body: parsed.body, title: parsed.title, sage: parsed.sage });
+    groups.get(id).push({ ...p, body: parsed.body, title: parsed.title, sage: parsed.sage, name: parsed.name });
   }
   const threads = [...groups.entries()].map(([threadId, ps]) => {
     ps.sort(byTime);

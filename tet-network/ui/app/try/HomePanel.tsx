@@ -68,6 +68,19 @@ export default function HomePanel(props: {
     };
   }, [props.listings, wantThreads, threads]);
 
+  // The newest public threads (real data), read once the directory is in; hidden while empty.
+  const [newest, setNewest] = useState<PublicThread[]>([]);
+  useEffect(() => {
+    if (!props.listings || props.listings.length === 0) return;
+    let on = true;
+    void readPublicThreads(BASE, props.listings, 8)
+      .then((th) => on && setNewest([...th].sort((a, b) => b.createdAtMs - a.createdAtMs).slice(0, 8)))
+      .catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [props.listings]);
+
   const hits = useMemo(() => (threads && asked ? searchThreads(threads, asked) : []), [threads, asked]);
   useEffect(() => {
     if (!props.search) return;
@@ -86,7 +99,10 @@ export default function HomePanel(props: {
         <div className="flex flex-col items-center gap-2">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/brand/tet-logo.svg" width={88} height={88} alt={t("TET logo")} className="tet-logo h-[88px] w-[88px]" />
-          <p className="text-[22px] font-semibold">TET v0.2 · testnet</p>
+          <p className="text-[22px] font-semibold">
+            TET v0.2{" "}
+            <span className="ml-1 rounded-full border border-[#6b4e00] px-2 py-0.5 align-middle text-[12px] font-semibold text-[#6b4e00]">{t("trial")}</span>
+          </p>
         </div>
         <p className="text-[16px] text-[#3d434a]">{t("A network where anyone can check who made something, and when.")}</p>
         <form
@@ -178,6 +194,23 @@ export default function HomePanel(props: {
           </div>
         </details>
         <ContinueBlock lastBoard={props.lastBoard} onOpenBoard={props.onOpenBoard} />
+        {newest.length && !asked ? (
+          <div className="text-left">
+            <h2 className="mb-1 text-[14px] font-semibold text-[#5d646d]">{t("Newest threads")}</h2>
+            <ol className="space-y-0.5 text-[15px]">
+              {newest.map((h, i) => (
+                <li key={i} className="truncate">
+                  <button type="button" className={cx(LINK, "text-left")} onClick={() => void openBoard(BASE, h.invite).then(props.onBoard)}>
+                    {h.title || t("Untitled")}
+                  </button>{" "}
+                  <span className="text-[13px] text-[#5d646d]">
+                    ({h.count}) · {h.board} · {new Date(h.createdAtMs).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        ) : null}
 
         {signatureQuery ? (
           <div aria-live="polite" className="text-left">

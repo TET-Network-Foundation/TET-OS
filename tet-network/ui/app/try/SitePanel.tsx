@@ -129,18 +129,18 @@ export default function SitePanel() {
   if (!words) {
     return (
       <section aria-label={t("Site")}>
-        <PanelHead title={t("Site")} sub={t("signed pages, block by block")} todo={t("Make a new site, or open yours with its 12 words.")} />
+        <PanelHead title={t("Site")} sub={t("pages marked as genuine, block by block")} todo={t("Make a new site, or open yours with its passphrase (12 words).")} />
         <div className="max-w-[46rem] space-y-4 px-4 pb-6 md:px-5">
           <PinnedNotice
             lines={[
-              t("Every block on a site is published by the site's own key, in order, and readers check every signature in their own tab. That doesn't show who holds the key, or that a person wrote the text."),
+              t("Every block on a site is published by the site's own ID, in order, and readers check each one in their own tab. That doesn't show who is behind the ID, or that a person wrote the text."),
               t("Public: anyone with the link can read a site. This node keeps a site 30 days after its last edit; export it to keep a lasting copy."),
-              t("The site's 12 words are its key. The page doesn't keep them: write them down."),
+              t("The site's passphrase (12 words) is what lets you edit it. The page doesn't keep it: write it down."),
             ]}
           />
           {fresh ? (
             <div className="space-y-2 rounded-md border border-[#e3e5e8] p-3">
-              <p className="text-[15px] font-semibold">{t("Your site's 12 words")}</p>
+              <p className="text-[15px] font-semibold">{t("Your site's passphrase (12 words)")}</p>
               <p translate="no" className={cx(MONO, "rounded bg-[#fafbfc] p-2 text-[15px]")}>
                 {fresh.words}
               </p>
@@ -158,7 +158,7 @@ export default function SitePanel() {
             <Button onClick={() => setFresh(newSite())}>{t("Make a new site")}</Button>
           )}
           <div className="space-y-2">
-            <TextArea label={t("Your site's 12 words")} value={typed} onChange={setTyped} rows={2} placeholder={t("Your site's 12 words")} />
+            <TextArea label={t("Your site's passphrase (12 words)")} value={typed} onChange={setTyped} rows={2} placeholder={t("Your site's passphrase (12 words)")} />
             <Button
               kind="secondary"
               disabled={typed.trim().split(/\s+/).length !== 12}
@@ -192,7 +192,7 @@ export default function SitePanel() {
             </a>
           ) : null
         }
-        todo={t("Add a block and it appears. Each add or removal is one edit, signed by the site's key.")}
+        todo={t("Add a block and it appears. Each add or removal is one edit, marked as genuine by the site's ID.")}
       />
       <div className="max-w-[56rem] space-y-5 px-4 pb-6 md:px-5">
         <p className="text-[14px]">
@@ -305,7 +305,7 @@ export default function SitePanel() {
               })
             }
           >
-            {busy ? t("Signing and saving…") : t("Add")}
+            {busy ? t("Saving…") : t("Add")}
           </Button>
         </fieldset>
 
@@ -337,7 +337,7 @@ export default function SitePanel() {
                 {t("Export the page (.html)")}
               </Button>
               <Button kind="secondary" onClick={() => download(`site-${siteId.slice(0, 12)}.site.json`, JSON.stringify({ site: siteId, edits }, null, 1), "application/json")}>
-                {t("Export the signed chain (.site.json)")}
+                {t("Export the proof file (.site.json)")}
               </Button>
             </div>
             <p className="text-[13px] text-[#5d646d]">{t("Host the .html anywhere. With the .site.json, anyone can re-check every signature and re-render the same page.")}</p>

@@ -36,11 +36,11 @@ const post = (text, sentAtMs) => ({ msgId: `m${String(++n).padStart(3, "0")}`, s
 
 await check("a thread post round-trips: id, title, body", () => {
   const opener = t.parseThreadPost(t.encodeThreadPost({ threadId: A, title: "Exam notes", body: "line 1\n\nline 3" }));
-  assert.deepEqual(opener, { threadId: A, title: "Exam notes", sage: false, body: "line 1\n\nline 3" });
+  assert.deepEqual(opener, { threadId: A, title: "Exam notes", sage: false, name: "", body: "line 1\n\nline 3" });
   const reply = t.parseThreadPost(t.encodeThreadPost({ threadId: A, body: ">>1 thanks" }));
-  assert.deepEqual(reply, { threadId: A, title: null, sage: false, body: ">>1 thanks" });
+  assert.deepEqual(reply, { threadId: A, title: null, sage: false, name: "", body: ">>1 thanks" });
   const sage = t.parseThreadPost(t.encodeThreadPost({ threadId: A, body: "quiet reply", sage: true }));
-  assert.deepEqual(sage, { threadId: A, title: null, sage: true, body: "quiet reply" });
+  assert.deepEqual(sage, { threadId: A, title: null, sage: true, name: "", body: "quiet reply" });
 });
 
 /** The property in (1), run against a parser. */
@@ -186,6 +186,23 @@ await check("AA is recognised by its spacing or drawing characters; ordinary pos
   assert.ok(t.looksLikeAA("┌──┐\n│ok│\n└──┘"));
   assert.ok(!t.looksLikeAA("one line, no art"));
   assert.ok(!t.looksLikeAA("Two lines.\nJust text, with >>1 and a URL https://x.y/z"));
+});
+
+// ── Display names: optional, cleaned, never mistaken for body text ─────────────────────────────
+function namesSafe(clean, parse, encode) {
+  const p = parse(encode({ threadId: A, title: "T", name: "モナー", body: "hi" }));
+  assert.equal(p.name, "モナー");
+  assert.equal(p.body, "hi");
+  assert.equal(clean("a\u202eb\u0000c\nd"), "abcd", "bidi overrides and control characters are removed");
+  assert.equal([...clean("x".repeat(100))].length, t.NAME_MAX, "a name is capped");
+  // A body that starts with "name:" is body text, not a name.
+  const q = parse(encode({ threadId: A, body: "name: spoof\nreal text" }));
+  assert.equal(q.name, "");
+  assert.equal(q.body, "name: spoof\nreal text");
+}
+await check("a display name round-trips cleaned, and a body can't pose as one", () => namesSafe(t.cleanName, t.parseThreadPost, t.encodeThreadPost));
+await check("control: a name cleaner that keeps bidi overrides is caught", () => {
+  assert.throws(() => namesSafe((x) => String(x).trim(), t.parseThreadPost, t.encodeThreadPost));
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
