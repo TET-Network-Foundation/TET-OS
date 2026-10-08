@@ -91,7 +91,8 @@ export async function memberLeaves(baseUrl: string, members: string[]): Promise<
   const leaves: Uint8Array[] = [];
   for (const id of ids) {
     const r = await fetchJson(baseUrl, `/tmail/anon/commitment/${id}`);
-    if (r.status !== 200 || typeof r.json?.commitment_hex !== "string") throw new Error(`${id.slice(0, 8)}… is not a registered member`);
+    if (r.status === 404) throw new Error(`${id.slice(0, 8)}… is not a registered member`);
+    if (r.status !== 200 || typeof r.json?.commitment_hex !== "string") throw new Error(`couldn't read the member list from the node (HTTP ${r.status}); try again in a minute`);
     leaves.push(fromHex(r.json.commitment_hex as string));
   }
   return leaves;

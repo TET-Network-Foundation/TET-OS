@@ -14203,3 +14203,40 @@ fn a_members_only_poll_refuses_the_anonymity_set_root() {
     assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &pid, &poll_root, day + 1, day + 1), "another day");
     assert!(crate::tmail::anon::anon_root_accepted_for(&store, &plain_receiver, &global, day, day), "other receivers are unaffected");
 }
+
+/// **SECURITY REGRESSION GUARD: a ballot that isn't stored doesn't use up the vote.** The poll gate
+/// claims the ballot's nullifier, so it runs only after every other reason to refuse (a full
+/// buffer here refuses with `Full`, before the gate), and a write that fails after the claim gives
+/// the nullifier back. A release frees only the claim made by that same message.
+/// Negative controls (run by hand): the gate moved back before the capacity check → FAILED;
+/// release made a no-op → FAILED.
+#[test]
+fn a_ballot_that_is_not_stored_does_not_use_up_the_vote() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &[], day)).unwrap();
+
+    // Fill the buffer, then send a ballot: refused as Full, before the gate could claim anything.
+    let (sw, sid) = tmail_party_for_tests();
+    let (_rw, plain) = tmail_party_for_tests();
+    store.store_tmail(&signed_tmail_env_for_tests(&sw, &sid, &plain, "filler", tmail_flags_for_tests(false), None)).unwrap();
+    let _cap = EnvVarGuard::set("TET_TMAIL_MAX_ENTRIES", "1");
+    let (ew, eid) = tmail_party_for_tests();
+    let ballot = anon_env_with_nullifier_for_tests(&ew, &eid, &pid, [5u8; 32], "ballot-full", tmail_now_ms_for_tests());
+    match store.store_tmail(&ballot) {
+        Err(crate::tmail::store::TmailStoreError::Full(_)) => {}
+        other => panic!("a full buffer must refuse before the poll gate runs: {other:?}"),
+    }
+
+    // Release frees only this message's claim.
+    let n = hex::encode([5u8; 32]);
+    assert_eq!(store.claim_anon_nullifier(&n, "msg-a").unwrap(), true);
+    store.release_anon_nullifier(&n, "msg-b");
+    assert_eq!(store.claim_anon_nullifier(&n, "msg-c").unwrap(), false, "someone else's release freed the claim");
+    store.release_anon_nullifier(&n, "msg-a");
+    assert_eq!(store.claim_anon_nullifier(&n, "msg-c").unwrap(), true, "the vote stayed used up");
+}

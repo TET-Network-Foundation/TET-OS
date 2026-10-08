@@ -292,11 +292,6 @@ impl TmailStore {
         if self.by_msg_id.contains_key(msg_id.as_bytes())? {
             return Ok(false);
         }
-        // A poll's wallet stores only anonymous ballots this node verified (tmail/poll.rs), so junk
-        // can't crowd real ballots out. Gossip and REST both come through here.
-        if poll_gate && self.get_poll_root(&receiver).is_some() {
-            self.poll_ballot_gate(env).map_err(TmailStoreError::PollBallot)?;
-        }
         // Capacity guard: reap expired first, then reject if still at the cap.
         let max = Self::max_entries();
         if self.by_receiver.len() >= max {
@@ -307,9 +302,26 @@ impl TmailStore {
         }
         let val = serde_json::to_vec(env).map_err(|e| TmailStoreError::Serde(e.to_string()))?;
         let key = receiver_index_key(&receiver, env.sent_at_ms, msg_id);
-        self.by_receiver.insert(key, val)?;
-        self.by_msg_id
-            .insert(msg_id.as_bytes(), receiver.as_bytes())?;
+        // A poll's wallet stores only anonymous ballots this node verified (tmail/poll.rs), so junk
+        // can't crowd real ballots out. Gossip and REST both come through here. Checked after
+        // everything that can refuse for other reasons, because it claims the ballot's nullifier.
+        let claimed = if poll_gate && self.get_poll_root(&receiver).is_some() {
+            Some(self.poll_ballot_gate(env).map_err(TmailStoreError::PollBallot)?)
+        } else {
+            None
+        };
+        let written = self
+            .by_receiver
+            .insert(key, val)
+            .and_then(|_| self.by_msg_id.insert(msg_id.as_bytes(), receiver.as_bytes()));
+        if let Err(e) = written {
+            // Not stored: give the nullifier back, or the member's vote is lost (a resend would be
+            // refused as a replay).
+            if let Some(nullifier) = claimed {
+                self.release_anon_nullifier(&nullifier, msg_id);
+            }
+            return Err(e.into());
+        }
         // Retention is applied at write time so the store never holds more than the rule allows,
         // even if nothing ever calls `GET /tmail/inbox`. Enforcing it only on read would make the
         // cap a display convention again -- exactly what S7-0 exists to stop being true.
@@ -837,7 +849,7 @@ impl TmailStore {
 
     /// A poll's wallet takes an envelope only if it's an anonymous ballot whose receipt is here and
     /// verifies now. The verdict is recorded (and the nullifier claimed) on the way.
-    fn poll_ballot_gate(&self, env: &TmailEnvelopeV1) -> Result<(), String> {
+    fn poll_ballot_gate(&self, env: &TmailEnvelopeV1) -> Result<String, String> {
         let Some(anon) = env.anonymous.as_ref().filter(|_| env.flags.anonymous) else {
             return Err("it takes only anonymous ballots".into());
         };
@@ -845,9 +857,9 @@ impl TmailStore {
             return Err("a ballot's proof receipt must be deposited first".into());
         };
         match crate::tmail::anon::verify_anonymous_proof(self, env, &receipt) {
-            v @ AnonVerdict::Verified { .. } => {
-                let _ = self.set_anon_verdict(env.msg_id.trim(), &v);
-                Ok(())
+            AnonVerdict::Verified { nullifier_hex, verified_at_ms } => {
+                let _ = self.set_anon_verdict(env.msg_id.trim(), &AnonVerdict::Verified { nullifier_hex: nullifier_hex.clone(), verified_at_ms });
+                Ok(nullifier_hex)
             }
             AnonVerdict::Failed { reason, .. } => Err(format!("ballot refused: {reason}")),
             other => Err(format!("ballot not verified: {other:?}")),
@@ -1147,6 +1159,13 @@ impl TmailStore {
     ///
     /// Re-claiming for the same `msg_id` is idempotent, so a duplicate delivery of one message does
     /// not look like a replay.
+    /// Undo [`Self::claim_anon_nullifier`] for a message that wasn't stored after all. Only the
+    /// claim by this `msg_id` is removed; anyone else's stands.
+    pub fn release_anon_nullifier(&self, nullifier_hex: &str, msg_id: &str) {
+        let key = nullifier_hex.trim().to_ascii_lowercase();
+        let _ = self.anon_nullifiers.compare_and_swap(key.as_bytes(), Some(msg_id.trim().as_bytes()), None as Option<&[u8]>);
+    }
+
     pub fn claim_anon_nullifier(
         &self,
         nullifier_hex: &str,
