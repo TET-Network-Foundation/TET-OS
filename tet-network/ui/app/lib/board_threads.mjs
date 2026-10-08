@@ -44,11 +44,16 @@ export function checkThreadTitle(title) {
   return { ok: true, title: t };
 }
 
-/** The plaintext for a post in a thread; `title` only when opening it. */
 /** The most characters a display name holds. */
 export const NAME_MAX = 32;
-const NAME_RE = /^name: (.*)$/;
-const RESERVED = /\bid\b|anonymous|verified|named|no name|proof|名無し|匿名|記名|検証|無名|具名|證明|証明/i;
+// The rest of the line, whatever it holds (cleanName decides what's shown), so a raw name line
+// can't be read one way here and another way by the cleaner.
+const NAME_RE = /^name: ([^\n]*)$/;
+const RESERVED = /\bid\b|anonymous|verified|named|noname|no name|proof|名無し|匿名|記名|検証|無名|具名|證明|証明/i;
+/** Cyrillic and Greek letters that look like Latin ones (and O/o like 0), for the skeleton check. */
+const LOOKALIKE = Object.fromEntries(
+  [..."аеорсухіјѕԁԛԝАВЕКМНОРСТХІЈЅοΟνΑΒΕΖΗΙΚΜΝΡΤΥΧ"].map((c, i) => [c, "aeopcyxijsdqwABEKMHOPCTXIJSoOvABEZHIKMNPTYX"[i]]),
+);
 
 /**
  * A display name as shown: trimmed, without control or bidi-override characters (which could make
@@ -63,8 +68,13 @@ export function cleanName(raw) {
     .replace(/\s+/g, " ")
     .trim();
   const name = [...s].slice(0, NAME_MAX).join("");
-  // A name that could pass for an ID or a status label is no name.
-  if (/[0-9a-f]{6,}/i.test(name.replace(/[\s:：]/g, "")) || RESERVED.test(name)) return "";
+  // A name that could pass for an ID or a status label is no name: checked on its skeleton (no
+  // spaces or punctuation, look-alike Cyrillic and Greek letters read as Latin), and a name that
+  // mixes Latin with Cyrillic or Greek letters is refused outright (the usual look-alike trick).
+  const latin = /\p{Script=Latin}/u.test(name);
+  if (latin && /[\p{Script=Cyrillic}\p{Script=Greek}]/u.test(name)) return "";
+  const skeleton = [...name.replace(/[\s\p{P}\p{S}]/gu, "")].map((c) => LOOKALIKE[c] ?? c).join("");
+  if (/[0-9a-f]{6,}/i.test(skeleton) || RESERVED.test(skeleton) || RESERVED.test(name)) return "";
   return name;
 }
 
