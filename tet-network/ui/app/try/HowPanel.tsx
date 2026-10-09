@@ -204,12 +204,15 @@ export default function HowPanel(props: { go: LandingGo }) {
         <h2 className={H}>{t("FAQ")}</h2>
         <p>{t("Testnet TET is a practice unit. It has no monetary value and cannot be bought.")}</p>
         <p className="mt-1">{t("This is a testnet. Data may be reset.")}</p>
+        <h3 className="mt-3 font-semibold">{t("AI and TET")}</h3>
+        <p>{t("Members-only spaces are encrypted; public pages opt out of AI training crawlers that respect robots.txt.")}</p>
+        <p className="mt-1">{t("That opt-out is a request: crawlers that ignore robots.txt, or don't say who they are, aren't stopped by it. Anything public (blocks, transactions, public boards, published marks) can be read by anyone who runs a node, AI included. Only the members-only spaces are out of reach, because they're end-to-end encrypted.")}</p>
       </div>
 
       {/* 9: about */}
       <div>
         <h2 className={H}>{t("About")}</h2>
-        <p>{t("Built and run by Steve, a student in Switzerland.")}</p>
+        <p>{t("Built by Steve.")}</p>
         <p className="mt-1">
           <a className={cx(LINK, MONO, "text-[14px]")} href="mailto:tetsteve@proton.me">
             tetsteve@proton.me

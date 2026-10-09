@@ -3,7 +3,7 @@
  *
  * Suite (must match `e2ee.rs` exactly):
  *   - X25519 key agreement (sender ephemeral SK ✕ receiver static PK)
- *   - ML-KEM-768 / Kyber768 (round-3, PQClean-derived) encapsulation against the receiver PK
+ *   - Kyber-768 (round 3, PQClean-derived; not FIPS 203 ML-KEM) encapsulation against the receiver PK
  *   - HKDF-SHA256(ikm = x25519_shared ‖ mlkem_shared, salt = 32 zero bytes, info = "tet-e2ee-hybrid-v1") → 32-byte key
  *   - ChaCha20-Poly1305 AEAD, 12-byte nonce, no AAD
  *
@@ -40,7 +40,7 @@ export type CiphertextBundle = {
   /** Sender ephemeral X25519 public key (32 bytes). */
   client_ephemeral_pub: Uint8Array;
   /**
-   * Unused for the sender→receiver direction (shared secret uses the receiver's ML-KEM key). Kept
+   * Unused for the sender→receiver direction (shared secret uses the receiver's Kyber key). Kept
    * for byte-symmetry with `e2ee.rs` response flows; always zero-length here.
    */
   client_mlkem_pub: Uint8Array;
@@ -67,7 +67,7 @@ function deriveKeyHybrid(x25519Shared: Uint8Array, mlkemShared: Uint8Array): Uin
 }
 
 /**
- * Encrypt `plaintext` for a receiver given their registered static X25519 + ML-KEM-768 public keys.
+ * Encrypt `plaintext` for a receiver given their registered static X25519 + Kyber-768 (round 3) public keys.
  * Generates a fresh ephemeral X25519 keypair and a fresh Kyber768 encapsulation per call.
  */
 export async function encryptForReceiver(
@@ -79,7 +79,7 @@ export async function encryptForReceiver(
     throw new Error(`receiver x25519 pub must be ${X25519_PUB_LEN} bytes`);
   }
   if (receiver_mlkem_pub.length !== MLKEM768_PUB_LEN) {
-    throw new Error(`receiver ML-KEM-768 pub must be ${MLKEM768_PUB_LEN} bytes`);
+    throw new Error(`receiver Kyber-768 pub must be ${MLKEM768_PUB_LEN} bytes`);
   }
 
   const ephemeralSk = randomBytes(X25519_SK_LEN);
@@ -111,7 +111,7 @@ export type CiphertextBundleForDecrypt = {
 };
 
 /**
- * Decrypt a {@link CiphertextBundle} with the receiver's static X25519 + ML-KEM-768 secret keys.
+ * Decrypt a {@link CiphertextBundle} with the receiver's static X25519 + Kyber-768 (round 3) secret keys.
  * Throws if the Poly1305 tag fails (wrong recipient or tampered ciphertext).
  */
 export async function decryptForReceiver(

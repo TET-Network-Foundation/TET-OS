@@ -507,6 +507,26 @@ jobs:
         name: try page — plain words on everyday pages
         run: node scripts/try_plain_guard.mjs
 
+      # Tmail's KEM is Kyber-768 Round 3, not FIPS 203 ML-KEM: no unqualified "ML-KEM" claim in the
+      # UI, tet-core or docs. Control.
+      - if: needs.gate.outputs.code == 'true'
+        name: wording — Tmail KEM is Kyber Round 3, never called ML-KEM
+        run: node scripts/kem_wording_guard.mjs
+
+      # Founder's rule: nothing next to "Steve"/"founder" says student, age, school, town or country.
+      - if: needs.gate.outputs.code == 'true'
+        name: wording — no personal details about the founder
+        run: node scripts/founder_privacy_guard.mjs
+
+      # AI access policy: robots.txt and Caddy's 403 come from deploy/ai-crawlers.txt; never "AI
+      # cannot access TET" / "AI-free guaranteed"; the FAQ says the honest limits. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: AI access policy — crawler list in sync
+        run: node scripts/ai_crawlers_guard.mjs
+      - if: needs.gate.outputs.code == 'true'
+        name: wording — no absolute "AI can't access" claims
+        run: node scripts/try_ai_wording_guard.mjs
+
       # The "Inside" page: retention shown only from the node's settings (the Rust test checks those
       # against the config), counts with the time they were read. Controls.
       - if: needs.gate.outputs.code == 'true'

@@ -155,6 +155,18 @@ if docker info >/dev/null 2>&1; then
   expect GET    "//tet-node-api/status" 400
   expect GET    "/tet-node-api/files/fetch/%252e%252e" 400
   expect GET    /try/anything 404
+  # Rule 6: AI training crawlers (deploy/ai-crawlers.txt) get 403; robots.txt stays readable to
+  # them; search crawlers and browsers pass. Control: a browser user agent is served.
+  ua() {  # USER-AGENT PATH WANT
+    local got; got=$(curl -s -o /dev/null -w "%{http_code}" -A "$1" "http://127.0.0.1:18080$2")
+    if [ "$got" = "$3" ]; then pass "caddy: UA '$1' $2 → $3"; else flunk "caddy: UA '$1' $2 → $3" "got $got"; fi
+  }
+  ua "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" /try 403
+  ua "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)" /tet-node-api/status 403
+  ua "CCBot/2.0 (https://commoncrawl.org/faq/)" /try 403
+  ua "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" /robots.txt 200
+  ua "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" /try 200
+  ua "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15" /try 200
   # Rule 5: no client address in any log. A failed upstream makes Caddy log the whole request as an
   # error; the entry must exist and hold no address, no forwarding header and not the marker.
   # Control: the same request through the Caddyfile without its log filter does show the client,

@@ -540,7 +540,7 @@ export default function NexusOS() {
         if (cancelled) return;
         const r = await putTmailKeys(baseUrl, wid, reg);
         if (!cancelled && r.ok) {
-          appendLedger(["[Tmail] Messaging keys registered (X25519 + ML-KEM-768)."]);
+          appendLedger(["[Tmail] Messaging keys registered (X25519 + Kyber-768 round 3)."]);
         }
       } catch {
         // ignore (offline / CORS) — Status section offers a manual Register button.

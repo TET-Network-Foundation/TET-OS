@@ -33,7 +33,7 @@
 | `hardware_id_hex` | `String` | **yes** (heartbeat) | Opaque hardware fingerprint string. Empty → `WORKER_REGISTER_REJECTED` / `"hardware_id_hex required"` (`worker_network.rs:65-67`). |
 | `ed25519_pubkey_hex` | `String` | **yes** | Advertised Ed25519 pubkey (hex). Empty → reject (`worker_network.rs:69-71`). **Not cross-checked** against `wallet` in register handler. |
 | `x25519_pubkey_b64` | `Option<String>` | no | E2EE worker key (base64). Stored if non-empty (`worker_network.rs:78-81`). |
-| `mlkem_pubkey_b64` | `Option<String>` | no | ML-KEM pub for E2EE jobs. Required later for `/v1/compute_e2ee/submit` (`worker.rs:182-187`). |
+| `mlkem_pubkey_b64` | `Option<String>` | no | Kyber-768 (round 3) public key for E2EE jobs (the `mlkem` name is legacy; not FIPS 203 ML-KEM). Required later for `/v1/compute_e2ee/submit` (`worker.rs:182-187`). |
 | `tflops_est` | `Option<f64>` | no | Self-reported TFLOPS; default **1.0** if omitted (`worker.rs:99`). Clamped `>= 0` (`worker_network.rs:86`). |
 
 ### Response schema

@@ -14,7 +14,7 @@ const REPO = "https://github.com/TET-Network-Foundation/TET-OS";
 /** Bitcoin, Ethereum and TET side by side. True claims only; never "first". */
 export const ROWS: [string, string, string, string][] = [
   ["Purpose", "Digital money", "A platform for smart contracts", "Checking who made something, and when"],
-  ["Post-quantum signatures today", "No (proposals are under discussion)", "No (on the research roadmap)", "Yes: every transaction is signed with ML-DSA-44 as well as Ed25519"],
+  ["Post-quantum signatures today", "No (proposals are under discussion)", "No (on the research roadmap)", "Partly: every transaction also carries an ML-DSA-44 signature, but the wallet ID is still the Ed25519 key until Phase 1"],
   ["Anonymous one-person-one-vote", "No", "Not built in (apps such as MACI add it)", "Built in: members-only polls, one vote per member"],
   ["Everyday interface", "Wallet apps from other projects", "Wallets and apps from other projects", "Built in: boards, signing and polls in the browser"],
   ["Energy", "Proof of work: high", "Proof of stake since 2022: low", "One block producer, no mining: low"],
@@ -61,6 +61,7 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
       <h2 className={H}>{t("Why it's needed now")}</h2>
       <p>{t("Text, pictures and voices can now be generated in seconds, so \"who made this, and when?\" is harder to answer than it used to be. A signature answers part of it: it shows which key signed exactly these bytes.")}</p>
       <p className="mt-2">{t("The signatures most systems use today (ECDSA, Ed25519) could be forged by a large enough quantum computer, if one is ever built. Signatures are meant to be checked for years, so TET adds a quantum-resistant signature from the start.")}</p>
+      <p className="mt-2">{t("Today that protection is incomplete: your ID is still your Ed25519 key, and the ML-DSA-44 key isn't bound to it until the Phase 1 genesis.")}</p>
 
       <h2 className={H}>{t("What works today")}</h2>
       <ul>
@@ -122,7 +123,7 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
           </tbody>
         </table>
       </div>
-      <p className="mt-2">{t("TET isn't the only network with post-quantum signatures: QRL and others already use them. What TET adds is the combination: quantum-resistant signatures, anonymous one-person-one-vote and an everyday interface, in one network.")}</p>
+      <p className="mt-2">{t("TET isn't the only network with post-quantum signatures: QRL and others already use them. What TET adds is the combination: quantum-resistant signatures (complete once Phase 1 binds them to your ID), anonymous one-person-one-vote and an everyday interface, in one network.")}</p>
       <p className="mt-2">{t("Messages, files and boards are not written to the chain. They stay on nodes for a limited time; the chain holds keys and proofs, not your content.")}</p>
 
       <h2 className={H}>{t("Where TET is weaker today")}</h2>

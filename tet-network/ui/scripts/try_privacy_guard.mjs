@@ -116,7 +116,8 @@ export const VOUCH_OVERCLAIM = new RegExp(
 function vouchOverclaims(list) {
   const found = [];
   for (const [path, text] of list) {
-    if (path === "tet-network/ui/scripts/try_privacy_guard.mjs") continue;
+    // Guards' own controls quote the banned phrases on purpose.
+    if (path === "tet-network/ui/scripts/try_privacy_guard.mjs" || path === "tet-network/ui/scripts/try_ai_wording_guard.mjs") continue;
     text.split("\n").forEach((line, i) => {
       const m = VOUCH_OVERCLAIM.exec(line);
       if (m && !DENIAL.test(line.slice(0, m.index))) found.push(`${path}:${i + 1}: ${line.trim().slice(0, 120)}`);

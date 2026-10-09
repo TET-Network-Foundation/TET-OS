@@ -2,7 +2,7 @@
  * Deterministic Tmail KEM key derivation + key-registration builder.
  *
  * The same BIP39 mnemonic that backs the wallet's Ed25519 / ML-DSA identity also derives a pair of
- * messaging KEM keys (X25519 + ML-KEM-768) via HKDF-SHA256 with distinct `info` labels. The derived
+ * messaging KEM keys (X25519 + Kyber-768 round 3; the `mlkem` names are legacy, it is not FIPS 203 ML-KEM) via HKDF-SHA256 with distinct `info` labels. The derived
  * public keys are published through `PUT /tmail/keys/:wallet_id` (a hybrid-signed
  * `TmailKeyRegistrationV1`, mirroring tet-core `src/tmail/keys.rs`).
  */
@@ -23,7 +23,7 @@ import type { TmailHybridSig } from "./tmail";
 
 /** HKDF `info` for the X25519 messaging secret key (32-byte output). */
 const X25519_INFO = new TextEncoder().encode("tet-tmail-x25519-v1");
-/** HKDF `info` for the ML-KEM-768 deterministic key-derivation seed (64-byte output). */
+/** HKDF `info` for the Kyber-768 deterministic key-derivation seed (64-byte output). */
 const MLKEM_INFO = new TextEncoder().encode("tet-tmail-mlkem-v1");
 
 /** Raw derived messaging keys (held only in memory for the unlocked tab session). */
@@ -39,7 +39,7 @@ function normalizeMnemonic(mnemonic: string): string {
 }
 
 /**
- * Derive the wallet's X25519 + ML-KEM-768 messaging keypairs deterministically from its mnemonic.
+ * Derive the wallet's X25519 + Kyber-768 (round 3) messaging keypairs deterministically from its mnemonic.
  * Re-running with the same mnemonic always yields the same keys (so a re-unlock keeps the inbox
  * decryptable). The KEM keypair is independent of the wallet's Ed25519 / ML-DSA signing keys.
  */
@@ -95,7 +95,7 @@ export function tmailKeyRegistrationAuthMessageBytes(opts: {
 /**
  * Build a hybrid-signed {@link TmailKeyRegistrationV1} for the unlocked wallet. The Ed25519 signer
  * (= `wallet_id`) and the ML-DSA keypair come from the active hybrid signer session; the X25519 /
- * ML-KEM public keys come from {@link deriveTmailKeysFromMnemonic}.
+ * Kyber public keys come from {@link deriveTmailKeysFromMnemonic}.
  */
 export async function buildTmailKeyRegistrationV1(opts: {
   x25519_pub: Uint8Array;
