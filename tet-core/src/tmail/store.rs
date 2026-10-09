@@ -37,6 +37,28 @@ const TREE_ANON_VERDICT: &str = "tmail_anon_verdict_v1";
 const TREE_ANON_RECEIPTS: &str = "tmail_anon_receipts_v1";
 /// Nullifiers already seen, so one member cannot publish two ephemerals per (receiver, bucket).
 const TREE_ANON_NULLIFIERS: &str = "tmail_anon_nullifiers_v1";
+/// Fast anonymous posting (docs/plans/FAST_ANON_POSTING.md): `receiver|bucket|posting key` →
+/// [`FastKey`], written when a post whose proof verified registers its posting key.
+const TREE_ANON_FAST_KEYS: &str = "tmail_anon_fast_keys_v1";
+/// `receiver|bucket|posting key|msg_id` → arrival ms, for fast posts that arrived (by gossip) before
+/// their key's registration verified here. Bounded; see [`FAST_PENDING_PER_KEY`].
+const TREE_ANON_FAST_PENDING: &str = "tmail_anon_fast_pending_v1";
+/// `receiver|bucket|posting key` → msg_id of a registering post (one with a proof) that is stored
+/// here but not yet verified. A gossiped fast post is held only while one exists.
+const TREE_ANON_FAST_REGPENDING: &str = "tmail_anon_fast_regpending_v1";
+
+/// Fast posts per posting key: a burst, then one per refill interval (an invisible flood guard;
+/// the page paces posts so normal conversation never meets it), and a daily cap.
+pub const FAST_BURST: f64 = 5.0;
+pub const FAST_REFILL_MS: u64 = 3_000;
+pub const FAST_DAILY_CAP: u32 = 200;
+/// Gossiped fast posts held before their registration verifies here: per key, in all, and for how long.
+pub const FAST_PENDING_PER_KEY: usize = 50;
+pub const FAST_PENDING_TOTAL: usize = 5_000;
+pub const FAST_PENDING_TTL_MS: u64 = 10 * 60 * 1000;
+/// One daily ID's share of a board's anonymous posts (of [`ANON_RETAIN_PER_RECEIVER`]), so one
+/// member posting fast can't push everyone else off a board. Its own oldest go first.
+pub const ANON_RETAIN_PER_DAILY_ID: usize = 20;
 
 /// Cap on cached receipts. Each is ~250 KiB, so this is the one Tmail structure where size, not
 /// count, is the binding constraint: 2,000 × 250 KiB ≈ 500 MB.
@@ -144,6 +166,8 @@ pub enum TmailStoreError {
     KeyVerify(String),
     #[error("this wallet is a poll: {0}")]
     PollBallot(String),
+    #[error("fast anonymous post: {0}")]
+    FastPost(String),
 }
 
 pub struct TmailStore {
@@ -156,6 +180,12 @@ pub struct TmailStore {
     anon_nullifiers: sled::Tree,
     /// Members-only poll roots, by poll wallet (tmail/poll.rs). Immutable once set.
     poll_roots: sled::Tree,
+    fast_keys: sled::Tree,
+    fast_pending: sled::Tree,
+    fast_regpending: sled::Tree,
+    /// Per posting key: (tokens, last refill ms, UTC day, posts that day). In memory: a restart
+    /// refills the burst, which the per-address limits still bound.
+    fast_flood: std::sync::Mutex<std::collections::HashMap<String, (f64, u64, u64, u32)>>,
     /// Memoised `(epoch, root)`. Purely a cache — a miss is recomputed from the registry, so
     /// losing it (restart, eviction, flood) costs time and never acceptance.
     anon_roots: std::sync::Mutex<Vec<(u64, [u8; 32])>>,
@@ -220,12 +250,51 @@ fn retain_per_conversation() -> usize {
     env_usize("TET_TMAIL_RETAIN_PER_CONVERSATION", RETAIN_PER_CONVERSATION)
 }
 
+fn anon_retain_per_daily_id() -> usize {
+    env_usize("TET_TMAIL_ANON_RETAIN_PER_DAILY_ID", ANON_RETAIN_PER_DAILY_ID)
+}
+
 fn anon_retain_per_receiver() -> usize {
     env_usize("TET_TMAIL_ANON_RETAIN_PER_RECEIVER", ANON_RETAIN_PER_RECEIVER)
 }
 
 fn is_anonymous(env: &TmailEnvelopeV1) -> bool {
     env.anonymous.is_some()
+}
+
+/// An anonymous post without a proof of its own: valid only for a registered posting key.
+pub fn is_fast_post(env: &TmailEnvelopeV1) -> bool {
+    env.anonymous.as_ref().is_some_and(|a| a.anchor_proof.is_none())
+}
+
+fn fast_key(receiver: &str, bucket: u64, posting_key: &str) -> String {
+    format!("{}|{bucket:020}|{}", receiver.trim().to_ascii_lowercase(), posting_key.trim().to_ascii_lowercase())
+}
+
+/// A posting key's registration: the nullifier its proof carried (the daily ID's source).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct FastKey {
+    pub nullifier_hex: String,
+    pub registered_at_ms: u64,
+    pub by_msg_id: String,
+}
+
+/// Why a fast post was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FastSendError {
+    /// Not an anonymous post without a proof.
+    NotFast,
+    /// A poll takes only ballots with their own proof.
+    Poll,
+    /// Posting keys are per UTC day; this post is dated another day.
+    WrongDay,
+    /// No post with a verified proof has registered this key for this board today.
+    NotRegistered,
+    /// The invisible flood guard: posted faster than a person types. Try again in a moment.
+    Busy,
+    /// The day's cap for this key.
+    DailyCap,
+    Store(String),
 }
 
 /// Conversation key for an inbox entry (Appendix K.3, Phase 0 flat threads): the counterparty.
@@ -236,10 +305,20 @@ fn is_anonymous(env: &TmailEnvelopeV1) -> bool {
 /// first. A nullifier is one per (member, receiver, day), which is the closest thing to a
 /// counterparty an anonymous sender has. Anonymous mail is bounded per receiver instead, by
 /// [`ANON_RETAIN_PER_RECEIVER`].
-fn conversation_key(env: &TmailEnvelopeV1) -> String {
-    if is_anonymous(env) {
-        let id = crate::tmail::envelope::anonymous_nullifier_hex(env)
-            .unwrap_or_else(|| format!("msg:{}", env.msg_id.trim()));
+///
+/// A post with a proof is keyed by its proof's nullifier, as always. A **fast post** (no proof;
+/// docs/plans/FAST_ANON_POSTING.md) is keyed by the nullifier of the post that registered its posting
+/// key, or, while that one is still being checked here, of the registering post waiting here. So
+/// all of one member's posts on one board on one day are one group, which holds
+/// [`ANON_RETAIN_PER_DAILY_ID`].
+fn conversation_key_with(env: &TmailEnvelopeV1, fast_nullifier: impl FnOnce() -> Option<String>) -> String {
+    if let Some(anon) = env.anonymous.as_ref() {
+        let id = if anon.anchor_proof.is_some() {
+            crate::tmail::envelope::anonymous_nullifier_hex(env)
+        } else {
+            fast_nullifier()
+        }
+        .unwrap_or_else(|| format!("msg:{}", env.msg_id.trim()));
         return format!("anonymous:{id}");
     }
     env.sender_wallet_id.trim().to_ascii_lowercase()
@@ -265,6 +344,10 @@ impl TmailStore {
             anon_receipts: db.open_tree(TREE_ANON_RECEIPTS)?,
             anon_nullifiers: db.open_tree(TREE_ANON_NULLIFIERS)?,
             poll_roots: db.open_tree(TREE_POLL_ROOTS)?,
+            fast_keys: db.open_tree(TREE_ANON_FAST_KEYS)?,
+            fast_pending: db.open_tree(TREE_ANON_FAST_PENDING)?,
+            fast_regpending: db.open_tree(TREE_ANON_FAST_REGPENDING)?,
+            fast_flood: std::sync::Mutex::new(std::collections::HashMap::new()),
             anon_roots: std::sync::Mutex::new(Vec::new()),
             anon_send_lock: std::sync::Mutex::new(()),
         })
@@ -280,6 +363,11 @@ impl TmailStore {
     /// already present (idempotent duplicate). Callers MUST have run
     /// [`crate::tmail::envelope::verify_tmail_envelope_v1`] first.
     pub fn store_tmail(&self, env: &TmailEnvelopeV1) -> Result<bool, TmailStoreError> {
+        // A fast post (anonymous, no proof) is stored only through `send_fast_anonymous` /
+        // `receive_fast_anonymous`, which check its posting key's registration first.
+        if is_fast_post(env) {
+            return Err(TmailStoreError::FastPost("a fast post needs a registered posting key".into()));
+        }
         self.store_tmail_inner(env, true)
     }
 
@@ -336,7 +424,7 @@ impl TmailStore {
         // Retention is applied at write time so the store never holds more than the rule allows,
         // even if nothing ever calls `GET /tmail/inbox`. Enforcing it only on read would make the
         // cap a display convention again -- exactly what S7-0 exists to stop being true.
-        self.enforce_retention(&receiver, &conversation_key(env))?;
+        self.enforce_retention(&receiver, &self.conversation_key(env))?;
         if is_anonymous(env) {
             self.enforce_anonymous_cap(&receiver)?;
         }
@@ -406,7 +494,8 @@ impl TmailStore {
         if self.is_pinned(&receiver, &counterparty) {
             return Ok(0);
         }
-        let keep = retain_per_conversation();
+        // One daily ID's share of the board's anonymous posts; named conversations keep theirs.
+        let keep = if counterparty.starts_with("anonymous:") { anon_retain_per_daily_id() } else { retain_per_conversation() };
 
         // (sent_at_ms, key, msg_id, expire_at) for this conversation, newest first.
         let mut rows: Vec<(u64, Vec<u8>, String, u64)> = Vec::new();
@@ -415,7 +504,7 @@ impl TmailStore {
             let Ok(env) = serde_json::from_slice::<TmailEnvelopeV1>(&v) else {
                 continue;
             };
-            if conversation_key(&env) != counterparty {
+            if self.conversation_key(&env) != counterparty {
                 continue;
             }
             let expire_at = env.sent_at_ms.saturating_add(effective_ttl_ms(env.ttl_ms));
@@ -508,9 +597,10 @@ impl TmailStore {
             }
             // Iteration is newest-first, so the first `keep` seen per conversation are the ones
             // retention would have kept.
-            let counterparty = conversation_key(&env);
+            let counterparty = self.conversation_key(&env);
+            let keep_here = if counterparty.starts_with("anonymous:") { anon_retain_per_daily_id() } else { keep };
             let slot = per_conversation.entry(counterparty.clone()).or_insert(0);
-            if *slot >= keep && !self.is_pinned(&receiver, &counterparty) {
+            if *slot >= keep_here && !self.is_pinned(&receiver, &counterparty) {
                 continue;
             }
             if is_anonymous(&env) {
@@ -878,7 +968,12 @@ impl TmailStore {
         let Some(anon) = env.anonymous.as_ref().filter(|_| env.flags.anonymous) else {
             return Err("it takes only anonymous ballots".into());
         };
-        let Some(receipt) = self.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex) else {
+        // One proof, one ballot: a poll never takes a fast post (no proof of its own), or a member
+        // with a registered posting key could vote again and again.
+        let Some(proof) = anon.anchor_proof.as_ref() else {
+            return Err("a ballot needs its own membership proof".into());
+        };
+        let Some(receipt) = self.get_anon_receipt(&proof.receipt_sha256_hex) else {
             return Err("a ballot's proof receipt must be deposited first".into());
         };
         match crate::tmail::anon::verify_anonymous_proof(self, env, &receipt) {
@@ -1217,6 +1312,27 @@ impl TmailStore {
         // node's view of the registry, so that one is deleted WITHOUT a tombstone: if the post is
         // genuine and arrives again once this node knows the root, it can still be checked and kept.
         // (Keeping it instead would let anyone post with a proof against a tree they made up.)
+        // Fast posting: a post WITH a proof registers its posting key once the proof verifies here,
+        // and the fast posts waiting here for it follow its verdict.
+        if let Some(env) = self.get_by_msg_id(msg_id)
+            && let Some(anon) = env.anonymous.as_ref()
+            && anon.anchor_proof.is_some()
+        {
+            let k = fast_key(&env.receiver_wallet_id, nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms), &anon.ephemeral_wallet_id);
+            match verdict {
+                AnonVerdict::Pending => {
+                    let _ = self.fast_regpending.insert(k.as_bytes(), msg_id.trim().as_bytes());
+                }
+                AnonVerdict::Verified { nullifier_hex, .. } => {
+                    let _ = self.fast_regpending.remove(k.as_bytes());
+                    self.register_fast_key(&env, &k, nullifier_hex);
+                }
+                AnonVerdict::Failed { reason, .. } => {
+                    let _ = self.fast_regpending.remove(k.as_bytes());
+                    self.drop_fast_pending(&k, failure_is_definitive(reason));
+                }
+            }
+        }
         if let AnonVerdict::Failed { reason, .. } = verdict {
             if failure_is_definitive(reason) {
                 self.delete_by_msg_id(msg_id)?;
@@ -1225,6 +1341,210 @@ impl TmailStore {
             }
         }
         Ok(())
+    }
+
+    // ── Fast anonymous posting (docs/plans/FAST_ANON_POSTING.md) ─────────────────────────────
+
+    /// The group an inbox entry belongs to (see [`conversation_key_with`]).
+    fn conversation_key(&self, env: &TmailEnvelopeV1) -> String {
+        conversation_key_with(env, || {
+            let anon = env.anonymous.as_ref()?;
+            let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
+            if let Some(reg) = self.fast_registration(&env.receiver_wallet_id, bucket, &anon.ephemeral_wallet_id) {
+                return Some(reg.nullifier_hex);
+            }
+            let k = fast_key(&env.receiver_wallet_id, bucket, &anon.ephemeral_wallet_id);
+            let reg_msg = self.fast_regpending.get(k.as_bytes()).ok().flatten()?;
+            let reg_env = self.get_by_msg_id(&String::from_utf8_lossy(&reg_msg))?;
+            crate::tmail::envelope::anonymous_nullifier_hex(&reg_env)
+        })
+    }
+
+    /// A post whose proof verified here registers its posting key for its board and day, and the
+    /// fast posts waiting for it are verified with its nullifier. Never for polls (one proof, one
+    /// ballot). The first registration of a key stands.
+    fn register_fast_key(&self, env: &TmailEnvelopeV1, k: &str, nullifier_hex: &str) {
+        if self.get_poll_root(&env.receiver_wallet_id.trim().to_ascii_lowercase()).is_some() {
+            return;
+        }
+        let now = now_ms();
+        if self.fast_keys.get(k.as_bytes()).ok().flatten().is_none() {
+            let reg = FastKey { nullifier_hex: nullifier_hex.to_string(), registered_at_ms: now, by_msg_id: env.msg_id.trim().to_string() };
+            if let Ok(v) = serde_json::to_vec(&reg) {
+                let _ = self.fast_keys.insert(k.as_bytes(), v);
+            }
+        }
+        let prefix = format!("{k}|");
+        let waiting: Vec<(Vec<u8>, String)> = self
+            .fast_pending
+            .scan_prefix(prefix.as_bytes())
+            .filter_map(|r| r.ok())
+            .map(|(key, _)| {
+                let id = String::from_utf8_lossy(&key[prefix.len()..]).to_string();
+                (key.to_vec(), id)
+            })
+            .collect();
+        for (key, id) in waiting {
+            let _ = self.fast_pending.remove(key);
+            if self.get_by_msg_id(&id).is_some() {
+                let _ = self.anon_verdict.insert(
+                    id.as_bytes(),
+                    serde_json::to_vec(&AnonVerdict::Verified { nullifier_hex: nullifier_hex.to_string(), verified_at_ms: now }).unwrap_or_default(),
+                );
+            }
+        }
+        self.prune_fast(now);
+    }
+
+    /// The registering post failed: its waiting fast posts go too (tombstoned if the failure is
+    /// definitive, forgotten if it only depends on this node's view, like their registration).
+    fn drop_fast_pending(&self, k: &str, definitive: bool) {
+        let prefix = format!("{k}|");
+        let waiting: Vec<(Vec<u8>, String)> = self
+            .fast_pending
+            .scan_prefix(prefix.as_bytes())
+            .filter_map(|r| r.ok())
+            .map(|(key, _)| (key.to_vec(), String::from_utf8_lossy(&key[prefix.len()..]).to_string()))
+            .collect();
+        for (key, id) in waiting {
+            let _ = self.fast_pending.remove(key);
+            let _ = if definitive { self.delete_by_msg_id(&id) } else { self.forget_by_msg_id(&id) };
+        }
+    }
+
+    /// Registrations older than yesterday, and pending fast posts older than
+    /// [`FAST_PENDING_TTL_MS`] (with their messages), are dropped.
+    fn prune_fast(&self, now: u64) {
+        let today = nexus_protocol::tmail_bucket_index_v1(now);
+        for item in self.fast_keys.iter() {
+            let Ok((k, _)) = item else { continue };
+            let key = String::from_utf8_lossy(&k).to_string();
+            if let Some(b) = key.split('|').nth(1).and_then(|b| b.parse::<u64>().ok())
+                && b + 1 < today
+            {
+                let _ = self.fast_keys.remove(&k);
+            }
+        }
+        for item in self.fast_pending.iter() {
+            let Ok((k, v)) = item else { continue };
+            let at = v.as_ref().try_into().map(u64::from_be_bytes).unwrap_or(0);
+            if now.saturating_sub(at) > FAST_PENDING_TTL_MS {
+                let _ = self.fast_pending.remove(&k);
+                let key = String::from_utf8_lossy(&k).to_string();
+                if let Some(id) = key.rsplit('|').next() {
+                    let _ = self.forget_by_msg_id(id);
+                }
+            }
+        }
+    }
+
+    /// The registration of a posting key for a board on a UTC day, if any.
+    pub fn fast_registration(&self, receiver: &str, bucket: u64, posting_key: &str) -> Option<FastKey> {
+        let v = self.fast_keys.get(fast_key(receiver, bucket, posting_key).as_bytes()).ok().flatten()?;
+        serde_json::from_slice(&v).ok()
+    }
+
+    /// The invisible flood guard: a burst of [`FAST_BURST`], then one post per
+    /// [`FAST_REFILL_MS`], at most [`FAST_DAILY_CAP`] a UTC day, per posting key.
+    fn fast_flood_take(&self, k: &str, now: u64, interval: bool) -> Result<(), FastSendError> {
+        // Env overrides exist for tests and operators, like the other store limits.
+        let burst = env_usize("TET_TMAIL_FAST_BURST", FAST_BURST as usize) as f64;
+        let refill_ms = env_usize("TET_TMAIL_FAST_REFILL_MS", FAST_REFILL_MS as usize) as f64;
+        let cap = env_usize("TET_TMAIL_FAST_DAILY_CAP", FAST_DAILY_CAP as usize) as u32;
+        let today = nexus_protocol::tmail_bucket_index_v1(now);
+        let mut map = self.fast_flood.lock().unwrap_or_else(|p| p.into_inner());
+        let e = map.entry(k.to_string()).or_insert((burst, now, today, 0));
+        if e.2 != today {
+            *e = (burst, now, today, 0);
+        }
+        if e.3 >= cap {
+            return Err(FastSendError::DailyCap);
+        }
+        if interval {
+            let refill = now.saturating_sub(e.1) as f64 / refill_ms;
+            e.0 = (e.0 + refill).min(burst);
+            e.1 = now;
+            if e.0 < 1.0 {
+                return Err(FastSendError::Busy);
+            }
+            e.0 -= 1.0;
+        }
+        e.3 += 1;
+        Ok(())
+    }
+
+    fn fast_checks(&self, env: &TmailEnvelopeV1, now: u64) -> Result<(String, u64, String), FastSendError> {
+        if !env.flags.anonymous || !is_fast_post(env) {
+            return Err(FastSendError::NotFast);
+        }
+        let receiver = env.receiver_wallet_id.trim().to_ascii_lowercase();
+        if self.get_poll_root(&receiver).is_some() {
+            return Err(FastSendError::Poll);
+        }
+        let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
+        if bucket != nexus_protocol::tmail_bucket_index_v1(now) {
+            return Err(FastSendError::WrongDay);
+        }
+        let posting_key = env.anonymous.as_ref().map(|a| a.ephemeral_wallet_id.trim().to_ascii_lowercase()).unwrap_or_default();
+        Ok((receiver, bucket, posting_key))
+    }
+
+    /// A fast post from a client (REST): stored, verified, only if its posting key is registered for
+    /// this board today and the flood guard allows it. Nothing refused is stored. Blocking.
+    pub fn send_fast_anonymous(&self, env: &TmailEnvelopeV1) -> Result<bool, FastSendError> {
+        let _g = self.anon_send_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let now = now_ms();
+        let (receiver, bucket, posting_key) = self.fast_checks(env, now)?;
+        let reg = self.fast_registration(&receiver, bucket, &posting_key).ok_or(FastSendError::NotRegistered)?;
+        if self.by_msg_id.contains_key(env.msg_id.trim().as_bytes()).unwrap_or(false) {
+            return Ok(false);
+        }
+        self.fast_flood_take(&fast_key(&receiver, bucket, &posting_key), now, true)?;
+        let stored = self.store_tmail_inner(env, true).map_err(|e| FastSendError::Store(e.to_string()))?;
+        if stored {
+            let v = AnonVerdict::Verified { nullifier_hex: reg.nullifier_hex, verified_at_ms: now };
+            let _ = self.anon_verdict.insert(env.msg_id.trim().as_bytes(), serde_json::to_vec(&v).unwrap_or_default());
+        }
+        Ok(stored)
+    }
+
+    /// A fast post from a peer (gossip). Registered key: stored, verified (daily cap; the interval was
+    /// the sending node's to keep). Not registered here yet: held as pending ONLY while a registering
+    /// post for that exact key is stored here awaiting its proof, within [`FAST_PENDING_PER_KEY`] and
+    /// [`FAST_PENDING_TOTAL`]; otherwise dropped. Nothing unverified is served as verified.
+    pub fn receive_fast_anonymous(&self, env: &TmailEnvelopeV1) -> Result<bool, FastSendError> {
+        let _g = self.anon_send_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let now = now_ms();
+        let (receiver, bucket, posting_key) = self.fast_checks(env, now)?;
+        let k = fast_key(&receiver, bucket, &posting_key);
+        if self.by_msg_id.contains_key(env.msg_id.trim().as_bytes()).unwrap_or(false) {
+            return Ok(false);
+        }
+        if let Some(reg) = self.fast_registration(&receiver, bucket, &posting_key) {
+            self.fast_flood_take(&k, now, false)?;
+            let stored = self.store_tmail_inner(env, true).map_err(|e| FastSendError::Store(e.to_string()))?;
+            if stored {
+                let v = AnonVerdict::Verified { nullifier_hex: reg.nullifier_hex, verified_at_ms: now };
+                let _ = self.anon_verdict.insert(env.msg_id.trim().as_bytes(), serde_json::to_vec(&v).unwrap_or_default());
+            }
+            return Ok(stored);
+        }
+        // Not registered here (yet). Hold it only if its registering post is here, waiting.
+        self.prune_fast(now);
+        if self.fast_regpending.get(k.as_bytes()).ok().flatten().is_none() {
+            return Err(FastSendError::NotRegistered);
+        }
+        let prefix = format!("{k}|");
+        if self.fast_pending.scan_prefix(prefix.as_bytes()).count() >= FAST_PENDING_PER_KEY || self.fast_pending.len() >= FAST_PENDING_TOTAL {
+            return Err(FastSendError::Busy);
+        }
+        self.fast_flood_take(&k, now, false)?;
+        let stored = self.store_tmail_inner(env, true).map_err(|e| FastSendError::Store(e.to_string()))?;
+        if stored {
+            let _ = self.anon_verdict.insert(env.msg_id.trim().as_bytes(), serde_json::to_vec(&AnonVerdict::Pending).unwrap_or_default());
+            let _ = self.fast_pending.insert(format!("{k}|{}", env.msg_id.trim()).as_bytes(), &now.to_be_bytes());
+        }
+        Ok(stored)
     }
 
     pub fn get_anon_verdict(&self, msg_id: &str) -> Option<AnonVerdict> {
@@ -1243,8 +1563,8 @@ impl TmailStore {
     /// same message was already stored.
     pub fn send_anonymous(&self, env: &TmailEnvelopeV1) -> Result<bool, AnonSendError> {
         let _g = self.anon_send_lock.lock().unwrap_or_else(|p| p.into_inner());
-        let anon = env.anonymous.as_ref().ok_or(AnonSendError::NoProof)?;
-        let bytes = self.get_anon_receipt(&anon.anchor_proof.receipt_sha256_hex).ok_or(AnonSendError::NoReceipt)?;
+        let proof = env.anonymous.as_ref().and_then(|a| a.anchor_proof.as_ref()).ok_or(AnonSendError::NoProof)?;
+        let bytes = self.get_anon_receipt(&proof.receipt_sha256_hex).ok_or(AnonSendError::NoReceipt)?;
         let nullifier_hex = match crate::tmail::anon::verify_anonymous_proof(self, env, &bytes) {
             AnonVerdict::Verified { nullifier_hex, verified_at_ms } => {
                 let v = AnonVerdict::Verified { nullifier_hex: nullifier_hex.clone(), verified_at_ms };

@@ -317,6 +317,7 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/explorer/tx/:hash",
             axum::routing::get(super::handlers::ledger::get_explorer_tx),
         )
+        .route("/tmail/anon/fast/:receiver/:posting_key", axum::routing::get(super::handlers::tmail::get_tmail_anon_fast))
         .route("/stats/inside", axum::routing::get(super::handlers::ledger::get_stats_inside))
         .route("/sigs/publish", axum::routing::post(super::handlers::sigs::post_sigs_publish))
         .route("/sigs/search", axum::routing::get(super::handlers::sigs::get_sigs_search))

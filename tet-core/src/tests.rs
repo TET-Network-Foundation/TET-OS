@@ -8306,11 +8306,11 @@ fn anon_env_with_nullifier_for_tests(
     env.sender_wallet_id = crate::tmail::envelope::ANONYMOUS_SENTINEL.to_string();
     env.anonymous = Some(crate::tmail::envelope::TmailAnonymous {
         ephemeral_wallet_id: ephemeral.to_string(),
-        anchor_proof: crate::tmail::envelope::TmailAnchorProof {
+        anchor_proof: Some(crate::tmail::envelope::TmailAnchorProof {
             image_id_hex: "00".repeat(32),
             journal_b64: base64::engine::general_purpose::STANDARD.encode(&journal_bytes),
             receipt_sha256_hex: "ab".repeat(32),
-        },
+        }),
     });
     resign_tmail_env_for_tests(&mut env, eph_words);
     env
@@ -9859,11 +9859,11 @@ fn anonymous_envelope_for_tests(
     envelope.sender_wallet_id = crate::tmail::envelope::ANONYMOUS_SENTINEL.to_string();
     envelope.anonymous = Some(crate::tmail::envelope::TmailAnonymous {
         ephemeral_wallet_id: ephemeral.clone(),
-        anchor_proof: crate::tmail::envelope::TmailAnchorProof {
+        anchor_proof: Some(crate::tmail::envelope::TmailAnchorProof {
             image_id_hex: crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID),
             journal_b64,
             receipt_sha256_hex: hex::encode(Sha256::digest(&receipt_bytes)),
-        },
+        }),
     });
     resign_tmail_env_for_tests(&mut envelope, &eph_words);
     (envelope, receipt_bytes, store, eph_words)
@@ -10263,7 +10263,7 @@ async fn anonymous_post_names_no_poster_to_the_node() {
     let mut env = anon_env_with_nullifier_for_tests(
         &eph_words, &ephemeral, &receiver, nullifier, "anon-trace-1", sent_at,
     );
-    env.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = receipt_hash;
+    env.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = receipt_hash;
     let (status, body) =
         call("POST", "/tmail/send".into(), Some(serde_json::to_value(&env).unwrap())).await;
     // The trace's receipt is a placeholder, so since anonymous posts are checked before they're
@@ -11254,8 +11254,8 @@ async fn replayed_nullifier_over_a_swarm_is_refused_and_the_node_keeps_serving()
     resign_tmail_env_for_tests(&mut second, &eph_words);
     assert_ne!(first.msg_id, second.msg_id);
     assert_eq!(
-        first.anonymous.as_ref().unwrap().anchor_proof.journal_b64,
-        second.anonymous.as_ref().unwrap().anchor_proof.journal_b64,
+        first.anonymous.as_ref().unwrap().anchor_proof.as_ref().unwrap().journal_b64,
+        second.anonymous.as_ref().unwrap().anchor_proof.as_ref().unwrap().journal_b64,
         "both envelopes must carry the same journal, or this is not a replay"
     );
 
@@ -13802,6 +13802,7 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         "/explorer/blocks/recent",
         // Counts and retention settings only.
         "/stats/inside",
+        "/tmail/anon/fast/:receiver/:posting_key",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -13990,8 +13991,8 @@ fn anonymous_receipt_from_an_unpinned_program_is_refused() {
     let with_program = |hex_id: &str| {
         let mut env = anon_env_with_nullifier_for_tests(&eph_words, &ephemeral, &receiver, [7u8; 32], "anon-pin", tmail_now_ms_for_tests());
         let a = env.anonymous.as_mut().unwrap();
-        a.anchor_proof.image_id_hex = hex_id.to_string();
-        a.anchor_proof.receipt_sha256_hex = hex::encode(sha2::Sha256::digest(&receipt));
+        a.anchor_proof.as_mut().unwrap().image_id_hex = hex_id.to_string();
+        a.anchor_proof.as_mut().unwrap().receipt_sha256_hex = hex::encode(sha2::Sha256::digest(&receipt));
         resign_tmail_env_for_tests(&mut env, &eph_words);
         env
     };
@@ -14809,7 +14810,7 @@ async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
     let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
     state.tmail.put_anon_receipt(&jh, &junk).unwrap();
     let mut b = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [2u8; 32], "anon-bad-proof", tmail_now_ms_for_tests());
-    b.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    b.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = jh.clone();
     resign_tmail_env_for_tests(&mut b, &ew);
     assert_eq!(send(b.clone()).await, StatusCode::FORBIDDEN);
     assert!(state.tmail.get_by_msg_id("anon-bad-proof").is_none(), "a post whose proof failed was stored");
@@ -14825,7 +14826,7 @@ async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
     // anyone can prove membership of a tree they made up), but not tombstoned, so a genuine post can
     // be stored and checked again once this node knows the root.
     let mut c = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [3u8; 32], "anon-root-unknown", tmail_now_ms_for_tests());
-    c.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    c.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = jh.clone();
     resign_tmail_env_for_tests(&mut c, &ew);
     assert!(state.tmail.store_tmail(&c).unwrap());
     state.tmail.set_anon_verdict("anon-root-unknown", &crate::tmail::store::AnonVerdict::Failed { reason: "registry root not recognised, or outside the acceptance window".into(), failed_at_ms: 1 }).unwrap();
@@ -14909,7 +14910,7 @@ fn a_released_claim_never_belongs_to_a_stored_post() {
     let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
     store.put_anon_receipt(&jh, &junk).unwrap();
     let mut bad = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [9u8; 32], "bad-proof", tmail_now_ms_for_tests());
-    bad.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh;
+    bad.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = jh;
     assert!(matches!(store.send_anonymous(&bad), Err(crate::tmail::store::AnonSendError::Refused(_))));
     for id in ["no-proof", "no-receipt", "bad-proof"] {
         assert!(store.get_by_msg_id(id).is_none(), "{id} was stored");
@@ -14991,4 +14992,229 @@ async fn only_trusted_peers_steer_chain_sync() {
     assert!(!sync.with(|s| s.registry.any_peer_ahead(0)), "an untrusted hello made the node behind");
     crate::p2p::ingest_remote_chain_hello(&sync, &ledger, relay, hello, None, restoring.trusts(&relay)).await;
     assert!(sync.with(|s| s.registry.any_peer_ahead(0)), "a trusted hello no longer counts");
+}
+
+// ── Fast anonymous posting (docs/plans/FAST_ANON_POSTING.md, with the 2026-10-10 review) ────────
+
+/// A fast post: an anonymous envelope by `eph` to `receiver`, with no proof of its own.
+fn fast_env_for_tests(eph_words: &str, eph: &str, receiver: &str, msg_id: &str, sent_at_ms: u64) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    let mut env = anon_env_with_nullifier_for_tests(eph_words, eph, receiver, [0x55; 32], msg_id, sent_at_ms);
+    env.anonymous.as_mut().unwrap().anchor_proof = None;
+    resign_tmail_env_for_tests(&mut env, eph_words);
+    env
+}
+
+/// Register `eph` for `receiver` today the way the node does: a post WITH a proof, stored, whose
+/// verdict becomes Verified (the proof itself is covered by the #78 tests).
+fn register_fast_key_for_tests(store: &crate::tmail::store::TmailStore, eph_words: &str, eph: &str, receiver: &str, nullifier: [u8; 32], msg_id: &str) {
+    let env = anon_env_with_nullifier_for_tests(eph_words, eph, receiver, nullifier, msg_id, tmail_now_ms_for_tests());
+    assert!(store.store_tmail_ungated_for_tests(&env).unwrap());
+    store
+        .set_anon_verdict(msg_id, &crate::tmail::store::AnonVerdict::Verified { nullifier_hex: hex::encode(nullifier), verified_at_ms: 1 })
+        .unwrap();
+}
+
+/// **SECURITY: a fast post is accepted only for a posting key a verified proof registered for that
+/// board today.** Unregistered: refused, nothing stored. Registered: stored, verified, with the
+/// registration's nullifier (so the daily ID matches). Another board, or another day: refused. A
+/// failed registering post registers nothing. `store_tmail` itself refuses a fast post.
+/// Negative controls (run by hand): `send_fast_anonymous` skipping the registration lookup →
+/// FAILED; ignoring the receiver in the key → FAILED; ignoring the day → FAILED.
+#[test]
+fn fast_posts_need_a_key_registered_for_this_board_today() {
+    use crate::tmail::store::{AnonVerdict, FastSendError};
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_ra, board_a) = tmail_party_for_tests();
+    let (_rb, board_b) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+
+    let early = fast_env_for_tests(&ew, &eid, &board_a, "fast-early", now);
+    assert_eq!(store.send_fast_anonymous(&early), Err(FastSendError::NotRegistered));
+    assert!(store.get_by_msg_id("fast-early").is_none(), "an unregistered fast post was stored");
+    assert!(store.store_tmail(&early).is_err(), "store_tmail took a fast post directly");
+
+    register_fast_key_for_tests(&store, &ew, &eid, &board_a, [7; 32], "reg-a");
+    let ok = fast_env_for_tests(&ew, &eid, &board_a, "fast-1", now);
+    assert_eq!(store.send_fast_anonymous(&ok), Ok(true));
+    match store.get_anon_verdict("fast-1") {
+        Some(AnonVerdict::Verified { nullifier_hex, .. }) => assert_eq!(nullifier_hex, hex::encode([7u8; 32])),
+        other => panic!("a registered fast post isn't verified with its key's nullifier: {other:?}"),
+    }
+
+    let other_board = fast_env_for_tests(&ew, &eid, &board_b, "fast-b", now);
+    assert_eq!(store.send_fast_anonymous(&other_board), Err(FastSendError::NotRegistered), "a key registered for board A posted on board B");
+    let yesterday = fast_env_for_tests(&ew, &eid, &board_a, "fast-yday", now - 86_400_000);
+    assert_eq!(store.send_fast_anonymous(&yesterday), Err(FastSendError::WrongDay));
+    assert!(store.get_by_msg_id("fast-b").is_none() && store.get_by_msg_id("fast-yday").is_none());
+
+    // A registering post that fails registers nothing.
+    let (fw, fid) = tmail_party_for_tests();
+    let bad = anon_env_with_nullifier_for_tests(&fw, &fid, &board_a, [8; 32], "reg-bad", now);
+    assert!(store.store_tmail_ungated_for_tests(&bad).unwrap());
+    store.set_anon_verdict("reg-bad", &AnonVerdict::Failed { reason: "nullifier already used by another message (replay)".into(), failed_at_ms: now }).unwrap();
+    assert!(store.fast_registration(&board_a, nexus_protocol::tmail_bucket_index_v1(now), &fid).is_none(), "a failed proof registered a key");
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&fw, &fid, &board_a, "fast-bad", now)), Err(FastSendError::NotRegistered));
+}
+
+/// **SECURITY: no fast path for polls (one proof, one ballot).** A poll's wallet refuses a fast post,
+/// on REST and gossip, and a verified ballot registers no posting key.
+/// Negative control (run by hand): the poll check removed from `fast_checks` → FAILED.
+#[test]
+fn polls_take_no_fast_posts() {
+    use crate::tmail::store::FastSendError;
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &[], day)).unwrap();
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &pid, [9; 32], "ballot-1");
+    assert!(store.fast_registration(&pid, day, &eid).is_none(), "a ballot registered a posting key");
+    let again = fast_env_for_tests(&ew, &eid, &pid, "ballot-2", tmail_now_ms_for_tests());
+    assert_eq!(store.send_fast_anonymous(&again), Err(FastSendError::Poll));
+    assert_eq!(store.receive_fast_anonymous(&again), Err(FastSendError::Poll));
+    assert!(store.get_by_msg_id("ballot-2").is_none(), "a second ballot without a proof was stored");
+}
+
+/// **The invisible flood guard.** Per posting key: a burst of 5 goes through, the next one at once
+/// is refused as "busy" (a retry), and after the refill interval posting works again; the daily cap
+/// holds. Nothing refused is stored.
+/// Negative controls (run by hand): no interval check → FAILED; no daily cap → FAILED.
+#[test]
+fn fast_posts_have_an_invisible_flood_guard_and_a_daily_cap() {
+    use crate::tmail::store::FastSendError;
+    let _g = env_lock();
+    set_test_env_base();
+    // Limits are read on every post, so the test can change them as it goes. A long refill first,
+    // so the burst check doesn't depend on how fast the disk is.
+    let refill = EnvVarGuard::set("TET_TMAIL_FAST_REFILL_MS", "10000");
+    let _cap = EnvVarGuard::set("TET_TMAIL_FAST_DAILY_CAP", "8");
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [3; 32], "reg");
+    let now = tmail_now_ms_for_tests();
+    for i in 0..5 {
+        assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, &format!("burst-{i}"), now + i)), Ok(true), "post {i} of the burst");
+    }
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "too-fast", now + 6)), Err(FastSendError::Busy));
+    assert!(store.get_by_msg_id("too-fast").is_none());
+    drop(refill);
+    let _quick = EnvVarGuard::set("TET_TMAIL_FAST_REFILL_MS", "1");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "after-pause", now + 7)), Ok(true), "posting didn't resume after the interval");
+    // Cap 8 a day: 6 so far; two more fit, then the cap.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for i in 0..2 {
+        assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, &format!("late-{i}"), now + 10 + i)), Ok(true));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "over-cap", now + 20)), Err(FastSendError::DailyCap));
+}
+
+/// **SECURITY: gossiped fast posts are held only while their registering post is here, bounded.**
+/// No registering post here: dropped, not stored (no flood of posts for made-up keys). Registering
+/// post here, waiting: held as pending (not verified), then verified when the proof verifies. A
+/// registering post that fails definitively takes its waiting fast posts with it.
+/// Negative controls (run by hand): holding fast posts without a waiting registration → FAILED;
+/// not promoting on Verified → FAILED; not dropping on Failed → FAILED.
+#[test]
+fn gossiped_fast_posts_wait_only_for_a_registration_that_is_here() {
+    use crate::tmail::store::{AnonVerdict, FastSendError};
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+
+    // A made-up key: dropped.
+    let (xw, xid) = tmail_party_for_tests();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&xw, &xid, &board, "made-up", now)), Err(FastSendError::NotRegistered));
+    assert!(store.get_by_msg_id("made-up").is_none(), "a fast post for a made-up key was stored");
+
+    // Its registering post arrived and waits for its receipt: the fast post waits too, unverified.
+    let (ew, eid) = tmail_party_for_tests();
+    let reg = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [4; 32], "reg-wait", now);
+    assert!(store.store_tmail_ungated_for_tests(&reg).unwrap());
+    store.set_anon_verdict("reg-wait", &AnonVerdict::Pending).unwrap();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "waiting", now)), Ok(true));
+    assert!(matches!(store.get_anon_verdict("waiting"), Some(AnonVerdict::Pending)), "a waiting fast post was served as verified");
+    // The proof verifies here: the waiting post is verified with its nullifier.
+    store.set_anon_verdict("reg-wait", &AnonVerdict::Verified { nullifier_hex: hex::encode([4u8; 32]), verified_at_ms: now }).unwrap();
+    assert!(matches!(store.get_anon_verdict("waiting"), Some(AnonVerdict::Verified { .. })), "the waiting post wasn't verified with its registration");
+
+    // Another member's registering post fails: its waiting fast post goes too.
+    let (fw, fid) = tmail_party_for_tests();
+    let reg2 = anon_env_with_nullifier_for_tests(&fw, &fid, &board, [5; 32], "reg-fail", now);
+    assert!(store.store_tmail_ungated_for_tests(&reg2).unwrap());
+    store.set_anon_verdict("reg-fail", &AnonVerdict::Pending).unwrap();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&fw, &fid, &board, "doomed", now)), Ok(true));
+    store.set_anon_verdict("reg-fail", &AnonVerdict::Failed { reason: "invalid receipt".into(), failed_at_ms: now }).unwrap();
+    assert!(store.get_by_msg_id("doomed").is_none(), "a fast post outlived its failed registration");
+}
+
+/// **One member can't push everyone else off a board.** One daily ID holds at most its share of the
+/// board's anonymous posts (its own oldest go first); another member's posts stay.
+/// Negative control (run by hand): the per-daily-ID share removed (25 kept) → FAILED.
+#[test]
+fn one_daily_id_keeps_only_its_share_of_a_board() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _refill = EnvVarGuard::set("TET_TMAIL_FAST_REFILL_MS", "1");
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (ow, oid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ow, &oid, &board, [1; 32], "other-member");
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [2; 32], "loud-reg");
+    for i in 0..25u64 {
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, &format!("loud-{i}"), now + i)), Ok(true));
+    }
+    let inbox = store.get_inbox(&board, 1_000);
+    let loud = inbox.iter().filter(|e| e.anonymous.as_ref().is_some_and(|a| a.ephemeral_wallet_id == eid)).count();
+    assert_eq!(loud, crate::tmail::store::ANON_RETAIN_PER_DAILY_ID, "one daily ID kept {loud} posts");
+    assert!(inbox.iter().any(|e| e.msg_id == "other-member"), "another member's post was pushed off the board");
+    assert!(inbox.iter().any(|e| e.msg_id == "loud-24") && !inbox.iter().any(|e| e.msg_id == "loud-0"), "the loud ID's oldest should go first");
+    // Deleted from the store, not only hidden when read.
+    assert!(store.get_by_msg_id("loud-0").is_none() && store.is_retention_pruned("loud-0"), "the share is only applied when reading");
+    assert!(store.get_by_msg_id("loud-24").is_some());
+}
+
+/// The page's question, and the REST path: `GET /tmail/anon/fast/:board/:key` says whether the key
+/// is registered today; `POST /tmail/send` takes a registered fast post (202) and refuses an
+/// unregistered one (403) without storing it.
+#[tokio::test]
+async fn fast_post_routes_answer_and_gate() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (_r, board) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let router = crate::rest::routes::build_router(state.clone());
+    let ask = |r: axum::Router, path: String| async move {
+        let resp = r.oneshot(axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap()).unwrap();
+        j["registered"].as_bool().unwrap()
+    };
+    let send = |r: axum::Router, env: crate::tmail::envelope::TmailEnvelopeV1| async move {
+        r.oneshot(axum::http::Request::builder().method("POST").uri("/tmail/send").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&env).unwrap())).unwrap())
+            .await
+            .unwrap()
+            .status()
+    };
+    assert!(!ask(router.clone(), format!("/tmail/anon/fast/{board}/{eid}")).await);
+    assert_eq!(send(router.clone(), fast_env_for_tests(&ew, &eid, &board, "rest-early", tmail_now_ms_for_tests())).await, StatusCode::FORBIDDEN);
+    assert!(state.tmail.get_by_msg_id("rest-early").is_none());
+    register_fast_key_for_tests(&state.tmail, &ew, &eid, &board, [6; 32], "rest-reg");
+    assert!(ask(router.clone(), format!("/tmail/anon/fast/{board}/{eid}")).await);
+    assert_eq!(send(router.clone(), fast_env_for_tests(&ew, &eid, &board, "rest-fast", tmail_now_ms_for_tests())).await, StatusCode::ACCEPTED);
 }
