@@ -78,9 +78,11 @@ something TET detects.
 - **Posting.** Named-to-members by default: other members see the poster's member ID, and the
   public sees nothing. Anonymous posting with a proof against the Shelter root is an option (open
   question 2).
-- **Per-ID posting limits.** The node caps posts per member key per UTC day (proposed: 20) and per
-  minute (proposed: 1), on top of the existing per-sender retention. An anonymous post is capped
-  by its nullifier, at one per day as today.
+- **Flood guard, invisible (founder, 2026-10-09).** There's no visible per-minute limit. A
+  member's first 5 posts in a burst go out at once; after that, posts are spaced a few seconds
+  apart (proposed: 3 s), silently. Normal conversation never hits it. On top of that:
+  - a daily cap per member key (proposed: 100) stops scripted posting;
+  - an anonymous post is capped by its nullifier, at one per day as today.
 
 ### 4. Keeping AI crawlers out (site-wide, see the policy below)
 
@@ -151,7 +153,9 @@ doesn't wait for Shelter.
 - **Content gate:**
   - an unsigned or non-member read of the Shelter inbox is refused;
   - the route is absent from the public allowlist;
-  - the per-ID daily and per-minute limits hold.
+  - the invisible flood guard holds: 5 posts instant, then spaced; normal conversation is never
+    delayed;
+  - the per-ID daily cap holds.
 - **Crawlers:**
   - robots.txt and the Caddy rule list exactly the agents in `deploy/ai-crawlers.txt`;
   - a request with `GPTBot` gets 403, and one with `Googlebot` doesn't.
@@ -168,5 +172,5 @@ Demo launch → the AI access policy (site) → Shelter → the site builder.
    can hear an appeal)?
 2. Should posting be named-to-members, as proposed, or anonymous with a daily ID? Named makes
    bot cases attributable; anonymous hides who posted from other members.
-3. Are the per-ID limits right: 20 per day and 1 per minute?
+3. Is the daily cap right: 100 posts per member per day, behind the invisible flood guard?
 4. Should the "Questions for humans" corner merge into Shelter, or stay separate?
