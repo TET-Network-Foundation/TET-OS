@@ -14202,3 +14202,42 @@ async fn only_trusted_peers_steer_chain_sync() {
     crate::p2p::ingest_remote_chain_hello(&sync, &ledger, relay, hello, None, restoring.trusts(&relay)).await;
     assert!(sync.with(|s| s.registry.any_peer_ahead(0)), "a trusted hello no longer counts");
 }
+
+/// **SECURITY REGRESSION GUARD: unverified anonymous posts can't push a verified one out.** Gossip
+/// stores an anonymous post before its proof is checked; the journal it announces is whatever the
+/// sender wrote. Retention used to group anonymous posts by that announced nullifier, so a few
+/// forged pending posts announcing a victim's (public) nullifier shared the victim's group and
+/// per-conversation retention deleted the victim's verified post. Now only a verified nullifier
+/// (from the stored verdict) groups; an unverified post is its own group.
+/// Negative control (run by hand): `conversation_key` grouping by the announced nullifier again →
+/// FAILED (the victim's post is pruned).
+#[test]
+fn unverified_anonymous_posts_cannot_prune_a_verified_one() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let victim_null = [0x42u8; 32];
+    let (vw, vid) = tmail_party_for_tests();
+    let victim = anon_env_with_nullifier_for_tests(&vw, &vid, &board, victim_null, "victim", now);
+    assert!(store.store_tmail(&victim).unwrap());
+    store
+        .set_anon_verdict("victim", &crate::tmail::store::AnonVerdict::Verified { nullifier_hex: hex::encode(victim_null), verified_at_ms: now })
+        .unwrap();
+    // Forged posts announcing the victim's nullifier, stored the way gossip stores them (unverified).
+    for i in 0..(crate::tmail::store::RETAIN_PER_CONVERSATION as u64 + 3) {
+        let (aw, aid) = tmail_party_for_tests();
+        let forged = anon_env_with_nullifier_for_tests(&aw, &aid, &board, victim_null, &format!("forged-{i}"), now + 1 + i);
+        let _ = store.store_tmail(&forged);
+    }
+    assert!(store.get_by_msg_id("victim").is_some(), "unverified posts pushed a verified post out");
+    assert!(!store.is_retention_pruned("victim"));
+    assert!(store.get_inbox(&board, 100).iter().any(|e| e.msg_id == "victim"), "the verified post isn't served");
+    // Verified posts by different members are still separate groups (one each, nothing evicted).
+    let (ow, oid) = tmail_party_for_tests();
+    let other = anon_env_with_nullifier_for_tests(&ow, &oid, &board, [0x43; 32], "other", now + 50);
+    assert!(store.store_tmail(&other).unwrap());
+    store.set_anon_verdict("other", &crate::tmail::store::AnonVerdict::Verified { nullifier_hex: hex::encode([0x43u8; 32]), verified_at_ms: now }).unwrap();
+    assert!(store.get_by_msg_id("victim").is_some() && store.get_by_msg_id("other").is_some());
+}
