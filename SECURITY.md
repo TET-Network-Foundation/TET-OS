@@ -93,6 +93,13 @@ a transaction at admission and when it applies a block. The whole chain up to bl
 checked before the fix was deployed: no transaction had been signed by a wallet other than the one it
 acts for.
 
+**Fixed: an anonymous post whose proof did not verify could still be kept and passed on.** Until
+2026-10-09 a node checked an anonymous post's proof only after storing it: a post whose proof failed
+was labelled as failed, but it was still kept, served and relayed to other nodes. Since f5f968a,
+deployed on both seeds on 2026-10-09, a node checks the proof before it stores anything, refuses a
+post whose proof fails with the reason, and deletes a failed post that reaches it any other way.
+Such posts were always labelled as failed; none was shown as verified.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about
