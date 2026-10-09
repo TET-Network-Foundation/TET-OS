@@ -55,7 +55,7 @@ export default function TopNav() {
       <div className="flex items-center gap-x-6">
         <Link href="/" className="text-sm font-medium hover:text-gray-600">Home</Link>
         <Link href="/participate" className="text-sm font-medium hover:text-gray-600">For Builders</Link>
-        <Link href="/whitepaper" className="text-sm font-medium hover:text-gray-600">Whitepaper</Link>
+        <Link href="/whitepaper" className="text-sm font-medium hover:text-gray-600">Technical paper</Link>
         <Link href="/create-wallet" className="text-sm font-medium hover:text-gray-600">Create Wallet</Link>
         <Link href="/os" className="text-sm font-bold text-fuchsia-600 hover:text-fuchsia-800">Launch TET-OS</Link>
       </div>

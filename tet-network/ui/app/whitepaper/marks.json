@@ -1,0 +1,18 @@
+{
+  "html": {
+    "code": "TET-W78E-P3YG",
+    "sha256": "c2c6428ad4430e248d6024c98a762a10f15785bdac889c56537a8b89c6410a6a",
+    "file": "paper/tet-technical-paper.html"
+  },
+  "pdf": {
+    "code": "TET-P76S-BC21",
+    "sha256": "8f871283b0c4d1b590395a5107acd7c57cfedd8a4322cbf9c38a9988e2187d1f",
+    "file": "paper/tet-technical-paper.pdf"
+  },
+  "signer": "0251cee93e087e90715c164e975ee929ee9a94cc2abd95c97b1e62fa547339b2",
+  "chain": {
+    "chainId": "tet-local-dev",
+    "genesisHash": "0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36"
+  },
+  "published": false
+}

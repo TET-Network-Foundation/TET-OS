@@ -527,6 +527,13 @@ jobs:
         name: wording — no absolute "AI can't access" claims
         run: node scripts/try_ai_wording_guard.mjs
 
+      # The technical paper: cited files exist, the built HTML is the text, the marks match the files,
+      # and the wording rules hold (no "first", money, "untraceable", authorship, AI absolutes,
+      # unqualified ML-KEM; quantum resistance incomplete until wallet_id_v2). Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: technical paper — sources, build and wording
+        run: node --experimental-strip-types scripts/paper_guard.mjs
+
       # The "Inside" page: retention shown only from the node's settings (the Rust test checks those
       # against the config), counts with the time they were read. Controls.
       - if: needs.gate.outputs.code == 'true'
