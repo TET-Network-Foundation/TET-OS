@@ -14934,3 +14934,61 @@ fn a_refused_ballot_on_the_checked_send_path_is_a_403() {
     let arm = handler.split("AnonSendError::Ballot(reason)").nth(1).expect("the handler has no Ballot arm");
     assert!(arm[..arm.find("AnonSendError::Store").unwrap_or(arm.len())].contains("StatusCode::FORBIDDEN"), "a refused ballot isn't a 403");
 }
+
+/// **SECURITY REGRESSION GUARD: only trusted peers steer chain sync.** Blocks carry no producer
+/// signature yet and `producer_id` is an unsigned string, so a block that arrives by catch-up or
+/// backfill is only as trustworthy as the peer that served it. A follower with a producer pin
+/// trusts the pinned producer (and operator-listed relays); each block a pinned producer serves must
+/// name that producer; a stranger is refused. The explicit sole validator trusts nobody, so a hello
+/// claiming a far higher height neither makes it "behind" nor pauses production. A node with no
+/// pin and no sole-validator role (local development) is unchanged.
+/// Negative controls (run by hand): `SyncTrust::new` returning `Everyone` always → FAILED; the
+/// untrusted-hello early return removed → FAILED.
+#[tokio::test]
+async fn only_trusted_peers_steer_chain_sync() {
+    use crate::p2p::{ProducerPeers, SyncTrust};
+    let producer = libp2p::PeerId::random();
+    let relay = libp2p::PeerId::random();
+    let stranger = libp2p::PeerId::random();
+    let pins = ProducerPeers::parse(&format!("helsinki-wallet={producer}")).unwrap();
+
+    // A follower: the pinned producer and listed relays are trusted; a stranger isn't.
+    let follower = SyncTrust::new(&pins, &relay.to_string(), false).unwrap();
+    assert!(follower.trusts(&producer) && follower.trusts(&relay));
+    assert!(!follower.trusts(&stranger), "a stranger can steer a follower's sync");
+    assert!(follower.check_blocks_from(&producer, ["helsinki-wallet"], &pins).is_ok());
+    assert!(follower.check_blocks_from(&producer, ["someone-else"], &pins).is_err(), "a pinned producer served another producer's block");
+    assert!(follower.check_blocks_from(&relay, ["helsinki-wallet"], &pins).is_ok());
+    assert!(follower.check_blocks_from(&stranger, ["helsinki-wallet"], &pins).is_err(), "a stranger's catch-up range was accepted");
+    assert!(follower.check_blocks_from(&stranger, std::iter::empty::<&str>(), &pins).is_err());
+
+    // The sole validator, no pin: nobody steers its sync; an operator-listed relay can (recovery).
+    let none = ProducerPeers::parse("").unwrap();
+    let sole = SyncTrust::new(&none, "", true).unwrap();
+    assert!(!sole.trusts(&stranger) && !sole.trusts(&producer), "the sole validator trusts a peer it was never told to");
+    assert!(sole.check_blocks_from(&stranger, ["helsinki-wallet"], &none).is_err(), "the sole validator applied blocks in its own name from a peer");
+    let restoring = SyncTrust::new(&none, &relay.to_string(), true).unwrap();
+    assert!(restoring.trusts(&relay) && !restoring.trusts(&stranger));
+
+    // Local development (no pin, not the sole validator): unchanged, every peer.
+    let dev = SyncTrust::new(&none, "", false).unwrap();
+    assert!(dev.trusts(&stranger) && dev.check_blocks_from(&stranger, ["x"], &none).is_ok());
+    assert!(SyncTrust::new(&none, "not-a-peer-id", false).is_err(), "a malformed TET_SYNC_TRUSTED_PEERS must refuse to start");
+
+    // Behaviour: an untrusted hello claiming a far higher height leaves the node synced (it isn't
+    // recorded), while the same hello from a trusted peer makes it "behind", as before.
+    let ledger = open_temp_ledger();
+    let hello = crate::sync::ChainHello {
+        chain_id: "tet-local-dev".into(),
+        block_height: 1_000_000,
+        tip_block_id: "0xfeed".into(),
+        state_root: "0xbeef".into(),
+    };
+    let sync = crate::sync::new_sync_state();
+    crate::p2p::ingest_remote_chain_hello(&sync, &ledger, stranger, hello.clone(), None, sole.trusts(&stranger)).await;
+    let status = sync.with(|s| crate::sync::compute_ledger_sync_status_with_bootnodes(0, &s.registry, &s.driver, s.in_progress.as_ref(), true));
+    assert!(!status.sync.best_peer_height.gt(&0) && sync.with(|s| s.registry.peer_count()) == 0, "an untrusted hello was recorded");
+    assert!(!sync.with(|s| s.registry.any_peer_ahead(0)), "an untrusted hello made the node behind");
+    crate::p2p::ingest_remote_chain_hello(&sync, &ledger, relay, hello, None, restoring.trusts(&relay)).await;
+    assert!(sync.with(|s| s.registry.any_peer_ahead(0)), "a trusted hello no longer counts");
+}
