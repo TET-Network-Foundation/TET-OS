@@ -202,7 +202,7 @@ Bitcoin's 2 h is no template — it is sized for 10-minute blocks.
   4. Archive the old chain's data; wipe the seeds.
   5. Start Helsinki — no block can exist before `genesis_time + 60 s` by the future bound — then
      Nuremberg; check heights and roots agree.
-  6. Re-sign everything chain-bound (devlog; users re-register Tmail keys, which FIPS-203 forces anyway).
+  6. Re-sign everything chain-bound (devlog; users re-register Tmail keys, which the FIPS-203 migration forces anyway).
   7. Docs: SECURITY.md, `RUNNING_A_NODE.md`, the red-by-design tests turning green, a devlog entry.
 
 ### Guards

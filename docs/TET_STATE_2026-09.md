@@ -286,7 +286,7 @@ Transport: TCP + Noise + Yamux, plus mdns, ping, Kademlia, identify, autonat/rel
 
 **Seed node configuration:** `TET_BOOTNODES` (or `BOOTNODES`), comma-separated multiaddrs with `/p2p/<PeerId>`; parsed in `vision/fluid_net.rs`. Persistent libp2p identity at `libp2p_keypair.bin` under `TET_DB_DIR` (`p2p_keystore.rs`); PeerId printed in a boot banner. Production deployment: `deploy/systemd/tet-node.service` (hardened: `NoNewPrivileges`, `ProtectSystem=strict`, `LimitNOFILE=1048576`, `Restart=always`) reading `/etc/tet-node/tet-node.env`. Docker: root `docker-compose.yml` with a CPU service and an `nvidia` GPU profile, healthcheck on `/status`, ports 5010 + 8002 tcp/udp.
 
-**Known live topology (from the logs, as of June):** exactly **two nodes** — a Mac in Switzerland and a Hetzner/VPS in Finland (Helsinki). Whether that VPS is still running today is unknown from the repo. Risk R10 in the spec accepts the single-public-seed SPOF pre-ship.
+**Known live topology (from the logs, as of June):** exactly **two nodes** — a home Mac and a Hetzner/VPS in Finland (Helsinki). Whether that VPS is still running today is unknown from the repo. Risk R10 in the spec accepts the single-public-seed SPOF pre-ship.
 
 ## 2.5 Ledger
 

@@ -209,7 +209,7 @@ export default function HowPanel(props: { go: LandingGo }) {
       {/* 9: about */}
       <div>
         <h2 className={H}>{t("About")}</h2>
-        <p>{t("Built and run by Steve, a student in Switzerland.")}</p>
+        <p>{t("Built by Steve.")}</p>
         <p className="mt-1">
           <a className={cx(LINK, MONO, "text-[14px]")} href="mailto:tetsteve@proton.me">
             tetsteve@proton.me

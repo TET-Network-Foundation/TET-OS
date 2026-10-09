@@ -932,7 +932,7 @@ export type TmailKeysResult = {
   text?: string;
 };
 
-/** `GET /tmail/keys/:wallet_id` — registered X25519 + ML-KEM keys, or `null` on 404. */
+/** `GET /tmail/keys/:wallet_id` — registered X25519 + Kyber-768 (round 3) keys, or `null` on 404. */
 export async function getTmailKeys(baseUrl: string, walletId: string): Promise<TmailKeysResult> {
   const wid = normalizeWalletId64(walletId);
   if (!wid) return { ok: false, status: 400, registration: null, text: "wallet_id must be 64 hex chars" };

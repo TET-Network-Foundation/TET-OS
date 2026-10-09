@@ -124,5 +124,24 @@ await check("control: a page without the Discussions link is caught", () => {
   assert.throws(() => involved(SRC.replace("/discussions`}", "/wiki`}")));
 });
 
+// Quantum resistance is incomplete until Phase 1 (wallet_id_v2: the wallet ID is still the Ed25519
+// key; the ML-DSA key isn't bound to it — SECURITY.md). The comparison row can't say "Yes", and
+// What is TET and About say the limit.
+const ABOUT = readFileSync(new URL("../app/try/AboutPanel.tsx", import.meta.url), "utf8");
+function quantumHonest(what, about) {
+  const row = what.match(/\["Post-quantum signatures today",[^\]]*\]/)?.[0] ?? "";
+  assert.ok(row, "the comparison row is missing");
+  assert.doesNotMatch(row.split(",").slice(3).join(","), /"Yes/, "the TET cell claims full post-quantum signatures today");
+  assert.match(row, /until Phase 1/, "the TET cell doesn't say it's incomplete until Phase 1");
+  assert.match(what, /isn't bound to it until the Phase 1 genesis/, "What is TET doesn't say the ML-DSA key isn't bound yet");
+  assert.match(about, /that protection is incomplete/, "About doesn't say the protection is incomplete");
+}
+await check("quantum resistance is stated as incomplete until Phase 1", () => quantumHonest(SRC, ABOUT));
+await check("control: a \"Yes\" row or a missing limit is caught", () => {
+  assert.throws(() => quantumHonest(SRC.replace("Partly: every transaction also carries", "Yes: every transaction also carries"), ABOUT));
+  assert.throws(() => quantumHonest(SRC.replace("isn't bound to it until the Phase 1 genesis", "is bound to it"), ABOUT));
+  assert.throws(() => quantumHonest(SRC, ABOUT.replace("that protection is incomplete", "it is safe")));
+});
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
