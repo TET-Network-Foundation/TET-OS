@@ -834,7 +834,17 @@ jobs:
         uses: actions/checkout@v4
 
       # docker.io images through Google's public mirror (Docker Hub rate-limits anonymous pulls from
-      # shared CI addresses); BuildKit falls back to docker.io when the mirror lacks an image.
+      # shared CI addresses); BuildKit falls back to docker.io when the mirror lacks an image. The
+      # builder's own image is pulled through the mirror first and tagged, so setting up the builder
+      # doesn't go to Docker Hub either.
+      - if: needs.gate.outputs.code == 'true'
+        name: pull the builder image through a registry mirror
+        run: |
+          set -euo pipefail
+          img=moby/buildkit:buildx-stable-1
+          for attempt in 1 2 3; do docker pull "mirror.gcr.io/$img" && break; sleep 10; done
+          docker tag "mirror.gcr.io/$img" "$img"
+
       - if: needs.gate.outputs.code == 'true'
         uses: docker/setup-buildx-action@v3
         with:
