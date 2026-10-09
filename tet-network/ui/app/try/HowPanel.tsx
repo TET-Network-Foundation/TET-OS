@@ -203,6 +203,7 @@ export default function HowPanel(props: { go: LandingGo }) {
       <div>
         <h2 className={H}>{t("FAQ")}</h2>
         <p>{t("Testnet TET is a practice unit. It has no monetary value and cannot be bought.")}</p>
+        <p className="mt-1">{t("This is a testnet. Data may be reset.")}</p>
       </div>
 
       {/* 9: about */}

@@ -878,7 +878,6 @@ export const JA: Record<string, string> = {
   "Start the thread": "スレッドを立てる",
   "Post": "書き込む",
   "anonymous": "匿名",
-  "trial": "試験運用中",
   "Newest threads": "新着スレッド",
   "Keep this ID? Save your passphrase (12 words)": "この ID を残しますか？パスフレーズ（12語）を保存",
   "This is a testnet. Data may be reset.": "これはテストネットです。データはリセットされることがあります。",
@@ -908,4 +907,5 @@ export const JA: Record<string, string> = {
   "In an age when AI can make anything.": "AIで何でも作れる時代に。",
   "Prove 'I put this out, on this day' in 10\u00a0seconds.": "『これを、この日に出したのは自分』を、10秒で証明。",
   "It proves when, and whose mark. Not who the author is.": "証明できるのは『いつ・誰の印か』まで。作者本人かどうかまでは証明しません。",
+  "The node can't be reached right now. New messages will show when it's back.": "いまノードにつながりません。つながれば新しいメッセージが表示されます。",
 };

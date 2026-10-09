@@ -106,8 +106,7 @@ export default function HomePanel(props: {
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/brand/tet-logo.svg" width={88} height={88} alt={t("TET logo")} className="tet-logo h-[88px] w-[88px]" />
           <p className="text-[22px] font-semibold">
-            TET v0.2{" "}
-            <span className="ml-1 rounded-full border border-[#6b4e00] px-2 py-0.5 align-middle text-[12px] font-semibold text-[#6b4e00]">{t("trial")}</span>
+            TET v0.2
           </p>
         </div>
         <div>

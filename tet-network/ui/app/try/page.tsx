@@ -603,8 +603,8 @@ function TryApp() {
           {panel({ tool: "inside" }, <InsidePanel listings={listings} go={(tool) => go({ tool: tool as ToolId })} />)}
           {panel({ tool: "qr" }, <QrPanel />)}
           {panel({ tool: "site" }, <SitePanel />)}
-          {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} />)}
-          {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} />)}
+          {panel({ tool: "files" }, <FilesTryPanel demoContact={DEMO_CONTACT} active={"tool" in view && view.tool === "files"} />)}
+          {panel({ tool: "mail" }, <MailPanel demoContact={DEMO_CONTACT} dmTarget={dmTarget} active={"tool" in view && view.tool === "mail"} />)}
           {panel({ tool: "about" }, <AboutPanel />)}
           {panel({ tool: "terms" }, <TermsPanel />)}
           {panel({ tool: "live" }, <LivePanel />)}
