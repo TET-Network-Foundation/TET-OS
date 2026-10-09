@@ -609,6 +609,19 @@ jobs:
       # The demo node (docs/DEMO_NODE.md): provision refuses an unsafe demo role, and the composed
       # config exposes only Caddy on 80/443, REST on loopback, no UI port, public mode on, the
       # trusted-proxy range equal to the pinned subnet, and a Caddyfile that trusts no client XFF.
+      # Docker Hub rate-limits anonymous pulls from shared CI addresses (2026-10-09: every run of
+      # this job and the image build failed with "toomanyrequests"). Pull the test's image through
+      # Google's public Docker Hub mirror and tag it under its usual name, so `docker run` finds it
+      # locally. CI only: the seeds and the demo build and pull as before.
+      - if: needs.gate.outputs.code == 'true'
+        name: pull test images through a registry mirror
+        run: |
+          set -euo pipefail
+          for img in caddy:2.8; do
+            for attempt in 1 2 3; do docker pull "mirror.gcr.io/library/$img" && break; sleep 10; done
+            docker tag "mirror.gcr.io/library/$img" "$img"
+          done
+
       - if: needs.gate.outputs.code == 'true'
         name: the demo node exposes only what the design says
         run: bash deploy/tests/demo-node.test.sh
@@ -820,8 +833,24 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         uses: actions/checkout@v4
 
+      # docker.io images through Google's public mirror (Docker Hub rate-limits anonymous pulls from
+      # shared CI addresses); BuildKit falls back to docker.io when the mirror lacks an image. The
+      # builder's own image is pulled through the mirror first and tagged, so setting up the builder
+      # doesn't go to Docker Hub either.
+      - if: needs.gate.outputs.code == 'true'
+        name: pull the builder image through a registry mirror
+        run: |
+          set -euo pipefail
+          img=moby/buildkit:buildx-stable-1
+          for attempt in 1 2 3; do docker pull "mirror.gcr.io/$img" && break; sleep 10; done
+          docker tag "mirror.gcr.io/$img" "$img"
+
       - if: needs.gate.outputs.code == 'true'
         uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
 
       # Build only — nothing is run or pushed. The point is that a broken
       # Dockerfile fails the PR instead of failing the next operator who types
