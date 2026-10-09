@@ -252,15 +252,20 @@ pub fn verify_anonymous_proof(
     let Some(anon) = env.anonymous.as_ref() else {
         return fail("not an anonymous envelope");
     };
+    // A fast post has no proof to verify: it is judged by its posting key's registration
+    // (`TmailStore::send_fast_anonymous`), never here.
+    let Some(proof) = anon.anchor_proof.as_ref() else {
+        return fail("no membership proof (a fast post is checked against its posting key's registration)");
+    };
 
     // 1. content address
     let actual = hex::encode(Sha256::digest(receipt_bytes));
-    if !actual.eq_ignore_ascii_case(anon.anchor_proof.receipt_sha256_hex.trim()) {
+    if !actual.eq_ignore_ascii_case(proof.receipt_sha256_hex.trim()) {
         return fail("receipt hash does not match the announced receipt_sha256_hex");
     }
 
     // 2. the proof itself
-    let Ok(image_id) = decode_image_id_hex(&anon.anchor_proof.image_id_hex) else {
+    let Ok(image_id) = decode_image_id_hex(&proof.image_id_hex) else {
         return fail("malformed image_id_hex");
     };
     // The receipt must come from TET's own membership program: a valid receipt from any other
@@ -274,7 +279,7 @@ pub fn verify_anonymous_proof(
     let receipt_b64 = base64::engine::general_purpose::STANDARD.encode(receipt_bytes);
     let verified = match crate::zk_verifier::verify_tx_receipt_and_journal(
         image_id,
-        anon.anchor_proof.journal_b64.trim(),
+        proof.journal_b64.trim(),
         &receipt_b64,
     ) {
         Ok(v) => v,

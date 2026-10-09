@@ -67,7 +67,25 @@ pub async fn post_tmail_send(
     // included) is refused with the reason, never kept or relayed. The check, the store and any
     // release run as one unit on a blocking thread (`TmailStore::send_anonymous`), so neither a
     // burst of sends nor a client hanging up mid-check can split them.
-    let stored = if env.flags.anonymous {
+    // A fast anonymous post (no proof of its own; docs/plans/FAST_ANON_POSTING.md): accepted only
+    // for a posting key a verified proof registered for this board today, within the invisible
+    // flood guard. Never for polls. Nothing refused is stored.
+    let stored = if env.flags.anonymous && crate::tmail::store::is_fast_post(&env) {
+        use crate::tmail::store::FastSendError as F;
+        let (store, e2) = (state.tmail.clone(), env.clone());
+        let err = |code: StatusCode, msg: &str| (code, Json(serde_json::json!({ "ok": false, "error": msg }))).into_response();
+        match tokio::task::spawn_blocking(move || store.send_fast_anonymous(&e2)).await {
+            Ok(Ok(stored)) => stored,
+            Ok(Err(F::NotRegistered)) => return err(StatusCode::FORBIDDEN, "no proof for this board today yet: the first anonymous post of the day carries one"),
+            Ok(Err(F::Poll)) => return err(StatusCode::FORBIDDEN, "a ballot needs its own membership proof"),
+            Ok(Err(F::WrongDay)) => return err(StatusCode::BAD_REQUEST, "a posting key is for one UTC day; this post is dated another"),
+            Ok(Err(F::Busy)) => return err(StatusCode::TOO_MANY_REQUESTS, "try again in a moment"),
+            Ok(Err(F::DailyCap)) => return err(StatusCode::TOO_MANY_REQUESTS, "today's anonymous posts on this board are used; try again tomorrow"),
+            Ok(Err(F::NotFast)) => return err(StatusCode::BAD_REQUEST, "not a fast post"),
+            Ok(Err(F::Store(e))) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+            Err(j) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")).into_response(),
+        }
+    } else if env.flags.anonymous {
         let (store, e2) = (state.tmail.clone(), env.clone());
         match tokio::task::spawn_blocking(move || store.send_anonymous(&e2)).await {
             Ok(Ok(stored)) => stored,
@@ -139,6 +157,19 @@ pub struct InboxQuery {
 /// Phase 0.1.
 ///
 /// One clock reading is taken for the whole response so rows cannot disagree about "now".
+/// `GET /tmail/anon/fast/:receiver/:posting_key` — is this posting key registered for this board
+/// today? (The page asks before posting: registered means the next post needs no proof.) Reveals
+/// nothing a reader of the board doesn't already see: posting keys sign the posts.
+pub async fn get_tmail_anon_fast(
+    State(state): State<RestState>,
+    Path((receiver, posting_key)): Path<(String, String)>,
+) -> axum::response::Response {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let bucket = nexus_protocol::tmail_bucket_index_v1(now);
+    let reg = state.tmail.fast_registration(&receiver, bucket, &posting_key);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "bucket": bucket, "registered": reg.is_some() }))).into_response()
+}
+
 pub async fn get_tmail_inbox(
     State(state): State<RestState>,
     Path(wallet_id): Path<String>,
