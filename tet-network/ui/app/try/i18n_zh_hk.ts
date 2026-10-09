@@ -625,7 +625,6 @@ export const ZH_HK: Record<string, string> = {
   "What is TET?": "TET 是甚麼？",
   "This site's chain doesn't check (edit {n}: {why}). Not showing it.": "此網站的鏈未能通過檢查（編輯 {n}：{why}）。不予顯示。",
   "Signed site": "已簽署網站",
-  "A network where anyone can check who made something, and when.": "任何人都能核實「誰在何時製作了甚麼」的網絡。",
   "What is TET": "TET 是甚麼",
   "Proves:": "證明：",
   "Doesn't prove:": "不證明：",
@@ -906,4 +905,7 @@ export const ZH_HK: Record<string, string> = {
   "How long it's kept": "保存期限",
   "Anyone: questions, ideas and feedback in GitHub Discussions.": "任何人：問題、想法及意見，歡迎到 GitHub Discussions。",
   "Discussions": "討論區",
+  "In an age when AI can make anything.": "在 AI 甚麼都能造出來的時代。",
+  "Prove 'I put this out, on this day' in 10\u00a0seconds.": "「這是我在這一天發出的」，10 秒內證明。",
+  "It proves when, and whose mark. Not who the author is.": "能證明的只是「何時、誰的印記」，並不證明誰是作者。",
 };

@@ -13,7 +13,7 @@
 //    publishes the record with consent; nothing posts the file's bytes. Control: an upload is caught.
 
 import { register } from "node:module";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 
 register("./lib/ts_hooks.mjs", import.meta.url);
@@ -95,6 +95,47 @@ const fingerprintOnly = (src) => {
 };
 await check("marking sends the fingerprint, never the file", () => fingerprintOnly(PANEL));
 await mustThrow("an upload is caught", () => fingerprintOnly(PANEL.replace("const chain = await", "await fetch('/tet-node-api/files/upload', { method: 'POST', body: bytes });\n      const chain = await")));
+
+// ── Never "proves you made it" ─────────────────────────────────────────────────────────────────
+// A mark proves when, and whose mark: not authorship. No page string, and no translation, may say
+// it proves you made something; and the home headline carries its limit right under it.
+const TRY_DIR = new URL("../app/try/", import.meta.url);
+const ALL_TRY = readdirSync(TRY_DIR)
+  .filter((f) => /\.(tsx|ts)$/.test(f))
+  .map((f) => [f, readFileSync(new URL(f, TRY_DIR), "utf8")]);
+const AUTHORSHIP = [
+  /prove[sd]?\s+(?:that\s+)?you\s+(?:made|created|wrote|authored)/i,
+  /proof\s+(?:that\s+)?you\s+(?:made|created|wrote)/i,
+  /proves?\s+(?:who\s+)?(?:the\s+)?author(?:ship)?\b(?!\s+is\.)/i,
+  /作ったことを証明|作ったことの証明|作者であることを証明|制作者であることを証明|あなたが作ったと証明/,
+  /證明(?:是)?你(?:製作|做|創作|寫)|證明你是作者/,
+];
+function noAuthorshipClaim(files) {
+  const bad = [];
+  for (const [f, src] of files) {
+    const strings = [...src.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
+    for (const x of strings) if (AUTHORSHIP.some((r) => r.test(x))) bad.push(`${f}: ${x.slice(0, 90)}`);
+  }
+  assert.deepEqual(bad, [], bad.join("\n     "));
+}
+await check("no page or translation says a mark proves you made it", () => noAuthorshipClaim(ALL_TRY));
+await check("control: \"proves you made it\" and 「作ったことを証明」 are caught", () => {
+  assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["x.tsx", 't("This proves you made it.")']]));
+  assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["i18n_ja.ts", '"x": "あなたが作ったことを証明します"']]));
+  assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["i18n_zh_hk.ts", '"x": "證明是你製作的"']]));
+});
+
+const HOME = readFileSync(new URL("../app/try/HomePanel.tsx", import.meta.url), "utf8");
+function headlineHasItsLimit(src) {
+  const i = src.indexOf(`t("Prove 'I put this out, on this day'`);
+  assert.ok(i >= 0, "the headline is missing");
+  const after = src.slice(i, i + 600);
+  assert.ok(after.includes('t("It proves when, and whose mark. Not who the author is.")'), "the limit line isn't right under the headline");
+}
+await check("the home headline carries its limit right under it", () => headlineHasItsLimit(HOME));
+await check("control: a headline without its limit line is caught", () => {
+  assert.throws(() => headlineHasItsLimit(HOME.replace('t("It proves when, and whose mark. Not who the author is.")', 't("Try it.")')));
+});
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
