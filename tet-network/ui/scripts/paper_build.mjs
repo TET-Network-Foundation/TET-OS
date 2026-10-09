@@ -16,7 +16,7 @@
 
 import { register } from "node:module";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -40,20 +40,18 @@ const pc = await import("../app/lib/proof_code.ts");
 const { CONSENT_PAYLOAD_TYPE } = pc;
 const { signContent, sigJsonBytes } = await import("../app/lib/sign_anything.ts");
 const trySession = await import("../app/lib/try_session.ts");
-const { generateDisposableWords } = await import("../app/lib/disposable_wallet.mjs");
 
 const { paperHtml, esc } = await import("./lib/paper_html.mjs");
 
 const sha256hex = (b) => createHash("sha256").update(b).digest("hex");
 
-/** The publisher ID: TET's own, kept outside the repository. Made once if missing. */
+/** The publisher ID: TET's own, kept outside the repository. Never made here: a key nobody has
+ * written down is a key nobody can recover, so it is made only by scripts/new_publisher_key.mjs. */
 function publisherWords() {
   const path = process.env.TET_PUBLISHER_WORDS || join(homedir(), ".tet", "tet-publisher.words");
   if (!existsSync(path)) {
-    mkdirSync(join(path, ".."), { recursive: true });
-    writeFileSync(path, generateDisposableWords() + "\n", { mode: 0o600 });
-    chmodSync(path, 0o600);
-    console.log(`made a new publisher ID: ${path} (keep it; it is TET's marking key)`);
+    console.error(`No publisher key at ${path}. Make one in your own terminal: node scripts/new_publisher_key.mjs`);
+    process.exit(2);
   }
   return readFileSync(path, "utf8").trim();
 }
