@@ -100,3 +100,31 @@ recognised" is forgotten without a tombstone (#78), and its posts with it.
 1. Flood interval (10 s?) and daily cap (200?).
 2. Should the first post wait for the proof, or go out named if the member doesn't want to wait?
 3. "Revoke today's key" now or later?
+
+## Security review before building (2026-10-10)
+
+The design was reviewed before any code. Five changes are required; with them it keeps the
+properties of today's anonymous posting. They are folded into the implementation and its tests.
+
+1. **Bounded pending posts** (rule 5 as written allowed a flood). A node holds a gossiped fast post
+   as pending **only** if it already holds a registering post, not yet verified, for that exact
+   posting key, board and day. Otherwise the post is dropped. Pending posts are capped (proposed:
+   50 per key, 5,000 per node) and expire after 10 minutes if the registration hasn't verified.
+   A REST-submitted fast post with no registered key is refused, as in rule 3.
+2. **No fast path for polls.** Poll wallets (receivers with a registered poll root) never accept
+   fast posts: one proof, one ballot. Without this, a registered key could vote many times.
+3. **A per-daily-ID share of the board's anonymous retention.** The board keeps its newest 100
+   anonymous posts. One daily ID may hold at most 20 of them, and its own oldest go first, so one
+   member can't push everyone else off a board.
+4. **Invisible flood guard** (founder, 2026-10-09: no visible per-minute limit). Per posting key,
+   the node allows a burst of 5, then one post every 3 s, and at most 200 a day. The page paces
+   posts silently, as named posts do. A refusal is a last resort, worded as a retry ("try again
+   in a moment"), never as a limit.
+5. **Unambiguous paths.**
+   - A fast post carries no proof. A post that carries a proof is judged only by the proof, and
+     never falls back to the fast path.
+   - Registrations are stored with their day and dropped after it.
+   - Registrations survive a node restart (sled).
+
+Unchanged: who can post anonymously, what a post reveals, and the one-daily-ID-per-board-per-day
+linkability, which the page states next to the ID.
