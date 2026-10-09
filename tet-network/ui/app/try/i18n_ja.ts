@@ -625,7 +625,6 @@ export const JA: Record<string, string> = {
   "What is TET?": "TET とは？",
   "This site's chain doesn't check (edit {n}: {why}). Not showing it.": "このサイトのチェーンは確認できません（編集 {n}: {why}）。表示しません。",
   "Signed site": "署名済みサイト",
-  "A network where anyone can check who made something, and when.": "誰が・いつ作ったかを、誰でも確かめられるネットワーク",
   "What is TET": "TET とは",
   "Proves:": "証明すること:",
   "Doesn't prove:": "証明しないこと:",
@@ -906,4 +905,7 @@ export const JA: Record<string, string> = {
   "How long it's kept": "保存期間",
   "Anyone: questions, ideas and feedback in GitHub Discussions.": "誰でも：質問・アイデア・感想は GitHub Discussions へ。",
   "Discussions": "ディスカッション",
+  "In an age when AI can make anything.": "AIで何でも作れる時代に。",
+  "Prove 'I put this out, on this day' in 10\u00a0seconds.": "『これを、この日に出したのは自分』を、10秒で証明。",
+  "It proves when, and whose mark. Not who the author is.": "証明できるのは『いつ・誰の印か』まで。作者本人かどうかまでは証明しません。",
 };

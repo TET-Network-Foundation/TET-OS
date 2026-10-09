@@ -24,6 +24,12 @@ import { parseProofCode } from "../lib/proof_code";
 
 const LINK = cx(FOCUS, "rounded-sm underline underline-offset-2");
 
+/** A line split after its last 、 or ， (one part when there is none). */
+export function lastCommaParts(line: string): string[] {
+  const i = Math.max(line.lastIndexOf("、"), line.lastIndexOf("，"));
+  return i < 0 ? [line] : [line.slice(0, i + 1), line.slice(i + 1)];
+}
+
 export default function HomePanel(props: {
   go: (tool: string) => void;
   listings: PublicListing[] | null;
@@ -104,7 +110,20 @@ export default function HomePanel(props: {
             <span className="ml-1 rounded-full border border-[#6b4e00] px-2 py-0.5 align-middle text-[12px] font-semibold text-[#6b4e00]">{t("trial")}</span>
           </p>
         </div>
-        <p className="text-[16px] text-[#3d434a]">{t("A network where anyone can check who made something, and when.")}</p>
+        <div>
+          <p className="text-[18px] font-semibold leading-snug md:text-[21px]">
+            {t("In an age when AI can make anything.")}
+            <br />
+            {/* Break only after the last 、/， (ja/zh), never before を; each part still wraps if too wide. */}
+            {lastCommaParts(t("Prove 'I put this out, on this day' in 10\u00a0seconds.")).map((part, i) => (
+              <span key={i} className="inline-block">
+                {part}
+              </span>
+            ))}
+          </p>
+          {/* The limit, right under the claim (try_genuine_guard). */}
+          <p className="mt-1 text-[13px] text-[#5d646d]">{t("It proves when, and whose mark. Not who the author is.")}</p>
+        </div>
         <form
           onSubmit={submit}
           className="flex gap-2"

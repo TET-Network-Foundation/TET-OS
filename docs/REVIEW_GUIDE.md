@@ -11,11 +11,11 @@ Nothing here is merged or deployed. After your review, I merge in the order belo
 
 ## Merge order
 
-1. **#73** and **#78**: two security fixes based on `main`. The poll stack already contains both, so merge them first.
+1. **#73** and **#78**: two security fixes based on `main`. **Both are merged and deployed on the seeds** (2026-10-09).
 2. **#70**: the base of the stack. It's outside #71–#84, but #71 is built on it.
 3. Then the stack, in order:
 
-   **#71 → #72 → #74 → #76 → #77 → #79 → #80 → #81 → #83 → #84**
+   **#71 → #72 → #74 → #76 → #77 → #79 → #80 → #81 → #83 → #84 → #86**
 
 **How each PR is merged:**
 - Merge commits, not squash, so each next PR's history still lines up.
@@ -112,6 +112,11 @@ Nothing here is merged or deployed. After your review, I merge in the order belo
   - a GitHub Discussions link under "Get involved", now that Discussions is on.
 - **To see it:** home → TET の中身.
 - **Risk:** the demo's Caddy allowlist gains `GET /tet-node-api/stats/inside` (already in `deploy/demo/Caddyfile`).
+
+**#86: the home headline (stacked on #84).**
+- **What changed:** 「AIで何でも作れる時代に。」「『これを、この日に出したのは自分』を、10秒で証明。」, with the limit right under it: 「証明できるのは『いつ・誰の印か』まで。作者本人かどうかまでは証明しません。」 The same in en and zh-HK.
+- **To see it:** the home screen.
+- **Risk:** "10秒" is a claim. `scripts/try_ten_seconds_e2e.mjs` measured pick file → mark → code shown, plus the verify lookup, at worst 2.6 s of machine time on a laptop profile in Japan using a node in Germany. That run used my local node with emulated latency, because the demo itself isn't reachable from here; re-run it against the demo once it's up. A guard bans "proves you made it" / 「作ったことを証明」 everywhere.
 
 ## 15-minute click-through (local site, Japanese)
 
