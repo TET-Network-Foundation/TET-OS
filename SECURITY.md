@@ -66,7 +66,9 @@ wallet. The fix (the wallet id commits to both public keys, ML-DSA level pinned 
 wallet id and is scheduled for Phase 1.
 
 **Blocks are authenticated by the producer's PeerId, not yet by a producer signature.** Followers pin
-the producer's PeerId by default; the full producer signature lands at Phase 1.
+the producer's PeerId by default, for blocks that arrive by gossip and by sync alike; the sole
+producer takes no blocks from peers unless its operator names one. The full producer signature lands
+at Phase 1.
 
 **Anonymity is weak today, by construction.** An anonymous sender is anonymous among the
 registrations *their node has seen*. On today's testnet that set is small, so the anonymity set is
@@ -99,6 +101,13 @@ was labelled as failed, but it was still kept, served and relayed to other nodes
 deployed on both seeds on 2026-10-09, a node checks the proof before it stores anything, refuses a
 post whose proof fails with the reason, and deletes a failed post that reaches it any other way.
 Such posts were always labelled as failed; none was shown as verified.
+
+**Fixed: blocks received during chain sync were not held to the producer pin.** Until 2026-10-09 the
+producer-PeerId pin applied only to blocks that arrived by gossip; blocks and height announcements
+that arrived through chain sync were taken from any connected peer. Since 8239d10, deployed on both
+seeds on 2026-10-09, a node takes them only from trusted peers: a follower from its pinned producer,
+and the sole producer from no peer unless its operator names one. Transaction signatures were checked
+throughout, so no balance could move without its wallet's signature.
 
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
