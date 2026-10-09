@@ -236,8 +236,11 @@ export async function postAnonymous(
   board: OpenBoard,
   text: string,
   onState: (s: AnonSendState) => void,
+  knownMember = false,
 ): Promise<AnonSendState> {
-  return postAnonymousTo(baseUrl, proverUrl, boardRecipient(board), text, onState);
+  const out = await postAnonymousTo(baseUrl, proverUrl, boardRecipient(board), text, onState, undefined, knownMember);
+  if (out.state === "sent") noteRegisteredToday(board.boardWalletId);
+  return out;
 }
 
 /** An anonymous Tmail to `to`, through the native prover. Nothing sent to the node names the sender. */
@@ -254,8 +257,23 @@ export async function prewarmBoardProof(baseUrl: string, proverUrl: string, boar
   if (!ks) return "no wallet";
   return prewarmAnonProof(
     { node: anonNodeAdapter(baseUrl), prove: makeHelperProver({ url: proverUrl }), ephemeralWalletId: ephemeralWalletIdFromSeed, now: () => Date.now(), proofCache: PROOF_CACHE },
-    { memberSecret: ks.anonMemberSecret, receiverWalletId: board.boardWalletId },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: board.boardWalletId, registeredToday: registeredToday(board.boardWalletId) },
   );
+}
+
+/**
+ * This page's memory that today's posting key for a board is registered (after a post here). In
+ * memory only, never in browser storage: a stored note would leave a trace, on the device, that it
+ * posted anonymously on that board today. After a reload the tab just proves again in the
+ * background; the node is asked at posting time anyway.
+ */
+const REGISTERED_TODAY = new Set<string>();
+const fastNoteKey = (board: string) => `${board}:${Math.floor(Date.now() / 86_400_000)}`;
+export function registeredToday(board: string): boolean {
+  return REGISTERED_TODAY.has(fastNoteKey(board));
+}
+export function noteRegisteredToday(board: string): void {
+  REGISTERED_TODAY.add(fastNoteKey(board));
 }
 
 export async function postAnonymousTo(
@@ -265,6 +283,7 @@ export async function postAnonymousTo(
   text: string,
   onState: (s: AnonSendState) => void,
   memberTree?: { leaves: Uint8Array[]; rootHex: string },
+  knownMember = false,
 ): Promise<AnonSendState> {
   const ks = getTmailKeySession();
   if (!ks) return { state: "failed", reason: "Create a disposable wallet first." };
@@ -296,7 +315,7 @@ export async function postAnonymousTo(
       now: () => Date.now(),
       onState,
     },
-    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text, memberTree },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text, memberTree, knownMember },
   )) as AnonSendState;
 }
 

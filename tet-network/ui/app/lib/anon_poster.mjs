@@ -168,15 +168,15 @@ export async function fetchAnonLeaves(node) {
 
 /**
  * Start today's proof for a board in the background (fast anonymous posting): when the member opens
- * a board, the first anonymous post of the day needn't wait the whole ~30 s. Does nothing if this
- * node already has today's posting key registered, or a proof for this board and day is already
- * cached. The proof is bound to the posting key, board and day, not to a message, so it can be made
+ * a board, the first anonymous post of the day needn't wait the whole ~30 s. Does nothing if the
+ * tab knows today's key is registered (`registeredToday`), or a proof for this board and day is
+ * already cached. It never asks the node about the posting key. The proof is bound to the posting key, board and day, not to a message, so it can be made
  * before the post is written. Never for polls.
  *
  * @param {{ node: (path: string, init?: { method?: string, body?: string }) => Promise<{ status: number, json: any }>,
  *   prove: (params: AnonProveParams) => Promise<AnonProof>, ephemeralWalletId: (seed: Uint8Array) => Promise<string>,
  *   now: () => number, proofCache: Map<string, Promise<AnonProof>> }} deps
- * @param {{ memberSecret: Uint8Array, receiverWalletId: string }} input
+ * @param {{ memberSecret: Uint8Array, receiverWalletId: string, registeredToday?: boolean }} input
  * @returns {Promise<"registered" | "cached" | "started" | "not_in_set">}
  */
 export async function prewarmAnonProof(deps, input) {
@@ -184,10 +184,12 @@ export async function prewarmAnonProof(deps, input) {
   const bucket = tmailBucketIndex(deps.now());
   const key = `${receiver}:${bucket}`;
   if (deps.proofCache.has(key)) return "cached";
+  // The tab remembers that today's key is registered (after a post); otherwise prove. The node is
+  // not asked about the posting key here: opening a board must not show it a key the member may
+  // never use. It sees the key only when a post is sent.
+  if (input.registeredToday) return "registered";
   const ephemeralSeed = tmailEphemeralSeed(input.memberSecret, fromHex(receiver), bucket);
   const ephemeral = (await deps.ephemeralWalletId(ephemeralSeed)).trim().toLowerCase();
-  const q = await deps.node(`/tmail/anon/fast/${receiver}/${ephemeral}`, { method: "GET" });
-  if (q.status === 200 && q.json?.registered === true) return "registered";
   const set = await fetchAnonLeaves(deps.node);
   const mine = toHex(anonCommitment(input.memberSecret));
   const index = set.leaves.findIndex((l) => toHex(l) === mine);
@@ -212,7 +214,7 @@ export async function prewarmAnonProof(deps, input) {
  *   proveBudgetMs?: number,
  *   proofCache?: Map<string, Promise<AnonProof>>,
  * }} deps
- * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string, memberTree?: { leaves: Uint8Array[], rootHex: string } }} input
+ * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string, memberTree?: { leaves: Uint8Array[], rootHex: string }, knownMember?: boolean }} input
  * @returns {Promise<AnonPostState>}
  */
 export async function runAnonPost(deps, input) {
@@ -235,7 +237,9 @@ export async function runAnonPost(deps, input) {
     const bucket = tmailBucketIndex(sentAtMs);
     const ephemeralSeed = tmailEphemeralSeed(input.memberSecret, fromHex(receiver), bucket);
     const ephemeral = (await deps.ephemeralWalletId(ephemeralSeed)).trim().toLowerCase();
-    if (!input.memberTree) {
+    // Ask only for a caller that already knows this is a member: a non-member's request shows the
+    // node nothing but the registry download (anon_poster_guard), not a would-be posting key.
+    if (!input.memberTree && input.knownMember) {
       const q = await deps.node(`/tmail/anon/fast/${receiver}/${ephemeral}`, { method: "GET" });
       if (q.status === 200 && q.json?.registered === true) {
         emit({ state: "sending" });

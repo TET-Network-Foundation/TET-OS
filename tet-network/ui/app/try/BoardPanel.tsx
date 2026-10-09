@@ -21,7 +21,7 @@ import { boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
 import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, NAME_MAX, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
-import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, prewarmBoardProof, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
+import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, prewarmBoardProof, readBoard, registeredToday, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
 import { getUi, setUi } from "../lib/device_store";
@@ -183,7 +183,7 @@ export default function BoardPanel(props: {
   const [sage, setSage] = useState(false);
   const sentTimes = useRef<number[]>([]);
   // Fast anonymous posting: is today's posting key for this board registered on this node?
-  const [fastReady, setFastReady] = useState(false);
+  const [fastReady, setFastReady] = useState(() => registeredToday(board.boardWalletId));
   // A display name for this tab's posts (blank: Anonymous / 名無しさん). Not stored, not checked.
   const [name, setName] = useState("");
   const [makingPoll, setMakingPoll] = useState(false);
@@ -391,7 +391,7 @@ export default function BoardPanel(props: {
           if (s.state === "proving") patch(id, { step: "proving" });
           else if (s.state === "depositing") patch(id, { step: "depositing" });
           else if (s.state === "sending") patch(id, { step: "sending" });
-        });
+        }, isMember);
         if (out.state === "sent") {
           sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
           setFastReady(true);

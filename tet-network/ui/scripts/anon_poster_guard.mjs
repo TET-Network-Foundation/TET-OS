@@ -35,6 +35,7 @@ import {
   ANON_PROVER_MISSING,
   ANONYMOUS_SENTINEL,
   makeHelperProver,
+  prewarmAnonProof,
   runAnonPost,
   sendPathFor,
 } from "../app/lib/anon_poster.mjs";
@@ -82,7 +83,7 @@ const memberSecret = fill(32, 0x42);
 const mine = toHex(anonCommitment(memberSecret));
 const others = [1, 2, 3, 4].map((b) => anonCommitment(fill(32, b)));
 
-function fakeNode({ includePoster = true } = {}) {
+function fakeNode({ includePoster = true, fastRegistered = false } = {}) {
   const leaves = includePoster ? [others[0], anonCommitment(memberSecret), ...others.slice(1)] : others;
   const root = toHex(anonRootAndPath(leaves, -1).root);
   const requests = [];
@@ -102,6 +103,7 @@ function fakeNode({ includePoster = true } = {}) {
       };
     }
     if (url.pathname === "/tmail/anon/receipt") return { status: 200, json: { ok: true } };
+    if (url.pathname.startsWith("/tmail/anon/fast/")) return { status: 200, json: { ok: true, registered: fastRegistered } };
     if (url.pathname === "/tmail/send") {
       return { status: 202, json: { ok: true, msg_id: JSON.parse(init.body).msg_id } };
     }
@@ -126,6 +128,7 @@ function deps(node, states, proveCalls) {
       };
     },
     buildEnvelope: async (a) => ({
+      _proof: a.proof,
       msg_id: "m-1",
       sender_wallet_id: ANONYMOUS_SENTINEL,
       receiver_wallet_id: a.receiverWalletId,
@@ -190,6 +193,55 @@ function deps(node, states, proveCalls) {
     "not in the set → nothing but the registry download",
     proveCalls.length === 0 && requests.every((r) => r.startsWith("GET /tmail/anon/leaves")),
   );
+}
+
+// ---- 5. fast anonymous posting (docs/plans/FAST_ANON_POSTING.md) ----------------------------
+// A known member whose posting key is registered today: one question, one send, no proof, nothing
+// that names the poster. Not registered: the full path, with the proof. A caller that doesn't know
+// it's a member, and a poll, never ask about the posting key; the background prewarm never does.
+// Negative control (run by hand, recorded in the commit): the `input.knownMember` condition removed
+// from `runAnonPost` → "never asks about the posting key unless known to be a member" FAILED.
+{
+  const needles = [POSTER_WALLET, mine, toHex(memberSecret)];
+  {
+    const { node, requests } = fakeNode({ fastRegistered: true });
+    const states = [];
+    const proveCalls = [];
+    const out = await runAnonPost(deps(node, states, proveCalls), { memberSecret, receiverWalletId: "cd".repeat(32), plaintext: "fast", knownMember: true });
+    const sent = requests.find((r) => r.startsWith("POST /tmail/send"));
+    const env = sent ? JSON.parse(sent.slice("POST /tmail/send ".length)) : null;
+    check("fast: a registered key posts at once, with no proof", out.state === "sent" && out.fast === true && proveCalls.length === 0 && env?._proof === null, states.join(">"));
+    check("fast: one question and one send, no registry download", requests.length === 2 && requests[0].startsWith("GET /tmail/anon/fast/") && requests[1].startsWith("POST /tmail/send"), requests.map((r) => r.slice(0, 40)).join(" | "));
+    check("SECURITY: fast: no request names the poster", !requests.some((r) => needles.some((n) => r.toLowerCase().includes(n))));
+  }
+  {
+    const { node, requests } = fakeNode({ fastRegistered: false });
+    const proveCalls = [];
+    const out = await runAnonPost(deps(node, [], proveCalls), { memberSecret, receiverWalletId: "cd".repeat(32), plaintext: "first", knownMember: true });
+    const sent = requests.find((r) => r.startsWith("POST /tmail/send"));
+    const env = sent ? JSON.parse(sent.slice("POST /tmail/send ".length)) : null;
+    check("fast: an unregistered key takes the full path, with its proof", out.state === "sent" && proveCalls.length === 1 && env?._proof !== null);
+  }
+  {
+    const { node, requests } = fakeNode({ fastRegistered: true });
+    await runAnonPost(deps(node, [], []), { memberSecret, receiverWalletId: "cd".repeat(32), plaintext: "x" });
+    const leaves = [anonCommitment(memberSecret)];
+    const { node: n2, requests: r2 } = fakeNode({ fastRegistered: true });
+    await runAnonPost(deps(n2, [], []), { memberSecret, receiverWalletId: "cd".repeat(32), plaintext: "ballot", knownMember: true, memberTree: { leaves, rootHex: toHex(anonRootAndPath(leaves, -1).root) } });
+    check("SECURITY: never asks about the posting key unless known to be a member", !requests.some((r) => r.includes("/tmail/anon/fast/")));
+    check("SECURITY: a poll never takes the fast path", !r2.some((r) => r.includes("/tmail/anon/fast/")));
+  }
+  {
+    const { node, requests } = fakeNode({ fastRegistered: true });
+    const proveCalls = [];
+    const cache = new Map();
+    const d = { ...deps(node, [], proveCalls), proofCache: cache };
+    const r1 = await prewarmAnonProof(d, { memberSecret, receiverWalletId: "cd".repeat(32), registeredToday: true });
+    check("prewarm: a key the tab knows is registered → nothing asked, nothing proved", r1 === "registered" && requests.length === 0 && proveCalls.length === 0);
+    const r2 = await prewarmAnonProof(d, { memberSecret, receiverWalletId: "cd".repeat(32) });
+    const r3 = await prewarmAnonProof(d, { memberSecret, receiverWalletId: "cd".repeat(32) });
+    check("SECURITY: prewarm never asks the node about the posting key", r2 === "started" && r3 === "cached" && proveCalls.length === 1 && !requests.some((r) => r.includes("/tmail/anon/fast/")));
+  }
 }
 
 // ---- 3. anonymous mode never takes the named path -------------------------------------------
