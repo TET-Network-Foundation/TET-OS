@@ -40,7 +40,7 @@ const LIMITS = (t: (en: string) => string) => [
   t("A delivered file proves which ID sent it and that only the recipient can open it. It doesn't prove who is behind that ID, or that the file is what its name says."),
 ];
 
-export default function FilesTryPanel(props: { demoContact: string }) {
+export default function FilesTryPanel(props: { demoContact: string; active: boolean }) {
   const { t, locale } = useLang();
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
   const [publishing, setPublishing] = useState(false);
@@ -92,15 +92,16 @@ export default function FilesTryPanel(props: { demoContact: string }) {
     };
   }, []);
 
+  // Only while this panel is the one on screen: home and other pages never fetch your inbox or keys.
   useEffect(() => {
-    if (!wallet) return;
+    if (!wallet || !props.active) return;
     const first = setTimeout(() => void checkKeys().then(refresh).catch(() => {}), 0);
     const t = setInterval(() => void refresh(), POLL_MS);
     return () => {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [wallet, checkKeys, refresh]);
+  }, [wallet, checkKeys, refresh, props.active]);
 
   async function onSend() {
     if (!file) return;

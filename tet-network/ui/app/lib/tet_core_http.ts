@@ -48,8 +48,12 @@ export function tetCoreUrl(baseUrl: string, path: string, params?: Record<string
   return `${raw}${raw.includes("?") ? "&" : "?"}${qs}`;
 }
 
+/**
+ * One plain line per real failure, as a warning: the page shows the user what happened, and an
+ * expected answer (a 404 "none yet") is never logged at all (see `fetchJson`'s `expected`).
+ */
 function logHttpFailure(context: string, payload: LogHttpFailurePayload): void {
-  if (typeof console === "undefined" || !console.error) return;
+  if (typeof console === "undefined" || !console.warn) return;
   const d = payload.detail ?? "";
   const hint =
     d.includes("Failed to fetch") || d.includes("NetworkError") || d.includes("Load failed")
@@ -57,12 +61,9 @@ function logHttpFailure(context: string, payload: LogHttpFailurePayload): void {
       : d.includes("ECONNREFUSED") || d.includes("Connection refused")
         ? " (connection refused — is TET-Core running?)"
         : "";
-  console.error(`[tet_core_http] ${context}${hint}`, {
-    url: payload.url,
-    ...(payload.status !== undefined && payload.status > 0 ? { httpStatus: payload.status } : {}),
-    ...(payload.responseBody !== undefined ? { responseBody: payload.responseBody } : {}),
-    ...(payload.detail !== undefined && payload.detail !== "" ? { detail: payload.detail } : {}),
-  });
+  const status = payload.status !== undefined && payload.status > 0 ? ` HTTP ${payload.status}` : "";
+  const body = payload.responseBody ? `: ${payload.responseBody.trim().slice(0, 200)}` : payload.detail ? `: ${payload.detail}` : "";
+  console.warn(`[tet_core_http] ${context}${hint}${status} ${payload.url}${body}`);
 }
 
 export type LedgerMeJson = {
@@ -140,7 +141,12 @@ export type EnterpriseInferenceSubmitResult = {
   task_id_hint?: string;
 };
 
-export async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ ok: boolean; data?: T; status: number; text?: string }> {
+export async function fetchJson<T>(
+  url: string,
+  init?: RequestInit,
+  /** Statuses that are a normal answer here (e.g. 404 "none yet"): returned, never logged. */
+  opts?: { expected?: number[] },
+): Promise<{ ok: boolean; data?: T; status: number; text?: string }> {
   try {
     const r = await fetch(url, {
       ...init,
@@ -148,6 +154,7 @@ export async function fetchJson<T>(url: string, init?: RequestInit): Promise<{ o
     });
     const text = await r.text();
     if (!r.ok) {
+      if (opts?.expected?.includes(r.status)) return { ok: false, status: r.status, text };
       logHttpFailure("HTTP error response", {
         url,
         status: r.status,
@@ -901,7 +908,9 @@ export async function getTmailInbox(
     count?: number;
     locked_count?: number;
     messages?: TmailInboxRowV1[];
-  }>(tetCoreUrl(baseUrl, `/tmail/inbox/${wid}`, { limit: String(clamped) }));
+  }>(tetCoreUrl(baseUrl, `/tmail/inbox/${wid}`, { limit: String(clamped) }), undefined, { expected: [404] });
+  // No inbox yet is a normal state: an empty inbox.
+  if (r.status === 404) return { ok: true, status: 404, messages: [], count: 0, lockedCount: 0 };
   if (!r.ok) {
     return { ok: false, status: r.status, messages: [], count: 0, lockedCount: 0, text: r.text };
   }
@@ -929,6 +938,8 @@ export async function getTmailKeys(baseUrl: string, walletId: string): Promise<T
   if (!wid) return { ok: false, status: 400, registration: null, text: "wallet_id must be 64 hex chars" };
   const r = await fetchJson<{ ok?: boolean; registration?: TmailKeyRegistrationV1 }>(
     tetCoreUrl(baseUrl, `/tmail/keys/${wid}`),
+    undefined,
+    { expected: [404] },
   );
   if (r.status === 404) return { ok: true, status: 404, registration: null };
   if (!r.ok) return { ok: false, status: r.status, registration: null, text: r.text };
@@ -1052,7 +1063,11 @@ export async function getFilesInbox(baseUrl: string, walletId: string, limit = 5
   const clamped = Math.max(1, Math.min(200, Math.floor(limit)));
   const r = await fetchJson<{ ok?: boolean; count?: number; files?: FileEnvelopeV1[] }>(
     tetCoreUrl(baseUrl, `/files/inbox/${wid}`, { limit: String(clamped) }),
+    undefined,
+    { expected: [404] },
   );
+  // Nothing received yet is a normal state: an empty list.
+  if (r.status === 404) return { ok: true, status: 404, files: [], count: 0 };
   if (!r.ok) return { ok: false, status: r.status, files: [], count: 0, text: r.text };
   const files = Array.isArray(r.data?.files) ? r.data!.files! : [];
   return { ok: true, status: r.status, files, count: files.length };

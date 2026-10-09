@@ -56,9 +56,12 @@ export default function MailPanel(props: {
   demoContact: string;
   /** A DM someone started from a named post: open that conversation (`at` makes repeats count). */
   dmTarget?: { walletId: string; at: number } | null;
+  /** This panel is the one on screen (it polls only then). */
+  active: boolean;
 }) {
   const { t, locale } = useLang();
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
+  const [unreachable, setUnreachable] = useState(false);
   const me = wallet?.walletId ?? "";
   const [received, setReceived] = useState<Received[]>([]);
   const [sent, setSent] = useState<Sent[]>([]);
@@ -97,7 +100,10 @@ export default function MailPanel(props: {
     const ks = getTmailKeySession();
     if (!wallet || !ks) return;
     const r = await getTmailInbox(BASE, wallet.walletId, 50);
-    if (!r.ok || !mounted.current) return;
+    if (!mounted.current) return;
+    // A real failure: one plain message (an empty inbox is not a failure).
+    setUnreachable(!r.ok);
+    if (!r.ok) return;
     const out: Received[] = [];
     for (const row of r.messages) {
       let plain: string | null = null;
@@ -142,15 +148,16 @@ export default function MailPanel(props: {
     };
   }, []);
 
+  // Only while this panel is the one on screen: home and other pages never fetch your inbox or keys.
   useEffect(() => {
-    if (!wallet) return;
+    if (!wallet || !props.active) return;
     const first = setTimeout(() => void checkKeys().then(refresh).catch(() => {}), 0);
     const t = setInterval(() => void refresh(), POLL_MS);
     return () => {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [wallet, checkKeys, refresh]);
+  }, [wallet, checkKeys, refresh, props.active]);
 
   const name = useCallback(
     (id: string) => (id === ANON ? t("anonymous senders") : id === "self" || (me && id === me) ? t("you (notes to self)") : id === props.demoContact ? t("demo inbox") : id.slice(0, 8)),
@@ -280,6 +287,7 @@ export default function MailPanel(props: {
         }
         todo={t("Pick a conversation, write a message and send it. To DM someone from a board, tap their id on a named post.")}
       />
+      {unreachable ? <p className="border-b border-[#e3d6b3] bg-[#fdf8ea] px-4 py-2 text-[14px] text-[#6b4e00] md:px-5">{t("The node can't be reached right now. New messages will show when it's back.")}</p> : null}
       {keys !== "published" ? <KeysBanner what={t("To receive messages, turn on your inbox.")} onPublish={() => void onPublish()} busy={publishing} error={publishErr} /> : null}
 
       <div className="grid flex-1 md:grid-cols-[16rem_minmax(0,1fr)]">

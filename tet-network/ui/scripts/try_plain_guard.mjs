@@ -52,5 +52,23 @@ const all = readdirSync(DIR).filter((n) => n.endsWith(".tsx")).map((f) => [f, re
 check("\"nullifier\" is on no page but How it works", () => noNullifier(all));
 check("control: a nullifier string is caught", () => assert.throws(() => noNullifier([...all, ["BoardPanel2.tsx", 't("the nullifier")']])));
 
+// 3. The testnet line stays where people look for it: the footer, Terms and the FAQ each say it's a
+//    testnet and that data may be reset (the home title has no "trial" badge; this is the place).
+function testnetLines(files) {
+  const has = (f, re, what) => assert.match(files[f], re, `${f}: ${what}`);
+  has("page.tsx", /t\("This is a testnet\. Data may be reset\."\)/, "the footer's testnet line is gone");
+  has("TermsPanel.tsx", /t\("[^"]*testnet[^"]*can be reset[^"]*"\)/, "Terms no longer says it's a testnet that can be reset");
+  const faq = files["HowPanel.tsx"].split('t("FAQ")')[1]?.split("</div>")[0] ?? "";
+  assert.match(faq, /t\("This is a testnet\. Data may be reset\."\)/, "the FAQ's testnet line is gone");
+}
+const LINE_FILES = Object.fromEntries(["page.tsx", "TermsPanel.tsx", "HowPanel.tsx"].map((f) => [f, read(f)]));
+check("the footer, Terms and FAQ keep \"testnet, data may be reset\"", () => testnetLines(LINE_FILES));
+check("control: removing it from the FAQ is caught", () =>
+  assert.throws(() => testnetLines({ ...LINE_FILES, "HowPanel.tsx": LINE_FILES["HowPanel.tsx"].replace('<p className="mt-1">{t("This is a testnet. Data may be reset.")}</p>', "") })),
+);
+check("control: removing it from the footer is caught", () =>
+  assert.throws(() => testnetLines({ ...LINE_FILES, "page.tsx": LINE_FILES["page.tsx"].replace('t("This is a testnet. Data may be reset.")', 't("Hello.")') })),
+);
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

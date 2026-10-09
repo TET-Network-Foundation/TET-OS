@@ -878,7 +878,6 @@ export const ZH_HK: Record<string, string> = {
   "Start the thread": "開新討論串",
   "Post": "發佈",
   "anonymous": "匿名",
-  "trial": "試行中",
   "Newest threads": "最新討論串",
   "Keep this ID? Save your passphrase (12 words)": "保留此 ID？儲存你的密語（12 個字）",
   "This is a testnet. Data may be reset.": "這是測試網，資料可能會被重設。",
@@ -908,4 +907,5 @@ export const ZH_HK: Record<string, string> = {
   "In an age when AI can make anything.": "在 AI 甚麼都能造出來的時代。",
   "Prove 'I put this out, on this day' in 10\u00a0seconds.": "「這是我在這一天發出的」，10 秒內證明。",
   "It proves when, and whose mark. Not who the author is.": "能證明的只是「何時、誰的印記」，並不證明誰是作者。",
+  "The node can't be reached right now. New messages will show when it's back.": "目前無法連接節點。恢復連接後，新訊息便會顯示。",
 };
