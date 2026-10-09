@@ -347,6 +347,9 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
         <button type="button" className={link} onClick={() => props.go({ tool: "terms" })}>
           {t("Terms")}
         </button>
+        <a className={link} href="/whitepaper">
+          {t("Technical paper")}
+        </a>
         <div className="ml-auto">
           <LangSwitch />
         </div>

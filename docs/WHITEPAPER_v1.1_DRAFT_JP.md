@@ -1,3 +1,5 @@
+> **Superseded (2026-10-09).** The current paper is the technical paper at `/whitepaper` (source `tet-network/ui/app/whitepaper/paper.ts`, PDF `tet-network/ui/public/paper/tet-technical-paper.pdf`, built by `tet-network/ui/scripts/paper_build.mjs`). This document is kept for history; where it differs from the code, the technical paper is right.
+
 # TET NETWORK
 ## 流動型 P2P コンピュート–エネルギー資源プロトコル
 ## AI ネイティブ・ソブリン Layer 1

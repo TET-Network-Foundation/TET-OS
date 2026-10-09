@@ -57,7 +57,13 @@ export const OVERCLAIM = new RegExp(
   "i",
 );
 // A content filter's blocklist names the phrase; it doesn't claim it. And this file defines the list.
-const NOT_CLAIMS = new Set(["tet-core/src/ai_filter.rs", "tet-network/ui/scripts/try_privacy_guard.mjs"]);
+// Guards whose controls quote the banned phrases on purpose aren't claims.
+const NOT_CLAIMS = new Set([
+  "tet-core/src/ai_filter.rs",
+  "tet-network/ui/scripts/try_privacy_guard.mjs",
+  "tet-network/ui/scripts/try_ai_wording_guard.mjs",
+  "tet-network/ui/scripts/paper_guard.mjs",
+]);
 // Statements that *deny* a claim are fine ("doesn't hide your IP"): only the claim itself counts. The
 // denial must be in the same sentence, so "No signup. Your posts are untraceable." is still a claim.
 const DENIAL = /(?:doesn't|does not|don't|never|not|no|ません|しない|ではありません|不會|不能|並不)[^.!?。！？]{0,24}$/i;
@@ -117,7 +123,7 @@ function vouchOverclaims(list) {
   const found = [];
   for (const [path, text] of list) {
     // Guards' own controls quote the banned phrases on purpose.
-    if (path === "tet-network/ui/scripts/try_privacy_guard.mjs" || path === "tet-network/ui/scripts/try_ai_wording_guard.mjs") continue;
+    if (NOT_CLAIMS.has(path)) continue;
     text.split("\n").forEach((line, i) => {
       const m = VOUCH_OVERCLAIM.exec(line);
       if (m && !DENIAL.test(line.slice(0, m.index))) found.push(`${path}:${i + 1}: ${line.trim().slice(0, 120)}`);

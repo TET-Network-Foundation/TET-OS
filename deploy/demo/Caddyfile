@@ -88,7 +88,7 @@
 		({method} == "DELETE" && {path}.matches("^/tet-node-api/files/item/[^/%]+$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/demo/files/sponsor-fee$"))`
 
-	@page path /try /_next/static/* /pqc/* /brand/* /favicon.ico /apple-icon.png
+	@page path /try /whitepaper /paper/* /_next/static/* /pqc/* /brand/* /favicon.ico /apple-icon.png
 
 	# BEGIN ai-crawlers (generated from deploy/ai-crawlers.txt by gen_ai_crawlers.mjs; edit the list)
 	@ai_crawler header_regexp User-Agent (?i)(GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|anthropic-ai|Google-Extended|CCBot|Applebot-Extended|PerplexityBot|Perplexity-User|Bytespider|Amazonbot|meta-externalagent|FacebookBot|cohere-ai|Diffbot|ImagesiftBot|Omgilibot|YouBot|Timpibot)

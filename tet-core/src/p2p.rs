@@ -735,7 +735,7 @@ fn gossip_mesh_params_from_env() -> (usize, usize, usize) {
 
 /// Tracks bootnode hello deadlines, dead state, and periodic re-dial (A.4).
 #[derive(Debug)]
-struct BootnodeWatch {
+pub(crate) struct BootnodeWatch {
     bootnode_ids: HashSet<PeerId>,
     bootnode_dial_addrs: HashMap<PeerId, Multiaddr>,
     hello_sent_at: HashMap<PeerId, u64>,
@@ -1036,15 +1036,22 @@ fn files_fetch_behaviour()
     )
 }
 
-async fn ingest_remote_chain_hello(
+pub(crate) async fn ingest_remote_chain_hello(
     registry: &SharedHelloRegistry,
     ledger: &crate::ledger::Ledger,
     peer: PeerId,
     hello: ChainHello,
     bootnode_watch: Option<&mut BootnodeWatch>,
+    trusted: bool,
 ) {
     if let Some(watch) = bootnode_watch {
         watch.on_hello_received(peer);
+    }
+    if !trusted {
+        // Not a trusted sync peer (SyncTrust): its height can't make this node "behind", pause
+        // production, or become a catch-up source.
+        println!("[P2P-block] chain_hello from {peer} height={} ignored for sync: not a trusted sync peer", hello.block_height);
+        return;
     }
     let local_height = ledger.block_height().unwrap_or(0);
     let peer_s = peer.to_string();
@@ -1217,6 +1224,8 @@ async fn on_catch_up_range_response(
     apply_queue: &crate::apply_worker::ApplyQueue,
     swarm: &mut Swarm<TetBehaviour>,
     pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+    sync_trust: &SyncTrust,
+    producer_peers: &ProducerPeers,
 ) {
     let peer_s = peer.to_string();
     println!(
@@ -1225,15 +1234,20 @@ async fn on_catch_up_range_response(
         response.to_height
     );
 
-    if response.blocks.is_empty() {
+    let refused = if response.blocks.is_empty() {
+        Some("empty range response".to_string())
+    } else if let Err(why) = sync_trust.check_blocks_from(&peer, response.blocks.iter().map(|b| b.producer_id.as_str()), producer_peers) {
+        println!("[P2P-block] ❌ catch-up range from {peer} refused: {why}");
+        Some(why)
+    } else {
+        None
+    };
+    if let Some(reason) = refused {
         set_in_progress_range(block_sync_board, None).await;
         let action = catch_up_driver.with(|s| {
             let local_height = ledger.block_height().unwrap_or(0);
             s.driver.handle(
-                CatchUpDriverEvent::RangeFailed {
-                    peer_id: peer_s,
-                    reason: "empty range response".into(),
-                },
+                CatchUpDriverEvent::RangeFailed { peer_id: peer_s, reason },
                 &s.registry,
                 local_height,
             )
@@ -1661,6 +1675,83 @@ impl ProducerPeers {
     }
 }
 
+/// Which peers may steer chain sync: their hellos count for "behind" / "tip conflict" / the
+/// catch-up source, and their catch-up ranges and backfilled blocks are applied.
+///
+/// Blocks carry no producer signature yet (Phase 1), and a block's `producer_id` is an unsigned
+/// string, so a block that arrives by request/response is only as trustworthy as the peer that sent
+/// it. The gossip path already checks the pinned PeerId ([`ProducerPeers`]); this extends the same
+/// trust to sync:
+/// - a follower with `TET_PRODUCER_PEERS` trusts the pinned producer PeerIds (each block it serves
+///   must name a producer pinned to it), plus any operator-listed relays in `TET_SYNC_TRUSTED_PEERS`;
+/// - the **explicit sole validator** trusts nobody by default: no peer can be ahead of the only
+///   producer, so a hello claiming otherwise is ignored and can't pause production. After data
+///   loss the operator lists a peer in `TET_SYNC_TRUSTED_PEERS` to restore from it;
+/// - a node with neither (local development) trusts every peer, as before.
+#[derive(Debug, Clone)]
+pub(crate) enum SyncTrust {
+    Everyone,
+    Only {
+        /// Pinned producer PeerIds: trusted, and each block they serve is source-checked.
+        pinned: std::collections::HashSet<PeerId>,
+        /// Operator-listed relays (`TET_SYNC_TRUSTED_PEERS`): trusted as they are.
+        relays: std::collections::HashSet<PeerId>,
+    },
+}
+
+impl SyncTrust {
+    pub(crate) fn new(producer_peers: &ProducerPeers, relays_raw: &str, explicit_sole_validator: bool) -> Result<Self, String> {
+        let mut relays = std::collections::HashSet::new();
+        for p in relays_raw.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            relays.insert(p.parse::<PeerId>().map_err(|e| format!("TET_SYNC_TRUSTED_PEERS entry {p:?}: bad PeerId: {e}"))?);
+        }
+        let pinned: std::collections::HashSet<PeerId> = producer_peers.0.values().copied().collect();
+        Ok(if !pinned.is_empty() || !relays.is_empty() || explicit_sole_validator {
+            Self::Only { pinned, relays }
+        } else {
+            Self::Everyone
+        })
+    }
+
+    pub(crate) fn from_env(producer_peers: &ProducerPeers, explicit_sole_validator: bool) -> Result<Self, String> {
+        Self::new(producer_peers, &std::env::var("TET_SYNC_TRUSTED_PEERS").unwrap_or_default(), explicit_sole_validator)
+    }
+
+    pub(crate) fn trusts(&self, peer: &PeerId) -> bool {
+        match self {
+            Self::Everyone => true,
+            Self::Only { pinned, relays } => pinned.contains(peer) || relays.contains(peer),
+        }
+    }
+
+    /// May blocks naming these producers, served by `peer` over catch-up or backfill, be applied?
+    pub(crate) fn check_blocks_from<'a>(
+        &self,
+        peer: &PeerId,
+        producer_ids: impl IntoIterator<Item = &'a str>,
+        producer_peers: &ProducerPeers,
+    ) -> Result<(), String> {
+        match self {
+            Self::Everyone => Ok(()),
+            Self::Only { relays, .. } if relays.contains(peer) => Ok(()),
+            Self::Only { pinned, .. } if pinned.contains(peer) => {
+                for id in producer_ids {
+                    producer_peers.check_block_source(id, Some(peer))?;
+                }
+                Ok(())
+            }
+            Self::Only { .. } => Err(format!("{peer} is not a trusted sync peer")),
+        }
+    }
+
+    pub(crate) fn describe(&self) -> String {
+        match self {
+            Self::Everyone => "every peer (no TET_PRODUCER_PEERS, no TET_SYNC_TRUSTED_PEERS, not the sole validator)".into(),
+            Self::Only { pinned, relays } => format!("pinned producers {} + relays {}", pinned.len(), relays.len()),
+        }
+    }
+}
+
 /// Gossip validation verdict for a decoded event. Legacy balance events carry no signature and
 /// are never applied, so they are rejected: the mesh stops forwarding them and the publisher's
 /// peer score drops. Everything else is accepted here and checked by its own handler.
@@ -1968,6 +2059,16 @@ async fn run_mdns_ping_swarm(
     let max_gossip_bytes = global_gossip_max_msg_bytes();
     // A malformed map is a startup error rather than a silently disabled check.
     let producer_peers = ProducerPeers::from_env().unwrap_or_else(|e| panic!("[p2p] FATAL: {e}"));
+    let sync_trust = {
+        let local_id = crate::consensus::local_node_id_from_env();
+        let sole = crate::consensus::is_explicit_sole_validator(
+            std::env::var("TET_VALIDATOR_IDS").ok().as_deref(),
+            &crate::consensus::ValidatorSet::from_env_or_single(&local_id),
+            &local_id,
+        );
+        SyncTrust::from_env(&producer_peers, sole).unwrap_or_else(|e| panic!("[p2p] FATAL: {e}"))
+    };
+    println!("[P2P] chain sync trusts: {}", sync_trust.describe());
     if !producer_peers.0.is_empty() {
         println!("[P2P] block source check ON for {} producer(s)", producer_peers.0.len());
     }
@@ -3107,6 +3208,7 @@ async fn run_mdns_ping_swarm(
                         peer,
                         request,
                         Some(&mut bootnode_watch),
+                        sync_trust.trusts(&peer),
                     )
                     .await;
                     if bootnode_watch.is_bootnode(&peer) {
@@ -3140,6 +3242,7 @@ async fn run_mdns_ping_swarm(
                         peer,
                         response,
                         Some(&mut bootnode_watch),
+                        sync_trust.trusts(&peer),
                     )
                     .await;
                     if bootnode_watch.is_bootnode(&peer) {
@@ -3192,6 +3295,8 @@ async fn run_mdns_ping_swarm(
                             &apply_queue,
                             &mut swarm,
                             &mut pending_catch_up_range,
+                            &sync_trust,
+                            &producer_peers,
                         )
                         .await;
                     }
@@ -3246,6 +3351,16 @@ async fn run_mdns_ping_swarm(
                         let Some(pending_req) = pending_backfill.remove(&request_id) else {
                             continue;
                         };
+                        // A backfilled block is only as trustworthy as the peer that served it
+                        // (SyncTrust): from a pinned producer it must name that producer.
+                        if let Err(why) = sync_trust.check_blocks_from(
+                            &peer,
+                            response.block.as_ref().map(|b| b.producer_id.as_str()),
+                            &producer_peers,
+                        ) {
+                            println!("[P2P] ❌ BLOCK RESPONSE REFUSED peer={peer} block={}: {why}", response.block_id);
+                            continue;
+                        }
                         let requested_id = pending_req.block_id;
                         let depth = pending_req.depth;
                         if requested_id != response.block_id {

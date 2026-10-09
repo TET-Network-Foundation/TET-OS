@@ -190,6 +190,10 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
         <button type="button" className={link} onClick={() => props.go("how")}>
           {t("How the demo works")}
         </button>
+        {" · "}
+        <a className={link} href="/whitepaper">
+          {t("Technical paper")}
+        </a>
       </p>
     </article>
   );
