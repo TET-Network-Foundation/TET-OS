@@ -25,7 +25,7 @@ import {
   shownOnBoard,
 } from "./board.mjs";
 import { generateDisposableWords } from "./disposable_wallet.mjs";
-import { fetchAnonLeaves, makeHelperProver, runAnonPost } from "./anon_poster.mjs";
+import { fetchAnonLeaves, makeHelperProver, prewarmAnonProof, runAnonPost, type AnonProof } from "./anon_poster.mjs";
 import { anonCommitment, toHex } from "./anon_tree.mjs";
 import { expectedChainBinding } from "./chain_binding";
 import { mnemonicToTetEd25519Keypair, signTetEd25519 } from "./ed25519_tet";
@@ -241,6 +241,23 @@ export async function postAnonymous(
 }
 
 /** An anonymous Tmail to `to`, through the native prover. Nothing sent to the node names the sender. */
+/** Today's proofs started in the background, by `board:bucket` (fast anonymous posting). */
+const PROOF_CACHE = new Map<string, Promise<AnonProof>>();
+
+/**
+ * When a member opens a board: start today's proof for it in the background, unless this node
+ * already has today's posting key registered. The first anonymous post then needn't wait the whole
+ * ~30 s; every later one that day is instant (docs/plans/FAST_ANON_POSTING.md).
+ */
+export async function prewarmBoardProof(baseUrl: string, proverUrl: string, board: OpenBoard): Promise<string> {
+  const ks = getTmailKeySession();
+  if (!ks) return "no wallet";
+  return prewarmAnonProof(
+    { node: anonNodeAdapter(baseUrl), prove: makeHelperProver({ url: proverUrl }), ephemeralWalletId: ephemeralWalletIdFromSeed, now: () => Date.now(), proofCache: PROOF_CACHE },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: board.boardWalletId },
+  );
+}
+
 export async function postAnonymousTo(
   baseUrl: string,
   proverUrl: string,
@@ -255,6 +272,7 @@ export async function postAnonymousTo(
     {
       node: anonNodeAdapter(baseUrl),
       prove: makeHelperProver({ url: proverUrl }),
+      proofCache: PROOF_CACHE,
       ephemeralWalletId: ephemeralWalletIdFromSeed,
       buildEnvelope: (a: {
         ephemeralSeed: Uint8Array;
@@ -262,7 +280,7 @@ export async function postAnonymousTo(
         receiverWalletId: string;
         plaintext: string;
         sentAtMs: number;
-        proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string };
+        proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string } | null;
       }) =>
         buildAnonymousTmailEnvelopeV1({
           ephemeralSeed: a.ephemeralSeed,

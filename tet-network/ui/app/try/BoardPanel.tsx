@@ -17,13 +17,11 @@
  */
 import { delayBeforeNext, WINDOW_MS as FLOOD_WINDOW_MS } from "../lib/flood_guard.mjs";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
+import { boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
 import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, NAME_MAX, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
-import { anonNullifier, fromHex, tmailBucketIndex, toHex } from "../lib/anon_tree.mjs";
-import { getTmailKeySession } from "../lib/tmail_session";
-import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
+import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, prewarmBoardProof, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
 import { getUi, setUi } from "../lib/device_store";
@@ -149,11 +147,11 @@ export const BOARD_NOTICE = (members: number | null, t: T) => [
   t("Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so."),
   t("You are anonymous among the registered members only ({members} on this node). Joining the set is public, and it is a separate step: posting right after you join makes the post easier to link to your join.", { members: members ?? "?" }),
   t("Posting anonymously unlinks the post from your ID: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."),
-  t("One anonymous post per board per UTC day (up to 3 around 00:00 UTC)."),
+  t("Your anonymous posts on a board share one ID for the UTC day. The first carries a proof (about 30 s); the rest that day are instant."),
   t("The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title."),
   t("Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time."),
   t("The node and the first relaying peer see your IP. Posts are not on the chain."),
-  t("An anonymous post's ID (ID:ab12) comes from its proof: the same for one member on one board for one UTC day, and different tomorrow. Nobody running the node chooses it, and it appears only after the proof is checked. A member can post anonymously once per board per day, so an ID marks one post; two members can share an ID by chance."),
+  t("An anonymous post's ID (ID:ab12) comes from its proof: the same for one member on one board for one UTC day, and different tomorrow or on another board. Nobody running the node chooses it, and it appears only after the proof is checked. All of one member's anonymous posts on a board that day carry it, so they can be read as one person's; two members can share an ID by chance."),
   t("Tap a named post's ID to send it a message. Anonymous posts can't be messaged: nothing in them says who wrote them."),
   t("Anyone with the invite link can read every post. An invite cannot be revoked: start a new board."),
   t(TMAIL_ANON_DISCLOSURE),
@@ -184,6 +182,8 @@ export default function BoardPanel(props: {
   const [named, setNamed] = useState(false);
   const [sage, setSage] = useState(false);
   const sentTimes = useRef<number[]>([]);
+  // Fast anonymous posting: is today's posting key for this board registered on this node?
+  const [fastReady, setFastReady] = useState(false);
   // A display name for this tab's posts (blank: Anonymous / 名無しさん). Not stored, not checked.
   const [name, setName] = useState("");
   const [makingPoll, setMakingPoll] = useState(false);
@@ -232,7 +232,6 @@ export default function BoardPanel(props: {
   const [newTitle, setNewTitle] = useState("");
   /** null = the thread list; "new" = the new-thread form; otherwise a thread id ("" = no thread). */
   const [open, setOpen] = useState<string | null>(null);
-  const [postedBuckets, setPostedBuckets] = useState<number[]>([]);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -314,12 +313,21 @@ export default function BoardPanel(props: {
     mounted.current && setOutgoing((o) => o.map((x) => (x.id === id ? { ...x, ...p, stepAtMs: p.step ? Date.now() : x.stepAtMs } : x)));
 
   // This member's daily ID on this board today, and the verified daily IDs already posted today.
-  const bucketNow = tmailBucketIndex(now);
-  const myDailyId = anon?.member && getTmailKeySession() ? toHex(anonNullifier(getTmailKeySession()!.anonMemberSecret, fromHex(board.boardWalletId), bucketNow)).slice(0, 4) : null;
-  const dailyIdsToday = posts.filter((p) => p.label.dailyId && tmailBucketIndex(p.sentAtMs) === bucketNow).map((p) => p.label.dailyId as string);
-  const allowance = anonAllowance({ nowMs: now, postedBuckets, myDailyId, dailyIdsToday });
   // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
   const anonymous = prover !== "missing" && !named;
+  // A member opening a board in anonymous mode: start today's proof in the background (or learn that
+  // today's posting key is registered here already, so every post is instant).
+  const isMember = !!anon?.member;
+  useEffect(() => {
+    if (!anonymous || !isMember || prover !== "found") return;
+    let on = true;
+    void prewarmBoardProof(BASE, PROVER_URL, board)
+      .then((r) => on && setFastReady(r === "registered"))
+      .catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [anonymous, isMember, prover, board]);
   // Anonymous posting needs membership; until then the one button is the (separate) join.
   const needsJoin = anonymous && prover === "found" && !anon?.member;
 
@@ -356,10 +364,6 @@ export default function BoardPanel(props: {
       setErr(t("Join the anonymity set first."));
       return;
     }
-    if (plan.action === "anonymous" && allowance.remaining === 0) {
-      setErr(t("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC."));
-      return;
-    }
     // An anonymous post never carries a name: the same name on two posts would link them.
     const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage, name: anonymous ? "" : name });
     const id = `${Date.now()}-${Math.random()}`;
@@ -378,14 +382,19 @@ export default function BoardPanel(props: {
         sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
         patch(id, { step: "sent", msgId });
       } else {
-        // Only members get here: joining is a separate, earlier tap (see the header).
+        // Only members get here: joining is a separate, earlier tap (see the header). The first post
+        // of the day here carries the proof; after it, posts are instant (fast anonymous posting),
+        // paced by the same invisible flood guard.
+        const wait = delayBeforeNext(sentTimes.current, Date.now());
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const out = await postAnonymous(BASE, PROVER_URL, board, plaintext, (s) => {
           if (s.state === "proving") patch(id, { step: "proving" });
           else if (s.state === "depositing") patch(id, { step: "depositing" });
           else if (s.state === "sending") patch(id, { step: "sending" });
         });
         if (out.state === "sent") {
-          setPostedBuckets((b) => [...b, tmailBucketIndex(t0)]);
+          sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
+          setFastReady(true);
           patch(id, { step: "sent", msgId: out.msgId });
         } else {
           patch(id, { step: "failed", reason: out.state === "failed" ? out.reason : "not in the anonymity set yet" });
@@ -510,7 +519,7 @@ export default function BoardPanel(props: {
             ) : needsJoin ? (
               <>{t("To post anonymously, join the set first: a separate, public step that posts nothing.")}</>
             ) : anonymous ? (
-              <span className="tabular-nums">{t("{n} anonymous post left today · about 30 s to prove", { n: allowance.remaining })}</span>
+              <span>{fastReady ? t("Anonymous posts here are instant for the rest of today.") : t("The first anonymous post here today takes about 30 s to prove; the rest are instant.")}</span>
             ) : (
               <>{t("shows your ID")}</>
             )}
