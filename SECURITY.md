@@ -109,6 +109,13 @@ seeds on 2026-10-09, a node takes them only from trusted peers: a follower from 
 and the sole producer from no peer unless its operator names one. Transaction signatures were checked
 throughout, so no balance could move without its wallet's signature.
 
+**Fixed: unverified anonymous posts could push a verified one out of a board.** Until 2026-10-10,
+anonymous posts were grouped for message retention by a value they announce before their proof is
+checked, so posts whose proofs would later fail could share a verified post's group and cause it
+to be deleted. Since 39036cf, deployed on both seeds on 2026-10-10, only a value from a verified
+proof groups posts; an unverified post stands alone. No post could be forged or deanonymised this
+way.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about
