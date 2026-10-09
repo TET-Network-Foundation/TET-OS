@@ -311,15 +311,16 @@ pub enum FastSendError {
 /// key, or, while that one is still being checked here, of the registering post waiting here. So
 /// all of one member's posts on one board on one day are one group, which holds
 /// [`ANON_RETAIN_PER_DAILY_ID`].
-fn conversation_key_with(env: &TmailEnvelopeV1, fast_nullifier: impl FnOnce() -> Option<String>) -> String {
-    if let Some(anon) = env.anonymous.as_ref() {
-        let id = if anon.anchor_proof.is_some() {
-            crate::tmail::envelope::anonymous_nullifier_hex(env)
-        } else {
-            fast_nullifier()
-        }
-        .unwrap_or_else(|| format!("msg:{}", env.msg_id.trim()));
-        return format!("anonymous:{id}");
+///
+/// **Only a VERIFIED nullifier groups** (#98): never the journal a post announces. An unverified
+/// post, and a fast post whose key isn't registered here yet, is its own group, so posts that may
+/// later fail can never share a verified post's group and push it out.
+fn conversation_key_with(env: &TmailEnvelopeV1, verified_nullifier: impl FnOnce() -> Option<String>) -> String {
+    if env.anonymous.is_some() {
+        return match verified_nullifier() {
+            Some(n) => format!("anonymous:{n}"),
+            None => format!("anonymous:unverified:{}", env.msg_id.trim()),
+        };
     }
     env.sender_wallet_id.trim().to_ascii_lowercase()
 }
@@ -1349,14 +1350,16 @@ impl TmailStore {
     fn conversation_key(&self, env: &TmailEnvelopeV1) -> String {
         conversation_key_with(env, || {
             let anon = env.anonymous.as_ref()?;
-            let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
-            if let Some(reg) = self.fast_registration(&env.receiver_wallet_id, bucket, &anon.ephemeral_wallet_id) {
-                return Some(reg.nullifier_hex);
+            if anon.anchor_proof.is_some() {
+                // A post with a proof: the nullifier its proof gave it, once verified here.
+                return match self.get_anon_verdict(env.msg_id.trim()) {
+                    Some(AnonVerdict::Verified { nullifier_hex, .. }) => Some(nullifier_hex),
+                    _ => None,
+                };
             }
-            let k = fast_key(&env.receiver_wallet_id, bucket, &anon.ephemeral_wallet_id);
-            let reg_msg = self.fast_regpending.get(k.as_bytes()).ok().flatten()?;
-            let reg_env = self.get_by_msg_id(&String::from_utf8_lossy(&reg_msg))?;
-            crate::tmail::envelope::anonymous_nullifier_hex(&reg_env)
+            // A fast post: its key's registration (made by a verified proof), or none yet.
+            let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
+            self.fast_registration(&env.receiver_wallet_id, bucket, &anon.ephemeral_wallet_id).map(|r| r.nullifier_hex)
         })
     }
 
@@ -1428,10 +1431,13 @@ impl TmailStore {
         for item in self.fast_pending.iter() {
             let Ok((k, v)) = item else { continue };
             let at = v.as_ref().try_into().map(u64::from_be_bytes).unwrap_or(0);
-            if now.saturating_sub(at) > FAST_PENDING_TTL_MS {
+            if now.saturating_sub(at) > env_usize("TET_TMAIL_FAST_PENDING_TTL_MS", FAST_PENDING_TTL_MS as usize) as u64 {
                 let _ = self.fast_pending.remove(&k);
+                // `receiver|bucket|posting key|msg_id`: the first three never contain '|' (hex and a
+                // number); the msg_id is everything after them, whatever it contains, so a '|' in a
+                // msg_id can't point this at another message.
                 let key = String::from_utf8_lossy(&k).to_string();
-                if let Some(id) = key.rsplit('|').next() {
+                if let Some(id) = key.splitn(4, '|').nth(3) {
                     let _ = self.forget_by_msg_id(id);
                 }
             }

@@ -15218,3 +15218,33 @@ async fn fast_post_routes_answer_and_gate() {
     assert!(ask(router.clone(), format!("/tmail/anon/fast/{board}/{eid}")).await);
     assert_eq!(send(router.clone(), fast_env_for_tests(&ew, &eid, &board, "rest-fast", tmail_now_ms_for_tests())).await, StatusCode::ACCEPTED);
 }
+
+/// **SECURITY: an expiring pending fast post deletes only itself.** Its pending entry is keyed
+/// `receiver|bucket|key|msg_id`; a msg_id containing '|' (e.g. ending in another message's id) must
+/// not make the expiry sweep delete that other message.
+/// Negative control (run by hand): parsing the msg_id with `rsplit('|')` → FAILED.
+#[test]
+fn expiring_a_pending_fast_post_deletes_only_itself() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+    // A victim's ordinary message.
+    let (sw, sid) = tmail_party_for_tests();
+    let victim = signed_tmail_env_for_tests(&sw, &sid, &board, "victim-msg", tmail_flags_for_tests(false), None);
+    assert!(store.store_tmail(&victim).unwrap());
+    // A fast post held pending, whose msg_id ends with the victim's.
+    let (ew, eid) = tmail_party_for_tests();
+    let reg = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [6; 32], "reg-pending", now);
+    assert!(store.store_tmail_ungated_for_tests(&reg).unwrap());
+    store.set_anon_verdict("reg-pending", &crate::tmail::store::AnonVerdict::Pending).unwrap();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "x|victim-msg", now)), Ok(true));
+    // Its pending entry expires: the sweep runs on the next arrival.
+    let _ttl = EnvVarGuard::set("TET_TMAIL_FAST_PENDING_TTL_MS", "1");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let (fw, fid) = tmail_party_for_tests();
+    let _ = store.receive_fast_anonymous(&fast_env_for_tests(&fw, &fid, &board, "trigger", now));
+    assert!(store.get_by_msg_id("victim-msg").is_some(), "expiring a fast post deleted another message");
+    assert!(store.get_by_msg_id("x|victim-msg").is_none(), "the expired fast post is still there");
+}
