@@ -226,11 +226,19 @@ fn is_anonymous(env: &TmailEnvelopeV1) -> bool {
 /// first. A nullifier is one per (member, receiver, day), which is the closest thing to a
 /// counterparty an anonymous sender has. Anonymous mail is bounded per receiver instead, by
 /// [`ANON_RETAIN_PER_RECEIVER`].
-fn conversation_key(env: &TmailEnvelopeV1) -> String {
+///
+/// **Only a VERIFIED nullifier groups.** The nullifier is taken from the post's stored verdict (set
+/// once its proof verified here), never from the journal it announces: an unverified journal is
+/// whatever the sender wrote, and grouping by it let forged pending posts (gossip stores before it
+/// verifies) share a verified post's group and push it out under per-conversation retention. An
+/// unverified anonymous post is its own group, bounded by the per-receiver anonymous cap, which
+/// keeps verified posts first.
+fn conversation_key_with(env: &TmailEnvelopeV1, verified_nullifier: Option<String>) -> String {
     if is_anonymous(env) {
-        let id = crate::tmail::envelope::anonymous_nullifier_hex(env)
-            .unwrap_or_else(|| format!("msg:{}", env.msg_id.trim()));
-        return format!("anonymous:{id}");
+        return match verified_nullifier {
+            Some(n) => format!("anonymous:{n}"),
+            None => format!("anonymous:unverified:{}", env.msg_id.trim()),
+        };
     }
     env.sender_wallet_id.trim().to_ascii_lowercase()
 }
@@ -297,7 +305,7 @@ impl TmailStore {
         // Retention is applied at write time so the store never holds more than the rule allows,
         // even if nothing ever calls `GET /tmail/inbox`. Enforcing it only on read would make the
         // cap a display convention again -- exactly what S7-0 exists to stop being true.
-        self.enforce_retention(&receiver, &conversation_key(env))?;
+        self.enforce_retention(&receiver, &self.conversation_key(env))?;
         if is_anonymous(env) {
             self.enforce_anonymous_cap(&receiver)?;
         }
@@ -376,7 +384,7 @@ impl TmailStore {
             let Ok(env) = serde_json::from_slice::<TmailEnvelopeV1>(&v) else {
                 continue;
             };
-            if conversation_key(&env) != counterparty {
+            if self.conversation_key(&env) != counterparty {
                 continue;
             }
             let expire_at = env.sent_at_ms.saturating_add(effective_ttl_ms(env.ttl_ms));
@@ -469,7 +477,7 @@ impl TmailStore {
             }
             // Iteration is newest-first, so the first `keep` seen per conversation are the ones
             // retention would have kept.
-            let counterparty = conversation_key(&env);
+            let counterparty = self.conversation_key(&env);
             let slot = per_conversation.entry(counterparty.clone()).or_insert(0);
             if *slot >= keep && !self.is_pinned(&receiver, &counterparty) {
                 continue;
@@ -1094,6 +1102,20 @@ impl TmailStore {
             }
         }
         Ok(())
+    }
+
+    /// The group an inbox entry belongs to for retention (see [`conversation_key_with`]): an
+    /// anonymous post only by the nullifier its own verified proof gave it.
+    fn conversation_key(&self, env: &TmailEnvelopeV1) -> String {
+        let verified = if is_anonymous(env) {
+            match self.get_anon_verdict(env.msg_id.trim()) {
+                Some(AnonVerdict::Verified { nullifier_hex, .. }) => Some(nullifier_hex),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        conversation_key_with(env, verified)
     }
 
     pub fn get_anon_verdict(&self, msg_id: &str) -> Option<AnonVerdict> {
