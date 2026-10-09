@@ -26,6 +26,12 @@ def checks(*statuses):
                        for i, s in enumerate(statuses)]}
 
 
+def with_demo(demo_status, seeds=("up", "up")):
+    doc = checks(*seeds)
+    doc["checks"].append({"name": "tet-demo", "status": demo_status, "last_ping": None})
+    return doc
+
+
 CASES = [
     ("both up → pass", checks("up", "up"), 0),
     ("one down → fail", checks("up", "down"), 1),
@@ -37,6 +43,14 @@ CASES = [
     ("not JSON → fail", "<html>rate limited</html>", 1),
     # The shape check on its own: with no minimum, a document without a checks list must still fail.
     ("no checks list, --min-checks 0 → fail", {"error": "wrong api key"}, 1, "--min-checks", "0"),
+    # --not-yet-live: a host that isn't provisioned yet (the demo) may be "new", and only "new".
+    ("demo never pinged, named not-yet-live → pass", with_demo("new"), 0, "--not-yet-live", "tet-demo"),
+    ("demo never pinged, not named → fail (control)", with_demo("new"), 1),
+    ("demo down, named not-yet-live → fail", with_demo("down"), 1, "--not-yet-live", "tet-demo"),
+    ("demo late (grace), named not-yet-live → fail", with_demo("grace"), 1, "--not-yet-live", "tet-demo"),
+    ("demo up, named not-yet-live → pass", with_demo("up"), 0, "--not-yet-live", "tet-demo"),
+    ("a seed new, demo named not-yet-live → fail", with_demo("new", seeds=("up", "new")), 1, "--not-yet-live", "tet-demo"),
+    ("one seed + demo named not-yet-live → fail (the demo doesn't count as a seed)", with_demo("up", seeds=("up",)), 1, "--not-yet-live", "tet-demo"),
 ]
 
 failed = 0

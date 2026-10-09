@@ -5,6 +5,9 @@
     python3 scripts/hc_status.py --min-checks 2 checks.json
 
 Passes only when the project has at least --min-checks checks and EVERY one of them is "up".
+One exception: a check named with --not-yet-live NAME (a host not provisioned yet, e.g. the demo)
+may be "new" (never pinged); any other status still fails, so once it has pinged it must be up
+like the rest. Such a check doesn't count toward --min-checks (the seeds).
 "grace" (a ping is late), "down", "new" (never pinged), "paused" and "started" all fail: each
 means a check cannot vouch that its seed's chain advanced in the last minute. A missing or
 malformed document fails too: this check must never pass because it could not see.
@@ -19,21 +22,23 @@ import json
 import sys
 
 
-def verdict(doc, min_checks):
+def verdict(doc, min_checks, not_yet_live=()):
     """Return (ok, lines) for a parsed /api/v3/checks/ document."""
     checks = doc.get("checks") if isinstance(doc, dict) else None
     if not isinstance(checks, list):
         return False, ["response has no 'checks' list — wrong key, wrong endpoint, or an API change"]
     lines = []
     ok = True
-    if len(checks) < min_checks:
+    counted = [c for c in checks if (c.get("name") or "") not in not_yet_live]
+    if len(counted) < min_checks:
         ok = False
-        lines.append(f"only {len(checks)} check(s) in the project, expected at least {min_checks} (one per seed)")
+        lines.append(f"only {len(counted)} check(s) in the project, expected at least {min_checks} (one per seed)")
     for c in checks:
         name = c.get("name") or "(unnamed)"
         status = c.get("status")
-        lines.append(f"{name}: status={status} last_ping={c.get('last_ping')}")
-        if status != "up":
+        pending = name in not_yet_live and status == "new"
+        lines.append(f"{name}: status={status} last_ping={c.get('last_ping')}" + (" (not yet live: allowed)" if pending else ""))
+        if status != "up" and not pending:
             ok = False
     return ok, lines
 
@@ -42,6 +47,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("path", help="JSON from GET /api/v3/checks/")
     ap.add_argument("--min-checks", type=int, default=2)
+    ap.add_argument("--not-yet-live", action="append", default=[], metavar="NAME", help="a check that may be 'new' (never pinged) until its host is live")
     args = ap.parse_args(argv)
     try:
         with open(args.path, encoding="utf-8") as f:
@@ -49,7 +55,7 @@ def main(argv=None):
     except (OSError, ValueError) as e:
         print(f"::error::cannot read the healthchecks.io response: {e}")
         return 1
-    ok, lines = verdict(doc, args.min_checks)
+    ok, lines = verdict(doc, args.min_checks, tuple(args.not_yet_live))
     for line in lines:
         print(line)
     if not ok:

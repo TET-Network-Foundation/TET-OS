@@ -60,7 +60,9 @@ jobs:
             exit 1
           fi
           curl -fsS -m 20 -H "X-Api-Key: ${HC_API_KEY}" https://healthchecks.io/api/v3/checks/ > checks.json
-          python3 scripts/hc_status.py --min-checks 2 checks.json
+          # tet-demo: the demo host isn't provisioned yet, so its check has never pinged ("new").
+          # Allowed only as "new"; remove this flag when the demo goes live.
+          python3 scripts/hc_status.py --min-checks 2 --not-yet-live tet-demo checks.json
 
       - name: P2P port reachable from the internet (exposure, not liveness)
         run: |
