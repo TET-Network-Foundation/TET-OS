@@ -913,4 +913,5 @@ export const ZH_HK: Record<string, string> = {
   "Members-only spaces are encrypted; public pages opt out of AI training crawlers that respect robots.txt.": "僅限成員的空間採用端對端加密；公開頁面已向遵守 robots.txt 的 AI 訓練爬蟲表明拒絕收集。",
   "That opt-out is a request: crawlers that ignore robots.txt, or don't say who they are, aren't stopped by it. Anything public (blocks, transactions, public boards, published marks) can be read by anyone who runs a node, AI included. Only the members-only spaces are out of reach, because they're end-to-end encrypted.": "這種拒絕只是請求：無視 robots.txt 或不表明身分的爬蟲不會因此被擋。公開的內容（區塊、交易、公開討論區、已公佈的記錄）任何運行節點的人都能讀取，包括 AI。只有採用端對端加密的僅限成員空間才無法讀取。",
   "Technical paper": "技術文件",
+  "{amount} TET (practice unit, can't be exchanged for money)": "{amount} TET（練習用單位，不能兌換成金錢）",
 };

@@ -913,4 +913,5 @@ export const JA: Record<string, string> = {
   "Members-only spaces are encrypted; public pages opt out of AI training crawlers that respect robots.txt.": "メンバー限定の場はエンドツーエンドで暗号化されています。公開ページは、robots.txt を守る AI 学習用クローラーに対して収集を断っています。",
   "That opt-out is a request: crawlers that ignore robots.txt, or don't say who they are, aren't stopped by it. Anything public (blocks, transactions, public boards, published marks) can be read by anyone who runs a node, AI included. Only the members-only spaces are out of reach, because they're end-to-end encrypted.": "この拒否はお願いにすぎません。robots.txt を無視するクローラーや、名乗らないクローラーは止められません。公開されているもの（ブロック、トランザクション、公開掲示板、公開された記録）は、ノードを動かす人なら誰でも、AI も含めて読めます。読めないのは、エンドツーエンドで暗号化されたメンバー限定の場だけです。",
   "Technical paper": "技術文書",
+  "{amount} TET (practice unit, can't be exchanged for money)": "{amount} TET（練習用の単位。お金とは交換できません）",
 };

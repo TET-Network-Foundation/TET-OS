@@ -94,6 +94,32 @@ await check("control: each kind of money wording is caught; the FAQ line isn't",
   assert.equal(moneyWording([["x.ts", `"save": "儲存"`]]).length, 0, "Chinese 儲存 (save) is not money");
 });
 
+// Balances: what a wallet holds is shown only as a practice unit (founder, 2026-10-09):
+// "120 TET (practice unit, can't be exchanged for money)". Any string that shows an amount of TET
+// held ({amount}/{balance} TET, or a number followed by TET) carries that line. (The Files fee
+// line is in µTET, a cost rather than a holding, and keeps its own guard.)
+const BALANCE = /\{(?:amount|balance)\}\s*TET\b|\b\d[\d,.]*\s+TET\b/;
+const PRACTICE = /practice unit, can't be exchanged for money/;
+function balancesWithoutPractice(list) {
+  const found = [];
+  for (const [path, text] of list) {
+    for (const m of text.matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) {
+      if (BALANCE.test(m[1]) && !PRACTICE.test(m[1])) found.push(`${path}: ${m[1].slice(0, 90)}`);
+    }
+  }
+  return found;
+}
+await check("every TET balance shown carries \"practice unit, can't be exchanged for money\"", () => {
+  const found = balancesWithoutPractice(files);
+  assert.equal(found.length, 0, found.join("\n     "));
+  assert.ok(files.some(([, text]) => text.includes(`t("{amount} TET (practice unit, can't be exchanged for money)"`)), "the balance line is gone");
+});
+await check("control: a bare balance is caught", () => {
+  assert.equal(balancesWithoutPractice([["x.tsx", 't("{amount} TET")']]).length, 1);
+  assert.equal(balancesWithoutPractice([["x.tsx", 't("You have 120 TET.")']]).length, 1);
+  assert.equal(balancesWithoutPractice([["x.tsx", 't("{amount} TET (practice unit, can\'t be exchanged for money)")']]).length, 0);
+});
+
 const plan = new URL("docs/LANDING_PLAN.md", ROOT);
 await check("the landing plan's FAQ has the practice-unit line word for word (when the plan exists)", () => {
   if (!existsSync(plan)) return;

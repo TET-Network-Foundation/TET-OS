@@ -15,6 +15,7 @@
  * A named post's short id opens a DM with its wallet; an anonymous post has no author, so no DM.
  * #18 (follows, profiles, notifications) is later: `Author` is where a profile link would attach.
  */
+import { delayBeforeNext, WINDOW_MS as FLOOD_WINDOW_MS } from "../lib/flood_guard.mjs";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
 import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, NAME_MAX, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
@@ -182,6 +183,7 @@ export default function BoardPanel(props: {
   const [err, setErr] = useState("");
   const [named, setNamed] = useState(false);
   const [sage, setSage] = useState(false);
+  const sentTimes = useRef<number[]>([]);
   // A display name for this tab's posts (blank: Anonymous / 名無しさん). Not stored, not checked.
   const [name, setName] = useState("");
   const [makingPoll, setMakingPoll] = useState(false);
@@ -368,7 +370,12 @@ export default function BoardPanel(props: {
     if (starting) setOpen(threadId);
     try {
       if (plan.action === "named") {
+        // Invisible flood guard: after a burst of 5, posts are spaced a few seconds apart; the post
+        // just shows as sending meanwhile. Normal conversation never waits.
+        const wait = delayBeforeNext(sentTimes.current, Date.now());
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const msgId = await postNamed(BASE, board, plaintext);
+        sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
         patch(id, { step: "sent", msgId });
       } else {
         // Only members get here: joining is a separate, earlier tap (see the header).
