@@ -909,4 +909,7 @@ export const JA: Record<string, string> = {
   "It proves when, and whose mark. Not who the author is.": "証明できるのは『いつ・誰の印か』まで。作者本人かどうかまでは証明しません。",
   "The node can't be reached right now. New messages will show when it's back.": "いまノードにつながりません。つながれば新しいメッセージが表示されます。",
   "Today that protection is incomplete: your ID is still your Ed25519 key, and the ML-DSA-44 key isn't bound to it until the Phase 1 genesis.": "ただし今の保護は不完全です。あなたの ID はまだ Ed25519 の鍵で、ML-DSA-44 の鍵が ID に結び付けられるのは Phase 1 のジェネシスからです。",
+  "AI and TET": "AI と TET",
+  "Members-only spaces are encrypted; public pages opt out of AI training crawlers that respect robots.txt.": "メンバー限定の場はエンドツーエンドで暗号化されています。公開ページは、robots.txt を守る AI 学習用クローラーに対して収集を断っています。",
+  "That opt-out is a request: crawlers that ignore robots.txt, or don't say who they are, aren't stopped by it. Anything public (blocks, transactions, public boards, published marks) can be read by anyone who runs a node, AI included. Only the members-only spaces are out of reach, because they're end-to-end encrypted.": "この拒否はお願いにすぎません。robots.txt を無視するクローラーや、名乗らないクローラーは止められません。公開されているもの（ブロック、トランザクション、公開掲示板、公開された記録）は、ノードを動かす人なら誰でも、AI も含めて読めます。読めないのは、エンドツーエンドで暗号化されたメンバー限定の場だけです。",
 };

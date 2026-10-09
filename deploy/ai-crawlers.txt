@@ -1,0 +1,25 @@
+# AI training crawlers, one user-agent token per line (case-insensitive). The one list:
+# tet-network/ui/scripts/gen_ai_crawlers.mjs writes robots.txt and the Caddy block from it, and
+# ai_crawlers_guard fails if either drifts. Normal search crawlers (Googlebot, Bingbot, …) stay
+# allowed: don't add them here.
+GPTBot
+ChatGPT-User
+OAI-SearchBot
+ClaudeBot
+Claude-Web
+anthropic-ai
+Google-Extended
+CCBot
+Applebot-Extended
+PerplexityBot
+Perplexity-User
+Bytespider
+Amazonbot
+meta-externalagent
+FacebookBot
+cohere-ai
+Diffbot
+ImagesiftBot
+Omgilibot
+YouBot
+Timpibot

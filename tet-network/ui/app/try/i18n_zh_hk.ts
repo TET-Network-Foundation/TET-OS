@@ -909,4 +909,7 @@ export const ZH_HK: Record<string, string> = {
   "It proves when, and whose mark. Not who the author is.": "能證明的只是「何時、誰的印記」，並不證明誰是作者。",
   "The node can't be reached right now. New messages will show when it's back.": "目前無法連接節點。恢復連接後，新訊息便會顯示。",
   "Today that protection is incomplete: your ID is still your Ed25519 key, and the ML-DSA-44 key isn't bound to it until the Phase 1 genesis.": "不過目前的保護並不完整：你的 ID 仍是 Ed25519 金鑰，ML-DSA-44 金鑰要到 Phase 1 創世才會與之綁定。",
+  "AI and TET": "AI 與 TET",
+  "Members-only spaces are encrypted; public pages opt out of AI training crawlers that respect robots.txt.": "僅限成員的空間採用端對端加密；公開頁面已向遵守 robots.txt 的 AI 訓練爬蟲表明拒絕收集。",
+  "That opt-out is a request: crawlers that ignore robots.txt, or don't say who they are, aren't stopped by it. Anything public (blocks, transactions, public boards, published marks) can be read by anyone who runs a node, AI included. Only the members-only spaces are out of reach, because they're end-to-end encrypted.": "這種拒絕只是請求：無視 robots.txt 或不表明身分的爬蟲不會因此被擋。公開的內容（區塊、交易、公開討論區、已公佈的記錄）任何運行節點的人都能讀取，包括 AI。只有採用端對端加密的僅限成員空間才無法讀取。",
 };

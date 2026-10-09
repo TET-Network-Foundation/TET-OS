@@ -20,6 +20,10 @@
 #    this is what makes that true for Caddy. TLS handshake errors name the client in their message
 #    text, which no field filter reaches; Caddy logs them only at DEBUG, so never run the demo at
 #    DEBUG. Checked by demo-node.test.sh, with a control that runs the Caddyfile without this block.
+# 6. AI training crawlers (deploy/ai-crawlers.txt, the one list) get 403 by user agent, after
+#    /robots.txt, which everyone may read: it asks them not to crawl. Only crawlers that say who they
+#    are are stopped this way; members-only spaces are end-to-end encrypted, which is what protects
+#    them. The block between the markers is generated (gen_ai_crawlers.mjs; ai_crawlers_guard).
 {
 	email {$TET_DEMO_ACME_EMAIL}
 	log default {
@@ -86,8 +90,14 @@
 
 	@page path /try /_next/static/* /pqc/* /brand/* /favicon.ico /apple-icon.png
 
+	# BEGIN ai-crawlers (generated from deploy/ai-crawlers.txt by gen_ai_crawlers.mjs; edit the list)
+	@ai_crawler header_regexp User-Agent (?i)(GPTBot|ChatGPT-User|OAI-SearchBot|ClaudeBot|Claude-Web|anthropic-ai|Google-Extended|CCBot|Applebot-Extended|PerplexityBot|Perplexity-User|Bytespider|Amazonbot|meta-externalagent|FacebookBot|cohere-ai|Diffbot|ImagesiftBot|Omgilibot|YouBot|Timpibot)
+	# END ai-crawlers
+
 	route {
 		respond @ambiguous_path 400
+		reverse_proxy /robots.txt ui:3000
+		respond @ai_crawler 403
 		redir / /try 302
 		reverse_proxy @tet_allowed ui:3000
 		reverse_proxy @page ui:3000
