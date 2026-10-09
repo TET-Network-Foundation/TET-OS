@@ -534,6 +534,12 @@ jobs:
         name: technical paper — sources, build and wording
         run: node --experimental-strip-types scripts/paper_guard.mjs
 
+      # Boards: an invisible flood guard (5 instant, then a few seconds apart), no visible per-minute
+      # limit; normal conversation never waits. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: boards — invisible flood guard
+        run: node scripts/try_flood_guard.mjs
+
       # The "Inside" page: retention shown only from the node's settings (the Rust test checks those
       # against the config), counts with the time they were read. Controls.
       - if: needs.gate.outputs.code == 'true'

@@ -230,7 +230,7 @@ function TopBar(props: { go: (v: View) => void; onSearch: (q: string) => void })
   const [q, setQ] = useState("");
   return (
     <header className="sticky top-0 z-20 border-b border-[#e3e5e8] bg-white">
-      <div className="mx-auto flex max-w-[48rem] items-center gap-3 px-4 py-2 md:px-5">
+      <div className="mx-auto flex max-w-[48rem] flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 md:px-5">
         <button type="button" onClick={() => props.go({ tool: "home" })} className={cx(FOCUS, "shrink-0 rounded-full")} aria-label={t("TET home")}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/brand/tet-logo.svg" width={30} height={30} alt="" className="tet-logo h-[30px] w-[30px]" />
@@ -265,10 +265,30 @@ const RETURNING = typeof window !== "undefined" && getUi("tet.ui.v1.visited") ==
  * This tab's ID in one short line. Keeping it ("save your passphrase") is offered when the visitor
  * asks (tap the ID) or on a returning visit — not pushed on the first one.
  */
+/** µTET → "120" or "0.5" (at most 6 decimals, no trailing zeros), with thousands separators. */
+export function formatTet(micro: number): string {
+  const whole = Math.floor(micro / 1_000_000);
+  const frac = String(micro % 1_000_000).padStart(6, "0").replace(/0+$/, "");
+  return whole.toLocaleString("en-US") + (frac ? `.${frac}` : "");
+}
+
 function CompactWallet() {
   const { t } = useLang();
   const { wallet } = useTryWallet();
   const [offer, setOffer] = useState(RETURNING);
+  // The ID's testnet balance, read only when the ID area is open (home makes no extra request).
+  const [balance, setBalance] = useState<string | null>(null);
+  useEffect(() => {
+    if (!offer || !wallet) return;
+    let on = true;
+    void fetch(`${BASE}/ledger/balance/${wallet.walletId}`)
+      .then((r) => (r.ok ? (r.json() as Promise<{ balance_micro_tet?: number }>) : null))
+      .then((j) => on && j && setBalance(formatTet(j.balance_micro_tet ?? 0)))
+      .catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [offer, wallet]);
   if (!wallet) return null;
   const save = () => {
     const url = URL.createObjectURL(new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" }));
@@ -278,20 +298,34 @@ function CompactWallet() {
     a.click();
     URL.revokeObjectURL(url);
   };
+  // The ID stays in the bar; when open, its details take their own full-width row under it (the bar
+  // wraps), so they never squeeze the search box on a phone.
   return (
-    <span className="shrink-0 text-[13px] text-[#5d646d]">
-      <button type="button" aria-expanded={offer} title={t("your ID")} onClick={() => setOffer(!offer)} className={cx(FOCUS, MONO, INK.named, "rounded-sm")}>
+    <>
+      <button
+        type="button"
+        aria-expanded={offer}
+        aria-controls="id-details"
+        title={t("your ID")}
+        onClick={() => setOffer(!offer)}
+        className={cx(FOCUS, MONO, INK.named, "shrink-0 rounded-sm text-[13px]")}
+      >
         {wallet.walletId.slice(0, 8)}
       </button>
       {offer ? (
-        <>
-          {" · "}
+        <div id="id-details" className="basis-full text-right text-[13px] text-[#5d646d]">
+          {balance !== null ? (
+            <>
+              <span>{t("{amount} TET (practice unit, can't be exchanged for money)", { amount: balance })}</span>
+              {" · "}
+            </>
+          ) : null}
           <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={save}>
             {t("Keep this ID? Save your passphrase (12 words)")}
           </button>
-        </>
+        </div>
       ) : null}
-    </span>
+    </>
   );
 }
 
