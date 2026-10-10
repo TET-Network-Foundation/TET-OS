@@ -14242,7 +14242,7 @@ fn unverified_anonymous_posts_cannot_prune_a_verified_one() {
     assert!(store.get_by_msg_id("victim").is_some() && store.get_by_msg_id("other").is_some());
 }
 
-// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-11) ----------
+// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-10) ----------
 
 const UI_KEY_REGISTRATION_V2: &str = include_str!("testdata/ui_key_registration_v2.json");
 
