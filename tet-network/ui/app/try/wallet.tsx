@@ -3,8 +3,9 @@
 /**
  * The tab's disposable wallet, shared by every panel. Made on the first action that needs it, so
  * posting, sending or answering is one tap; the page then shows a "save your words" bar. Messaging
- * keys are published only from the explicit banner in Mail and Files: publishing is public, so the
- * visitor chooses it. Nothing is stored: forget the tab and the wallet is gone unless the words were saved.
+ * keys (the inbox) are published with the membership join, right after a named post, or from the
+ * banner in Mail and Files; never as a public moment of their own (see `publishInbox`). Nothing is
+ * stored: forget the tab and the wallet is gone unless the words were saved.
  *
  * Joining the anonymity set is its own step, never folded into a post: a join is public, and a post
  * sent automatically the moment the join takes effect would point straight back at it. So `joinAnon`
@@ -47,6 +48,8 @@ type Ctx = {
   refreshAnon: () => Promise<void>;
   /** Join the anonymity set (public). Makes the wallet first if needed. Never posts anything. */
   joinAnon: () => Promise<void>;
+  /** Call right after a named post went out: turns the inbox on in the same public moment. */
+  noteNamedPost: () => Promise<void>;
   /** The wallet id, making the wallet first if there is none. */
   ensureWallet: () => Promise<string>;
   /** Open the wallet from 12 words this device remembered (encrypted; see lib/device_store.ts). */
@@ -73,9 +76,11 @@ export function WalletProvider(props: { children: ReactNode }) {
   const current = useRef<Promise<Wallet> | null>(null);
   const keysFor = useRef<string | null>(null);
 
-  // The inbox is turned on when the wallet is made or opened (signed v2 registration, #101), so
-  // every named poster can be messaged. Best effort: if the node is unreachable, the banner offers
-  // it again. Publishing the keys is public: it says this ID exists, nothing more.
+  // The inbox (signed v2 registration, #101) is never published as an event of its own: a public
+  // registration at a moment of its own could be lined up, by time, with a first anonymous post.
+  // It goes out together with the membership join (`joinAnon`), or right after the first named
+  // post (`noteNamedPost`), which already shows this ID publicly. So every named poster can be
+  // messaged, and the inbox adds no public moment. Best effort: the banner offers it again.
   const publishInbox = useCallback(async (id: string) => {
     try {
       const have = await getTmailKeys(BASE, id);
@@ -99,21 +104,19 @@ export function WalletProvider(props: { children: ReactNode }) {
       const words = generateDisposableWords();
       const w = { words, walletId: await activateTryWallet(words) };
       setWallet(w);
-      void publishInbox(w.walletId);
       return w;
     })().catch((e: unknown) => {
       current.current = null;
       throw e;
     });
     return (await current.current).walletId;
-  }, [publishInbox]);
+  }, []);
 
   /** Open the tab's wallet from existing words (a key remembered on this device). */
   const openWithWords = useCallback(async (words: string) => {
     current.current = (async () => {
       const w = { words, walletId: await activateTryWallet(words) };
       setWallet(w);
-      void publishInbox(w.walletId);
       return w;
     })().catch((e: unknown) => {
       current.current = null;
@@ -122,7 +125,7 @@ export function WalletProvider(props: { children: ReactNode }) {
     keysFor.current = null;
     setKeys("unknown");
     return (await current.current).walletId;
-  }, [publishInbox]);
+  }, []);
 
   const ensureMessagingKeys = useCallback(async () => {
     const id = await ensureWallet();
@@ -175,11 +178,20 @@ export function WalletProvider(props: { children: ReactNode }) {
   }, []);
 
   const joinAnon = useCallback(async () => {
-    await ensureWallet();
-    await registerForAnon(BASE);
+    const id = await ensureWallet();
+    // One public moment: the join and the inbox together.
+    await Promise.all([registerForAnon(BASE), publishInbox(id)]);
     joined.current = true;
     await refreshAnon();
-  }, [ensureWallet, refreshAnon]);
+  }, [ensureWallet, refreshAnon, publishInbox]);
+
+  /** After a named post went out: turn the inbox on (the post already shows this ID publicly). */
+  const noteNamedPost = useCallback(async () => {
+    if (!current.current) return;
+    const id = (await current.current).walletId;
+    if (keysFor.current === id) return;
+    await publishInbox(id);
+  }, [publishInbox]);
 
   // While joined but not yet a member, re-check until the next epoch admits us.
   useEffect(() => {
@@ -224,8 +236,8 @@ export function WalletProvider(props: { children: ReactNode }) {
   }, [wallet, forget]);
 
   const value = useMemo(
-    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered }),
-    [wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered],
+    () => ({ wallet, anon, refreshAnon, joinAnon, noteNamedPost, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered }),
+    [wallet, anon, refreshAnon, joinAnon, noteNamedPost, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered],
   );
   return <WalletCtx.Provider value={value}>{props.children}</WalletCtx.Provider>;
 }

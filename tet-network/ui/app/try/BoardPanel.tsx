@@ -193,7 +193,7 @@ export default function BoardPanel(props: {
   const [relist, setRelist] = useState<"closed" | "open" | "busy" | "done">("closed");
   const [relistWords, setRelistWords] = useState("");
   const [relistErr, setRelistErr] = useState("");
-  const { wallet, anon, refreshAnon, joinAnon, ensureWallet, prover } = useTryWallet();
+  const { wallet, anon, refreshAnon, joinAnon, noteNamedPost, ensureWallet, prover } = useTryWallet();
   const [joining, setJoining] = useState(false);
   const [posts, setPosts] = useState<BoardPost[]>([]);
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
@@ -399,6 +399,7 @@ export default function BoardPanel(props: {
         const wait = delayBeforeNext(sentTimes.current, Date.now());
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const msgId = await postNamed(BASE, board, plaintext);
+        void noteNamedPost();
         sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
         patch(id, { step: "sent", msgId });
       } else {
@@ -463,6 +464,7 @@ export default function BoardPanel(props: {
             <PollMaker
               post={async (body) => {
                 await postNamed(BASE, board, encodeThreadPost({ threadId: open, body, sage: false }));
+                void noteNamedPost();
                 void refresh();
               }}
               onDone={() => setMakingPoll(false)}

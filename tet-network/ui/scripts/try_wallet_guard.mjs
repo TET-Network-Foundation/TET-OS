@@ -13,11 +13,14 @@
  * 3. The wallet id is the one tet-core derives: the "abandon … about" phrase must give the
  *    agent_wallet_id that tet-core asserts in `agent_payload_envelopes_match_the_rust_signer`.
  * 4. SECURITY REGRESSION GUARD: messaging keys are published only when the visitor acts (publishing
- *    is public): when this tab's wallet is made or opened (founder decision 2026-10-10: every
- *    named poster is reachable), or from a "Publish keys" tap. Every `ensureMessagingKeys()` call
- *    in app/try sits in an `onPublish` handler, and wallet.tsx calls `publishInbox` only inside
- *    `ensureWallet` and `openWithWords`, never from an effect, and only with a v2 registration.
- *    Controls: a call in an effect, in a send handler, or bare; publishInbox from an effect → FAILED.
+ *    is public), and never as a public moment of their own (one that could be lined up by time
+ *    with a first anonymous post; founder decision 2026-10-10): together with the membership join
+ *    (`joinAnon`), right after a named post (`noteNamedPost`, which the post already makes public),
+ *    or from a "Publish keys" tap. Every `ensureMessagingKeys()` call in app/try sits in an
+ *    `onPublish` handler; wallet.tsx calls `publishInbox` only inside `joinAnon` and `noteNamedPost`,
+ *    v2 only; every `noteNamedPost()` call follows an `await postNamed(` within two lines.
+ *    Controls: a publish from an effect, a send handler or bare; publishInbox in ensureWallet;
+ *    noteNamedPost without a named post → FAILED.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -118,7 +121,7 @@ function inboxProblems(src) {
     const openers = [...before.matchAll(/\b(const (\w+) = useCallback|useEffect)\b/g)];
     const last = openers.at(-1);
     const where = last?.[2] ?? last?.[1] ?? "top level";
-    if (where !== "ensureWallet" && where !== "openWithWords") problems.push(`publishInbox() in ${where}`);
+    if (where !== "joinAnon" && where !== "noteNamedPost") problems.push(`publishInbox() in ${where}`);
   }
   if (calls.length !== 2) problems.push(`${calls.length} publishInbox calls (expected 2)`);
   if (!/registration\.v !== 2/.test(src)) problems.push("no v2 check");
@@ -126,10 +129,33 @@ function inboxProblems(src) {
 }
 const walletSrc = readFileSync(resolve(tryDir, "wallet.tsx"), "utf8");
 const ip = inboxProblems(walletSrc);
-check("SECURITY: wallet.tsx publishes the inbox only when the wallet is made or opened", ip.length === 0, ip.join("; "));
+check("SECURITY: wallet.tsx publishes the inbox only with the membership join or after a named post", ip.length === 0, ip.join("; "));
 check(
-  "negative control: publishInbox from an effect FAILS",
-  inboxProblems(walletSrc.replace("void publishInbox(w.walletId);\n      return w;", "return w;").replace("const lockable = useRef(false);", "useEffect(() => { void publishInbox(\"x\"); }, []);\n  const lockable = useRef(false);")).length > 0,
+  "negative control: publishInbox when the wallet is made FAILS",
+  inboxProblems(walletSrc.replace("      setWallet(w);\n      return w;", "      setWallet(w);\n      void publishInbox(w.walletId);\n      return w;")).length > 0,
+);
+/** Every noteNamedPost() call in the panels follows an `await postNamed(` within two lines. */
+function namedPostProblems(sources) {
+  const problems = [];
+  let sites = 0;
+  for (const [f, src] of Object.entries(sources)) {
+    if (f === "wallet.tsx") continue;
+    const lines = src.split("\n");
+    lines.forEach((l, i) => {
+      if (!/\bnoteNamedPost\(\)/.test(l)) return;
+      sites++;
+      const before = lines.slice(Math.max(0, i - 6), i).join("\n");
+      if (!/await postNamed\(/.test(before)) problems.push(`${f}:${i + 1}: noteNamedPost() without a named post just before`);
+    });
+  }
+  if (sites < 3) problems.push(`${sites} noteNamedPost sites (expected 3)`);
+  return problems;
+}
+const np = namedPostProblems(trySources);
+check("SECURITY: the inbox goes out only right after a named post", np.length === 0, np.join("; "));
+check(
+  "negative control: noteNamedPost in an effect FAILS",
+  namedPostProblems({ ...trySources, "x.tsx": "useEffect(() => {\n  void noteNamedPost();\n}, []);" }).length > 0,
 );
 const controls = {
   "effect.tsx": `useEffect(() => { void ensureMessagingKeys(); }, []);`,
