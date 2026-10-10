@@ -639,6 +639,12 @@ jobs:
         name: operator-hide.sh refuses incomplete commands
         run: bash deploy/tests/operator-hide.test.sh
 
+      # SSH listeners: every port on IPv4 and IPv6, ssh.socket enabled, IPv4 checked, no firewall
+      # rules in the provisioning script or the demo cloud-config. Controls included.
+      - if: needs.gate.outputs.code == 'true'
+        name: provisioning keeps SSH on IPv4 and IPv6
+        run: bash deploy/tests/provision-ssh.test.sh
+
       # seed-liveness.yml's verdict on healthchecks.io's status: every check "up", at least two,
       # and a malformed or empty answer is a failure, never a pass.
       - if: needs.gate.outputs.code == 'true'

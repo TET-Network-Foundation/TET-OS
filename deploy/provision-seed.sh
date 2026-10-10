@@ -306,8 +306,11 @@ if systemctl list-unit-files ssh.socket >/dev/null 2>&1; then
   systemctl daemon-reload
   systemctl enable ssh.socket >/dev/null 2>&1
   systemctl restart ssh.socket
+  # Each port on IPv4 and IPv6 separately: a [::] listener alone refuses every IPv4 connection
+  # when the socket is IPv6-only, which is what locked the demo host's IPv4 SSH out.
   for p in $SSH_PORT $SSH_EXTRA_PORTS; do
-    ss -ltnH "sport = :$p" | grep -q . || die "ssh.socket is not listening on $p"
+    ss -4ltnH "sport = :$p" | grep -q . || die "ssh.socket is not listening on IPv4 port $p"
+    ss -6ltnH "sport = :$p" | grep -q . || warn "ssh.socket is not listening on IPv6 port $p"
   done
   ok "ssh listens on $(ss -ltnH | awk '{print $4}' | grep -E ":(${SSH_PORT}$(for p in $SSH_EXTRA_PORTS; do printf '|%s' "$p"; done))$" | tr '\n' ' ')"
 else
