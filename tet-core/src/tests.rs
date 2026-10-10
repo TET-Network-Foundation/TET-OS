@@ -15702,13 +15702,13 @@ async fn shelter_sealed_key_is_set_by_their_voucher_and_served_only_to_them() {
     state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
     state.tmail.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Vouch, &bid, true, "", "", now), now).unwrap();
     state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &cid, true, "", "", now), now).unwrap();
-    let key_for = |w: &str, from: &str, to: &str, id: &str| signed_tmail_env_for_tests(w, from, to, id, tmail_flags_for_tests(false), None);
+    let key_for = |w: &str, from: &str, to: &str, id: &str, at: u64| signed_tmail_env_at_for_tests(w, from, to, id, at);
     // Another member (not b's voucher) can't set b's key; b's voucher, the moderator, and b can.
-    assert!(state.tmail.set_shelter_key(&key_for(&cw, &cid, &bid, "k-c")).is_err(), "another member set the key");
-    assert!(state.tmail.set_shelter_key(&key_for(&aw, &aid, &xid, "k-x")).is_err(), "a key for a non-member");
-    state.tmail.set_shelter_key(&key_for(&aw, &aid, &bid, "k-a")).unwrap();
-    state.tmail.set_shelter_key(&key_for(&mw, &mid, &bid, "k-m")).unwrap();
-    state.tmail.set_shelter_key(&key_for(&bw, &bid, &bid, "k-b")).unwrap();
+    assert!(state.tmail.set_shelter_key(&key_for(&cw, &cid, &bid, "k-c", now)).is_err(), "another member set the key");
+    assert!(state.tmail.set_shelter_key(&key_for(&aw, &aid, &xid, "k-x", now)).is_err(), "a key for a non-member");
+    state.tmail.set_shelter_key(&key_for(&aw, &aid, &bid, "k-a", now)).unwrap();
+    state.tmail.set_shelter_key(&key_for(&mw, &mid, &bid, "k-m", now + 1)).unwrap();
+    state.tmail.set_shelter_key(&key_for(&bw, &bid, &bid, "k-b", now + 2)).unwrap();
     let me = |words: &str| {
         let router = router.clone();
         let auth = shelter_read_auth_for_tests(words, "/shelter/me", now);
@@ -15720,4 +15720,146 @@ async fn shelter_sealed_key_is_set_by_their_voucher_and_served_only_to_them() {
     };
     assert!(me(&bw).await.contains("k-b"), "the member didn't get their key");
     assert!(!me(&aw).await.contains("k-b") && !me(&cw).await.contains("k-b"), "another member got it");
+}
+
+/// **SECURITY: a signed Shelter record counts once.** Sent again within its clock window, a vouch
+/// would put back a member who left, and a nickname record would undo a later change.
+/// Negative control: the duplicate check removed → FAILED.
+#[test]
+fn shelter_records_cannot_be_replayed() {
+    use crate::tmail::shelter::{ShelterAction as A, ShelterError as E};
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let vouch = shelter_rec_for_tests(&aw, A::Vouch, &bid, true, "", "", now);
+    store.submit_shelter_record(&vouch, now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&bw, A::Withdraw, &bid, false, "", "", now), now).unwrap();
+    assert_eq!(store.submit_shelter_record(&vouch, now + 1), Err(E::Duplicate), "a replayed vouch put a member back");
+    assert!(!store.shelter_state(&cfg).is_member(&bid));
+    let nick1 = shelter_rec_for_tests(&aw, A::Nickname, &aid, false, "Sora", "", now);
+    store.submit_shelter_record(&nick1, now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Nickname, &aid, false, "Umi", "", now + 1), now + 1).unwrap();
+    assert_eq!(store.submit_shelter_record(&nick1, now + 2), Err(E::Duplicate));
+    assert_eq!(store.shelter_state(&cfg).members[&aid].nickname.as_deref(), Some("Umi"));
+}
+
+/// **SECURITY: a nickname can't copy another, or a reserved word, with look-alike characters.**
+/// Negative control: the skeleton reduced to `to_lowercase` → FAILED.
+#[test]
+fn shelter_nicknames_cannot_be_copied_with_look_alikes() {
+    use crate::tmail::shelter::nickname_ok;
+    assert!(nickname_ok("Hana") && nickname_ok("みお") && nickname_ok("小林") && nickname_ok("Sora_2"));
+    // Other scripts: refused outright.
+    assert!(!nickname_ok("Mоderator"), "Cyrillic о");
+    assert!(!nickname_ok("Ηana"), "Greek Η");
+    assert!(!nickname_ok("Ha\u{200b}na"), "zero-width space");
+    assert!(!nickname_ok("ﾊﾅ"), "half-width katakana");
+    // Reserved words, however they're written.
+    for r in ["Moderator", "M0DERATOR", "mod.erator", "anon", "Anonymous", "匿名", "モデレーター"] {
+        assert!(!nickname_ok(r), "{r}");
+    }
+    // Look-alikes within the allowed set collide.
+    let sk = crate::tmail::shelter::nickname_skeleton;
+    assert_eq!(sk("Bill"), sk("B1lI"));
+    assert_eq!(sk("Sora"), sk("S0ra"));
+    assert_eq!(sk("エロ"), sk("工口"));
+    assert_eq!(sk("へや"), sk("ヘヤ"));
+    assert_eq!(sk("ha na"), sk("hana"));
+    // …so Shelter refuses the copy.
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    for id in [&aid, &bid] {
+        store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, id, true, "", "", now), now).unwrap();
+    }
+    store.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Nickname, &aid, false, "Bill", "", now), now).unwrap();
+    assert!(store.submit_shelter_record(&shelter_rec_for_tests(&bw, A::Nickname, &bid, false, "B1ll", "", now), now).is_err(), "a look-alike copy was accepted");
+    assert!(store.submit_shelter_record(&shelter_rec_for_tests(&bw, A::Nickname, &bid, false, "bi ll", "", now), now).is_err());
+}
+
+/// **SECURITY: after someone is removed, a posting key registered before then doesn't count,
+/// even if deleting it failed;** and the roots state fails closed.
+/// Negative control: `send_fast_anonymous` without the Shelter registration-time check → FAILED.
+#[test]
+fn shelter_posting_keys_from_before_a_removal_never_count() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let _e = anon_fast_epoch_guard();
+    let (mw, _mid, board, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let bucket = nexus_protocol::tmail_bucket_index_v1(now);
+    let (ids, _) = registered_members_for_tests(&store, 4);
+    for id in &ids {
+        store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, id, true, "", "", now), now).unwrap();
+    }
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [0x22; 32], "shelter-reg-2");
+    let saved = store.fast_registration(&board, bucket, &eid).expect("setup: registered");
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "before", tmail_now_ms_for_tests())), Ok(true));
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let later = tmail_now_ms_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Case, &ids[0], false, "bot", "", later), later).unwrap();
+    // As if deleting the key had failed: put it back.
+    store.put_fast_key_for_tests(&board, bucket, &eid, &saved);
+    assert_eq!(
+        store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "after", tmail_now_ms_for_tests())),
+        Err(crate::tmail::store::FastSendError::NotRegistered),
+        "a posting key from before the removal still posted"
+    );
+}
+
+/// **SECURITY: a sealed key comes only from a current member, fresh, and never replaces a newer
+/// one.** Negative controls: the voucher's current membership not checked → FAILED; the
+/// newer-than check removed → FAILED.
+#[test]
+fn shelter_sealed_keys_need_a_current_sender_and_cannot_go_back() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Vouch, &bid, true, "", "", now), now).unwrap();
+    let key = |w: &str, from: &str, id: &str, at: u64| signed_tmail_env_at_for_tests(w, from, &bid, id, at);
+    let older = key(&aw, &aid, "k-old", now - 1_000);
+    let newer = key(&bw, &bid, "k-new", now);
+    store.set_shelter_key(&newer).unwrap();
+    assert!(store.set_shelter_key(&older).is_err(), "an older sealed key replaced a newer one");
+    assert_eq!(store.shelter_key_for(&bid).unwrap().msg_id, "k-new");
+    assert!(store.set_shelter_key(&key(&aw, &aid, "k-stale", now - 11 * 60_000)).is_err(), "a stale sealed key");
+    // The voucher is removed: they hand out nothing more.
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Case, &aid, false, "bot", "", now), now).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    assert!(store.set_shelter_key(&key(&aw, &aid, "k-removed", tmail_now_ms_for_tests())).is_err(), "a removed voucher set the key");
+    assert_eq!(store.shelter_key_for(&bid).unwrap().msg_id, "k-new");
+}
+
+/// A named envelope like [`signed_tmail_env_for_tests`], sent at `at_ms`.
+fn signed_tmail_env_at_for_tests(words: &str, from: &str, to: &str, msg_id: &str, at_ms: u64) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let mut env = signed_tmail_env_for_tests(words, from, to, msg_id, tmail_flags_for_tests(false), None);
+    env.sent_at_ms = at_ms;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let msg = crate::tmail::envelope::tmail_envelope_auth_message_bytes(&env, &env.hybrid_sig.mldsa_pubkey_b64.clone()).unwrap();
+    env.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    env.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, msg.as_slice()).unwrap());
+    env
 }

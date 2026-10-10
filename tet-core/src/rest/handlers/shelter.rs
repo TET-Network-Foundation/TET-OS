@@ -61,6 +61,7 @@ pub async fn post_shelter_record(State(state): State<RestState>, Json(r): Json<s
         Ok(Err(ShelterError::Off)) => off(),
         Ok(Err(e @ (ShelterError::Signature | ShelterError::SignerMismatch))) => refuse(StatusCode::UNAUTHORIZED, e.to_string()),
         Ok(Err(e @ ShelterError::Refused(_))) => refuse(StatusCode::FORBIDDEN, e.to_string()),
+        Ok(Err(e @ ShelterError::Duplicate)) => refuse(StatusCode::CONFLICT, e.to_string()),
         Ok(Err(e)) => refuse(StatusCode::BAD_REQUEST, e.to_string()),
         Err(j) => refuse(StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")),
     }

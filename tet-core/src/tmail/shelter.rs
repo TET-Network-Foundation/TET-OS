@@ -160,6 +160,8 @@ pub enum ShelterError {
     Clock,
     #[error("{0}")]
     Refused(&'static str),
+    #[error("this record was already submitted")]
+    Duplicate,
 }
 
 /// Shape and signature. Whether the record is allowed is [`ShelterState::apply`]'s job.
@@ -188,18 +190,58 @@ pub fn verify_record(r: &ShelterRecordV1) -> Result<(), ShelterError> {
     .map_err(|_| ShelterError::Signature)
 }
 
-/// A nickname: 1–24 characters, letters, digits, spaces, `_`, `-`, `.`; no leading or trailing
-/// space; not a word the page uses for something else.
+/// Characters a nickname may use: the site's languages only (English, Japanese, Chinese), so
+/// look-alikes from other scripts (Cyrillic `о`, Greek `Η`, …) can't copy a nickname.
+fn nickname_char_ok(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, ' ' | '_' | '-' | '.')
+        || ('\u{3041}'..='\u{3096}').contains(&c) // hiragana
+        || ('\u{30A1}'..='\u{30FA}').contains(&c) // katakana
+        || c == '\u{30FC}' // ー
+        || ('\u{4E00}'..='\u{9FFF}').contains(&c) // CJK ideographs
+}
+
+/// What a nickname looks like, for uniqueness and the reserved words: lower case, separators
+/// dropped, and characters that look alike within the allowed set folded together (`I`/`l`/`1`,
+/// `O`/`0`, hiragana/katakana pairs, katakana/kanji look-alikes such as `エ`/`工`, `ロ`/`口`).
+pub fn nickname_skeleton(n: &str) -> String {
+    n.chars()
+        .filter(|c| !matches!(c, ' ' | '_' | '-' | '.'))
+        .map(|c| {
+            let c = c.to_ascii_lowercase();
+            match c {
+                'i' | '1' | '|' => 'l',
+                '0' => 'o',
+                '5' => 's',
+                // hiragana → katakana (same sound, often same shape: へ/ヘ, べ/ベ, ぺ/ペ, り/リ)
+                '\u{3041}'..='\u{3096}' => char::from_u32(c as u32 + 0x60).unwrap_or(c),
+                '一' => 'ー',
+                '工' => 'エ',
+                '口' => 'ロ',
+                '力' => 'カ',
+                '二' => 'ニ',
+                '八' => 'ハ',
+                '夕' => 'タ',
+                '卜' => 'ト',
+                '三' => 'ミ',
+                _ => c,
+            }
+        })
+        .collect()
+}
+
+/// A nickname: 1–24 characters from the allowed set; no leading or trailing space; not like a word
+/// the page uses for something else (compared by [`nickname_skeleton`]).
 pub fn nickname_ok(n: &str) -> bool {
     let count = n.chars().count();
-    if count == 0 || count > NICKNAME_MAX_CHARS || n.trim() != n {
+    if count == 0 || count > NICKNAME_MAX_CHARS || n.trim() != n || !n.chars().all(nickname_char_ok) {
         return false;
     }
-    if !n.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '_' || c == '-' || c == '.') {
-        return false;
-    }
-    let lower = n.to_lowercase();
-    !["anonymous", "anon", "moderator", "mod", "tet", "匿名", "管理人", "モデレーター", "版主"].contains(&lower.as_str())
+    let sk = nickname_skeleton(n);
+    !sk.is_empty()
+        && !["anonymous", "anon", "moderator", "mod", "tet", "匿名", "管理人", "モデレーター", "版主", "管理員"]
+            .iter()
+            .any(|r| nickname_skeleton(r) == sk)
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -353,10 +395,10 @@ impl ShelterState {
                     return Err(ShelterError::Refused("only a member sets their own nickname"));
                 }
                 if !nickname_ok(&r.text) {
-                    return Err(ShelterError::Refused("a nickname is 1–24 letters, digits, spaces, _ - or ."));
+                    return Err(ShelterError::Refused("a nickname is 1–24 letters (English, Japanese or Chinese), digits, spaces, _ - or ."));
                 }
-                let wanted = r.text.to_lowercase();
-                if self.members.values().any(|m| m.wallet != signer && m.nickname.as_deref().map(str::to_lowercase).as_deref() == Some(wanted.as_str())) {
+                let wanted = nickname_skeleton(&r.text);
+                if self.members.values().any(|m| m.wallet != signer && m.nickname.as_deref().map(nickname_skeleton).as_deref() == Some(wanted.as_str())) {
                     return Err(ShelterError::Refused("another member has that nickname"));
                 }
                 if let Some(m) = self.members.get_mut(signer) {

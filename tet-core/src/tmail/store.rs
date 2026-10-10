@@ -210,6 +210,7 @@ pub struct TmailStore {
     shelter_records: sled::Tree,
     shelter_roots: sled::Tree,
     shelter_keys: sled::Tree,
+    shelter_roots_lock: std::sync::Mutex<()>,
     /// Serialises Shelter record checks and appends (check against the state, then append).
     shelter_lock: std::sync::Mutex<()>,
 }
@@ -372,6 +373,7 @@ impl TmailStore {
             shelter_records: db.open_tree(TREE_SHELTER_RECORDS)?,
             shelter_roots: db.open_tree(TREE_SHELTER_ROOTS)?,
             shelter_keys: db.open_tree(TREE_SHELTER_KEYS)?,
+            shelter_roots_lock: std::sync::Mutex::new(()),
             shelter_lock: std::sync::Mutex::new(()),
         })
     }
@@ -1538,6 +1540,9 @@ impl TmailStore {
         let now = now_ms();
         let (receiver, bucket, posting_key) = self.fast_checks(env, now)?;
         let reg = self.fast_registration(&receiver, bucket, &posting_key).ok_or(FastSendError::NotRegistered)?;
+        if crate::tmail::shelter::is_shelter_board(&receiver) && !self.shelter_fast_registration_ok(&reg) {
+            return Err(FastSendError::NotRegistered);
+        }
         if self.by_msg_id.contains_key(env.msg_id.trim().as_bytes()).unwrap_or(false) {
             return Ok(false);
         }
@@ -1562,7 +1567,10 @@ impl TmailStore {
         if self.by_msg_id.contains_key(env.msg_id.trim().as_bytes()).unwrap_or(false) {
             return Ok(false);
         }
-        if let Some(reg) = self.fast_registration(&receiver, bucket, &posting_key) {
+        let reg = self
+            .fast_registration(&receiver, bucket, &posting_key)
+            .filter(|r| !crate::tmail::shelter::is_shelter_board(&receiver) || self.shelter_fast_registration_ok(r));
+        if let Some(reg) = reg {
             self.fast_flood_take(&k, now, false)?;
             let stored = self.store_tmail_inner(env, true).map_err(|e| FastSendError::Store(e.to_string()))?;
             if stored {
@@ -1700,6 +1708,10 @@ struct ShelterRoots {
     leaves: Vec<String>,
     /// Roots that count, with when each was first seen. Cleared whenever a leaf goes away.
     roots: Vec<(String, u64)>,
+    /// When the set last lost someone: a posting key registered before then doesn't count, even if
+    /// deleting it failed.
+    #[serde(default)]
+    last_loss_ms: u64,
 }
 
 impl TmailStore {
@@ -1725,7 +1737,14 @@ impl TmailStore {
             return Err(ShelterError::Clock);
         }
         let _g = self.shelter_lock.lock().unwrap_or_else(|p| p.into_inner());
-        let mut state = self.shelter_state(&cfg);
+        // A signed record counts once: a copy sent again (within its clock window) would replay it,
+        // e.g. put back a member who left, or a nickname they changed.
+        let id = sh::record_id(r);
+        let records = self.shelter_records();
+        if records.iter().any(|x| sh::record_id(x) == id) {
+            return Err(ShelterError::Duplicate);
+        }
+        let mut state = sh::replay(&cfg, &records);
         state.apply(&cfg, r)?;
         let seq = self.shelter_records.len() as u64;
         let bytes = serde_json::to_vec(r).map_err(|_| ShelterError::Malformed("record"))?;
@@ -1756,19 +1775,20 @@ impl TmailStore {
     /// clears them, and drops today's fast-posting keys for the board, so a removed member's proof
     /// or posting key stops working at once. Fewer than [`crate::tmail::shelter::SHELTER_ANON_MIN`]
     /// members: no root counts.
-    pub fn shelter_refresh_roots(&self, cfg: &crate::tmail::shelter::ShelterConfig, now: u64) {
+    /// Runs under its own lock (a read, then a write: two at once could put back a cleared root),
+    /// and fails closed: `None` if the state couldn't be read or written, and then nothing counts.
+    pub fn shelter_refresh_roots(&self, cfg: &crate::tmail::shelter::ShelterConfig, now: u64) -> Option<(Vec<String>, u64)> {
+        let _g = self.shelter_roots_lock.lock().unwrap_or_else(|p| p.into_inner());
         let set = self.shelter_anon_set(cfg, now);
         let leaves: Vec<String> = set.iter().map(|(_, c)| hex::encode(c)).collect();
-        let mut st: ShelterRoots = self
-            .shelter_roots
-            .get(b"state")
-            .ok()
-            .flatten()
-            .and_then(|v| serde_json::from_slice(&v).ok())
-            .unwrap_or_default();
+        let mut st: ShelterRoots = match self.shelter_roots.get(b"state").ok()? {
+            Some(v) => serde_json::from_slice(&v).ok()?,
+            None => ShelterRoots::default(),
+        };
         let lost = st.leaves.iter().any(|l| !leaves.contains(l));
         if lost {
             st.roots.clear();
+            st.last_loss_ms = now;
             let prefix = format!("{}|", cfg.board);
             let keys: Vec<_> = self.fast_keys.scan_prefix(prefix.as_bytes()).filter_map(|r| r.ok()).map(|(k, _)| k).collect();
             for k in keys {
@@ -1786,9 +1806,9 @@ impl TmailStore {
             st.roots.clear();
         }
         st.leaves = leaves;
-        if let Ok(v) = serde_json::to_vec(&st) {
-            let _ = self.shelter_roots.insert(b"state", v);
-        }
+        let v = serde_json::to_vec(&st).ok()?;
+        self.shelter_roots.insert(b"state", v).ok()?;
+        Some((st.roots.into_iter().map(|(r, _)| r).collect(), st.last_loss_ms))
     }
 
     /// Does a proof against `root` count for Shelter's board now? Only Shelter's own roots, never
@@ -1798,14 +1818,15 @@ impl TmailStore {
         if bucket.abs_diff(now_bucket) > 1 {
             return false;
         }
-        self.shelter_refresh_roots(&cfg, now_ms());
         let want = hex::encode(root);
-        self.shelter_roots
-            .get(b"state")
-            .ok()
-            .flatten()
-            .and_then(|v| serde_json::from_slice::<ShelterRoots>(&v).ok())
-            .is_some_and(|st| st.roots.iter().any(|(r, _)| *r == want))
+        self.shelter_refresh_roots(&cfg, now_ms()).is_some_and(|(roots, _)| roots.contains(&want))
+    }
+
+    /// May a fast post to Shelter's board use this registration? Only if it was registered after
+    /// the set last lost someone (and the state reads; otherwise no).
+    fn shelter_fast_registration_ok(&self, reg: &FastKey) -> bool {
+        let Some(cfg) = crate::tmail::shelter::config_from_env() else { return false };
+        self.shelter_refresh_roots(&cfg, now_ms()).is_some_and(|(_, lost_at)| reg.registered_at_ms > lost_at)
     }
 
     /// Keep a member's sealed board key: a named envelope (signature already verified) to a current
@@ -1817,12 +1838,23 @@ impl TmailStore {
         if env.flags.anonymous || env.anonymous.is_some() {
             return Err("a sealed key is a named envelope");
         }
+        crate::tmail::envelope::verify_tmail_envelope_v1(env).map_err(|_| "the envelope's signature doesn't verify")?;
         let to = env.receiver_wallet_id.trim().to_ascii_lowercase();
         let from = env.sender_wallet_id.trim().to_ascii_lowercase();
         let st = self.shelter_state(&cfg);
         let Some(m) = st.members.get(&to) else { return Err("not a member") };
-        if !(from == cfg.moderator || from == to || m.via.as_deref() == Some(from.as_str())) {
+        // The sender must be a member now: a voucher who was removed (or left) hands out nothing.
+        let voucher_now = m.via.as_deref() == Some(from.as_str()) && st.is_member(&from);
+        if !(from == cfg.moderator || from == to || voucher_now) {
             return Err("only the member who let them in, the moderator, or the member can hand them the key");
+        }
+        // Fresh, and newer than the key it replaces: an old sealed key sent again can't undo a newer
+        // one (after the board key is rotated, say).
+        if env.sent_at_ms.abs_diff(now_ms()) > crate::tmail::shelter::SHELTER_RECORD_SKEW_MS {
+            return Err("the sealed key's time is too far from now; check the device clock");
+        }
+        if self.shelter_key_for(&to).is_some_and(|old| old.sent_at_ms >= env.sent_at_ms) {
+            return Err("a newer key is already there");
         }
         let v = serde_json::to_vec(env).map_err(|_| "malformed")?;
         if v.len() > 16 * 1024 {
@@ -1830,6 +1862,12 @@ impl TmailStore {
         }
         self.shelter_keys.insert(to.as_bytes(), v).map_err(|_| "couldn't store it")?;
         Ok(())
+    }
+
+    /// Tests only: put a posting key's registration back, as if deleting it had failed.
+    #[cfg(test)]
+    pub fn put_fast_key_for_tests(&self, receiver: &str, bucket: u64, posting_key: &str, reg: &FastKey) {
+        self.fast_keys.insert(fast_key(receiver, bucket, posting_key).as_bytes(), serde_json::to_vec(reg).unwrap()).unwrap();
     }
 
     pub fn shelter_key_for(&self, member: &str) -> Option<TmailEnvelopeV1> {
