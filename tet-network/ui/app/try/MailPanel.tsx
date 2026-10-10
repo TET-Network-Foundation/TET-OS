@@ -457,7 +457,7 @@ export default function MailPanel(props: {
                 {schedule ? <p className="mt-1.5 text-[13px] text-[#5d646d]">{t(TMAIL_TIME_LOCK_DISCLOSURE)}</p> : null}
                 {note ? (
                   <p role="alert" className={cx("mt-1.5 text-[14.5px]", note.ok ? INK.ok : INK.bad)}>
-                    {note.text}
+                    {t(note.text)}
                   </p>
                 ) : null}
               </>

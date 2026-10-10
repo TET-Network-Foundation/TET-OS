@@ -14559,3 +14559,94 @@ async fn concurrent_double_spend_admits_at_most_one() {
     assert_eq!(admitted, 1, "exactly one of the overdrawing transfers may be admitted");
     assert_eq!(state.mempool.lock().await.len(), 1);
 }
+
+// ---- Tmail sent_at_ms is held to the node's clock (SECURITY.md 2026-10-11) ---------------------
+
+#[test]
+fn sent_at_window_is_five_minutes_and_anonymous_posts_stay_in_their_utc_day() {
+    use crate::tmail::envelope::{check_sent_at, SentAtRefusal, SENT_AT_SKEW_MS};
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    let mut named = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-1", tmail_flags_for_tests(false), None);
+    let now = 1_791_700_000_000u64;
+    named.sent_at_ms = now - SENT_AT_SKEW_MS;
+    assert_eq!(check_sent_at(&named, now), Ok(()), "exactly 5 minutes behind is accepted");
+    named.sent_at_ms = now + SENT_AT_SKEW_MS;
+    assert_eq!(check_sent_at(&named, now), Ok(()), "exactly 5 minutes ahead is accepted");
+    named.sent_at_ms = now - SENT_AT_SKEW_MS - 1;
+    assert_eq!(check_sent_at(&named, now), Err(SentAtRefusal::ClockOff));
+    named.sent_at_ms = now + SENT_AT_SKEW_MS + 1;
+    assert_eq!(check_sent_at(&named, now), Err(SentAtRefusal::ClockOff));
+
+    // The UTC day boundary: dated 2 s before midnight.
+    let midnight = (now / 86_400_000 + 1) * 86_400_000;
+    let mut anon = named.clone();
+    anon.flags.anonymous = true;
+    anon.sent_at_ms = midnight - 2_000;
+    assert_eq!(check_sent_at(&anon, midnight - 1_000), Ok(()), "arrives before midnight: accepted");
+    assert_eq!(check_sent_at(&anon, midnight + 1_000), Err(SentAtRefusal::AnonDayChanged), "arrives after midnight: refused");
+    // Dated just after midnight by a clock a little ahead, arriving just before: also another day.
+    anon.sent_at_ms = midnight + 2_000;
+    assert_eq!(check_sent_at(&anon, midnight - 1_000), Err(SentAtRefusal::AnonDayChanged));
+    // A named post across midnight is fine (no daily ID).
+    named.sent_at_ms = midnight - 2_000;
+    assert_eq!(check_sent_at(&named, midnight + 1_000), Ok(()));
+}
+
+/// Through the real send handler: a post with a clock 10 minutes off is refused with the plain
+/// message and not stored; an anonymous post dated before midnight arriving after it is refused
+/// cleanly and not stored, while the same post arriving before midnight is not refused for its
+/// time. Controls (run by hand): without the check in the handler → FAILS.
+#[tokio::test]
+async fn send_refuses_posts_dated_off_the_node_clock_and_stores_nothing() {
+    let _g = env_lock();
+    set_test_env_base();
+    let node = TmailNode::new();
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    let body = |r: axum::response::Response| async move {
+        let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        String::from_utf8_lossy(&b).to_string()
+    };
+
+    let mut env = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-2", tmail_flags_for_tests(false), None);
+    env.sent_at_ms -= 10 * 60_000;
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(env)).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert!(body(r).await.contains("your device clock is off"));
+    assert_eq!(node.inbox_len(&receiver), 0, "nothing stored");
+
+    let midnight = (tmail_now_ms_for_tests() / 86_400_000 + 1) * 86_400_000;
+    let mut anon = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-3", tmail_flags_for_tests(false), None);
+    anon.flags.anonymous = true;
+    anon.sent_at_ms = midnight - 2_000;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(Some(midnight + 1_000));
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(anon.clone())).await;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(None);
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert!(body(r).await.contains("the UTC day changed"), "a clean refusal, with the reason");
+    assert_eq!(node.inbox_len(&receiver), 0, "not stored");
+
+    crate::tmail::envelope::set_sent_at_clock_for_tests(Some(midnight - 1_000));
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(anon)).await;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(None);
+    let text = body(r).await;
+    assert!(!text.contains("clock") && !text.contains("UTC day"), "before midnight it is not refused for its time: {text}");
+}
+
+/// Gossip ingest applies the same rule: a peer can't plant a backdated or future-dated envelope.
+#[test]
+fn gossip_refuses_envelopes_dated_off_the_node_clock() {
+    let _g = env_lock();
+    set_test_env_base();
+    let node = TmailNode::new();
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    for (id, shift) in [("clock-g1", -(10 * 60_000i64)), ("clock-g2", 10 * 60_000)] {
+        let mut env = signed_tmail_env_for_tests(&words, &sender, &receiver, id, tmail_flags_for_tests(false), None);
+        env.sent_at_ms = (env.sent_at_ms as i64 + shift) as u64;
+        let out = node.receive_gossip(&tmail_wire_envelope(&env));
+        assert!(matches!(out, crate::p2p::TmailGossipOutcome::Rejected { ref reason } if reason.starts_with("time:")), "{id}: {out:?}");
+    }
+    assert_eq!(node.inbox_len(&receiver), 0);
+}

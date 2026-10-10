@@ -424,7 +424,7 @@ export default function BoardPanel(props: {
         </div>
         {err ? (
           <p role="alert" className={cx("mt-1 text-[15px]", INK.bad)}>
-            {err}
+            {t(err)}
           </p>
         ) : null}
       </div>
@@ -564,7 +564,7 @@ export default function BoardPanel(props: {
                   o.step === "proving"
                     ? t("proving… {time}", { time: fmtSeconds(secs) })
                     : o.step === "failed"
-                      ? t("not posted: {reason}", { reason: o.reason ?? "" })
+                      ? t("not posted: {reason}", { reason: t(o.reason ?? "") })
                       : o.step === "sent"
                         ? t("sent · waiting for the board")
                         : o.step === "depositing"

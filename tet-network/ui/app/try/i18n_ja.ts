@@ -452,4 +452,6 @@ export const JA: Record<string, string> = {
   "That ID hasn't turned on its inbox yet: nothing was sent.": "その ID はまだ受信箱をオンにしていません。何も送っていません。",
   "A delivered file proves the sender's key signed it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who holds that key, or that the file is what its name says.": "届いたファイルは、送り主の鍵で署名されたことを示します。開けるのは受取人だけです（DM で見える安全番号が相手と一致していれば）。その鍵を誰が持っているか、ファイルが名前どおりの中身かは示しません。",
   "Messages are end-to-end encrypted in this tab: only the two of you can read them, if your safety numbers match. The node still sees who writes to whom, and when.": "メッセージはこのタブでエンドツーエンドで暗号化されます。安全番号が一致していれば、読めるのは2人だけです。誰が誰にいつ書いたかは、ノードに見えます。",
+  "your device clock is off: set it to the right time and try again": "端末の時計がずれています。正しい時刻に合わせてから、もう一度試してください。",
+  "the UTC day changed while this anonymous post was on its way; send it again": "この匿名の書き込みを送っている間に UTC の日付が変わりました。もう一度送ってください。",
 };
