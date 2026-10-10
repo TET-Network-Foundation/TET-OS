@@ -4,7 +4,7 @@
 //   TET_PUBLISHER_WORDS=… node scripts/build_offline_verifier.mjs --mark   # also marks both files
 //
 // Both files inline, unchanged, app/lib/offline_verify.mjs (Level 1: "this key signed this hash")
-// and the ML-DSA-44 WASM (public/pqc), with the WASM glue's network loader removed: nothing in
+// and the ML-DSA-44 WASM (tet-agent-sdk/vendor, the committed signer), with the WASM glue's network loader removed: nothing in
 // either file can make a request, and the HTML's Content-Security-Policy says `connect-src 'none'`
 // and pins its one inline script by hash. Deterministic: the same sources give the same bytes, so
 // the published SHA-256 can be re-derived from the repository.
@@ -34,7 +34,10 @@ const KNOWN = {
 const verifierSrc = read("app/lib/offline_verify.mjs").toString("utf8").replace(/^export /gm, "");
 
 // The WASM glue: initSync only. The async loader (the only code that could fetch) is cut out.
-let glue = read("public/pqc/tet_pqc_wasm.js").toString("utf8");
+// From the one committed copy of the signer (tet-agent-sdk/vendor/), not public/pqc/: that is a
+// gitignored build output, absent in CI and different across toolchains, so the files could not be
+// rebuilt byte for byte from the repository.
+let glue = read("../../tet-agent-sdk/vendor/tet_pqc_wasm.js").toString("utf8");
 glue = glue.replace(/^\/\* @ts-self-types.*\n/m, "");
 glue = glue.replace(/async function __wbg_load\([\s\S]*?\n}\n/, "");
 glue = glue.replace(/async function __wbg_init\([\s\S]*?\n}\n/, "");
@@ -42,7 +45,7 @@ glue = glue.replace(/^export \{[^}]*\};?\n?/m, "").replace(/^export /gm, "");
 if (/\bfetch\s*\(|XMLHttpRequest|WebSocket|import\.meta/.test(glue + verifierSrc)) {
   throw new Error("the inlined code still contains a network call or import.meta");
 }
-const wasmB64 = read("public/pqc/tet_pqc_wasm_bg.wasm").toString("base64");
+const wasmB64 = read("../../tet-agent-sdk/vendor/tet_pqc_wasm_bg.wasm").toString("base64");
 
 const core = `// ---- ML-DSA-44 (TET's own WASM, wasm-bindgen glue, network loader removed) ----
 ${glue}
