@@ -15771,6 +15771,11 @@ fn shelter_nicknames_cannot_be_copied_with_look_alikes() {
     assert_eq!(sk("エロ"), sk("工口"));
     assert_eq!(sk("へや"), sk("ヘヤ"));
     assert_eq!(sk("ha na"), sk("hana"));
+    assert_eq!(sk("Bill-"), sk("Billー"));
+    assert_eq!(sk("Bill"), sk("Bill一"));
+    assert_eq!(sk("アキ"), sk("ァキ"));
+    assert_eq!(sk("ソラ"), sk("ンラ"));
+    assert_eq!(sk("Sam"), sk("Sarn"));
     // …so Shelter refuses the copy.
     use crate::tmail::shelter::ShelterAction as A;
     let _g = env_lock();
@@ -15862,4 +15867,55 @@ fn signed_tmail_env_at_for_tests(words: &str, from: &str, to: &str, msg_id: &str
     env.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
     env.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, msg.as_slice()).unwrap());
     env
+}
+
+/// **SECURITY: leaving doesn't dodge a case.** A key that leaves before the moderator decides is
+/// still the subject of a case, and its voucher still answers for it; an overturned case puts the
+/// subject back where they were, and never gives them a nickname someone else took meanwhile.
+/// Negative control: a case only against current members → FAILED.
+#[test]
+fn shelter_leaving_does_not_dodge_a_case() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let (vw, vid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    let (cw, cid) = tmail_party_for_tests();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &vid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &bid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &cid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&bw, A::Nickname, &bid, false, "Kai", "", now)).unwrap();
+    // The bot leaves first.
+    submit(&shelter_rec_for_tests(&bw, A::Withdraw, &bid, false, "", "", now)).unwrap();
+    let case = submit(&shelter_rec_for_tests(&mw, A::Case, &bid, false, "scripted posts", "", now)).expect("a case against a key that left was refused");
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.vouches_left(&cfg, &vid), 0, "the voucher escaped by the bot leaving");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &bid, true, "", "", now)).is_err(), "the removed key was let back in");
+    // Meanwhile someone takes the nickname; the case is overturned: back to "left", nickname cleared.
+    submit(&shelter_rec_for_tests(&cw, A::Nickname, &cid, false, "Kai", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case, false, "not a bot", "overturn", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(!st.is_member(&bid), "an overturned case made someone who had left a member");
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &bid, true, "", "", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.members[&bid].nickname, None, "two members share a nickname");
+    assert_eq!(st.members[&cid].nickname.as_deref(), Some("Kai"));
+    // A member (not one who left) restored by an overturn: their nickname, taken meanwhile, is cleared.
+    let (dw, did) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &did, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &eid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&dw, A::Nickname, &did, false, "Rin", "", now)).unwrap();
+    let case2 = submit(&shelter_rec_for_tests(&mw, A::Case, &did, false, "x", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&ew, A::Nickname, &eid, false, "Rin", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case2, false, "not a bot", "overturn", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(st.is_member(&did), "the overturned member wasn't restored");
+    assert_eq!(st.members[&did].nickname, None, "two members share a nickname after an overturn");
+    assert_eq!(st.members[&eid].nickname.as_deref(), Some("Rin"));
 }

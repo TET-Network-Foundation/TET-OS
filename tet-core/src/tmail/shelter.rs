@@ -19,7 +19,7 @@
 //! - **Node-local:** Shelter posts are never gossiped, and reads are members-only
 //!   ([`verify_read_auth`]).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
@@ -205,8 +205,10 @@ fn nickname_char_ok(c: char) -> bool {
 /// dropped, and characters that look alike within the allowed set folded together (`I`/`l`/`1`,
 /// `O`/`0`, hiragana/katakana pairs, katakana/kanji look-alikes such as `エ`/`工`, `ロ`/`口`).
 pub fn nickname_skeleton(n: &str) -> String {
-    n.chars()
-        .filter(|c| !matches!(c, ' ' | '_' | '-' | '.'))
+    let folded: String = n
+        .chars()
+        // Separators and dash-like marks (ー and 一 look like -) don't tell nicknames apart.
+        .filter(|c| !matches!(c, ' ' | '_' | '-' | '.' | 'ー' | '一'))
         .map(|c| {
             let c = c.to_ascii_lowercase();
             match c {
@@ -215,7 +217,26 @@ pub fn nickname_skeleton(n: &str) -> String {
                 '5' => 's',
                 // hiragana → katakana (same sound, often same shape: へ/ヘ, べ/ベ, ぺ/ペ, り/リ)
                 '\u{3041}'..='\u{3096}' => char::from_u32(c as u32 + 0x60).unwrap_or(c),
-                '一' => 'ー',
+                _ => c,
+            }
+        })
+        .map(|c| match c {
+                // small kana → full size (ァ/ア, ッ/ツ, …)
+                'ァ' => 'ア',
+                'ィ' => 'イ',
+                'ゥ' => 'ウ',
+                'ェ' => 'エ',
+                'ォ' => 'オ',
+                'ッ' => 'ツ',
+                'ャ' => 'ヤ',
+                'ュ' => 'ユ',
+                'ョ' => 'ヨ',
+                'ヮ' => 'ワ',
+                'ヵ' => 'カ',
+                'ヶ' => 'ケ',
+                // katakana that look alike
+                'ン' => 'ソ',
+                'ツ' => 'シ',
                 '工' => 'エ',
                 '口' => 'ロ',
                 '力' => 'カ',
@@ -225,9 +246,10 @@ pub fn nickname_skeleton(n: &str) -> String {
                 '卜' => 'ト',
                 '三' => 'ミ',
                 _ => c,
-            }
         })
-        .collect()
+        .collect();
+    // Latin pairs that read as one letter.
+    folded.replace("rn", "m").replace("vv", "w").replace("cl", "d")
 }
 
 /// A nickname: 1–24 characters from the allowed set; no leading or trailing space; not like a word
@@ -263,6 +285,9 @@ pub struct ShelterCase {
     pub reason: String,
     /// `None` until an appeal is decided; then `overturn` or `keep`.
     pub appeal: Option<String>,
+    /// Whether the subject was a member when the case was decided (false: they had left). An
+    /// overturned case puts them back where they were.
+    pub was_member: bool,
     pub appeal_at_ms: Option<u64>,
 }
 
@@ -281,8 +306,9 @@ pub struct ShelterState {
     pub cases: Vec<ShelterCase>,
     /// Members removed by a case, kept to restore them if it's overturned.
     removed: BTreeMap<String, ShelterMember>,
-    /// Wallets that left; they can be let in again.
-    left: BTreeSet<String>,
+    /// Members who left, as they were (they can be let in again, and a case can still be decided
+    /// about them, so leaving can't dodge one).
+    left: BTreeMap<String, ShelterMember>,
 }
 
 impl ShelterState {
@@ -385,10 +411,10 @@ impl ShelterState {
                 if signer == cfg.moderator {
                     return Err(ShelterError::Refused("the moderator can't leave"));
                 }
-                if self.members.remove(subject).is_none() {
+                let Some(m) = self.members.remove(subject) else {
                     return Err(ShelterError::Refused("not a member"));
-                }
-                self.left.insert(subject.to_string());
+                };
+                self.left.insert(subject.to_string(), m);
             }
             ShelterAction::Nickname => {
                 if signer != subject || !self.is_member(signer) {
@@ -416,7 +442,9 @@ impl ShelterState {
                 if reason_len == 0 || reason_len > REASON_MAX_CHARS {
                     return Err(ShelterError::Refused("a case needs its reason (up to 280 characters)"));
                 }
-                let Some(m) = self.members.remove(subject) else {
+                // A member, or one who left (leaving doesn't dodge a case or its voucher's part).
+                let was_member = self.members.contains_key(subject);
+                let Some(m) = self.members.remove(subject).or_else(|| self.left.remove(subject)) else {
                     return Err(ShelterError::Refused("not a member"));
                 };
                 self.cases.push(ShelterCase {
@@ -427,6 +455,7 @@ impl ShelterState {
                     reason: r.text.trim().to_string(),
                     appeal: None,
                     appeal_at_ms: None,
+                    was_member,
                 });
                 self.removed.insert(subject.to_string(), m);
             }
@@ -454,8 +483,20 @@ impl ShelterState {
                 self.cases[i].appeal_at_ms = Some(r.at_ms);
                 if r.decision == "overturn" {
                     let who = self.cases[i].subject.clone();
-                    if let Some(m) = self.removed.remove(&who) {
-                        self.members.insert(who, m);
+                    let was_member = self.cases[i].was_member;
+                    if let Some(mut m) = self.removed.remove(&who) {
+                        // A nickname someone else took meanwhile stays theirs.
+                        let taken = m.nickname.as_deref().map(nickname_skeleton).is_some_and(|sk| {
+                            self.members.values().any(|o| o.nickname.as_deref().map(nickname_skeleton).as_deref() == Some(sk.as_str()))
+                        });
+                        if taken {
+                            m.nickname = None;
+                        }
+                        if was_member {
+                            self.members.insert(who, m);
+                        } else {
+                            self.left.insert(who, m);
+                        }
                     }
                 }
             }
