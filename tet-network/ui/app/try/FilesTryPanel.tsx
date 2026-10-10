@@ -12,7 +12,8 @@ import { decryptFileForReceiver, decryptFileMeta } from "../lib/files_e2ee";
 import { settleFileFee } from "../lib/files_fee";
 import { getTmailKeySession } from "../lib/tmail_session";
 import { b64ToBytes } from "../lib/encoding";
-import { getFilesFetch, getFilesInbox, getTmailKeys, normalizeWalletId64, postFilesUpload } from "../lib/tet_core_http";
+import { getFilesFetch, getFilesInbox, normalizeWalletId64, postFilesUpload } from "../lib/tet_core_http";
+import { trustedKeysFor, verifyFileSender } from "../lib/key_trust";
 import { Badge, Button, Chips, FilePick, INK, Input, KeysBanner, PanelHead, PinnedNotice, cx, fmtWhen } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
@@ -37,7 +38,7 @@ const LIMITS = (t: (en: string) => string) => [
   t("Each connection can upload up to 200 MB a day, and the demo keeps up to 10 GB in all; when it is full, uploads wait for older files to expire."),
   t("The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per ID a day. Past that the file still arrives; its fee shows as unpaid."),
   t("The node sees sender, recipient, size and time; not the contents or the file name. The page offers photos, PDFs and videos, but the node can't check what a file is."),
-  t("A delivered file proves which ID sent it and that only the recipient can open it. It doesn't prove who is behind that ID, or that the file is what its name says."),
+  t("A delivered file proves which ID sent it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who is behind that ID, or that the file is what its name says."),
 ];
 
 export default function FilesTryPanel(props: { demoContact: string; active: boolean }) {
@@ -62,6 +63,8 @@ export default function FilesTryPanel(props: { demoContact: string; active: bool
     if (!r.ok || !mounted.current) return;
     const out: Item[] = [];
     for (const env of r.files) {
+      // A file whose signature isn't its claimed sender's is not listed (the sender is checked here).
+      if ((await verifyFileSender(env, BASE)) !== "verified") continue;
       try {
         const meta = await decryptFileMeta(
           {
@@ -112,10 +115,13 @@ export default function FilesTryPanel(props: { demoContact: string; active: bool
       const me = await ensureWallet();
       const recipient = to === "self" ? me : to === "demo" ? props.demoContact : normalizeWalletId64(other);
       if (!recipient) throw new Error(t("The recipient must be a 64-character ID."));
-      const keys = await getTmailKeys(BASE, recipient);
-      if (!keys.ok) throw new Error(keys.text || `could not look up the recipient (HTTP ${keys.status})`);
-      if (!keys.registration) {
-        throw new Error(recipient === me ? t("Turn on your inbox first (the banner above), then you can send files to yourself.") : t("That ID hasn't turned on its inbox yet, so it can't receive messages."));
+      // Only keys the recipient's own wallet signed (checked here, not trusted from the node).
+      const keys = await trustedKeysFor(BASE, recipient);
+      if (!keys.ok) {
+        if (keys.reason === "none") {
+          throw new Error(recipient === me ? t("Turn on your inbox first (the banner above), then you can send files to yourself.") : t("That ID hasn't turned on its inbox yet, so it can't receive messages."));
+        }
+        throw new Error(t(keys.message));
       }
       const built = await buildFileEnvelopeV1({
         senderWalletId: me,
@@ -125,8 +131,8 @@ export default function FilesTryPanel(props: { demoContact: string; active: bool
         mimeType: file.type || "application/octet-stream",
         ttlMs: TTL_MS,
         maxBodyBytes: NODE_MAX_BODY,
-        receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
-        receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
+        receiverX25519Pub: keys.x25519Pub,
+        receiverMlkemPub: keys.mlkemPub,
         baseUrl: BASE,
       });
       // Ask first: in public mode the node keeps a daily upload budget per address, and a refused

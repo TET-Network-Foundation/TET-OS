@@ -530,7 +530,8 @@ export default function NexusOS() {
       try {
         const existing = await getTmailKeys(baseUrl, wid);
         if (cancelled) return;
-        if (existing.ok && existing.registration) return; // already published
+        // Already published as v2. An older registration is re-signed (pages refuse older ones).
+        if (existing.ok && existing.registration && existing.registration.v === 2) return;
         if (!existing.ok && existing.status !== 404) return; // transient/offline — retry on next unlock
         const reg = await buildTmailKeyRegistrationV1({
           x25519_pub: ks.x25519_pub,

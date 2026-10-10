@@ -26,6 +26,7 @@ import {
   postFilesUpload,
   putTmailKeys,
 } from "../../lib/tet_core_http";
+import { trustedKeysFor, verifyFileSender } from "../../lib/key_trust";
 import {
   buildFileEnvelopeV1,
   FILE_FEE_MICRO,
@@ -181,6 +182,8 @@ export default function FilesPanel(props: {
 
   const decryptMeta = useCallback(
     async (env: FileEnvelopeV1): Promise<InboxFile | null> => {
+      // A file whose signature isn't its claimed sender's isn't listed (checked here).
+      if ((await verifyFileSender(env, baseUrl)) !== "verified") return null;
       const session = getTmailKeySession();
       if (!session) return null;
       if (normalizeWalletId64(env.receiver_wallet_id) !== myWalletId) return null;
@@ -210,7 +213,7 @@ export default function FilesPanel(props: {
         return null;
       }
     },
-    [myWalletId],
+    [myWalletId, baseUrl],
   );
 
   // Inbox polling + decrypt + key probe. Panel remounts per wallet via its `key` prop.
@@ -308,15 +311,11 @@ export default function FilesPanel(props: {
     }
     try {
       setSendPhase("encrypting");
-      const keys = await getTmailKeys(baseUrl, to);
-      if (!keys.ok && keys.status !== 404) {
+      // Only keys the recipient's own wallet signed (checked here, not trusted from the node).
+      const keys = await trustedKeysFor(baseUrl, to);
+      if (!keys.ok) {
         setSendPhase("error");
-        setSendNotice({ kind: "err", text: keys.text ?? `Key lookup failed (HTTP ${keys.status}).` });
-        return;
-      }
-      if (!keys.registration) {
-        setSendPhase("error");
-        setSendNotice({ kind: "err", text: "Recipient hasn't registered messaging keys yet." });
+        setSendNotice({ kind: "err", text: keys.reason === "none" ? "Recipient hasn't registered messaging keys yet." : keys.message });
         return;
       }
       const fileBytes = new Uint8Array(await file.arrayBuffer());
@@ -326,8 +325,8 @@ export default function FilesPanel(props: {
         fileBytes,
         filename: file.name,
         mimeType: file.type || "application/octet-stream",
-        receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
-        receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
+        receiverX25519Pub: keys.x25519Pub,
+        receiverMlkemPub: keys.mlkemPub,
         baseUrl,
       });
       if (!mountedRef.current) return;

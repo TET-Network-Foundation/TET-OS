@@ -281,6 +281,8 @@ jobs:
             anonymous_post_names_no_poster_to_the_node
             anonymous_mail_from_six_members_is_all_retained
             anonymous_mail_is_capped_per_receiver
+            key_registrations_need_a_v2_signature_by_the_wallet
+            ui_signed_key_registration_v2_verifies_in_rust
             stalled_block_plane_exits_the_process_past_the_hard_threshold
             stalled_block_plane_below_the_hard_threshold_keeps_running
             sole_validator_keeps_mining_after_its_last_peer_leaves
@@ -442,6 +444,16 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — a page signature verifies and a stamp anchors only its own .sig.json
         run: node --experimental-strip-types scripts/try_sign_guard.mjs
+      # The page checks keys and senders itself: a node that swaps a key, a key signed by another
+      # wallet, an older (unsigned) key and a forged sender are all refused (SECURITY.md 2026-10-11).
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — keys and senders are checked in the browser, not trusted from the node
+        run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # Verify without TET: the offline verifier agrees with the page's, its files are what the build
+      # makes now, they can't reach the network, and the CLI verifies with networking disabled.
+      - if: needs.gate.outputs.code == 'true'
+        name: verify without TET — offline, deterministic, no network
+        run: node --experimental-strip-types scripts/offline_verify_guard.mjs
 
       # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
       # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in

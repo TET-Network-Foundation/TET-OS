@@ -1,0 +1,16 @@
+{
+  "tet-verify.html": {
+    "code": "TET-PC94-EC1K",
+    "sha256": "570f5b4b186ed5f7e78ee6fa9c99c6f673cd5550807de7ad8053538c177553c2"
+  },
+  "tet-verify.mjs": {
+    "code": "TET-MXEQ-X7T9",
+    "sha256": "fc0936a56317f49e139bcd10c60c22bb6b4f2ea915ef2b79d6ca50aea699a07c"
+  },
+  "signer": "e93a3597f03a8ee4621d8c7340d37fe871875f8dedbc5ec9e139293d0af847bd",
+  "chain": {
+    "chainId": "tet-local-dev",
+    "genesisHash": "0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36"
+  },
+  "published": false
+}
