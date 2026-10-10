@@ -6,7 +6,7 @@
 //! a hybrid (Ed25519 + ML-DSA) signature over a dedicated preimage — no admin token. Storage lives
 //! in [`crate::tmail::store::TmailStore`].
 //!
-//! **Only v2 is accepted** (2026-10-11): the pre-image is PAE-encoded (length-prefixed fields under
+//! **Only v2 is accepted** (2026-10-10): the pre-image is PAE-encoded (length-prefixed fields under
 //! the domain [`TMAIL_KEY_PAE_DOMAIN`], the agent payloads' encoding), so no field can be shifted
 //! into another. A registration without `v: 2` — the older `|`-joined pre-image, or one stored
 //! before signatures were checked — is refused here, and pages refuse to encrypt to it: the owner
