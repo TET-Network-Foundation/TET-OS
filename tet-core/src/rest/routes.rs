@@ -321,6 +321,7 @@ pub fn build_router(state: RestState) -> axum::Router {
         // Shelter (tmail/shelter.rs): 404 while off; reads are signed, most members-only.
         .route("/shelter/status", axum::routing::get(super::handlers::shelter::get_shelter_status))
         .route("/shelter/record", axum::routing::post(super::handlers::shelter::post_shelter_record))
+        .route("/shelter/key", axum::routing::post(super::handlers::shelter::post_shelter_key))
         .route("/shelter/me", axum::routing::get(super::handlers::shelter::get_shelter_me))
         .route("/shelter/members", axum::routing::get(super::handlers::shelter::get_shelter_members))
         .route("/shelter/log", axum::routing::get(super::handlers::shelter::get_shelter_log))

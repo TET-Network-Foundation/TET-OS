@@ -15680,3 +15680,44 @@ fn shelter_anonymous_posts_need_shelters_own_root() {
     assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &now_three, bucket - 2, bucket));
     let _ = mid;
 }
+
+/// **A member's sealed board key** is set only by the member who let them in, the moderator, or
+/// the member, for a current member; and it comes back only in that member's own signed read.
+/// Negative control: `set_shelter_key` without the sender check → FAILED.
+#[tokio::test]
+async fn shelter_sealed_key_is_set_by_their_voucher_and_served_only_to_them() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    let (cw, cid) = tmail_party_for_tests();
+    let (_xw, xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Vouch, &bid, true, "", "", now), now).unwrap();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &cid, true, "", "", now), now).unwrap();
+    let key_for = |w: &str, from: &str, to: &str, id: &str| signed_tmail_env_for_tests(w, from, to, id, tmail_flags_for_tests(false), None);
+    // Another member (not b's voucher) can't set b's key; b's voucher, the moderator, and b can.
+    assert!(state.tmail.set_shelter_key(&key_for(&cw, &cid, &bid, "k-c")).is_err(), "another member set the key");
+    assert!(state.tmail.set_shelter_key(&key_for(&aw, &aid, &xid, "k-x")).is_err(), "a key for a non-member");
+    state.tmail.set_shelter_key(&key_for(&aw, &aid, &bid, "k-a")).unwrap();
+    state.tmail.set_shelter_key(&key_for(&mw, &mid, &bid, "k-m")).unwrap();
+    state.tmail.set_shelter_key(&key_for(&bw, &bid, &bid, "k-b")).unwrap();
+    let me = |words: &str| {
+        let router = router.clone();
+        let auth = shelter_read_auth_for_tests(words, "/shelter/me", now);
+        async move {
+            let req = axum::http::Request::builder().uri("/shelter/me").header("x-tet-shelter-auth", auth).body(axum::body::Body::empty()).unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            String::from_utf8_lossy(&axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap()).to_string()
+        }
+    };
+    assert!(me(&bw).await.contains("k-b"), "the member didn't get their key");
+    assert!(!me(&aw).await.contains("k-b") && !me(&cw).await.contains("k-b"), "another member got it");
+}

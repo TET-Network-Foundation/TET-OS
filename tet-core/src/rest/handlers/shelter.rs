@@ -2,6 +2,7 @@
 //!
 //! - `GET /shelter/status`: is Shelter open on this node? Nothing else.
 //! - `POST /shelter/record`: a signed record (invite, vouch, withdraw, nickname, case, appeal).
+//! - `POST /shelter/key`: a member's board key, sealed to them (served only in their `/shelter/me`).
 //! - Signed reads (`x-tet-shelter-auth`, [`crate::tmail::shelter::verify_read_auth`]):
 //!   - `GET /shelter/me`: the signer's own standing (any signer; a non-member learns only that);
 //!   - members only: `GET /shelter/members`, `/shelter/log`, `/shelter/inbox`, `/shelter/anon/leaves`.
@@ -65,6 +66,20 @@ pub async fn post_shelter_record(State(state): State<RestState>, Json(r): Json<s
     }
 }
 
+/// `POST /shelter/key`: hand a member the board key, sealed to them (a named Tmail envelope).
+pub async fn post_shelter_key(State(state): State<RestState>, Json(env): Json<crate::tmail::envelope::TmailEnvelopeV1>) -> Response {
+    if sh::config_from_env().is_none() {
+        return off();
+    }
+    if let Err(e) = crate::tmail::envelope::verify_tmail_envelope_v1(&env) {
+        return refuse(StatusCode::UNAUTHORIZED, e.to_string());
+    }
+    match state.tmail.set_shelter_key(&env) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) => refuse(StatusCode::FORBIDDEN, e),
+    }
+}
+
 pub async fn get_shelter_me(State(state): State<RestState>, headers: HeaderMap, uri: Uri) -> Response {
     let Some(cfg) = sh::config_from_env() else { return off() };
     let who = match reader(&headers, &uri) {
@@ -92,6 +107,8 @@ pub async fn get_shelter_me(State(state): State<RestState>, headers: HeaderMap, 
             "anon_set_size": anon_set.len(),
             "anon_min": sh::SHELTER_ANON_MIN,
             "in_anon_set": anon_set.iter().any(|(w, _)| *w == who),
+            // The board key, sealed to this member (their page opens it; the node can't).
+            "sealed_key": state.tmail.shelter_key_for(&who),
         })),
     )
         .into_response()

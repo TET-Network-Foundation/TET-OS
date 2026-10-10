@@ -44,6 +44,7 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     // except `/shelter/me`, which tells a non-member only that).
     ("GET", "/shelter/status"),
     ("POST", "/shelter/record"),
+    ("POST", "/shelter/key"),
     ("GET", "/shelter/me"),
     ("GET", "/shelter/members"),
     ("GET", "/shelter/log"),

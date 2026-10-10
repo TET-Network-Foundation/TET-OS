@@ -226,5 +226,13 @@ v1 builds exactly this.
 - **Reads are members-only.** Board posts, the member list, the log and the anonymous-set leaves are
   served only to a request signed by a current member's key, made within the last 2 minutes and
   bound to the route. `GET /tmail/inbox/<the Shelter board>` answers 403.
-- **The board key, handed over after the vouch.** The voucher's page sends the board's invite to
-  the new member in an end-to-end encrypted Tmail message, so the node never sees it.
+- **The board key, handed over after the vouch.** The voucher's page seals the board's invite to
+  the new member's Tmail keys. It's an ordinary end-to-end encrypted envelope, and the node keeps
+  it (`POST /shelter/key`).
+  - **Who may set it:** only the member who let them in, the moderator, or the member themselves.
+  - **Who gets it back:** only that member, in their own signed `/shelter/me`.
+  - **What the node and the device see:** the node can't open it, and the device stores nothing,
+    so a new tab gets the key back after unlocking the wallet.
+- **The house rule** is shown the first time Shelter opens in a tab, and from a "house rule" link
+  after that. It isn't remembered on the device, because a stored "seen" flag would show the
+  device was in Shelter.

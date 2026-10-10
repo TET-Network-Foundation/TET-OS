@@ -50,6 +50,9 @@ const TREE_ANON_FAST_REGPENDING: &str = "tmail_anon_fast_regpending_v1";
 const TREE_SHELTER_RECORDS: &str = "tmail_shelter_records_v1";
 /// Shelter's anonymous-set roots that still count (see [`TmailStore::shelter_refresh_roots`]).
 const TREE_SHELTER_ROOTS: &str = "tmail_shelter_roots_v1";
+/// Each member's sealed board key: a Tmail envelope (end-to-end encrypted to that member) holding
+/// the board's invite. The node keeps ciphertext it can't open; see [`TmailStore::set_shelter_key`].
+const TREE_SHELTER_KEYS: &str = "tmail_shelter_keys_v1";
 /// Shelter's invisible flood guard: per member key, a burst, then spaced, and a daily cap.
 pub const SHELTER_BURST: u32 = 5;
 pub const SHELTER_REFILL_MS: u64 = 3_000;
@@ -206,6 +209,7 @@ pub struct TmailStore {
     anon_send_lock: std::sync::Mutex<()>,
     shelter_records: sled::Tree,
     shelter_roots: sled::Tree,
+    shelter_keys: sled::Tree,
     /// Serialises Shelter record checks and appends (check against the state, then append).
     shelter_lock: std::sync::Mutex<()>,
 }
@@ -367,6 +371,7 @@ impl TmailStore {
             anon_send_lock: std::sync::Mutex::new(()),
             shelter_records: db.open_tree(TREE_SHELTER_RECORDS)?,
             shelter_roots: db.open_tree(TREE_SHELTER_ROOTS)?,
+            shelter_keys: db.open_tree(TREE_SHELTER_KEYS)?,
             shelter_lock: std::sync::Mutex::new(()),
         })
     }
@@ -1801,6 +1806,35 @@ impl TmailStore {
             .flatten()
             .and_then(|v| serde_json::from_slice::<ShelterRoots>(&v).ok())
             .is_some_and(|st| st.roots.iter().any(|(r, _)| *r == want))
+    }
+
+    /// Keep a member's sealed board key: a named envelope (signature already verified) to a current
+    /// member, from the member who let them in, the moderator, or the member themselves (the only
+    /// ones who should hand them the key). Replaces the previous one. Never served but to that
+    /// member's own signed read.
+    pub fn set_shelter_key(&self, env: &TmailEnvelopeV1) -> Result<(), &'static str> {
+        let cfg = crate::tmail::shelter::config_from_env().ok_or("Shelter is not open on this node")?;
+        if env.flags.anonymous || env.anonymous.is_some() {
+            return Err("a sealed key is a named envelope");
+        }
+        let to = env.receiver_wallet_id.trim().to_ascii_lowercase();
+        let from = env.sender_wallet_id.trim().to_ascii_lowercase();
+        let st = self.shelter_state(&cfg);
+        let Some(m) = st.members.get(&to) else { return Err("not a member") };
+        if !(from == cfg.moderator || from == to || m.via.as_deref() == Some(from.as_str())) {
+            return Err("only the member who let them in, the moderator, or the member can hand them the key");
+        }
+        let v = serde_json::to_vec(env).map_err(|_| "malformed")?;
+        if v.len() > 16 * 1024 {
+            return Err("too large for a board key");
+        }
+        self.shelter_keys.insert(to.as_bytes(), v).map_err(|_| "couldn't store it")?;
+        Ok(())
+    }
+
+    pub fn shelter_key_for(&self, member: &str) -> Option<TmailEnvelopeV1> {
+        let v = self.shelter_keys.get(member.trim().to_ascii_lowercase().as_bytes()).ok()??;
+        serde_json::from_slice(&v).ok()
     }
 
     /// The invisible flood guard for a member's named posts in Shelter: a burst of
