@@ -461,7 +461,7 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: security.txt — same contacts as SECURITY.md, not expired
         run: node scripts/security_txt_guard.mjs
-      # Threat model rule 9: Actions pinned by SHA, npm ci without install scripts, lockfiles, CODEOWNERS.
+      # Threat model rule 9: Actions pinned by SHA, installs with --ignore-scripts, lockfiles, CODEOWNERS.
       - if: needs.gate.outputs.code == 'true'
         name: supply chain — pinned Actions, no install scripts, lockfiles, code owners
         run: node scripts/supply_chain_guard.mjs
