@@ -473,6 +473,10 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: build manifest — what the demo serves, signed by the publisher
         run: node --experimental-strip-types scripts/build_manifest_guard.mjs
+      # Verify without TET, Level 2: a stamp in a chain export, checked offline; each tampering caught.
+      - if: needs.gate.outputs.code == 'true'
+        name: verify without TET, Level 2 — a stamp in a chain copy, offline
+        run: node --experimental-strip-types scripts/chain_verify_guard.mjs
       # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
       - if: needs.gate.outputs.code == 'true'
         name: try page — the three safety sentences are where they must be
