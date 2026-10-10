@@ -750,6 +750,14 @@ jobs:
             }
             echo "ok  tet-agent-sdk/vendor/$f  $(shasum -a 256 "tet-agent-sdk/vendor/$f" | cut -c1-12)"
           done
+          # The committed signer must not carry the build machine's home directory (rustc embeds
+          # source paths in panic messages). Rebuild it with
+          #   RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$PWD=/src" wasm-pack build tet-pqc-wasm --target web
+          # Control (2026-10-10): the previous signer, which named a home directory, fails this.
+          if LC_ALL=C grep -aoE '/(Users|home)/[A-Za-z0-9._-]+/' tet-agent-sdk/vendor/tet_pqc_wasm_bg.wasm | head -3 | grep .; then
+            echo "::error::tet-agent-sdk/vendor/tet_pqc_wasm_bg.wasm names a home directory; rebuild it with --remap-path-prefix (above)"
+            exit 1
+          fi
 
       - if: needs.gate.outputs.code == 'true'
         name: The committed signer reproduces the interop fixture
