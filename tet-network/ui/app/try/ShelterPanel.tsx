@@ -71,6 +71,7 @@ export default function ShelterPanel(props: { active: boolean }) {
   const [open, setOpen] = useState<boolean | null>(null);
   const [me, setMe] = useState<ShelterMe | null>(null);
   const [board, setBoard] = useState<OpenBoard | null>(null);
+  const [keyFrom, setKeyFrom] = useState("");
   const [posts, setPosts] = useState<BoardPost[]>([]);
   const [members, setMembers] = useState<ShelterMember[]>([]);
   const [log, setLog] = useState<{ log: ShelterLogLine[]; cases: ShelterCase[] } | null>(null);
@@ -111,13 +112,18 @@ export default function ShelterPanel(props: { active: boolean }) {
   useEffect(() => {
     if (!me?.member || board || !me.sealed_key) return;
     let live = true;
-    void openSealedKey(BASE, me.sealed_key, me.board)
-      .then((b) => live && setBoard(b))
+    const allowed = [wallet?.walletId ?? "", me.moderator_id, me.via ?? ""].filter(Boolean);
+    void openSealedKey(BASE, me.sealed_key, me.board, allowed)
+      .then((r) => {
+        if (!live) return;
+        setBoard(r.board);
+        setKeyFrom(r.from);
+      })
       .catch((e) => live && setErr(errText(e)));
     return () => {
       live = false;
     };
-  }, [me, board]);
+  }, [me, board, wallet]);
 
   const refreshBoard = useCallback(async () => {
     if (!board) return;
@@ -264,6 +270,11 @@ export default function ShelterPanel(props: { active: boolean }) {
         </button>
       </div>
 
+      {keyFrom ? (
+        <p className="text-[13px] text-[#5d646d]">
+          {t("Board key from {who}: check it's the member who let you in.", { who: keyFrom === wallet.walletId ? t("you") : memberLabel(byWallet.get(keyFrom), keyFrom) })}
+        </p>
+      ) : null}
       {tab === "board" ? (
         <>
           <Composer
@@ -753,7 +764,7 @@ function How() {
       <li>{t("Each member has a number, given in the order members were let in. A nickname can look like another; the number next to it can't be chosen or copied.")}</li>
       <li>{t("For now there is one moderator, who decides cases and appeals alone. That's weaker than two people agreeing; every decision is in the log, which all members can see.")}</li>
       <li>{t("Posts are end-to-end encrypted to members; this node serves Shelter only to members and never passes its posts to other nodes.")}</li>
-      <li>{t("The node operator can't read posts, but sees which ID reads and posts, when, and from which address.")}</li>
+      <li>{t("The node operator can't read posts, as long as each member's page checks the keys it seals the board key to (it does) and you compare safety numbers when you meet. It sees which ID reads and posts, when, and from which address.")}</li>
       <li>{t("Members-only spaces are encrypted; public pages opt out of AI training crawlers that respect robots.txt.")}</li>
     </ul>
   );

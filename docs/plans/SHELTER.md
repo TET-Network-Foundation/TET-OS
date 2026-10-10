@@ -11,7 +11,9 @@ It's built from pieces that already exist:
 
 Shelter is an invite-only space where members post to each other. You join only through an
 in-person vouch from a member, and each member can vouch for at most 3 people. Posts are
-end-to-end encrypted to members, so neither outside AI nor the node operator can read them. The
+end-to-end encrypted to members: anyone outside, AI services included, sees only ciphertext, and
+so does the node operator as long as members' pages check each other's keys and members compare
+safety numbers when they meet (the board key travels sealed to each member's own signed keys). The
 public API never serves them, and AI crawlers are refused at the door. On entry, the house rule
 reads: **"Don't post AI-written text here."** It's a promise members make to each other, not
 something TET detects.
@@ -116,8 +118,8 @@ A one-screen notice, shown on the first visit and then from a "house rule" link:
    - **Caddy refuses those user agents with 403**, and keeps per-IP bulk-read limits on the
      `/tet-node-api` routes (the read buckets in `public_api.rs`, plus a Caddy rate limit on page
      fetches).
-2. **Members-only spaces** (Shelter, invite-only boards) are end-to-end encrypted, so neither
-   outside AI nor the node operator can read them.
+2. **Members-only spaces** (Shelter, invite-only boards) are end-to-end encrypted: outside AI
+   services see only ciphertext, and so does the node operator as long as keys are checked as above.
 3. **Wording.** Say: "Members-only spaces are encrypted; public pages opt out of AI training
    crawlers that respect robots.txt." Never "AI cannot access TET". Guarded (`try_ai_wording_guard`,
    with a negative control).
@@ -139,7 +141,7 @@ doesn't wait for Shelter.
 | Vouch rings or bought vouches | 3 vouches each, accountability, and a public-to-members log. Not prevented, only limited and traceable. |
 | A member pastes AI text | Not detected; the house rule is a promise. Stated on the page. |
 | A member copies posts out | Not prevented. Stated on the page. |
-| The node operator | Can't read posts (E2EE). Sees who reads and posts, when, and from which IP. |
+| The node operator | Can't read posts (E2EE), as long as pages check members' signed keys and members compare safety numbers; the page's own code must be trusted. Sees who reads and posts, when, and from which IP. |
 | A crawler that ignores robots.txt | Gets nothing from Shelter: members-only routes and encrypted content. |
 | A leaked board key | Ciphertext isn't public, but a member could pass on old posts. The key is rotated. |
 | A compromised member device | That member's view is exposed. Out of scope. |
@@ -231,7 +233,9 @@ v1 builds exactly this.
   served only to a request signed by a current member's key, made within the last 2 minutes and
   bound to the route. `GET /tmail/inbox/<the Shelter board>` answers 403.
 - **The board key, handed over after the vouch.** The voucher's page seals the board's invite to
-  the new member's Tmail keys. It's an ordinary end-to-end encrypted envelope, and the node keeps
+  the new member's Tmail keys, only after checking those keys are signed by the new member's own
+  wallet (#101); the member's page opens it only if its sender's signature checks out and the sender
+  is the member, the moderator or the member who let them in, and shows who sent it. It's an ordinary end-to-end encrypted envelope, and the node keeps
   it (`POST /shelter/key`).
   - **Who may set it:** only the member who let them in, the moderator, or the member themselves.
   - **Who gets it back:** only that member, in their own signed `/shelter/me`.

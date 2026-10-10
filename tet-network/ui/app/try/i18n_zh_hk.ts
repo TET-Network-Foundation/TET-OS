@@ -1001,7 +1001,6 @@ export const ZH_HK: Record<string, string> = {
   "Appeals: within 14 days. An overturned case restores everything it took.": "上訴：14 日內。被推翻的個案會恢復其拿走的一切。",
   "For now there is one moderator, who decides cases and appeals alone. That's weaker than two people agreeing; every decision is in the log, which all members can see.": "目前只有一位管理員，獨自裁決個案及上訴。這比兩人同意的做法弱；每個決定都記錄在案，所有成員都可查看。",
   "Posts are end-to-end encrypted to members; this node serves Shelter only to members and never passes its posts to other nodes.": "帖文以端對端加密只供成員閱讀；此節點只向成員提供避風港，並從不把帖文傳給其他節點。",
-  "The node operator can't read posts, but sees which ID reads and posts, when, and from which address.": "節點營運者無法閱讀帖文，但可看到哪個 ID 於何時、從哪個位址閱讀及發帖。",
   "Each member has a number, given in the order members were let in. A nickname can look like another; the number next to it can't be chosen or copied.": "每位成員都有一個編號，按加入次序編配。暱稱可以與他人相似，但旁邊的編號不能自選，亦不能複製。",
   "Choose a nickname first. Members see it next to your posts, with your member number.": "請先選擇暱稱。成員會在你的帖文旁看到它，並附上你的成員編號。",
   "The member who lets you in hands you the board key through your inbox.": "讓你加入的成員會經你的收件匣把討論區金鑰交給你。",
@@ -1015,4 +1014,6 @@ export const ZH_HK: Record<string, string> = {
   "Messages are end-to-end encrypted in this tab: only the two of you can read them, if your safety numbers match. The node still sees who writes to whom, and when.": "訊息在此分頁以端對端加密：如果你們的安全號碼相符，就只有你們兩人能讀到。節點仍可看到誰在何時寫給誰。",
   "A delivered file proves which ID sent it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who is behind that ID, or that the file is what its name says.": "已送達的檔案證明由哪個 ID 傳送。只有收件人能開啟（前提是你在 DM 看到的安全號碼與對方的一致）。它不能證明該 ID 背後是誰，亦不能證明檔案內容與檔名相符。",
   "Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between may be reading along: don't send anything private.": "請與對方親身或透過通話核對這個號碼。如果雙方看到的號碼相同，就只有你們兩人能讀到訊息。如果號碼不同，中途可能有人在偷看：請不要傳送任何私密內容。",
+  "The node operator can't read posts, as long as each member's page checks the keys it seals the board key to (it does) and you compare safety numbers when you meet. It sees which ID reads and posts, when, and from which address.": "節點營運者無法閱讀帖文，前提是每位成員的頁面會核對封存討論區金鑰時所用的金鑰（頁面會核對），以及你們見面時核對安全號碼。營運者可看到哪個 ID 於何時、從哪個位址閱讀及發帖。",
+  "Board key from {who}: check it's the member who let you in.": "討論區金鑰來自 {who}：請確認是讓你加入的成員。",
 };

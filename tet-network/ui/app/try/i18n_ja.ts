@@ -1001,7 +1001,6 @@ export const JA: Record<string, string> = {
   "Appeals: within 14 days. An overturned case restores everything it took.": "異議申し立て：14日以内。取り消された件は、失われたものがすべて元に戻ります。",
   "For now there is one moderator, who decides cases and appeals alone. That's weaker than two people agreeing; every decision is in the log, which all members can see.": "今はモデレーターが1人で、確認も異議申し立ても1人で判断します。2人の合意より弱いやり方です。判断はすべて記録に残り、メンバー全員が見られます。",
   "Posts are end-to-end encrypted to members; this node serves Shelter only to members and never passes its posts to other nodes.": "投稿はメンバー向けにエンドツーエンドで暗号化されます。このノードはシェルターをメンバーにだけ表示し、投稿を他のノードに渡しません。",
-  "The node operator can't read posts, but sees which ID reads and posts, when, and from which address.": "ノードの運営者は投稿を読めませんが、どの ID がいつ、どのアドレスから読んだり投稿したりしたかは見えます。",
   "Each member has a number, given in the order members were let in. A nickname can look like another; the number next to it can't be chosen or copied.": "メンバーにはそれぞれ番号があり、参加した順に付きます。ニックネームは別の人と似せられますが、横の番号は選ぶことも真似することもできません。",
   "Choose a nickname first. Members see it next to your posts, with your member number.": "まずニックネームを決めてください。メンバーには、投稿の横にあなたのメンバー番号と一緒に表示されます。",
   "The member who lets you in hands you the board key through your inbox.": "あなたを参加させるメンバーは、受信箱を通して掲示板の鍵を渡します。",
@@ -1015,4 +1014,6 @@ export const JA: Record<string, string> = {
   "Messages are end-to-end encrypted in this tab: only the two of you can read them, if your safety numbers match. The node still sees who writes to whom, and when.": "メッセージはこのタブでエンドツーエンドで暗号化されます。安全番号が一致していれば、読めるのは2人だけです。誰が誰にいつ書いたかは、ノードに見えます。",
   "A delivered file proves which ID sent it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who is behind that ID, or that the file is what its name says.": "届いたファイルは、どの ID が送ったかを示します。開けるのは受取人だけです（DM で見える安全番号が相手と一致していれば）。その ID の背後に誰がいるか、ファイルが名前どおりの中身かは示しません。",
   "Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between may be reading along: don't send anything private.": "この番号を相手と、直接または通話で見比べてください。2人とも同じ番号なら、メッセージを読めるのは2人だけです。番号が違うなら、途中の誰かが読んでいるおそれがあります。大事なことは送らないでください。",
+  "The node operator can't read posts, as long as each member's page checks the keys it seals the board key to (it does) and you compare safety numbers when you meet. It sees which ID reads and posts, when, and from which address.": "ノードの運営者は投稿を読めません。ただし、各メンバーの画面が掲示板の鍵を渡す相手の鍵を確認していること（確認しています）と、会ったときに安全番号を見比べることが条件です。どの ID がいつ、どのアドレスから読んだり投稿したりしたかは見えます。",
+  "Board key from {who}: check it's the member who let you in.": "掲示板の鍵の送り主：{who}。あなたを参加させたメンバーか確かめてください。",
 };

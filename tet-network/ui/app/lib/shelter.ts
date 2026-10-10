@@ -16,7 +16,7 @@ import { expectedChainBinding } from "./chain_binding";
 import { b64ToBytes } from "./encoding";
 import { getHybridSignerSession } from "./hybrid_signer_session";
 import { mldsa44SignDeterministic } from "./pqc";
-import { getTmailKeys } from "./tet_core_http";
+import { trustedKeysFor, verifyEnvelopeSender } from "./key_trust";
 import { buildTmailEnvelopeV1, type TmailEnvelopeV1 } from "./tmail";
 import { decryptForReceiver } from "./tmail_e2ee";
 import { getTmailKeySession } from "./tmail_session";
@@ -29,6 +29,7 @@ export type ShelterMe =
   | {
       member: true;
       moderator: boolean;
+      moderator_id: string;
       board: string;
       nickname: string | null;
       via: string | null;
@@ -170,14 +171,18 @@ export async function submitRecord(
  */
 export async function sealKeyTo(baseUrl: string, member: string, board: OpenBoard): Promise<void> {
   const s = signer();
-  const k = await getTmailKeys(baseUrl, member);
-  if (!k.registration) throw new Error("They haven't published their messaging keys yet: ask them to open Shelter on their phone first.");
+  // Only keys the member's own wallet signed (checked here): a node that served other keys would
+  // otherwise get the board key.
+  const k = await trustedKeysFor(baseUrl, member);
+  if (!k.ok) {
+    throw new Error(k.reason === "none" ? "They haven't turned on their inbox yet: ask them to open Shelter on their phone first." : k.message);
+  }
   const env = await buildTmailEnvelopeV1({
     senderWalletId: s.walletIdHex64,
     receiverWalletId: member,
     plaintextUtf8: JSON.stringify({ kind: SEALED_KIND, invite: board.invite }),
-    receiverX25519Pub: b64ToBytes(k.registration.x25519_pub_b64),
-    receiverMlkemPub: b64ToBytes(k.registration.mlkem_pub_b64),
+    receiverX25519Pub: k.x25519Pub,
+    receiverMlkemPub: k.mlkemPub,
     baseUrl,
   });
   const r = await fetch(`${baseUrl}/shelter/key`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(env) });
@@ -185,10 +190,22 @@ export async function sealKeyTo(baseUrl: string, member: string, board: OpenBoar
   if (!r.ok) throw new Error(String(j?.error ?? `HTTP ${r.status}`));
 }
 
-/** Open this member's sealed key: the board, checked against the board the node names. */
-export async function openSealedKey(baseUrl: string, sealed: TmailEnvelopeV1, boardWalletId: string): Promise<OpenBoard> {
+/**
+ * Open this member's sealed key: only if the sender's signature checks out here and the sender is
+ * the member, the moderator, or the member who let them in (`allowedSenders`); then the board,
+ * checked against the board the node names. Returns who sealed it, for the page to show.
+ */
+export async function openSealedKey(
+  baseUrl: string,
+  sealed: TmailEnvelopeV1,
+  boardWalletId: string,
+  allowedSenders: string[],
+): Promise<{ board: OpenBoard; from: string }> {
   const ks = getTmailKeySession();
   if (!ks) throw new Error("No ID in this tab yet.");
+  const from = sealed.sender_wallet_id.trim().toLowerCase();
+  if ((await verifyEnvelopeSender(sealed as never, baseUrl)) !== "verified") throw new Error("The board key's signature isn't its sender's: not opened.");
+  if (!allowedSenders.map((w) => w.trim().toLowerCase()).includes(from)) throw new Error("The board key came from someone who didn't let you in: not opened.");
   const e = sealed.e2ee;
   const pt = await decryptForReceiver(
     {
@@ -204,7 +221,7 @@ export async function openSealedKey(baseUrl: string, sealed: TmailEnvelopeV1, bo
   if (j?.kind !== SEALED_KIND || typeof j.invite !== "string") throw new Error("That isn't a Shelter key.");
   const board = await openBoard(baseUrl, j.invite);
   if (board.boardWalletId !== boardWalletId) throw new Error("That key is for another board.");
-  return board;
+  return { board, from };
 }
 
 /** The join code a member scans: this wallet's id. */
