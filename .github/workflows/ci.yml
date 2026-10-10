@@ -453,6 +453,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # Thread grants (docs/plans/TESTNET_REWARDS.md §2): distinct people, the starter excluded,
+      # anonymous daily IDs within one day, per-person and network daily caps, never twice, halving.
+      - if: needs.gate.outputs.code == 'true'
+        name: thread grants — the rules and caps, each with a negative control
+        run: node scripts/thread_grants_guard.mjs
       # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
       - if: needs.gate.outputs.code == 'true'
         name: try page — the three safety sentences are where they must be
