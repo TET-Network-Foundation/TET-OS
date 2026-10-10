@@ -458,26 +458,25 @@ jobs:
         name: try page — the three safety sentences are where they must be
         run: node --experimental-strip-types scripts/try_safety_lines_guard.mjs
       # Threat model rule 11: security.txt names SECURITY.md's contacts and hasn't expired.
-      - if: needs.gate.outputs.code == 'true'
         name: security.txt — same contacts as SECURITY.md, not expired
         run: node scripts/security_txt_guard.mjs
       # Threat model rule 9: Actions pinned by SHA, installs with --ignore-scripts, lockfiles, CODEOWNERS.
-      - if: needs.gate.outputs.code == 'true'
         name: supply chain — pinned Actions, no install scripts, lockfiles, code owners
         run: node scripts/supply_chain_guard.mjs
       # Threat model rule 7: weak device passwords refused; a remembered ID auto-locks after 15 minutes.
-      - if: needs.gate.outputs.code == 'true'
         name: device keys — password strength and auto-lock
         run: node --experimental-strip-types scripts/device_keys_guard.mjs
       # Threat model rule 6: the public pages' CSP admits no other origin; SRI on; no third-party code.
-      - if: needs.gate.outputs.code == 'true'
         name: page integrity — CSP, SRI, no third-party scripts
         run: node --experimental-strip-types scripts/page_integrity_guard.mjs
       # Shelter: the board key is sealed only to keys the member's wallet signed, and opened only from
       # a verified, allowed sender.
-      - if: needs.gate.outputs.code == 'true'
         name: Shelter — the board key travels only between the right people
         run: node --experimental-strip-types scripts/shelter_guard.mjs
+      # Verify without TET: the offline verifier agrees with the page's, its files are what the build
+      # makes now, they can't reach the network, and the CLI verifies with networking disabled.
+        name: verify without TET — offline, deterministic, no network
+        run: node --experimental-strip-types scripts/offline_verify_guard.mjs
 
       # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
       # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in

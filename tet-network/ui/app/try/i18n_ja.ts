@@ -1026,4 +1026,7 @@ export const JA: Record<string, string> = {
   "That device password is too common. A few words you'll remember is easiest.": "その端末パスワードはよく使われすぎています。覚えやすい単語をいくつか並べるのが簡単です。",
   "That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.": "その端末パスワードは推測されやすすぎます。12文字以上にするか、文字・数字・記号を混ぜてください。",
   "A remembered ID locks itself after 15 minutes without use; open it again with your device password.": "端末に覚えさせた ID は、15分使わないと自動でロックされます。端末パスワードでまた開けます。",
+  "Even if TET disappears, this still works:": "TET がなくなっても、これは動きます：",
+  "the offline verifier": "オフライン検証ツール",
+  "(one file: it checks a record on your device, with the network off)": "（1つのファイル。ネットに接続しなくても、あなたの端末で記録を確認します）",
 };

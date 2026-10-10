@@ -1026,4 +1026,7 @@ export const ZH_HK: Record<string, string> = {
   "That device password is too common. A few words you'll remember is easiest.": "這個裝置密碼太常見。用幾個你記得的字詞最容易。",
   "That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.": "這個裝置密碼太容易被猜中。請使用 12 個或以上字元，或混合字母、數字和符號。",
   "A remembered ID locks itself after 15 minutes without use; open it again with your device password.": "已記住的 ID 在 15 分鐘沒有使用後會自動上鎖；用裝置密碼即可再次開啟。",
+  "Even if TET disappears, this still works:": "即使 TET 消失，這仍然可用：",
+  "the offline verifier": "離線驗證工具",
+  "(one file: it checks a record on your device, with the network off)": "（單一檔案：在你的裝置上檢查紀錄，無需連接網絡）",
 };
