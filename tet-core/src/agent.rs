@@ -129,8 +129,9 @@ fn pae_fields(fields: &[&[u8]]) -> Vec<u8> {
     out
 }
 
-/// `domain SP <pae_fields>`.
-fn pae(domain: &str, fields: &[&[u8]]) -> Vec<u8> {
+/// `domain SP <pae_fields>`. Shared with other pre-images that want the same encoding
+/// (`tmail::keys`).
+pub(crate) fn pae(domain: &str, fields: &[&[u8]]) -> Vec<u8> {
     let mut out = Vec::with_capacity(domain.len() + 1);
     out.extend_from_slice(domain.as_bytes());
     out.push(b' ');
