@@ -1,5 +1,6 @@
 /** TET-Core Axum REST client (port 5010). No WebSocket / Substrate. */
 
+import { plainNodeError } from "./node_error.mjs";
 import {
   buildAiInferHybridHeaders,
   flopsBigIntToJsonNumber,
@@ -828,7 +829,8 @@ export async function postTmailSend(baseUrl: string, env: TmailEnvelopeV1): Prom
   if (r.status === 409) {
     return { ok: true, status: r.status, msgId: env.msg_id, duplicate: true };
   }
-  return { ok: false, status: r.status, text: r.text };
+  // The node's plain message (e.g. "your device clock is off: …"), not the JSON around it.
+  return { ok: false, status: r.status, text: plainNodeError(r.text) };
 }
 
 export type TmailReadReceiptResult = {

@@ -1509,6 +1509,12 @@ pub(crate) fn handle_tmail_network_event(
 ) -> TmailGossipOutcome {
     match event {
         crate::models::NetworkEvent::TmailGossip { envelope } => {
+            // The same clock rule as a REST send, so every node keeps the same posts.
+            if let Err(r) = crate::tmail::envelope::check_sent_at(envelope, crate::tmail::envelope::sent_at_clock_now_ms()) {
+                return TmailGossipOutcome::Rejected {
+                    reason: format!("time: {}", r.message()),
+                };
+            }
             if let Err(e) = crate::tmail::envelope::verify_tmail_envelope_v1(envelope) {
                 return TmailGossipOutcome::Rejected {
                     reason: format!("envelope: {e}"),

@@ -449,6 +449,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # The node's clock refusals ("your device clock is off", the UTC day changed) are shown plainly
+      # and translated word for word.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the node's clock refusals are translated
+        run: node --experimental-strip-types scripts/node_messages_guard.mjs
 
       # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
       # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in

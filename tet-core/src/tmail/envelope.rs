@@ -437,3 +437,61 @@ fn verify_anchor_proof_consistency(
     }
     Ok(())
 }
+
+/// How far an envelope's `sent_at_ms` may be from the receiving node's clock (either way). Generous
+/// enough for real devices whose clocks drift; the seeds and the demo keep NTP time (their health
+/// check fails when it isn't synced).
+pub const SENT_AT_SKEW_MS: u64 = 5 * 60_000;
+
+/// Why an envelope's time is refused at the door (REST send and gossip ingest).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SentAtRefusal {
+    /// More than [`SENT_AT_SKEW_MS`] from the node's clock.
+    ClockOff,
+    /// An anonymous post dated on a UTC day that has ended (or not begun) by the node's clock: its
+    /// daily ID and nullifier belong to that day only.
+    AnonDayChanged,
+}
+
+impl SentAtRefusal {
+    /// The plain message the sender sees.
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::ClockOff => "your device clock is off: set it to the right time and try again",
+            Self::AnonDayChanged => "the UTC day changed while this anonymous post was on its way; send it again",
+        }
+    }
+}
+
+/// The sender sets and signs `sent_at_ms`; the node holds it to its own clock. Without this a post
+/// could be dated anywhere: backdated to the top of a thread, future-dated past the retention
+/// limit, or (anonymous) dated on another day to post under another daily ID.
+pub fn check_sent_at(env: &TmailEnvelopeV1, now_ms: u64) -> Result<(), SentAtRefusal> {
+    if env.sent_at_ms.abs_diff(now_ms) > SENT_AT_SKEW_MS {
+        return Err(SentAtRefusal::ClockOff);
+    }
+    if env.flags.anonymous && nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms) != nexus_protocol::tmail_bucket_index_v1(now_ms) {
+        return Err(SentAtRefusal::AnonDayChanged);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_NOW_MS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Tests only: pin the clock `check_sent_at` callers read on this thread (`None` restores it).
+#[cfg(test)]
+pub fn set_sent_at_clock_for_tests(now_ms: Option<u64>) {
+    TEST_NOW_MS.with(|c| c.set(now_ms));
+}
+
+/// The node's clock for [`check_sent_at`] (pinnable in tests).
+pub fn sent_at_clock_now_ms() -> u64 {
+    #[cfg(test)]
+    if let Some(n) = TEST_NOW_MS.with(|c| c.get()) {
+        return n;
+    }
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}

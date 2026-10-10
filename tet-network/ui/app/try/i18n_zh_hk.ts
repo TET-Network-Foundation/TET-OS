@@ -452,4 +452,6 @@ export const ZH_HK: Record<string, string> = {
   "That ID hasn't turned on its inbox yet: nothing was sent.": "該 ID 尚未開啟收件匣：未有傳送任何內容。",
   "A delivered file proves the sender's key signed it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who holds that key, or that the file is what its name says.": "已送達的檔案證明它由寄件人的金鑰簽署。只有收件人能開啟（前提是你在 DM 看到的安全號碼與對方的一致）。它不能證明誰持有該金鑰，亦不能證明檔案內容與檔名相符。",
   "Messages are end-to-end encrypted in this tab: only the two of you can read them, if your safety numbers match. The node still sees who writes to whom, and when.": "訊息在此分頁以端對端加密：如果你們的安全號碼相符，就只有你們兩人能讀到。節點仍可看到誰在何時寫給誰。",
+  "your device clock is off: set it to the right time and try again": "你裝置的時鐘不準確：請把它調到正確時間，然後再試一次。",
+  "the UTC day changed while this anonymous post was on its way; send it again": "這則匿名帖文傳送途中 UTC 日期已經改變；請再發送一次。",
 };
