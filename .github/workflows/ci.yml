@@ -469,6 +469,10 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: device keys — password strength and auto-lock
         run: node --experimental-strip-types scripts/device_keys_guard.mjs
+      # Threat model rule 6: the public pages' CSP admits no other origin; SRI on; no third-party code.
+      - if: needs.gate.outputs.code == 'true'
+        name: page integrity — CSP, SRI, no third-party scripts
+        run: node --experimental-strip-types scripts/page_integrity_guard.mjs
       # Shelter: the board key is sealed only to keys the member's wallet signed, and opened only from
       # a verified, allowed sender.
       - if: needs.gate.outputs.code == 'true'

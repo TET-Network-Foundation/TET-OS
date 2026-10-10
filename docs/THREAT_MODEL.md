@@ -32,7 +32,7 @@ the external audit planned for Phase 2, and reporting through `SECURITY.md`.
 
 | Scenario | Status | Whose job | Mitigation |
 |---|---|---|---|
-| The served JavaScript replaced (as in the 2025 Bybit theft, where an attacker changed a wallet interface's served code) | **Partly, the largest open gap** | TET operator; later, an extension or app | Rule 6: strict CSP, SRI on scripts, zero third-party scripts; a build hash signed by the publisher key and a "verify this page" check. These detect changed scripts from other origins and let a careful user compare, but **a compromised server can still serve different HTML and scripts with matching hashes**. The plan: a browser extension or app that pins the publisher-signed build, and the offline verifier (`public/verify/`) for records. |
+| The served JavaScript replaced (as in the 2025 Bybit theft, where an attacker changed a wallet interface's served code) | **Partly, the largest open gap** | TET operator; later, an extension or app | Rule 6: a CSP that admits only this origin's scripts, zero third-party scripts, SRI where Next.js emits it (part of the chunks today); planned: a build hash signed by the publisher key and a "verify this page" check. These detect changed scripts from other origins and let a careful user compare, but **a compromised server can still serve different HTML and scripts with matching hashes**. The plan: a browser extension or app that pins the publisher-signed build, and the offline verifier (`public/verify/`) for records. |
 | A node serving wrong keys | Defended (since #101) | TET (page code) | The browser checks every messaging-key registration is signed by that wallet before encrypting, and every sender's signature before showing who sent something; safety numbers let two people check in person. |
 | Registrar or domain takeover | Partly | TET operator | Registrar lock and hardware-key 2FA on the registrar are open infra items. Records stay checkable offline with the publisher key, whatever the domain serves. |
 | Certificate mis-issuance | Partly | TET operator, CAs | CAA records and Certificate Transparency monitoring are open infra items. |
@@ -95,6 +95,14 @@ with TET are specified now and tested when it is built.
 6. **Page integrity:** SRI on every script, a CSP, zero third-party scripts; a reproducible build
    whose hash is signed with the publisher key and compared by "verify this page". Still
    unprotected: a compromised server can serve different HTML; the plan is an extension or app.
+   *As built (2026-10-10):* the public pages send a CSP that admits scripts and connections only
+   from their own origin (and the visitor's local prover), with no framing, plugins or `<base>`;
+   `'unsafe-inline'` remains for scripts because Next.js bootstraps with inline scripts on static
+   pages. Zero third-party scripts, stylesheets or fonts. SRI is switched on, but Next.js adds
+   integrity hashes to only part of its chunks today (about half on /try, with either bundler), so
+   "SRI on every script" is **not yet true**. The signed build manifest with "verify this page",
+   which would hash every file whatever SRI covers, is **not built yet**; it is the next step.
+   Guarded by `page_integrity_guard`.
 7. **Keys:** in memory only while the tab is unlocked; the vault encrypted; auto-lock; a
    passphrase-strength check. Argon2id: evaluated (WebCrypto has no Argon2; it would need a WASM
    dependency reviewed by a human); PBKDF2 at 600,000 iterations until then.
