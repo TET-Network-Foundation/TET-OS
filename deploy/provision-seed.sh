@@ -54,6 +54,8 @@ SEED_DIR="${TET_SEED_DIR:-/opt/TET-OS}"
 DEPLOY_KEY="${TET_SEED_DEPLOY_KEY:-/root/.ssh/tet_os_deploy}"
 SOURCE_MODE="${TET_SEED_SOURCE:-push}"   # push | clone — see header
 SSH_PORT="${TET_SEED_SSH_PORT:-22}"
+# Extra SSH ports (space-separated), for networks that block outbound 22. The demo default is 8443.
+SSH_EXTRA_PORTS="${TET_SSH_EXTRA_PORTS:-}"
 P2P_PORT="${TET_SEED_P2P_PORT:-8002}"
 SWAP_GB="${TET_SEED_SWAP_GB:-4}"
 
@@ -284,7 +286,45 @@ fi
 chmod 600 "$SEED_DIR/.env"
 ok "profile=$PROFILE  p2p=$P2P_PORT  chain=$CHAIN_ID"
 
+# --- 6b. SSH listeners --------------------------------------------------------
+# Ubuntu 24.04 starts sshd from ssh.socket. Enable it explicitly and list every port on both IPv4
+# and IPv6 (an [::] listener alone depends on bindv6only), then check each one really listens:
+# a port the firewall allows but nothing serves looks exactly like a firewall problem from outside.
+[ "$ROLE" = demo ] && [ -z "$SSH_EXTRA_PORTS" ] && SSH_EXTRA_PORTS=8443
+log "ssh.socket: ports $SSH_PORT $SSH_EXTRA_PORTS"
+if systemctl list-unit-files ssh.socket >/dev/null 2>&1; then
+  mkdir -p /etc/systemd/system/ssh.socket.d
+  {
+    echo "[Socket]"
+    echo "ListenStream="
+    for p in $SSH_PORT $SSH_EXTRA_PORTS; do
+      echo "ListenStream=0.0.0.0:$p"
+      echo "ListenStream=[::]:$p"
+    done
+    echo "BindIPv6Only=ipv6-only"
+  } > /etc/systemd/system/ssh.socket.d/tet-ports.conf
+  systemctl daemon-reload
+  systemctl enable ssh.socket >/dev/null 2>&1
+  systemctl restart ssh.socket
+  # Each port on IPv4 and IPv6 separately: a [::] listener alone refuses every IPv4 connection
+  # when the socket is IPv6-only, which is what locked the demo host's IPv4 SSH out.
+  for p in $SSH_PORT $SSH_EXTRA_PORTS; do
+    ss -4ltnH "sport = :$p" | grep -q . || die "ssh.socket is not listening on IPv4 port $p"
+    ss -6ltnH "sport = :$p" | grep -q . || warn "ssh.socket is not listening on IPv6 port $p"
+  done
+  ok "ssh listens on $(ss -ltnH | awk '{print $4}' | grep -E ":(${SSH_PORT}$(for p in $SSH_EXTRA_PORTS; do printf '|%s' "$p"; done))$" | tr '\n' ' ')"
+else
+  warn "no ssh.socket unit (sshd not socket-activated here): extra ports not configured"
+fi
+
 # --- 7. firewall ------------------------------------------------------------
+# Never add nftables reject rules of our own: a REJECT answers a connection with a reset, which
+# reads from outside as "nothing listening" and hides the real problem. ufw is the only host
+# firewall here (plus the Hetzner cloud firewall). Anything else that rejects is reported.
+if command -v nft >/dev/null 2>&1; then
+  other=$(nft list ruleset 2>/dev/null | awk '/^table /{t=$2" "$3} /reject/ && t !~ /ufw/ {print t": "$0}' | head -5)
+  [ -z "$other" ] || warn "nftables reject rules outside ufw (from cloud-config or elsewhere?): $other"
+fi
 # Mirrors the Hetzner cloud firewall so the host is not defenceless if that
 # firewall is ever relaxed. READ THIS BEFORE TRUSTING IT: ufw does not filter
 # container-published ports. Docker inserts DNAT rules into the nat table's
@@ -297,6 +337,7 @@ ufw --force disable >/dev/null 2>&1 || true
 ufw default deny incoming  >/dev/null
 ufw default allow outgoing >/dev/null
 ufw allow "${SSH_PORT}/tcp"  >/dev/null   # keep this first — enabling without it locks you out
+for p in $SSH_EXTRA_PORTS; do ufw allow "${p}/tcp" >/dev/null; done
 ufw allow "${P2P_PORT}/tcp"  >/dev/null   # block plane; all swarms are TCP-only
 if [ "$ROLE" = demo ]; then
   ufw allow 80/tcp  >/dev/null   # ACME challenge and the redirect to 443
