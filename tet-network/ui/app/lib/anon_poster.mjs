@@ -282,7 +282,7 @@ export async function runAnonPost(deps, input) {
     const index = set.leaves.findIndex((l) => toHex(l) === mine);
     const { root, siblings } = anonRootAndPath(set.leaves, index);
     if (toHex(root) !== String(set.rootHex).toLowerCase()) {
-      return fail(input.memberTree ? "the poll's member list does not reproduce its registered root" : "the downloaded registry does not reproduce this node's root");
+      return fail(input.memberTree ? "the member list does not reproduce its registered root (it changed: try again)" : "the downloaded registry does not reproduce this node's root");
     }
     if (index < 0 || !siblings) {
       return emit({ state: "not_in_set", nextEpochAtMs: set.nextEpochAtMs });
