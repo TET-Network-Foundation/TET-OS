@@ -452,6 +452,14 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the three safety sentences are where they must be
+        run: node --experimental-strip-types scripts/try_safety_lines_guard.mjs
+      # Threat model rule 11: security.txt names SECURITY.md's contacts and hasn't expired.
+      - if: needs.gate.outputs.code == 'true'
+        name: security.txt — same contacts as SECURITY.md, not expired
+        run: node scripts/security_txt_guard.mjs
       # Shelter: the board key is sealed only to keys the member's wallet signed, and opened only from
       # a verified, allowed sender.
       - if: needs.gate.outputs.code == 'true'

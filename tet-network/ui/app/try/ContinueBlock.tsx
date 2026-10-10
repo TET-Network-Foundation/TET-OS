@@ -13,6 +13,21 @@ import { useLang } from "./i18n";
 
 const LINK = cx(FOCUS, "rounded-sm underline underline-offset-2");
 
+/**
+ * The three fixed sentences (docs/THREAT_MODEL.md rule 8), shown wherever the 12 words are entered,
+ * saved or remembered. Guarded by scripts/try_safety_lines_guard.mjs.
+ */
+export function SafetyLines() {
+  const { t } = useLang();
+  return (
+    <ul className="list-disc space-y-0.5 pl-5 text-[13.5px] text-[#5d646d]">
+      <li>{t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</li>
+      <li>{t("On a device managed by your school or employer, the admin can see everything.")}</li>
+      <li>{t("Lose your passphrase (12 words) and nobody can recover it.")}</li>
+    </ul>
+  );
+}
+
 export default function ContinueBlock(props: { lastBoard: { name: string; invite: string | null } | null; onOpenBoard: (invite: string) => void }) {
   const { t } = useLang();
   const { wallet, openWithWords } = useTryWallet();
@@ -24,6 +39,8 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
   const [busy, setBusy] = useState(false);
   const [showRemember, setShowRemember] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreWords, setRestoreWords] = useState("");
 
   useEffect(() => {
     // Read once after mount: storage may be missing, and the server render must match the first one.
@@ -48,6 +65,21 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
       setBusy(false);
     }
   };
+  // The restore screen: the only place the page asks for the 12 words.
+  const restore = async () => {
+    setMsg("");
+    setBusy(true);
+    try {
+      await openWithWords(restoreWords.trim());
+      setRestoreWords("");
+      setRestoreOpen(false);
+      setMsg(t("Your ID is open in this tab."));
+    } catch {
+      setMsg(t("Those aren't 12 valid words. Check them and try again."));
+    } finally {
+      setBusy(false);
+    }
+  };
   const remember = async () => {
     setMsg("");
     if (pass !== pass2) return setMsg(t("The two device passwords differ. Type them again."));
@@ -67,7 +99,7 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     }
   };
 
-  const keyOptions = (!wallet && remembered) || (wallet && !remembered) || remembered || returning;
+  const keyOptions = !wallet || (wallet && !remembered) || remembered || returning;
   if (!props.lastBoard && !keyOptions) return null;
   return (
     <div className="text-[13.5px] text-[#5d646d]">
@@ -113,6 +145,7 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
                 {showRemember ? (
                   <div className="max-w-sm space-y-1.5">
                     <p className="text-[14px] text-[#5d646d]">{t("Anyone with this device and your device password can use your ID. A script injected into this page could read it while it's open.")}</p>
+                    <SafetyLines />
                     <Input ariaLabel={t("Device password")} type="password" value={pass} onChange={setPass} placeholder={t("Device password (8 characters or more)")} />
                     <Input ariaLabel={t("Device password again")} type="password" value={pass2} onChange={setPass2} placeholder={t("Device password again")} />
                     <Button disabled={busy || !pass} onClick={() => void remember()}>
@@ -122,6 +155,32 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
                 ) : (
                   <button type="button" className={LINK} onClick={() => setShowRemember(true)}>
                     {t("Remember my ID on this device (optional, encrypted)")}
+                  </button>
+                )}
+              </li>
+            ) : null}
+            {!wallet ? (
+              <li className="pt-1">
+                {restoreOpen ? (
+                  <div className="max-w-md space-y-1.5">
+                    <p className="text-[14px]">{t("Open an ID with your passphrase (12 words):")}</p>
+                    <SafetyLines />
+                    <textarea
+                      value={restoreWords}
+                      onChange={(e) => setRestoreWords(e.target.value)}
+                      rows={2}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label={t("Your passphrase (12 words)")}
+                      className={cx(FOCUS, "w-full rounded-md border border-[#c9ced4] p-2 text-[15px]")}
+                    />
+                    <Button disabled={busy || restoreWords.trim().split(/\s+/).length !== 12} onClick={() => void restore()}>
+                      {t("Open")}
+                    </Button>
+                  </div>
+                ) : (
+                  <button type="button" className={LINK} onClick={() => setRestoreOpen(true)}>
+                    {t("Open an ID with your passphrase (12 words)")}
                   </button>
                 )}
               </li>

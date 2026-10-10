@@ -1016,4 +1016,11 @@ export const ZH_HK: Record<string, string> = {
   "Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between may be reading along: don't send anything private.": "請與對方親身或透過通話核對這個號碼。如果雙方看到的號碼相同，就只有你們兩人能讀到訊息。如果號碼不同，中途可能有人在偷看：請不要傳送任何私密內容。",
   "The node operator can't read posts, as long as each member's page checks the keys it seals the board key to (it does) and you compare safety numbers when you meet. It sees which ID reads and posts, when, and from which address.": "節點營運者無法閱讀帖文，前提是每位成員的頁面會核對封存討論區金鑰時所用的金鑰（頁面會核對），以及你們見面時核對安全號碼。營運者可看到哪個 ID 於何時、從哪個位址閱讀及發帖。",
   "Board key from {who}: check it's the member who let you in.": "討論區金鑰來自 {who}：請確認是讓你加入的成員。",
+  "On a device managed by your school or employer, the admin can see everything.": "在學校或僱主管理的裝置上，管理員可以看到一切。",
+  "Open an ID with your passphrase (12 words)": "用密語（12 個字）開啟 ID",
+  "Open an ID with your passphrase (12 words):": "用密語（12 個字）開啟 ID：",
+  "Those aren't 12 valid words. Check them and try again.": "這不是有效的 12 個字。請檢查後再試。",
+  "TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.": "TET 只會在還原畫面要求你的密語（12 個字）；支援人員絕不會私訊你索取。",
+  "Lose your passphrase (12 words) and nobody can recover it.": "遺失密語（12 個字），任何人都無法替你復原。",
+  "Your passphrase (12 words)": "你的密語（12 個字）",
 };

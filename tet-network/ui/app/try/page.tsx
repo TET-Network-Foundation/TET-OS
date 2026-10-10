@@ -326,6 +326,7 @@ function CompactWallet() {
           <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={save}>
             {t("Keep this ID? Save your passphrase (12 words)")}
           </button>
+          <span className="block">{t("Lose your passphrase (12 words) and nobody can recover it.")} {t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</span>
         </div>
       ) : null}
     </>
