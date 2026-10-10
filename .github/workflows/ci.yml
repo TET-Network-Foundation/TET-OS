@@ -452,6 +452,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # Shelter: the board key is sealed only to keys the member's wallet signed, and opened only from
+      # a verified, allowed sender.
+      - if: needs.gate.outputs.code == 'true'
+        name: Shelter — the board key travels only between the right people
+        run: node --experimental-strip-types scripts/shelter_guard.mjs
 
       # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
       # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in
