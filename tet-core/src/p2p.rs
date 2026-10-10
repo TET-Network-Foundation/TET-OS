@@ -1450,7 +1450,7 @@ pub(crate) async fn handle_tx_broadcast(
         }
     }
 
-    match crate::rest::state::enqueue_without_broadcast(mempool, env).await {
+    match crate::rest::state::enqueue_without_broadcast(mempool, ledger, env).await {
         Ok(_evicted) => {
             let mempool_len = mempool.lock().await.len();
             TxGossipOutcome::Enqueued {

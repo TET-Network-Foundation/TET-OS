@@ -86,6 +86,8 @@ pub struct RestState {
 pub enum MempoolEnqueueError {
     TxTooLarge { bytes: usize, max_bytes: usize },
     Full { txs: usize, bytes: usize },
+    /// A transaction no block could accept, whatever the state (`consensus::tx_admissible`).
+    Invalid(String),
 }
 
 impl std::fmt::Display for MempoolEnqueueError {
@@ -101,6 +103,7 @@ impl std::fmt::Display for MempoolEnqueueError {
                 f,
                 "mempool is full and incoming tx fee is not high enough to evict: txs={txs} bytes={bytes}"
             ),
+            Self::Invalid(why) => write!(f, "a block would refuse this transaction: {why}"),
         }
     }
 }
@@ -165,7 +168,7 @@ impl RestState {
         &self,
         env: SignedTxEnvelopeV1,
     ) -> Result<bool, MempoolEnqueueError> {
-        let evicted = enqueue_without_broadcast(&self.mempool, env.clone()).await?;
+        let evicted = enqueue_without_broadcast(&self.mempool, &self.ledger, env.clone()).await?;
         self.broadcast_mempool_tx(&env).await;
         Ok(evicted)
     }
@@ -185,9 +188,13 @@ impl RestState {
 /// `Arc`, not a `RestState`.
 pub async fn enqueue_without_broadcast(
     mempool: &Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    ledger: &crate::ledger::Ledger,
     env: SignedTxEnvelopeV1,
 ) -> Result<bool, MempoolEnqueueError> {
     use RestState as S;
+    // Refused here what every block refuses regardless of state, so it never reaches a block
+    // (the producer also drops such a transaction alone: consensus::select_block_txs).
+    crate::consensus::tx_admissible(&env).map_err(MempoolEnqueueError::Invalid)?;
     {
         let max_txs = S::mempool_max_txs();
         let max_bytes = S::mempool_max_bytes();
@@ -201,6 +208,9 @@ pub async fn enqueue_without_broadcast(
 
         let incoming_fee = S::tx_fee_score(&env);
         let mut mp = mempool.lock().await;
+        // Under the same lock as the insert: two submissions at once can't both pass on the
+        // same balance (a double-spend admitted by a race).
+        crate::consensus::tx_affordable(ledger, &env, &mp).map_err(MempoolEnqueueError::Invalid)?;
         let mut total_bytes = mp.iter().map(S::tx_estimated_bytes).sum::<usize>();
         let mut evicted = false;
 

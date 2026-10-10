@@ -1383,6 +1383,232 @@ pub async fn mine_pending_block_as(
         }
         kept
     };
+    // One transaction a block would refuse must not cost everyone else theirs (SECURITY.md,
+    // 2026-10-10): keep the ones that build a valid block, drop only those that break it.
+    let (mut txs, mut later) = select_block_txs(&state.ledger, txs, &producer_id);
+    // After a failed block, blocks carry one transaction at a time until one is made: the one
+    // that keeps failing is found and dropped alone; everyone else's wait, in order.
+    if BLOCK_FAILURES.load(std::sync::atomic::Ordering::Relaxed) > 0 && txs.len() > 1 {
+        let mut rest = txs.split_off(1);
+        rest.append(&mut later);
+        later = rest;
+    }
+    if !later.is_empty() {
+        // Ahead of anything that arrived meanwhile, so a backlog always advances.
+        requeue_txs_front(&state, later).await;
+    }
+    match build_and_apply_block(&state, &producer_id, &txs).await {
+        Ok(outcome) => {
+            BLOCK_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+            Ok(outcome)
+        }
+        Err(BuildError::NothingWritten(e)) => {
+            let n = BLOCK_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if after_failure(true, n, txs.len()) == AfterFailure::Requeue {
+                requeue_txs_front(&state, txs).await;
+            } else {
+                BLOCK_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+                log::error!(
+                    "[consensus] a transaction failed alone {n} times in a row; dropped: {}",
+                    txs.first().and_then(|t| tx_hash_for_env(t).ok()).unwrap_or_default()
+                );
+            }
+            Err(e)
+        }
+        Err(BuildError::MaybeWritten(e)) => {
+            // A storage error in the apply's writes: some may be written, so a retry could apply a
+            // transaction twice. Never requeued; not something a transaction can cause. Logged
+            // as the node failure it is.
+            BLOCK_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+            log::error!("[consensus] storage error while applying a block; {} transactions dropped: {}", txs.len(), e.message());
+            Err(e)
+        }
+    }
+}
+
+/// Failed blocks in a row (reset by a block that's made, or by dropping the one that failed).
+static BLOCK_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// A transaction failing alone this many times in a row is dropped.
+pub(crate) const PRE_APPLY_REQUEUE_MAX: u32 = 3;
+
+/// What happens to a failed block's transactions.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AfterFailure {
+    Requeue,
+    Drop,
+}
+
+/// When nothing was written, the transactions go back; a batch of more than one is never dropped
+/// (after a failure blocks carry one at a time, so the failing one is isolated), and a single
+/// transaction is dropped only after failing alone [`PRE_APPLY_REQUEUE_MAX`] times in a row. A
+/// storage error that may have written part of the block never requeues.
+pub(crate) fn after_failure(nothing_written: bool, failures_in_a_row: u32, batch_len: usize) -> AfterFailure {
+    if !nothing_written {
+        return AfterFailure::Drop;
+    }
+    if batch_len > 1 || failures_in_a_row < PRE_APPLY_REQUEUE_MAX {
+        AfterFailure::Requeue
+    } else {
+        AfterFailure::Drop
+    }
+}
+
+/// Where making a block failed: nothing written (safe to retry), or a storage error during the
+/// apply's writes (maybe partly written). The apply validates everything before it writes, so its
+/// other errors write nothing.
+enum BuildError {
+    NothingWritten(MineError),
+    MaybeWritten(MineError),
+}
+
+/// The checks every block makes on a transaction regardless of the ledger's state, run at mempool
+/// admission: the signer acts for itself, and for a transfer: both wallets named, an amount in
+/// range, a fee rate in the consensus range (FEE_SPEC §2.1). Mirrors the preview's stateless arm.
+pub fn tx_admissible(env: &SignedTxEnvelopeV1) -> Result<(), String> {
+    if !crate::protocol::signer_acts_for_itself(env) {
+        return Err("signer must be the wallet the transaction acts for".into());
+    }
+    if let TxV1::Transfer { from_wallet, to_wallet, amount_micro, fee_bps } = &env.tx {
+        if from_wallet.trim().is_empty() || to_wallet.trim().is_empty() {
+            return Err("from/to required".into());
+        }
+        if *amount_micro == 0 || *amount_micro > crate::ledger::MAX_SUPPLY_MICRO {
+            return Err("amount exceeds hard cap".into());
+        }
+        crate::fees::charge(crate::fees::FeeKind::Transfer { fee_bps: *fee_bps }, *amount_micro)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// A transfer its sender can't cover is refused at admission: its amount plus the sender's
+/// transfers already waiting in `pending` must fit in the spendable balance. Without this, one
+/// funded wallet could fill the mempool with double-spends that each look affordable alone and
+/// would only be dropped by the producer, one preview at a time (block-building time a flood
+/// could take from honest transactions). A node behind on sync may refuse a transfer a synced node
+/// accepts; it is then simply not relayed by that node.
+pub fn tx_affordable(
+    ledger: &Ledger,
+    env: &SignedTxEnvelopeV1,
+    pending: &[SignedTxEnvelopeV1],
+) -> Result<(), String> {
+    if let TxV1::Transfer { from_wallet, amount_micro, .. } = &env.tx {
+        let from = from_wallet.trim().to_ascii_lowercase();
+        let bal = ledger.balance_micro(&from).map_err(|e| e.to_string())?;
+        let locked = ledger.locked_balance_micro_now(&from).map_err(|e| e.to_string())?;
+        let waiting: u64 = pending
+            .iter()
+            .filter_map(|e| match &e.tx {
+                TxV1::Transfer { from_wallet: f, amount_micro: a, .. } if f.trim().eq_ignore_ascii_case(&from) => Some(*a),
+                _ => None,
+            })
+            .fold(0u64, |acc, a| acc.saturating_add(a));
+        if bal.saturating_sub(locked) < waiting.saturating_add(*amount_micro) {
+            return Err("insufficient funds for this transfer (counting the sender's pending transfers)".into());
+        }
+    }
+    Ok(())
+}
+
+/// Is `txs` a block the preview and apply would accept (the same checks, in the same order)?
+fn block_txs_ok(ledger: &Ledger, txs: &[SignedTxEnvelopeV1], producer_id: &str) -> bool {
+    if validate_zk_task_claims(ledger, txs).is_err() {
+        return false;
+    }
+    let Ok(reward) = reward_for_block(txs) else { return false };
+    ledger
+        .compute_state_root_after_remote_block(txs, producer_id, reward.total_reward_micro)
+        .is_ok()
+}
+
+/// At most this many transactions are examined one by one when a batch fails; the rest wait for
+/// the next block. Each check is a full preview, so this bounds the work a flood of
+/// bad-but-admissible transactions can cause per block.
+pub(crate) const SELECT_ONE_BY_ONE_MAX: usize = 256;
+
+/// The mempool's transactions that make a valid block, in order, and the ones left for a later
+/// block. All of them when the batch is valid (one preview, the usual case); otherwise the first
+/// [`SELECT_ONE_BY_ONE_MAX`] are each kept only if the block so far still previews with them, so
+/// a bad transaction (an out-of-range fee, an overdraft, …) drops alone.
+pub(crate) fn select_block_txs(
+    ledger: &Ledger,
+    mut txs: Vec<SignedTxEnvelopeV1>,
+    producer_id: &str,
+) -> (Vec<SignedTxEnvelopeV1>, Vec<SignedTxEnvelopeV1>) {
+    if block_txs_ok(ledger, &txs, producer_id) {
+        return (txs, Vec::new());
+    }
+    let later = if txs.len() > SELECT_ONE_BY_ONE_MAX { txs.split_off(SELECT_ONE_BY_ONE_MAX) } else { Vec::new() };
+    let mut kept: Vec<SignedTxEnvelopeV1> = Vec::with_capacity(txs.len());
+    for env in txs {
+        kept.push(env);
+        if !block_txs_ok(ledger, &kept, producer_id) {
+            let bad = kept.pop().expect("just pushed");
+            log::warn!(
+                "[consensus] dropped a transaction a block would refuse: {}",
+                tx_hash_for_env(&bad).unwrap_or_default()
+            );
+        }
+    }
+    (kept, later)
+}
+
+/// Put transactions back at the front of the mempool, in order (and in its durable copy).
+pub(crate) async fn requeue_txs_front(state: &RestState, txs: Vec<SignedTxEnvelopeV1>) {
+    let mut mp = state.mempool.lock().await;
+    let mut front = Vec::with_capacity(txs.len());
+    for env in txs {
+        let Ok(h) = tx_hash_for_env(&env) else { continue };
+        if mp.iter().chain(front.iter()).any(|e| tx_hash_for_env(e).map(|x| x == h).unwrap_or(false)) {
+            continue;
+        }
+        state.ledger.mempool_persist(&h, &env);
+        front.push(env);
+    }
+    mp.splice(0..0, front);
+}
+
+async fn build_and_apply_block(
+    state: &RestState,
+    producer_id: &str,
+    txs: &[SignedTxEnvelopeV1],
+) -> Result<MineOutcome, BuildError> {
+    let (block_height, pre) = prepare_block(state, producer_id, txs).map_err(BuildError::NothingWritten)?;
+    let PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id } = pre;
+    let state_root = state
+        .ledger
+        .apply_consensus_block_batch(
+            block_height,
+            &txs,
+            &tx_hashes,
+            &producer_id,
+            reward.total_reward_micro,
+        )
+        .map_err(|e| match e {
+            crate::ledger::LedgerError::Sled(_) => BuildError::MaybeWritten(MineError::BadRequest(e.to_string())),
+            other => BuildError::NothingWritten(MineError::BadRequest(other.to_string())),
+        })?;
+    Ok(finish_block(state, block_height, PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id }, state_root).await)
+}
+
+struct PreparedBlock {
+    producer_id: String,
+    txs: Vec<SignedTxEnvelopeV1>,
+    tx_hashes: Vec<String>,
+    parent_block_id: Option<String>,
+    reward: BlockRewardBreakdown,
+    block_id: String,
+}
+
+/// Everything before the apply: hashes, parent, checks, reward, preview, block id, undo record.
+/// Writes only the undo record (keyed by the block id), so a failure here is safe to retry.
+fn prepare_block(
+    state: &RestState,
+    producer_id: &str,
+    txs: &[SignedTxEnvelopeV1],
+) -> Result<(u64, PreparedBlock), MineError> {
+    let producer_id = producer_id.to_string();
+    let txs: Vec<SignedTxEnvelopeV1> = txs.to_vec();
     let tx_hashes: Vec<String> = txs
         .iter()
         .map(tx_hash_for_env)
@@ -1423,17 +1649,23 @@ pub async fn mine_pending_block_as(
         .store_block_undo(&undo)
         .map_err(|e| MineError::BadRequest(e.to_string()))?;
 
-    let block_height = next_height;
-    let state_root = state
-        .ledger
-        .apply_consensus_block_batch(
-            block_height,
-            &txs,
-            &tx_hashes,
-            &producer_id,
-            reward.total_reward_micro,
-        )
-        .map_err(|e| MineError::BadRequest(e.to_string()))?;
+    Ok((
+        next_height,
+        PreparedBlock {
+            producer_id,
+            txs,
+            tx_hashes,
+            parent_block_id,
+            reward,
+            block_id,
+        },
+    ))
+}
+
+/// Everything after a successful apply: records, indexes, gossip. Its writes are best-effort as
+/// before (`let _`), so it can't fail the block.
+async fn finish_block(state: &RestState, block_height: u64, b: PreparedBlock, state_root: String) -> MineOutcome {
+    let PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id } = b;
 
     let _ =
         state
@@ -1475,7 +1707,7 @@ pub async fn mine_pending_block_as(
         }
     }
 
-    Ok(MineOutcome {
+    MineOutcome {
         mined: true,
         block_height,
         block_id,
@@ -1484,7 +1716,7 @@ pub async fn mine_pending_block_as(
         tx_hashes,
         tx_count: txs.len(),
         reward,
-    })
+    }
 }
 
 /// Outcome of the synchronous (blocking-pool) section of [`apply_remote_block_from_gossip`].
