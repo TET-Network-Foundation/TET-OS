@@ -15824,6 +15824,8 @@ fn shelter_posting_keys_from_before_a_removal_never_count() {
         Err(crate::tmail::store::FastSendError::NotRegistered),
         "a posting key from before the removal still posted"
     );
+    // …and the page is told so (it then proves again instead of failing).
+    assert!(!store.fast_registration_counts(&board, bucket, &eid), "/tmail/anon/fast still says registered");
 }
 
 /// **SECURITY: a sealed key comes only from a current member, fresh, and never replaces a newer

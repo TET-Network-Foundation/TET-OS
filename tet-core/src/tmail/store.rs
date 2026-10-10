@@ -1822,6 +1822,13 @@ impl TmailStore {
         self.shelter_refresh_roots(&cfg, now_ms()).is_some_and(|(roots, _)| roots.contains(&want))
     }
 
+    /// Does this posting key's registration count now (what `/tmail/anon/fast` answers)? On Shelter's
+    /// board, only one made after the set last lost someone; the page then proves again.
+    pub fn fast_registration_counts(&self, receiver: &str, bucket: u64, posting_key: &str) -> bool {
+        self.fast_registration(receiver, bucket, posting_key)
+            .is_some_and(|r| !crate::tmail::shelter::is_shelter_board(receiver) || self.shelter_fast_registration_ok(&r))
+    }
+
     /// May a fast post to Shelter's board use this registration? Only if it was registered after
     /// the set last lost someone (and the state reads; otherwise no).
     fn shelter_fast_registration_ok(&self, reg: &FastKey) -> bool {

@@ -186,8 +186,8 @@ pub async fn get_tmail_anon_fast(
 ) -> axum::response::Response {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let bucket = nexus_protocol::tmail_bucket_index_v1(now);
-    let reg = state.tmail.fast_registration(&receiver, bucket, &posting_key);
-    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "bucket": bucket, "registered": reg.is_some() }))).into_response()
+    let registered = state.tmail.fast_registration_counts(&receiver, bucket, &posting_key);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "bucket": bucket, "registered": registered }))).into_response()
 }
 
 pub async fn get_tmail_inbox(
