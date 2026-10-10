@@ -62,6 +62,8 @@
 		({method} == "GET" && {path}.matches("^/tet-node-api/explorer/blocks/recent$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/stats/inside$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/fast/[^/%]+/[^/%]+$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/(status|me|members|log|inbox|anon/leaves)$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/shelter/record$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/sigs/publish$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/sigs/search$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/sites/edit$")) ||

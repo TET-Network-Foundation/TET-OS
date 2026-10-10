@@ -13788,7 +13788,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     unsafe { std::env::set_var("TET_OPERATOR_LOG", &log) };
 
     // Every public GET is classified; content routes are the ones this test exercises.
-    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id", "/sigs/search"];
+    // `/shelter/inbox` is content, served only to a member's signed read (tests: shelter_*).
+    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id", "/sigs/search", "/shelter/inbox"];
     const NOT_CONTENT: &[&str] = &[
         "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/status/live",
         "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
@@ -13803,6 +13804,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         // Counts and retention settings only.
         "/stats/inside",
         "/tmail/anon/fast/:receiver/:posting_key",
+        // Shelter: open or not; the signer's own standing; members-only lists (no post content).
+        "/shelter/status", "/shelter/me", "/shelter/members", "/shelter/log", "/shelter/anon/leaves",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -15286,4 +15289,394 @@ fn unverified_anonymous_posts_cannot_prune_a_verified_one() {
     assert!(store.store_tmail(&other).unwrap());
     store.set_anon_verdict("other", &crate::tmail::store::AnonVerdict::Verified { nullifier_hex: hex::encode([0x43u8; 32]), verified_at_ms: now }).unwrap();
     assert!(store.get_by_msg_id("victim").is_some() && store.get_by_msg_id("other").is_some());
+}
+
+// ── Shelter (tmail/shelter.rs; docs/plans/SHELTER.md) ──────────────────────────────────────────
+
+/// Shelter on, with a fresh moderator and board: (moderator words, moderator id, board id, guards).
+fn shelter_on_for_tests() -> (String, String, String, Vec<EnvVarGuard>) {
+    let (mw, mid) = tmail_party_for_tests();
+    let (_bw, bid) = tmail_party_for_tests();
+    let g = vec![EnvVarGuard::set("TET_SHELTER_MODERATOR", &mid), EnvVarGuard::set("TET_SHELTER_BOARD", &bid)];
+    (mw, mid, bid, g)
+}
+
+fn shelter_rec_for_tests(
+    words: &str,
+    action: crate::tmail::shelter::ShelterAction,
+    subject: &str,
+    met_in_person: bool,
+    text: &str,
+    decision: &str,
+    at_ms: u64,
+) -> crate::tmail::shelter::ShelterRecordV1 {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(kp.public_key());
+    let signer = hex::encode(ed_sk.verifying_key().to_bytes());
+    let mut r = crate::tmail::shelter::ShelterRecordV1 {
+        v: 1,
+        kind: crate::tmail::shelter::SHELTER_RECORD_KIND.to_string(),
+        action,
+        signer: signer.clone(),
+        subject: subject.to_ascii_lowercase(),
+        met_in_person,
+        text: text.to_string(),
+        decision: decision.to_string(),
+        at_ms,
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: signer,
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::shelter::record_auth_message_bytes(&r, &pk);
+    r.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(&msg).to_bytes());
+    r.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap());
+    r
+}
+
+/// The `x-tet-shelter-auth` header for a read of `path` at `at_ms`.
+fn shelter_read_auth_for_tests(words: &str, path: &str, at_ms: u64) -> String {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = b64(kp.public_key());
+    let wallet = hex::encode(ed_sk.verifying_key().to_bytes());
+    let msg = crate::tmail::shelter::read_auth_message_bytes(&wallet, path, at_ms, &pk);
+    format!("{wallet}.{at_ms}.{}.{pk}.{}", b64(&ed_sk.sign(&msg).to_bytes()), b64(&crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap()))
+}
+
+/// **Membership follows the rules.** The moderator invites (at most 10, in person); members vouch
+/// (at most 3 each, in person); nobody else lets anyone in; nicknames are unique; a member can leave.
+/// Negative controls (run by hand, recorded in the commit): the vouch limit check removed →
+/// FAILED; the `met_in_person` check removed → FAILED; the members-only vouch check removed → FAILED.
+#[test]
+fn shelter_membership_follows_the_rules() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, _bid, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let people: Vec<(String, String)> = (0..16).map(|_| tmail_party_for_tests()).collect();
+
+    // Not met in person: refused. A member can't invite; the moderator invites.
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &people[0].1, false, "", "", now)).is_err(), "an invite without met_in_person was accepted");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Vouch, &people[0].1, true, "", "", now)).is_err(), "the moderator used a vouch");
+    // A non-member can't vouch.
+    assert_eq!(
+        submit(&shelter_rec_for_tests(&people[15].0, A::Vouch, &people[14].1, true, "", "", now)),
+        Err(crate::tmail::shelter::ShelterError::Refused("only a member can vouch")),
+        "a non-member vouched, or was refused for another reason"
+    );
+    // The moderator's 10 invites, then no more.
+    for p in &people[..10] {
+        submit(&shelter_rec_for_tests(&mw, A::Invite, &p.1, true, "", "", now)).unwrap();
+    }
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &people[10].1, true, "", "", now)).is_err(), "an 11th invite was accepted");
+    // A member: three vouches, then no more; never someone who is already in.
+    let v = &people[0];
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Invite, &people[10].1, true, "", "", now)).is_err(), "a member invited");
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Vouch, &people[1].1, true, "", "", now)).is_err(), "vouched for a member");
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Vouch, &people[10].1, false, "", "", now)).is_err(), "a vouch without met_in_person was accepted");
+    for p in &people[10..13] {
+        submit(&shelter_rec_for_tests(&v.0, A::Vouch, &p.1, true, "", "", now)).unwrap();
+    }
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Vouch, &people[13].1, true, "", "", now)).is_err(), "a 4th vouch was accepted");
+    let st = store.shelter_state(&crate::tmail::shelter::config_from_env().unwrap());
+    assert_eq!(st.members.len(), 1 + 10 + 3);
+    assert_eq!(st.members[&people[10].1].via.as_deref(), Some(v.1.as_str()));
+    // Nicknames: one's own, unique (case-insensitive), well-formed.
+    submit(&shelter_rec_for_tests(&people[1].0, A::Nickname, &people[1].1, false, "Hana", "", now)).unwrap();
+    assert!(submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[2].1, false, "hana", "", now)).is_err(), "a taken nickname");
+    assert!(submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[1].1, false, "Mio", "", now)).is_err(), "set someone else's nickname");
+    assert!(submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[2].1, false, "anonymous", "", now)).is_err(), "a reserved nickname");
+    submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[2].1, false, "みお", "", now)).unwrap();
+    // Leaving: one's own key only; the vouch still counts.
+    assert!(submit(&shelter_rec_for_tests(&people[3].0, A::Withdraw, &people[4].1, false, "", "", now)).is_err());
+    submit(&shelter_rec_for_tests(&people[10].0, A::Withdraw, &people[10].1, false, "", "", now)).unwrap();
+    let st = store.shelter_state(&crate::tmail::shelter::config_from_env().unwrap());
+    assert!(!st.is_member(&people[10].1));
+    assert_eq!(st.vouches_left(&crate::tmail::shelter::config_from_env().unwrap(), &v.1), 0, "leaving refunded a vouch");
+    let _ = mid;
+}
+
+/// **Records are signed, chain-bound and current;** with Shelter off, nothing is taken.
+/// Negative control: `verify_record` skipping the signature → FAILED.
+#[test]
+fn shelter_records_must_be_signed_by_their_signer_and_current() {
+    use crate::tmail::shelter::{ShelterAction as A, ShelterError as E};
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (pw, pid) = tmail_party_for_tests();
+    // Off: refused as off.
+    assert_eq!(store.submit_shelter_record(&shelter_rec_for_tests(&pw, A::Invite, &pid, true, "", "", now), now), Err(E::Off));
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    // A changed field breaks the signature.
+    let mut r = shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now);
+    r.subject = tmail_party_for_tests().1;
+    assert_eq!(store.submit_shelter_record(&r, now), Err(E::Signature));
+    // Someone else's key, claiming to be the moderator.
+    let mut r = shelter_rec_for_tests(&pw, A::Invite, &pid, true, "", "", now);
+    r.signer = crate::tmail::shelter::config_from_env().unwrap().moderator;
+    assert!(matches!(store.submit_shelter_record(&r, now), Err(E::SignerMismatch | E::Signature)));
+    // Too old, or from the future.
+    let r = shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now - 11 * 60_000);
+    assert_eq!(store.submit_shelter_record(&r, now), Err(E::Clock));
+    // Bound to the chain: the same record on another chain id doesn't verify.
+    let r = shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now);
+    {
+        let _c = EnvVarGuard::set("TET_CHAIN_ID", "another-chain");
+        assert_eq!(store.submit_shelter_record(&r, now), Err(E::Signature), "a record from another chain was accepted");
+    }
+    store.submit_shelter_record(&r, now).unwrap();
+    assert!(store.shelter_records().len() == 1);
+}
+
+/// **Accountability:** a confirmed bot case removes the member and takes the voucher's right to
+/// vouch; a second standing case suspends the voucher's posting for 90 days; an appeal within 14
+/// days that overturns a case restores everything; an appeal is decided once.
+/// Negative control: `vouches_left` ignoring standing cases → FAILED.
+#[test]
+fn shelter_cases_take_the_vouchers_right_and_appeals_restore_it() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let (vw, vid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    let (_cw, cid) = tmail_party_for_tests();
+    let (_dw, did) = tmail_party_for_tests();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &vid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &bid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &cid, true, "", "", now)).unwrap();
+    // Only the moderator decides; a case needs its reason.
+    assert!(submit(&shelter_rec_for_tests(&bw, A::Case, &cid, false, "bot", "", now)).is_err(), "a member decided a case");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Case, &bid, false, "", "", now)).is_err(), "a case without a reason");
+    let case1 = submit(&shelter_rec_for_tests(&mw, A::Case, &bid, false, "posted 400 generated replies in an hour", "", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(!st.is_member(&bid), "the bot is still a member");
+    assert_eq!(st.vouches_left(&cfg, &vid), 0, "the voucher can still vouch");
+    assert!(st.may_post(&vid, now), "one case suspended the voucher");
+    assert!(submit(&shelter_rec_for_tests(&vw, A::Vouch, &did, true, "", "", now)).is_err(), "the voucher vouched again");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &bid, true, "", "", now)).is_err(), "a removed key was let back in");
+    // A second standing case: the voucher's posting is suspended for 90 days.
+    let case2 = submit(&shelter_rec_for_tests(&mw, A::Case, &cid, false, "same pattern", "", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(!st.may_post(&vid, now), "two cases didn't suspend the voucher");
+    assert_eq!(st.suspended_until(&vid), Some(now + crate::tmail::shelter::SHELTER_SUSPEND_MS));
+    assert!(st.may_post(&vid, now + crate::tmail::shelter::SHELTER_SUSPEND_MS));
+    // An appeal: the moderator only, overturn or keep, with a reason; once.
+    assert!(submit(&shelter_rec_for_tests(&vw, A::Appeal, &case1, false, "not a bot", "overturn", now)).is_err());
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Appeal, &case1, false, "x", "maybe", now)).is_err());
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case1, false, "met them again with another member", "overturn", now)).unwrap();
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Appeal, &case1, false, "again", "keep", now)).is_err(), "an appeal decided twice");
+    let st = store.shelter_state(&cfg);
+    assert!(st.is_member(&bid), "the overturned case's member wasn't restored");
+    assert!(st.may_post(&vid, now), "the suspension stayed after an overturn");
+    assert_eq!(st.vouches_left(&cfg, &vid), 0, "case2 still stands: no vouching");
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case2, false, "confirmed", "keep", now)).unwrap();
+    // 14 days: a case's appeal can't be decided after.
+    let mut st = store.shelter_state(&cfg);
+    let (_ew, eid) = tmail_party_for_tests();
+    let r = shelter_rec_for_tests(&mw, A::Invite, &eid, true, "", "", now);
+    st.apply(&cfg, &r).unwrap();
+    let c = shelter_rec_for_tests(&mw, A::Case, &eid, false, "bot", "", now);
+    st.apply(&cfg, &c).unwrap();
+    let id = crate::tmail::shelter::record_id(&c);
+    let ap = shelter_rec_for_tests(&mw, A::Appeal, &id, false, "late", "overturn", now + crate::tmail::shelter::SHELTER_APPEAL_MS + 1);
+    assert!(st.apply(&cfg, &ap).is_err(), "an appeal after 14 days was accepted");
+    // Every step is a log line.
+    assert_eq!(store.shelter_records().len(), 7);
+}
+
+/// **Reads are members-only:** every members-only route refuses an unsigned read, a non-member's,
+/// a signature for another route, and an old one; `/tmail/inbox/<board>` refuses everyone;
+/// `/shelter/me` tells a non-member only that. A member reads the board.
+/// Negative control: `get_shelter_inbox` skipping `member()` → FAILED.
+#[tokio::test]
+async fn shelter_reads_are_members_only() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use axum::http::StatusCode;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, _xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    // A member's post on the board.
+    let env = signed_tmail_env_for_tests(&aw, &aid, &board, "shelter-post-1", tmail_flags_for_tests(false), None);
+    assert!(state.tmail.store_tmail(&env).unwrap());
+    let get = |uri: &str, auth: Option<String>| {
+        let router = router.clone();
+        let mut b = axum::http::Request::builder().uri(uri);
+        if let Some(a) = auth {
+            b = b.header("x-tet-shelter-auth", a);
+        }
+        let req = b.body(axum::body::Body::empty()).unwrap();
+        async move {
+            let resp = router.oneshot(req).await.unwrap();
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (st, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    assert!(get("/shelter/status", None).await.1.contains("\"on\":true"));
+    assert_eq!(get(&format!("/tmail/inbox/{board}"), None).await.0, StatusCode::FORBIDDEN, "the board's public inbox answered");
+    for path in ["/shelter/members", "/shelter/log", "/shelter/inbox", "/shelter/anon/leaves"] {
+        assert_eq!(get(path, None).await.0, StatusCode::UNAUTHORIZED, "{path}: unsigned read answered");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&xw, path, now))).await.0, StatusCode::FORBIDDEN, "{path}: a non-member read");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&aw, "/shelter/me", now))).await.0, StatusCode::UNAUTHORIZED, "{path}: another route's signature");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&aw, path, now - 3 * 60_000))).await.0, StatusCode::UNAUTHORIZED, "{path}: an old signature");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&aw, path, now))).await.0, StatusCode::OK, "{path}: a member's read was refused");
+    }
+    let (st, body) = get("/shelter/inbox", Some(shelter_read_auth_for_tests(&aw, "/shelter/inbox", now))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body.contains("shelter-post-1"), "the member didn't get the post");
+    let (_, body) = get("/shelter/members", Some(shelter_read_auth_for_tests(&mw, "/shelter/members", now))).await;
+    assert!(body.contains(&aid) && body.contains(&mid));
+    let (st, body) = get("/shelter/me", Some(shelter_read_auth_for_tests(&xw, "/shelter/me", now))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body.contains("\"member\":false") && !body.contains(&board), "a non-member learned more than that: {body}");
+    let (_, body) = get("/shelter/me", Some(shelter_read_auth_for_tests(&aw, "/shelter/me", now))).await;
+    assert!(body.contains("\"member\":true") && body.contains(&board));
+    // Hidden by the operator: not served here either.
+    state.operator_hide.hide(crate::operator_hide::HideKind::Msg, "shelter-post-1", "test", now).unwrap();
+    assert!(!get("/shelter/inbox", Some(shelter_read_auth_for_tests(&aw, "/shelter/inbox", now))).await.1.contains("shelter-post-1"));
+    // Off: every Shelter route is 404.
+    drop(_sg);
+    assert_eq!(get("/shelter/status", None).await.1.contains("\"on\":false"), true);
+    assert_eq!(get("/shelter/inbox", Some(shelter_read_auth_for_tests(&aw, "/shelter/inbox", now))).await.0, StatusCode::NOT_FOUND);
+}
+
+/// **The board takes named posts only from current, unsuspended members, behind an invisible
+/// flood guard** (a burst, then "try again in a moment"; a daily cap). Never gossiped, either way.
+/// Negative controls: the membership check in `store_tmail` removed → FAILED (gossip-free path);
+/// `broadcast_tmail` without the Shelter check → FAILED.
+#[tokio::test]
+async fn shelter_board_takes_members_posts_only_and_never_gossips() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use axum::http::StatusCode;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, board, _sg) = shelter_on_for_tests();
+    let _b = EnvVarGuard::set("TET_SHELTER_BURST", "2");
+    let _r = EnvVarGuard::set("TET_SHELTER_REFILL_MS", "600000");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let mut state = rest_state_for_tests(ledger);
+    let (gtx, mut grx) = tokio::sync::mpsc::channel::<String>(16);
+    state.gossip_tx = Some(gtx);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let send = |env: crate::tmail::envelope::TmailEnvelopeV1| {
+        let router = router.clone();
+        async move {
+            let req = axum::http::Request::builder()
+                .method("POST")
+                .uri("/tmail/send")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(serde_json::to_vec(&env).unwrap()))
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (st, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    let mk = |w: &str, id: &str, m: &str| signed_tmail_env_for_tests(w, id, &board, m, tmail_flags_for_tests(false), None);
+    assert_eq!(send(mk(&xw, &xid, "outsider")).await.0, StatusCode::FORBIDDEN, "a non-member posted");
+    assert!(state.tmail.get_by_msg_id("outsider").is_none());
+    assert!(state.tmail.store_tmail(&mk(&xw, &xid, "outsider-direct")).is_err(), "the store took a non-member's post");
+    assert_eq!(send(mk(&aw, &aid, "m1")).await.0, StatusCode::ACCEPTED);
+    assert_eq!(send(mk(&aw, &aid, "m2")).await.0, StatusCode::ACCEPTED);
+    let (st, body) = send(mk(&aw, &aid, "m3")).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+    assert!(body.contains("try again in a moment"), "{body}");
+    assert!(grx.try_recv().is_err(), "a Shelter post was gossiped");
+    // An ordinary board's post still is.
+    let (ow, oid) = tmail_party_for_tests();
+    let (_tw, tid) = tmail_party_for_tests();
+    assert_eq!(send(signed_tmail_env_for_tests(&ow, &oid, &tid, "elsewhere", tmail_flags_for_tests(false), None)).await.0, StatusCode::ACCEPTED);
+    assert!(grx.try_recv().is_ok(), "the control post wasn't gossiped");
+    // From a peer: refused.
+    let ev = crate::models::NetworkEvent::TmailGossip { envelope: mk(&aw, &aid, "via-gossip") };
+    assert!(matches!(crate::p2p::handle_tmail_network_event(&state.tmail, &ev), crate::p2p::TmailGossipOutcome::Rejected { .. }));
+    assert!(state.tmail.get_by_msg_id("via-gossip").is_none());
+}
+
+/// **Anonymous posts in Shelter prove membership of Shelter, not of the open anonymity set;** a
+/// set that loses anyone voids the earlier roots and today's posting keys.
+/// Negative controls: `anon_root_accepted_for` without the Shelter branch → FAILED (an anonymity-set
+/// root counted on the board); no clearing on loss → FAILED.
+#[test]
+fn shelter_anonymous_posts_need_shelters_own_root() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let _e = anon_fast_epoch_guard();
+    let (mw, mid, board, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let bucket = nexus_protocol::tmail_bucket_index_v1(now);
+    // Four registered wallets in the anonymity set; three of them join Shelter.
+    let (ids, _cs) = registered_members_for_tests(&store, 4);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let set_root = store.anon_tree_for_epoch(crate::tmail::store::TmailStore::anon_epoch_index(tmail_now_ms_for_tests())).root();
+    assert!(store.accepts_anon_root(&set_root, bucket), "setup: the set root should count elsewhere");
+    for id in &ids[..2] {
+        store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, id, true, "", "", now), now).unwrap();
+    }
+    // Two in the set: below the minimum, no root counts.
+    assert!(store.shelter_anon_set(&cfg, now).len() == 2);
+    let two = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &two, bucket, bucket), "a set under the minimum counted");
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &ids[2], true, "", "", now), now).unwrap();
+    let three = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &three, bucket, bucket), "Shelter's own root didn't count");
+    // The open anonymity set's root never counts on the board (it holds a non-member).
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &set_root, bucket, bucket), "the open set's root counted in Shelter");
+    // An unregistered wallet joining changes nothing; a registered one adds: the old root still counts.
+    let (_pw, pid) = tmail_party_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now), now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &ids[3], true, "", "", now), now).unwrap();
+    let four = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &three, bucket, bucket), "an addition voided the earlier root");
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &four, bucket, bucket));
+    // A posting key registered today for the board (as a verified proof would).
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [0x11; 32], "shelter-reg-1");
+    assert!(store.fast_registration(&board, bucket, &eid).is_some(), "setup: the posting key wasn't registered");
+    // Someone is removed: every earlier root, and today's posting keys, stop counting.
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Case, &ids[0], false, "bot", "", now), now).unwrap();
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &four, bucket, bucket), "a removed member's root still counts");
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &three, bucket, bucket));
+    assert!(store.fast_registration(&board, bucket, &eid).is_none(), "a posting key survived a removal");
+    let now_three = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &now_three, bucket, bucket));
+    // Only today's (or yesterday's) bucket.
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &now_three, bucket - 2, bucket));
+    let _ = mid;
 }

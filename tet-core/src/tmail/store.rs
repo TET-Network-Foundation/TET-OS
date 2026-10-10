@@ -46,6 +46,14 @@ const TREE_ANON_FAST_PENDING: &str = "tmail_anon_fast_pending_v1";
 /// `receiver|bucket|posting key` → msg_id of a registering post (one with a proof) that is stored
 /// here but not yet verified. A gossiped fast post is held only while one exists.
 const TREE_ANON_FAST_REGPENDING: &str = "tmail_anon_fast_regpending_v1";
+/// Shelter's records, in order (`seq` big-endian → record JSON). The log is the membership.
+const TREE_SHELTER_RECORDS: &str = "tmail_shelter_records_v1";
+/// Shelter's anonymous-set roots that still count (see [`TmailStore::shelter_refresh_roots`]).
+const TREE_SHELTER_ROOTS: &str = "tmail_shelter_roots_v1";
+/// Shelter's invisible flood guard: per member key, a burst, then spaced, and a daily cap.
+pub const SHELTER_BURST: u32 = 5;
+pub const SHELTER_REFILL_MS: u64 = 3_000;
+pub const SHELTER_DAILY_CAP: u32 = 100;
 
 /// Fast posts per posting key: a burst, then one per refill interval (an invisible flood guard;
 /// the page paces posts so normal conversation never meets it), and a daily cap.
@@ -168,6 +176,8 @@ pub enum TmailStoreError {
     PollBallot(String),
     #[error("fast anonymous post: {0}")]
     FastPost(String),
+    #[error("Shelter: {0}")]
+    Shelter(String),
 }
 
 pub struct TmailStore {
@@ -194,6 +204,10 @@ pub struct TmailStore {
     /// Serialises [`Self::send_anonymous`] (check → store → release). Only ever taken on a
     /// blocking thread, never on the async runtime.
     anon_send_lock: std::sync::Mutex<()>,
+    shelter_records: sled::Tree,
+    shelter_roots: sled::Tree,
+    /// Serialises Shelter record checks and appends (check against the state, then append).
+    shelter_lock: std::sync::Mutex<()>,
 }
 
 fn now_ms() -> u64 {
@@ -351,6 +365,9 @@ impl TmailStore {
             fast_flood: std::sync::Mutex::new(std::collections::HashMap::new()),
             anon_roots: std::sync::Mutex::new(Vec::new()),
             anon_send_lock: std::sync::Mutex::new(()),
+            shelter_records: db.open_tree(TREE_SHELTER_RECORDS)?,
+            shelter_roots: db.open_tree(TREE_SHELTER_ROOTS)?,
+            shelter_lock: std::sync::Mutex::new(()),
         })
     }
 
@@ -368,6 +385,15 @@ impl TmailStore {
         // `receive_fast_anonymous`, which check its posting key's registration first.
         if is_fast_post(env) {
             return Err(TmailStoreError::FastPost("a fast post needs a registered posting key".into()));
+        }
+        // Shelter's board takes named posts only from a current, unsuspended member (anonymous ones
+        // prove membership against Shelter's own root instead).
+        if !env.flags.anonymous
+            && let Some(cfg) = crate::tmail::shelter::config_from_env()
+            && cfg.board == env.receiver_wallet_id.trim().to_ascii_lowercase()
+            && !self.shelter_state(&cfg).may_post(&env.sender_wallet_id.trim().to_ascii_lowercase(), now_ms())
+        {
+            return Err(TmailStoreError::Shelter("only a member can post here".into()));
         }
         self.store_tmail_inner(env, true)
     }
@@ -1457,6 +1483,11 @@ impl TmailStore {
         let burst = env_usize("TET_TMAIL_FAST_BURST", FAST_BURST as usize) as f64;
         let refill_ms = env_usize("TET_TMAIL_FAST_REFILL_MS", FAST_REFILL_MS as usize) as f64;
         let cap = env_usize("TET_TMAIL_FAST_DAILY_CAP", FAST_DAILY_CAP as usize) as u32;
+        self.flood_take(k, now, interval, burst, refill_ms, cap)
+    }
+
+    /// A token bucket per key (`burst`, one more every `refill_ms`) and a daily cap; in memory.
+    fn flood_take(&self, k: &str, now: u64, interval: bool, burst: f64, refill_ms: f64, cap: u32) -> Result<(), FastSendError> {
         let today = nexus_protocol::tmail_bucket_index_v1(now);
         let mut map = self.fast_flood.lock().unwrap_or_else(|p| p.into_inner());
         let e = map.entry(k.to_string()).or_insert((burst, now, today, 0));
@@ -1652,5 +1683,132 @@ impl TmailStore {
 
     pub fn anon_receipt_count(&self) -> usize {
         self.anon_receipts.len()
+    }
+}
+
+// ── Shelter (tmail/shelter.rs; docs/plans/SHELTER.md) ──────────────────────────────────────────
+
+/// Shelter's anonymous-set roots that still count, and the leaves of the newest.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct ShelterRoots {
+    /// The newest set's leaves (registry commitments, hex), to tell whether the next set only adds.
+    leaves: Vec<String>,
+    /// Roots that count, with when each was first seen. Cleared whenever a leaf goes away.
+    roots: Vec<(String, u64)>,
+}
+
+impl TmailStore {
+    pub fn shelter_records(&self) -> Vec<crate::tmail::shelter::ShelterRecordV1> {
+        self.shelter_records
+            .iter()
+            .filter_map(|r| r.ok())
+            .filter_map(|(_, v)| serde_json::from_slice(&v).ok())
+            .collect()
+    }
+
+    pub fn shelter_state(&self, cfg: &crate::tmail::shelter::ShelterConfig) -> crate::tmail::shelter::ShelterState {
+        crate::tmail::shelter::replay(cfg, &self.shelter_records())
+    }
+
+    /// Check a record (shape, signature, clock, and the rules against the current state) and
+    /// append it. Nothing refused is stored.
+    pub fn submit_shelter_record(&self, r: &crate::tmail::shelter::ShelterRecordV1, now: u64) -> Result<String, crate::tmail::shelter::ShelterError> {
+        use crate::tmail::shelter::{self as sh, ShelterError};
+        let cfg = sh::config_from_env().ok_or(ShelterError::Off)?;
+        sh::verify_record(r)?;
+        if r.at_ms.abs_diff(now) > sh::SHELTER_RECORD_SKEW_MS {
+            return Err(ShelterError::Clock);
+        }
+        let _g = self.shelter_lock.lock().unwrap_or_else(|p| p.into_inner());
+        let mut state = self.shelter_state(&cfg);
+        state.apply(&cfg, r)?;
+        let seq = self.shelter_records.len() as u64;
+        let bytes = serde_json::to_vec(r).map_err(|_| ShelterError::Malformed("record"))?;
+        self.shelter_records.insert(seq.to_be_bytes(), bytes).map_err(|_| ShelterError::Refused("couldn't store the record"))?;
+        let _ = self.shelter_records.flush();
+        tracing::info!(target: "shelter", "{}", sh::log_line(r));
+        drop(_g);
+        self.shelter_refresh_roots(&cfg, now);
+        Ok(sh::record_id(r))
+    }
+
+    /// Shelter's anonymous set now: the current, unsuspended members who joined the anonymity
+    /// registry, ordered by wallet, with their registered commitments.
+    pub fn shelter_anon_set(&self, cfg: &crate::tmail::shelter::ShelterConfig, now: u64) -> Vec<(String, [u8; 32])> {
+        self.shelter_state(cfg)
+            .anon_eligible(now)
+            .into_iter()
+            .filter_map(|w| {
+                let reg = self.get_anon_registration(&w)?;
+                let c: [u8; 32] = hex::decode(reg.commitment_hex.trim()).ok()?.try_into().ok()?;
+                Some((w, c))
+            })
+            .collect()
+    }
+
+    /// Bring the roots that count up to date. A set that only **adds** members keeps the earlier
+    /// roots (everyone in them is still in); a set that loses anyone (left, removed, suspended)
+    /// clears them, and drops today's fast-posting keys for the board, so a removed member's proof
+    /// or posting key stops working at once. Fewer than [`crate::tmail::shelter::SHELTER_ANON_MIN`]
+    /// members: no root counts.
+    pub fn shelter_refresh_roots(&self, cfg: &crate::tmail::shelter::ShelterConfig, now: u64) {
+        let set = self.shelter_anon_set(cfg, now);
+        let leaves: Vec<String> = set.iter().map(|(_, c)| hex::encode(c)).collect();
+        let mut st: ShelterRoots = self
+            .shelter_roots
+            .get(b"state")
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_slice(&v).ok())
+            .unwrap_or_default();
+        let lost = st.leaves.iter().any(|l| !leaves.contains(l));
+        if lost {
+            st.roots.clear();
+            let prefix = format!("{}|", cfg.board);
+            let keys: Vec<_> = self.fast_keys.scan_prefix(prefix.as_bytes()).filter_map(|r| r.ok()).map(|(k, _)| k).collect();
+            for k in keys {
+                let _ = self.fast_keys.remove(k);
+            }
+        }
+        if set.len() >= crate::tmail::shelter::SHELTER_ANON_MIN {
+            let root = hex::encode(crate::tmail::anon::AnonMerkleTree::build(set.iter().map(|(_, c)| *c).collect()).root());
+            if !st.roots.iter().any(|(r, _)| *r == root) {
+                st.roots.push((root, now));
+            }
+            let excess = st.roots.len().saturating_sub(64);
+            st.roots.drain(..excess);
+        } else {
+            st.roots.clear();
+        }
+        st.leaves = leaves;
+        if let Ok(v) = serde_json::to_vec(&st) {
+            let _ = self.shelter_roots.insert(b"state", v);
+        }
+    }
+
+    /// Does a proof against `root` count for Shelter's board now? Only Shelter's own roots, never
+    /// the node's open anonymity set.
+    pub fn shelter_accepts_root(&self, root: &[u8; 32], bucket: u64, now_bucket: u64) -> bool {
+        let Some(cfg) = crate::tmail::shelter::config_from_env() else { return false };
+        if bucket.abs_diff(now_bucket) > 1 {
+            return false;
+        }
+        self.shelter_refresh_roots(&cfg, now_ms());
+        let want = hex::encode(root);
+        self.shelter_roots
+            .get(b"state")
+            .ok()
+            .flatten()
+            .and_then(|v| serde_json::from_slice::<ShelterRoots>(&v).ok())
+            .is_some_and(|st| st.roots.iter().any(|(r, _)| *r == want))
+    }
+
+    /// The invisible flood guard for a member's named posts in Shelter: a burst of
+    /// [`SHELTER_BURST`], then one per [`SHELTER_REFILL_MS`], up to [`SHELTER_DAILY_CAP`] a day.
+    pub fn shelter_flood_take(&self, wallet: &str, now: u64) -> Result<(), FastSendError> {
+        let burst = env_usize("TET_SHELTER_BURST", SHELTER_BURST as usize) as f64;
+        let refill = env_usize("TET_SHELTER_REFILL_MS", SHELTER_REFILL_MS as usize) as f64;
+        let cap = env_usize("TET_SHELTER_DAILY_CAP", SHELTER_DAILY_CAP as usize) as u32;
+        self.flood_take(&format!("shelter|{}", wallet.trim().to_ascii_lowercase()), now, true, burst, refill, cap)
     }
 }

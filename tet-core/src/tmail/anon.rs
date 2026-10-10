@@ -386,7 +386,8 @@ pub fn anon_program_accepted(id: &[u32; 8]) -> bool {
 ///
 /// A poll's wallet follows the poll's rules (`tmail::poll::poll_accepts`): its day only, checked
 /// on that day; a members-only poll's own root only (the node's anonymity-set roots don't count
-/// there, or anyone in the set could vote). Every other receiver accepts the node's anonymity-set
+/// there, or anyone in the set could vote). Shelter's board accepts Shelter's own roots only
+/// (`TmailStore::shelter_accepts_root`). Every other receiver accepts the node's anonymity-set
 /// roots, as before.
 pub fn anon_root_accepted_for(
     store: &crate::tmail::store::TmailStore,
@@ -395,6 +396,11 @@ pub fn anon_root_accepted_for(
     bucket: u64,
     now_bucket: u64,
 ) -> bool {
+    // Shelter's board: Shelter's own member roots only. The open anonymity set must not count
+    // there, or anyone in it could post in Shelter.
+    if crate::tmail::shelter::is_shelter_board(receiver) {
+        return store.shelter_accepts_root(root, bucket, now_bucket);
+    }
     match store.get_poll_root(receiver) {
         Some(p) => crate::tmail::poll::poll_accepts(&p, root, bucket, now_bucket, || store.accepts_anon_root(root, bucket)),
         None => store.accepts_anon_root(root, bucket),

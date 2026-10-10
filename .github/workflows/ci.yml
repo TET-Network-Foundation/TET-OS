@@ -281,6 +281,9 @@ jobs:
             anonymous_post_names_no_poster_to_the_node
             anonymous_mail_from_six_members_is_all_retained
             anonymous_mail_is_capped_per_receiver
+            shelter_reads_are_members_only
+            shelter_board_takes_members_posts_only_and_never_gossips
+            shelter_anonymous_posts_need_shelters_own_root
             stalled_block_plane_exits_the_process_past_the_hard_threshold
             stalled_block_plane_below_the_hard_threshold_keeps_running
             sole_validator_keeps_mining_after_its_last_peer_leaves

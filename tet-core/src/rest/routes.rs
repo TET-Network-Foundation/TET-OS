@@ -318,6 +318,14 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::ledger::get_explorer_tx),
         )
         .route("/tmail/anon/fast/:receiver/:posting_key", axum::routing::get(super::handlers::tmail::get_tmail_anon_fast))
+        // Shelter (tmail/shelter.rs): 404 while off; reads are signed, most members-only.
+        .route("/shelter/status", axum::routing::get(super::handlers::shelter::get_shelter_status))
+        .route("/shelter/record", axum::routing::post(super::handlers::shelter::post_shelter_record))
+        .route("/shelter/me", axum::routing::get(super::handlers::shelter::get_shelter_me))
+        .route("/shelter/members", axum::routing::get(super::handlers::shelter::get_shelter_members))
+        .route("/shelter/log", axum::routing::get(super::handlers::shelter::get_shelter_log))
+        .route("/shelter/inbox", axum::routing::get(super::handlers::shelter::get_shelter_inbox))
+        .route("/shelter/anon/leaves", axum::routing::get(super::handlers::shelter::get_shelter_anon_leaves))
         .route("/stats/inside", axum::routing::get(super::handlers::ledger::get_stats_inside))
         .route("/sigs/publish", axum::routing::post(super::handlers::sigs::post_sigs_publish))
         .route("/sigs/search", axum::routing::get(super::handlers::sigs::get_sigs_search))

@@ -1509,6 +1509,10 @@ pub(crate) fn handle_tmail_network_event(
 ) -> TmailGossipOutcome {
     match event {
         crate::models::NetworkEvent::TmailGossip { envelope } => {
+            // Shelter's posts never arrive by gossip: they are made on this node only.
+            if crate::tmail::shelter::is_shelter_board(&envelope.receiver_wallet_id) {
+                return TmailGossipOutcome::Rejected { reason: "Shelter posts are not gossiped".into() };
+            }
             if let Err(e) = crate::tmail::envelope::verify_tmail_envelope_v1(envelope) {
                 return TmailGossipOutcome::Rejected {
                     reason: format!("envelope: {e}"),
