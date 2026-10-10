@@ -109,6 +109,17 @@ seeds on 2026-10-09, a node takes them only from trusted peers: a follower from 
 and the sole producer from no peer unless its operator names one. Transaction signatures were checked
 throughout, so no balance could move without its wallet's signature.
 
+**Fixed: pages trusted the messaging keys a node served.** Until 2026-10-11, the page encrypted
+direct messages and files to whatever messaging keys the node returned for a wallet, without
+checking that wallet had signed them, so a dishonest or compromised node could have substituted its
+own keys and read what was sent after that. Since bea1e45, deployed on both seeds on 2026-10-11,
+keys are registered only with a v2 signature by the wallet (Ed25519 + ML-DSA-44, PAE
+domain-separated), and the browser checks that signature before encrypting and checks each
+sender's signature before showing who sent something; older registrations are refused until their
+owner opens TET once. Each conversation shows a safety number: the guarantee that only the two
+people can read their messages holds when they have compared it. The page's own code still has to
+be trusted (see the threat model).
+
 **Fixed: unverified anonymous posts could push a verified one out of a board.** Until 2026-10-10,
 anonymous posts were grouped for message retention by a value they announce before their proof is
 checked, so posts whose proofs would later fail could share a verified post's group and cause it
