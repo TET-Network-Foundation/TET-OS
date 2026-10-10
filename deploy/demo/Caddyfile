@@ -45,7 +45,8 @@
 {$TET_DEMO_DOMAIN} {
 	encode zstd gzip
 	header {
-		Strict-Transport-Security "max-age=31536000"
+		# Preload-ready (submitting to hstspreload.org is the maintainer's step): HTTPS on every subdomain.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		Referrer-Policy "no-referrer"
 		-Server
@@ -112,4 +113,12 @@
 		reverse_proxy @page ui:3000
 		respond 404
 	}
+}
+
+# Other names for the demo (TET_DEMO_REDIRECTS, comma-separated, e.g. "www.tetnet.org,
+# try.stevenexus.org"): each keeps its own certificate, so old links keep working, and redirects
+# permanently to the main name with the same path. Unset: a placeholder that matches nothing.
+{$TET_DEMO_REDIRECTS:http://redirects.invalid} {
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+	redir https://{$TET_DEMO_DOMAIN}{uri} permanent
 }

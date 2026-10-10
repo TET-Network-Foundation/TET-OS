@@ -4,7 +4,7 @@
 // sees a read of the board wallet's inbox (the same public route the page uses), never the invite
 // or the board's keys.
 //
-//   TET_NODE=https://try.stevenexus.org/tet-node-api \
+//   TET_NODE=https://tetnet.org/tet-node-api \
 //     node --experimental-strip-types scripts/operator_thread_ids.mjs '<invite>'            # list threads
 //   TET_NODE=… node --experimental-strip-types scripts/operator_thread_ids.mjs '<invite>' <thread id>
 //

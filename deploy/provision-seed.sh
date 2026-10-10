@@ -279,6 +279,7 @@ if [ "$ROLE" = demo ]; then
     echo "TET_PUBLIC_API=1"
     echo "TET_DEMO_DOMAIN=$DEMO_DOMAIN"
     echo "TET_DEMO_ACME_EMAIL=${TET_DEMO_ACME_EMAIL:-}"
+    if [ -n "${TET_DEMO_REDIRECTS:-}" ]; then echo "TET_DEMO_REDIRECTS=${TET_DEMO_REDIRECTS}"; fi
   } >> "$SEED_DIR/.env"
 fi
 chmod 600 "$SEED_DIR/.env"

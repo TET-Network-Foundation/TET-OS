@@ -196,6 +196,21 @@ if docker info >/dev/null 2>&1; then
   if [ "$got" = yes ]; then pass "control: without the log filter the client's address is logged"
   else flunk "control: without the log filter the client's address is logged" "got: $got"; fi
   rm -f "$unfiltered"
+  # The main name sends preload-ready HSTS; another name (TET_DEMO_REDIRECTS) redirects permanently
+  # to it with the same path, so old links keep working. (The edge above ran with it unset: the
+  # placeholder default parses and serves nothing.)
+  hsts=$(curl -s -D - -o /dev/null http://127.0.0.1:18080/try | tr -d '\r' | grep -i '^strict-transport-security:')
+  if grep -q 'includeSubDomains; preload' <<<"$hsts"; then pass "caddy: HSTS includeSubDomains; preload"
+  else flunk "caddy: HSTS includeSubDomains; preload" "got: $hsts"; fi
+  docker run -d --rm --name "edge2-$$" --network "$net" -p 127.0.0.1:18083:8081 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" -e TET_DEMO_REDIRECTS=":8081" \
+    -v "$PWD/deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18083/ && break; sleep 1; done
+  red=$(curl -s -D - -o /dev/null "http://127.0.0.1:18083/try?code=TET-ABCD-EFGH" | tr -d '\r')
+  if grep -qE '^HTTP/[0-9.]+ 30[18]' <<<"$red" && grep -qiE '^location: https://[^ ]*/try\?code=TET-ABCD-EFGH$' <<<"$red"; then
+    pass "caddy: another name redirects permanently, keeping the path"
+  else flunk "caddy: another name redirects permanently, keeping the path" "got: $(head -3 <<<"$red" | tr '\n' ' ')"; fi
+  docker rm -f "edge2-$$" >/dev/null 2>&1
   docker rm -f "edge-$$" "edge0-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
 elif [ -n "${CI:-}" ]; then
   flunk "caddy behaviour" "no Docker daemon in CI"
