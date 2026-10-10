@@ -45,7 +45,7 @@ Try it: **<https://tetnet.org>** (no sign-up; an ID is made in your browser).
 - **Security:** [`SECURITY.md`](./SECURITY.md) (how to report, and every known limitation and fixed
   issue) and [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md).
 - **Contributing:** [`CONTRIBUTING.md`](./CONTRIBUTING.md).
-- **Discord:** the invite link is posted on tetnet.org at launch.
+- **Discord:** <https://discord.gg/ANcpc76k8m> (questions, reports of things that look wrong; security problems go through `SECURITY.md`, not Discord).
 - Older documents (whitepapers v1.0 and v1.1, status snapshots) are in [`archive/`](./archive):
   historical, not the current design.
 
