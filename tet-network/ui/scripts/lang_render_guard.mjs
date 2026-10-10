@@ -22,7 +22,7 @@ import { join } from "node:path";
 
 const UI = (process.env.TET_UI || "http://127.0.0.1:3400").replace(/\/+$/, "");
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const TABS = ["home", "how", "what", "inside", "new", "directory", "questions", "verify", "sign", "genuine", "seal", "qr", "files", "site", "mail", "live", "about", "terms"];
+const TABS = ["home", "how", "what", "inside", "new", "directory", "questions", "search", "verify", "sign", "genuine", "seal", "qr", "files", "site", "mail", "live", "about", "terms"];
 const ONLY = process.env.TET_LANG_ONLY;
 const ROUTES0 = [
   ...TABS.map((t) => ({ path: `/try?tab=${t}`, name: `try:${t}` })),

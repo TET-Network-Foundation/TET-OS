@@ -477,6 +477,10 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: verify without TET, Level 2 — a stamp in a chain copy, offline
         run: node --experimental-strip-types scripts/chain_verify_guard.mjs
+      # TetSearch v1: ranking (one voice per member), only verified chains searched, wording. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: TetSearch — ranking, verified sites only, wording
+        run: node --experimental-strip-types scripts/tetsearch_guard.mjs
       # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
       - if: needs.gate.outputs.code == 'true'
         name: try page — the three safety sentences are where they must be

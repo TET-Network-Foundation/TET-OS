@@ -335,6 +335,8 @@ pub fn build_router(state: RestState) -> axum::Router {
         .route("/sigs/publish", axum::routing::post(super::handlers::sigs::post_sigs_publish))
         .route("/sigs/search", axum::routing::get(super::handlers::sigs::get_sigs_search))
         .route("/sites/edit", axum::routing::post(super::handlers::sites::post_site_edit))
+        .route("/search/list", axum::routing::post(super::handlers::search::post_search_list))
+        .route("/search/listings", axum::routing::get(super::handlers::search::get_search_listings))
         .route("/sites/:site_id", axum::routing::get(super::handlers::sites::get_site))
         .route(
             "/explorer/blocks/recent",
