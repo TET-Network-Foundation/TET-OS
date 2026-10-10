@@ -15962,3 +15962,86 @@ fn shelter_member_numbers_come_from_the_log_and_are_unique() {
     all.dedup();
     assert_eq!(all.len(), st.members.len(), "two members share a number");
 }
+
+// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-11) ----------
+
+const UI_KEY_REGISTRATION_V2: &str = include_str!("testdata/ui_key_registration_v2.json");
+
+/// A key registration for `words`'s wallet, v2 (PAE), signed by `signer_words` (normally the same).
+fn signed_key_registration_for_tests(words: &str, signer_words: &str, x25519: &str, mlkem: &str) -> crate::tmail::keys::TmailKeyRegistrationV1 {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let wallet = hex::encode(crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap().verifying_key().to_bytes());
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(signer_words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(signer_words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(kp.public_key());
+    let mut reg = crate::tmail::keys::TmailKeyRegistrationV1 {
+        v: 2,
+        wallet_id: wallet.clone(),
+        x25519_pub_b64: x25519.to_string(),
+        mlkem_pub_b64: mlkem.to_string(),
+        registered_at_ms: tmail_now_ms_for_tests(),
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: wallet,
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::keys::tmail_key_registration_auth_message_bytes(&reg, &pk);
+    reg.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(&msg).to_bytes());
+    reg.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap());
+    reg
+}
+
+/// **SECURITY: messaging keys are registered only with a v2 (PAE) signature by the wallet itself.**
+/// An older registration (the `|`-joined pre-image, or no version), one signed by another wallet,
+/// and one whose keys were changed after signing are all refused, and none is stored.
+/// Negative controls (run by hand): the `v != 2` check removed → FAILED (legacy accepted); the
+/// pre-image `|`-joined again → `ui_signed_key_registration_v2_verifies_in_rust` FAILED.
+#[test]
+fn key_registrations_need_a_v2_signature_by_the_wallet() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, _bid) = tmail_party_for_tests();
+    let ok = signed_key_registration_for_tests(&aw, &aw, "eA==", "a2V5");
+    store.register_key(&ok).expect("an honest v2 registration was refused");
+    assert_eq!(store.get_key(&aid).unwrap().x25519_pub_b64, "eA==");
+    // Older (no version): refused, whatever its signature.
+    let (cw, cid) = tmail_party_for_tests();
+    let mut legacy = signed_key_registration_for_tests(&cw, &cw, "eA==", "a2V5");
+    legacy.v = 0;
+    assert!(matches!(crate::tmail::keys::verify_tmail_key_registration_v1(&legacy), Err(crate::tmail::keys::TmailKeyError::Legacy)));
+    assert!(store.register_key(&legacy).is_err() && store.get_key(&cid).is_none());
+    // Signed by another wallet, claiming this one.
+    let other = signed_key_registration_for_tests(&cw, &bw, "eA==", "a2V5");
+    assert!(store.register_key(&other).is_err(), "a registration signed by another wallet was accepted");
+    // Keys changed after signing.
+    let mut swapped = signed_key_registration_for_tests(&cw, &cw, "eA==", "a2V5");
+    swapped.x25519_pub_b64 = "eQ==".into();
+    assert!(store.register_key(&swapped).is_err(), "a changed key kept its signature");
+    // PAE: moving a character from one field to the next changes the signed bytes.
+    let a = signed_key_registration_for_tests(&cw, &cw, "eAa", "2V5");
+    let mut shifted = a.clone();
+    shifted.x25519_pub_b64 = "eA".into();
+    shifted.mlkem_pub_b64 = "a2V5".into();
+    assert!(crate::tmail::keys::verify_tmail_key_registration_v1(&shifted).is_err(), "a field shift kept the signature");
+    assert!(store.get_key(&cid).is_none());
+}
+
+/// The page's v2 registration (built by `tmail_keys.ts`) verifies here byte for byte, and fails if
+/// any key in it changes.
+#[test]
+fn ui_signed_key_registration_v2_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_KEY_REGISTRATION_V2).expect("fixture JSON must parse");
+    let _bound = agent_fixture_chain(&doc);
+    let reg: crate::tmail::keys::TmailKeyRegistrationV1 = serde_json::from_value(doc["registration"].clone()).unwrap();
+    crate::tmail::keys::verify_tmail_key_registration_v1(&reg).expect("the node must accept the page's v2 registration");
+    let mut other = reg.clone();
+    other.mlkem_pub_b64 = other.x25519_pub_b64.clone();
+    assert!(crate::tmail::keys::verify_tmail_key_registration_v1(&other).is_err());
+}
