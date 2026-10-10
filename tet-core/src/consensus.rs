@@ -1385,43 +1385,50 @@ pub async fn mine_pending_block_as(
     };
     // One transaction a block would refuse must not cost everyone else theirs (SECURITY.md,
     // 2026-10-10): keep the ones that build a valid block, drop only those that break it.
-    let (txs, later) = select_block_txs(&state.ledger, txs, &producer_id);
+    let (mut txs, mut later) = select_block_txs(&state.ledger, txs, &producer_id);
+    // After a failed block, blocks carry one transaction at a time until one is made: the one
+    // that keeps failing is found and dropped alone; everyone else's wait, in order.
+    if BLOCK_FAILURES.load(std::sync::atomic::Ordering::Relaxed) > 0 && txs.len() > 1 {
+        let mut rest = txs.split_off(1);
+        rest.append(&mut later);
+        later = rest;
+    }
     if !later.is_empty() {
         // Ahead of anything that arrived meanwhile, so a backlog always advances.
         requeue_txs_front(&state, later).await;
     }
     match build_and_apply_block(&state, &producer_id, &txs).await {
         Ok(outcome) => {
-            PRE_APPLY_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+            BLOCK_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
             Ok(outcome)
         }
-        Err(BuildError::BeforeApply(e)) => {
-            // Nothing was written: the transactions go back, so a failed block loses none of them.
-            // Bounded: after PRE_APPLY_REQUEUE_MAX failures in a row they are dropped, so a batch
-            // that keeps failing can't stop block production.
-            let n = PRE_APPLY_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            if after_failure(true, n) == AfterFailure::Requeue {
+        Err(BuildError::NothingWritten(e)) => {
+            let n = BLOCK_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if after_failure(true, n, txs.len()) == AfterFailure::Requeue {
                 requeue_txs_front(&state, txs).await;
             } else {
-                PRE_APPLY_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
-                log::error!("[consensus] block failed {n} times before apply; dropping its {} transactions", txs.len());
+                BLOCK_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+                log::error!(
+                    "[consensus] a transaction failed alone {n} times in a row; dropped: {}",
+                    txs.first().and_then(|t| tx_hash_for_env(t).ok()).unwrap_or_default()
+                );
             }
             Err(e)
         }
-        Err(BuildError::Apply(e)) => {
-            debug_assert_eq!(after_failure(false, 1), AfterFailure::Drop);
-            // The apply writes in more than one step, so after a failure here some of it may be
-            // written: never requeue (that could apply a transaction twice). The preview passed, so
-            // this is an I/O error or a preview/apply mismatch: a bug to look at, logged as such.
-            log::error!("[consensus] block apply failed after a passing preview; {} transactions dropped: {}", txs.len(), e.message());
+        Err(BuildError::MaybeWritten(e)) => {
+            // A storage error in the apply's writes: some may be written, so a retry could apply a
+            // transaction twice. Never requeued; not something a transaction can cause. Logged
+            // as the node failure it is.
+            BLOCK_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+            log::error!("[consensus] storage error while applying a block; {} transactions dropped: {}", txs.len(), e.message());
             Err(e)
         }
     }
 }
 
-/// Failures of the block step before the apply, in a row (reset by a block that's made).
-static PRE_APPLY_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// After this many pre-apply failures in a row, the batch is dropped instead of requeued.
+/// Failed blocks in a row (reset by a block that's made, or by dropping the one that failed).
+static BLOCK_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// A transaction failing alone this many times in a row is dropped.
 pub(crate) const PRE_APPLY_REQUEUE_MAX: u32 = 3;
 
 /// What happens to a failed block's transactions.
@@ -1431,20 +1438,27 @@ pub(crate) enum AfterFailure {
     Drop,
 }
 
-/// Requeue only when nothing was written (before the apply) and the batch hasn't already failed
-/// [`PRE_APPLY_REQUEUE_MAX`] times in a row; an apply failure never requeues (partial writes).
-pub(crate) fn after_failure(before_apply: bool, failures_in_a_row: u32) -> AfterFailure {
-    if before_apply && failures_in_a_row < PRE_APPLY_REQUEUE_MAX {
+/// When nothing was written, the transactions go back; a batch of more than one is never dropped
+/// (after a failure blocks carry one at a time, so the failing one is isolated), and a single
+/// transaction is dropped only after failing alone [`PRE_APPLY_REQUEUE_MAX`] times in a row. A
+/// storage error that may have written part of the block never requeues.
+pub(crate) fn after_failure(nothing_written: bool, failures_in_a_row: u32, batch_len: usize) -> AfterFailure {
+    if !nothing_written {
+        return AfterFailure::Drop;
+    }
+    if batch_len > 1 || failures_in_a_row < PRE_APPLY_REQUEUE_MAX {
         AfterFailure::Requeue
     } else {
         AfterFailure::Drop
     }
 }
 
-/// Where making a block failed: before anything was written (safe to retry), or in the apply.
+/// Where making a block failed: nothing written (safe to retry), or a storage error during the
+/// apply's writes (maybe partly written). The apply validates everything before it writes, so its
+/// other errors write nothing.
 enum BuildError {
-    BeforeApply(MineError),
-    Apply(MineError),
+    NothingWritten(MineError),
+    MaybeWritten(MineError),
 }
 
 /// The checks every block makes on a transaction regardless of the ledger's state, run at mempool
@@ -1559,7 +1573,7 @@ async fn build_and_apply_block(
     producer_id: &str,
     txs: &[SignedTxEnvelopeV1],
 ) -> Result<MineOutcome, BuildError> {
-    let (block_height, pre) = prepare_block(state, producer_id, txs).map_err(BuildError::BeforeApply)?;
+    let (block_height, pre) = prepare_block(state, producer_id, txs).map_err(BuildError::NothingWritten)?;
     let PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id } = pre;
     let state_root = state
         .ledger
@@ -1570,7 +1584,10 @@ async fn build_and_apply_block(
             &producer_id,
             reward.total_reward_micro,
         )
-        .map_err(|e| BuildError::Apply(MineError::BadRequest(e.to_string())))?;
+        .map_err(|e| match e {
+            crate::ledger::LedgerError::Sled(_) => BuildError::MaybeWritten(MineError::BadRequest(e.to_string())),
+            other => BuildError::NothingWritten(MineError::BadRequest(other.to_string())),
+        })?;
     Ok(finish_block(state, block_height, PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id }, state_root).await)
 }
 

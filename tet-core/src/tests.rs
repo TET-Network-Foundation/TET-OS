@@ -14509,17 +14509,19 @@ async fn deferred_transactions_go_back_in_front_of_newcomers() {
     assert_eq!(crate::consensus::tx_hash_for_env(&mp[0]).unwrap(), deferred_hash, "the deferred one must be first");
 }
 
-/// A failed block's transactions go back only if nothing was written and it hasn't kept failing:
-/// an apply failure (writes may be partial) never requeues, and a batch failing before the apply
-/// is dropped after PRE_APPLY_REQUEUE_MAX tries, so it can't stop block production. Control (run by
-/// hand): `after_failure` always returning Requeue → this test FAILS.
+/// A failed block's transactions go back when nothing was written; a batch of more than one is
+/// never dropped (blocks then carry one at a time, isolating the failing one), and a single
+/// transaction is dropped only after failing alone PRE_APPLY_REQUEUE_MAX times; a storage error
+/// that may have written part of a block never requeues. Controls (run by hand): dropping a
+/// multi-transaction batch after the limit, or requeueing after a partial write → FAILS.
 #[test]
-fn failed_blocks_requeue_only_when_safe_and_not_forever() {
+fn failed_blocks_isolate_the_failing_transaction() {
     use crate::consensus::{after_failure, AfterFailure, PRE_APPLY_REQUEUE_MAX};
-    assert_eq!(after_failure(true, 1), AfterFailure::Requeue);
-    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX - 1), AfterFailure::Requeue);
-    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX), AfterFailure::Drop, "a batch that keeps failing is dropped");
-    assert_eq!(after_failure(false, 1), AfterFailure::Drop, "an apply failure never requeues");
+    assert_eq!(after_failure(true, 1, 5), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX + 10, 5), AfterFailure::Requeue, "honest transactions in a failing batch are never dropped");
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX - 1, 1), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX, 1), AfterFailure::Drop, "the one that keeps failing alone is dropped");
+    assert_eq!(after_failure(false, 1, 5), AfterFailure::Drop, "a maybe-partial write never requeues");
 }
 
 /// Two transfers that together overdraw, submitted at the same moment, can't both be admitted:
