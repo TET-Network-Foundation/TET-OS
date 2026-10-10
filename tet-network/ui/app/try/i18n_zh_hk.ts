@@ -1023,4 +1023,7 @@ export const ZH_HK: Record<string, string> = {
   "TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.": "TET 只會在還原畫面要求你的密語（12 個字）；支援人員絕不會私訊你索取。",
   "Lose your passphrase (12 words) and nobody can recover it.": "遺失密語（12 個字），任何人都無法替你復原。",
   "Your passphrase (12 words)": "你的密語（12 個字）",
+  "That device password is too common. A few words you'll remember is easiest.": "這個裝置密碼太常見。用幾個你記得的字詞最容易。",
+  "That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.": "這個裝置密碼太容易被猜中。請使用 12 個或以上字元，或混合字母、數字和符號。",
+  "A remembered ID locks itself after 15 minutes without use; open it again with your device password.": "已記住的 ID 在 15 分鐘沒有使用後會自動上鎖；用裝置密碼即可再次開啟。",
 };

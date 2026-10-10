@@ -1023,4 +1023,7 @@ export const JA: Record<string, string> = {
   "TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.": "TET が合言葉（12語）を求めるのは復元画面だけです。サポートが DM で聞くことはありません。",
   "Lose your passphrase (12 words) and nobody can recover it.": "合言葉（12語）をなくすと、誰にも復旧できません。",
   "Your passphrase (12 words)": "あなたの合言葉（12語）",
+  "That device password is too common. A few words you'll remember is easiest.": "その端末パスワードはよく使われすぎています。覚えやすい単語をいくつか並べるのが簡単です。",
+  "That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.": "その端末パスワードは推測されやすすぎます。12文字以上にするか、文字・数字・記号を混ぜてください。",
+  "A remembered ID locks itself after 15 minutes without use; open it again with your device password.": "端末に覚えさせた ID は、15分使わないと自動でロックされます。端末パスワードでまた開けます。",
 };

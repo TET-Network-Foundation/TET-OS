@@ -30,7 +30,7 @@ export function SafetyLines() {
 
 export default function ContinueBlock(props: { lastBoard: { name: string; invite: string | null } | null; onOpenBoard: (invite: string) => void }) {
   const { t } = useLang();
-  const { wallet, openWithWords } = useTryWallet();
+  const { wallet, openWithWords, noteRemembered } = useTryWallet();
   const [returning, setReturning] = useState(false);
   const [remembered, setRemembered] = useState(false);
   const [pass, setPass] = useState("");
@@ -57,6 +57,7 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     setBusy(true);
     try {
       await openWithWords(await openRememberedKey(pass));
+      noteRemembered();
       setPass("");
       setMsg(t("Your ID is open in this tab."));
     } catch (e: unknown) {
@@ -87,13 +88,23 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     setBusy(true);
     try {
       await rememberKey(wallet.words, pass);
+      noteRemembered();
       setPass("");
       setPass2("");
       setRemembered(true);
       setShowRemember(false);
       setMsg(t("Remembered on this device, encrypted with your device password."));
     } catch (e: unknown) {
-      setMsg(e instanceof Error && /at least 8/.test(e.message) ? t("Use a device password of at least 8 characters.") : t("This browser won't let the page remember anything."));
+      const m = e instanceof Error ? e.message : "";
+      setMsg(
+        /at least 8/.test(m)
+          ? t("Use a device password of at least 8 characters.")
+          : /weak passphrase: common/.test(m)
+            ? t("That device password is too common. A few words you'll remember is easiest.")
+            : /weak passphrase/.test(m)
+              ? t("That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.")
+              : t("This browser won't let the page remember anything."),
+      );
     } finally {
       setBusy(false);
     }
@@ -142,6 +153,7 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
             ) : null}
             {wallet && !remembered ? (
               <li className="pt-1">
+                <p className="text-[13px] text-[#5d646d]">{t("A remembered ID locks itself after 15 minutes without use; open it again with your device password.")}</p>
                 {showRemember ? (
                   <div className="max-w-sm space-y-1.5">
                     <p className="text-[14px] text-[#5d646d]">{t("Anyone with this device and your device password can use your ID. A script injected into this page could read it while it's open.")}</p>
