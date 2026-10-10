@@ -39,6 +39,7 @@ import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
 import ShelterPanel from "./ShelterPanel";
 import { shelterOpen } from "../lib/shelter";
+import { formatTet } from "../lib/format_tet";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -268,12 +269,6 @@ const RETURNING = typeof window !== "undefined" && getUi("tet.ui.v1.visited") ==
  * This tab's ID in one short line. Keeping it ("save your passphrase") is offered when the visitor
  * asks (tap the ID) or on a returning visit — not pushed on the first one.
  */
-/** µTET → "120" or "0.5" (at most 6 decimals, no trailing zeros), with thousands separators. */
-export function formatTet(micro: number): string {
-  const whole = Math.floor(micro / 1_000_000);
-  const frac = String(micro % 1_000_000).padStart(6, "0").replace(/0+$/, "");
-  return whole.toLocaleString("en-US") + (frac ? `.${frac}` : "");
-}
 
 function CompactWallet() {
   const { t } = useLang();
@@ -326,6 +321,7 @@ function CompactWallet() {
           <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={save}>
             {t("Keep this ID? Save your passphrase (12 words)")}
           </button>
+          <span className="block">{t("Lose your passphrase (12 words) and nobody can recover it.")} {t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</span>
         </div>
       ) : null}
     </>

@@ -13,9 +13,24 @@ import { useLang } from "./i18n";
 
 const LINK = cx(FOCUS, "rounded-sm underline underline-offset-2");
 
+/**
+ * The three fixed sentences (docs/THREAT_MODEL.md rule 8), shown wherever the 12 words are entered,
+ * saved or remembered. Guarded by scripts/try_safety_lines_guard.mjs.
+ */
+export function SafetyLines() {
+  const { t } = useLang();
+  return (
+    <ul className="list-disc space-y-0.5 pl-5 text-[13.5px] text-[#5d646d]">
+      <li>{t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</li>
+      <li>{t("On a device managed by your school or employer, the admin can see everything.")}</li>
+      <li>{t("Lose your passphrase (12 words) and nobody can recover it.")}</li>
+    </ul>
+  );
+}
+
 export default function ContinueBlock(props: { lastBoard: { name: string; invite: string | null } | null; onOpenBoard: (invite: string) => void }) {
   const { t } = useLang();
-  const { wallet, openWithWords } = useTryWallet();
+  const { wallet, openWithWords, noteRemembered } = useTryWallet();
   const [returning, setReturning] = useState(false);
   const [remembered, setRemembered] = useState(false);
   const [pass, setPass] = useState("");
@@ -24,6 +39,8 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
   const [busy, setBusy] = useState(false);
   const [showRemember, setShowRemember] = useState(false);
   const [keysOpen, setKeysOpen] = useState(false);
+  const [restoreOpen, setRestoreOpen] = useState(false);
+  const [restoreWords, setRestoreWords] = useState("");
 
   useEffect(() => {
     // Read once after mount: storage may be missing, and the server render must match the first one.
@@ -40,10 +57,26 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     setBusy(true);
     try {
       await openWithWords(await openRememberedKey(pass));
+      noteRemembered();
       setPass("");
       setMsg(t("Your ID is open in this tab."));
     } catch (e: unknown) {
       setMsg(e instanceof Error && e.message === "Wrong passphrase." ? t("Wrong device password. Try again, or open with your passphrase (12 words).") : t("This device can't open your remembered ID. Open it with your passphrase (12 words) instead."));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // The restore screen: the only place the page asks for the 12 words.
+  const restore = async () => {
+    setMsg("");
+    setBusy(true);
+    try {
+      await openWithWords(restoreWords.trim());
+      setRestoreWords("");
+      setRestoreOpen(false);
+      setMsg(t("Your ID is open in this tab."));
+    } catch {
+      setMsg(t("Those aren't 12 valid words. Check them and try again."));
     } finally {
       setBusy(false);
     }
@@ -55,19 +88,29 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
     setBusy(true);
     try {
       await rememberKey(wallet.words, pass);
+      noteRemembered();
       setPass("");
       setPass2("");
       setRemembered(true);
       setShowRemember(false);
       setMsg(t("Remembered on this device, encrypted with your device password."));
     } catch (e: unknown) {
-      setMsg(e instanceof Error && /at least 8/.test(e.message) ? t("Use a device password of at least 8 characters.") : t("This browser won't let the page remember anything."));
+      const m = e instanceof Error ? e.message : "";
+      setMsg(
+        /at least 8/.test(m)
+          ? t("Use a device password of at least 8 characters.")
+          : /weak passphrase: common/.test(m)
+            ? t("That device password is too common. A few words you'll remember is easiest.")
+            : /weak passphrase/.test(m)
+              ? t("That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.")
+              : t("This browser won't let the page remember anything."),
+      );
     } finally {
       setBusy(false);
     }
   };
 
-  const keyOptions = (!wallet && remembered) || (wallet && !remembered) || remembered || returning;
+  const keyOptions = !wallet || (wallet && !remembered) || remembered || returning;
   if (!props.lastBoard && !keyOptions) return null;
   return (
     <div className="text-[13.5px] text-[#5d646d]">
@@ -110,9 +153,11 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
             ) : null}
             {wallet && !remembered ? (
               <li className="pt-1">
+                <p className="text-[13px] text-[#5d646d]">{t("A remembered ID locks itself after 15 minutes without use; open it again with your device password.")}</p>
                 {showRemember ? (
                   <div className="max-w-sm space-y-1.5">
                     <p className="text-[14px] text-[#5d646d]">{t("Anyone with this device and your device password can use your ID. A script injected into this page could read it while it's open.")}</p>
+                    <SafetyLines />
                     <Input ariaLabel={t("Device password")} type="password" value={pass} onChange={setPass} placeholder={t("Device password (8 characters or more)")} />
                     <Input ariaLabel={t("Device password again")} type="password" value={pass2} onChange={setPass2} placeholder={t("Device password again")} />
                     <Button disabled={busy || !pass} onClick={() => void remember()}>
@@ -122,6 +167,32 @@ export default function ContinueBlock(props: { lastBoard: { name: string; invite
                 ) : (
                   <button type="button" className={LINK} onClick={() => setShowRemember(true)}>
                     {t("Remember my ID on this device (optional, encrypted)")}
+                  </button>
+                )}
+              </li>
+            ) : null}
+            {!wallet ? (
+              <li className="pt-1">
+                {restoreOpen ? (
+                  <div className="max-w-md space-y-1.5">
+                    <p className="text-[14px]">{t("Open an ID with your passphrase (12 words):")}</p>
+                    <SafetyLines />
+                    <textarea
+                      value={restoreWords}
+                      onChange={(e) => setRestoreWords(e.target.value)}
+                      rows={2}
+                      autoComplete="off"
+                      spellCheck={false}
+                      aria-label={t("Your passphrase (12 words)")}
+                      className={cx(FOCUS, "w-full rounded-md border border-[#c9ced4] p-2 text-[15px]")}
+                    />
+                    <Button disabled={busy || restoreWords.trim().split(/\s+/).length !== 12} onClick={() => void restore()}>
+                      {t("Open")}
+                    </Button>
+                  </div>
+                ) : (
+                  <button type="button" className={LINK} onClick={() => setRestoreOpen(true)}>
+                    {t("Open an ID with your passphrase (12 words)")}
                   </button>
                 )}
               </li>

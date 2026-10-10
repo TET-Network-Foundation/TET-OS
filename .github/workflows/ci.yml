@@ -76,7 +76,7 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Needed to diff against the pushed-from commit; a shallow clone cannot.
           fetch-depth: 0
@@ -156,12 +156,13 @@ jobs:
           echo "Reporting success so the required check 'rust (build, test, guards)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           components: clippy
 
       # `ubuntu-latest` ships ~14 GB free, and this workspace does not fit: the
@@ -177,7 +178,7 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: rust-${{ hashFiles('**/Cargo.lock') }}
 
@@ -214,7 +215,7 @@ jobs:
       # job. No new job, so the five required check names stay exactly as the ruleset lists them.
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
@@ -228,7 +229,7 @@ jobs:
         name: agent identity — GET /chain discovery, end to end
         run: |
           set -euo pipefail
-          (cd tet-agent-sdk && npm ci --silent && npm run build --silent)
+          (cd tet-agent-sdk && npm ci --ignore-scripts --silent && npm run build --silent)
           cargo build -p tet-core --bin TET-Core
           tet-cli/scripts/agent_chain_discovery.sh target/debug/TET-Core target/debug/tet-cli
 
@@ -388,18 +389,18 @@ jobs:
           echo "Reporting success so the required check 'ui (next build)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: tet-network/ui/package-lock.json
 
       - if: needs.gate.outputs.code == 'true'
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - if: needs.gate.outputs.code == 'true'
         run: npm run build
@@ -452,6 +453,26 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the three safety sentences are where they must be
+        run: node --experimental-strip-types scripts/try_safety_lines_guard.mjs
+      # Threat model rule 11: security.txt names SECURITY.md's contacts and hasn't expired.
+      - if: needs.gate.outputs.code == 'true'
+        name: security.txt — same contacts as SECURITY.md, not expired
+        run: node scripts/security_txt_guard.mjs
+      # Threat model rule 9: Actions pinned by SHA, installs with --ignore-scripts, lockfiles, CODEOWNERS.
+      - if: needs.gate.outputs.code == 'true'
+        name: supply chain — pinned Actions, no install scripts, lockfiles, code owners
+        run: node scripts/supply_chain_guard.mjs
+      # Threat model rule 7: weak device passwords refused; a remembered ID auto-locks after 15 minutes.
+      - if: needs.gate.outputs.code == 'true'
+        name: device keys — password strength and auto-lock
+        run: node --experimental-strip-types scripts/device_keys_guard.mjs
+      # Threat model rule 6: the public pages' CSP admits no other origin; SRI on; no third-party code.
+      - if: needs.gate.outputs.code == 'true'
+        name: page integrity — CSP, SRI, no third-party scripts
+        run: node --experimental-strip-types scripts/page_integrity_guard.mjs
       # Shelter: the board key is sealed only to keys the member's wallet signed, and opened only from
       # a verified, allowed sender.
       - if: needs.gate.outputs.code == 'true'
@@ -622,7 +643,7 @@ jobs:
         run: |
           set -euo pipefail
           committed=$(shasum -a 256 src/wallet_client_bundled.js | cut -d' ' -f1)
-          npm ci --silent
+          npm ci --ignore-scripts --silent
           npm run build-wallet-client --silent
           rebuilt=$(shasum -a 256 src/wallet_client_bundled.js | cut -d' ' -f1)
           echo "committed: $committed"
@@ -647,7 +668,7 @@ jobs:
         working-directory: tet-agent-sdk
         run: |
           set -euo pipefail
-          npm ci --silent
+          npm ci --ignore-scripts --silent
           npm run build --silent
           out=$(npm test --silent 2>&1)
           echo "$out"
@@ -684,7 +705,7 @@ jobs:
           echo "Reporting success so the required check 'shell (shellcheck deploy scripts)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # deploy/ was untested by anything until 2026-09-29, and it is the code with the most
       # authority in the repository: it provisions the seed, deploys to it, and deletes its
@@ -808,23 +829,24 @@ jobs:
           echo "Reporting success so the required check 'wasm (tet-pqc-wasm → ui/public/pqc)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Rust (wasm32 target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
       - if: needs.gate.outputs.code == 'true'
         name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: wasm-${{ hashFiles('**/Cargo.lock') }}
 
@@ -916,7 +938,7 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         name: Upload pqc artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tet-pqc-wasm
           path: ${{ runner.temp }}/pqc/
@@ -947,7 +969,7 @@ jobs:
           echo "Reporting success so the required check 'docker (images build)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # docker.io images through Google's public mirror (Docker Hub rate-limits anonymous pulls from
       # shared CI addresses); BuildKit falls back to docker.io when the mirror lacks an image. The
@@ -962,7 +984,7 @@ jobs:
           docker tag "mirror.gcr.io/$img" "$img"
 
       - if: needs.gate.outputs.code == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           buildkitd-config-inline: |
             [registry."docker.io"]
@@ -978,7 +1000,7 @@ jobs:
       # this. Compose still defaults to the full zk build for deployments.
       - if: needs.gate.outputs.code == 'true'
         name: Build tet-core image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile
@@ -993,7 +1015,7 @@ jobs:
       # tet-pqc-wasm from the Rust workspace and bakes it into public/pqc.
       - if: needs.gate.outputs.code == 'true'
         name: Build ui image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: tet-network/ui/Dockerfile

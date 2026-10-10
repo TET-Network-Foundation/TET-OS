@@ -24,6 +24,17 @@ export const PROVER_URL = process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROV
 
 export const BASE = "/tet-node-api";
 
+/** A remembered ID is locked (forgotten in this tab) after this long without any input. */
+export const AUTO_LOCK_MS = 15 * 60_000;
+
+/**
+ * Lock now? Only an ID this device remembers (it can be reopened with the device password), and
+ * only after `AUTO_LOCK_MS` without input: locking an unsaved ID would lose it for good.
+ */
+export function shouldAutoLock(o: { lockable: boolean; idleMs: number }): boolean {
+  return o.lockable && o.idleMs >= AUTO_LOCK_MS;
+}
+
 type Wallet = { words: string; walletId: string };
 
 /** This tab's place in the anonymity set (null until checked). */
@@ -48,6 +59,8 @@ type Ctx = {
   /** Whether the native prover answers on this computer (checked once per tab). */
   prover: "unknown" | "found" | "missing";
   forget: () => void;
+  /** The open ID is the one this device remembers (opened from it, or just remembered): it auto-locks. */
+  noteRemembered: () => void;
 };
 
 const WalletCtx = createContext<Ctx | null>(null);
@@ -153,7 +166,12 @@ export function WalletProvider(props: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [anon, refreshAnon]);
 
+  const lockable = useRef(false);
+  const noteRemembered = useCallback(() => {
+    lockable.current = true;
+  }, []);
   const forget = useCallback(() => {
+    lockable.current = false;
     joined.current = false;
     setAnon(null);
     setKeys("unknown");
@@ -163,9 +181,28 @@ export function WalletProvider(props: { children: ReactNode }) {
     setWallet(null);
   }, []);
 
+  // Auto-lock (docs/THREAT_MODEL.md rule 7): a remembered ID is forgotten in this tab after
+  // AUTO_LOCK_MS without input; it reopens with the device password.
+  useEffect(() => {
+    if (!wallet) return;
+    let last = Date.now();
+    const seen = () => {
+      last = Date.now();
+    };
+    const events = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    for (const e of events) window.addEventListener(e, seen, { passive: true });
+    const tick = setInterval(() => {
+      if (shouldAutoLock({ lockable: lockable.current, idleMs: Date.now() - last })) forget();
+    }, 30_000);
+    return () => {
+      clearInterval(tick);
+      for (const e of events) window.removeEventListener(e, seen);
+    };
+  }, [wallet, forget]);
+
   const value = useMemo(
-    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget }),
-    [wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget],
+    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered }),
+    [wallet, anon, refreshAnon, joinAnon, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered],
   );
   return <WalletCtx.Provider value={value}>{props.children}</WalletCtx.Provider>;
 }

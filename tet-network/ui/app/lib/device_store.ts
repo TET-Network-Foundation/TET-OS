@@ -62,9 +62,33 @@ async function deriveKey(passphrase: string, salt: Uint8Array, iterations: numbe
   return crypto.subtle.deriveKey({ name: "PBKDF2", hash: "SHA-256", salt: salt as BufferSource, iterations }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
 }
 
+const COMMON = ["password", "passwort", "123456", "12345678", "qwerty", "letmein", "iloveyou", "admin", "welcome", "abc123", "111111", "monkey", "dragon", "football", "baseball", "sunshine", "princess", "trustno1", "tettet", "tetnetwork"];
+
+/**
+ * Why a device password is too weak to protect the 12 words (docs/THREAT_MODEL.md rule 7), or null.
+ * At least 8 characters; not a common password or one repeated character or a run like "abcdefgh";
+ * under 12 characters it needs three kinds of character (lower, upper, digit, other). A few words
+ * ("correct horse battery") is the easiest strong one. A rough check, not a strength guarantee.
+ */
+export function passphraseProblem(p: string): "short" | "common" | "pattern" | "simple" | null {
+  if (p.length < 8) return "short";
+  const lower = p.toLowerCase();
+  if (COMMON.some((c) => lower.includes(c))) return "common";
+  if (/^(.)\1+$/.test(p)) return "pattern";
+  const codes = Array.from(p, (c) => c.charCodeAt(0));
+  const steps = codes.slice(1).map((c, i) => c - codes[i]);
+  if (steps.every((d) => d === 1) || steps.every((d) => d === -1)) return "pattern";
+  if (new Set(p).size < 5) return "pattern";
+  const kinds = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^A-Za-z0-9]/].filter((r) => r.test(p)).length;
+  if (p.length < 12 && kinds < 3) return "simple";
+  return null;
+}
+
 /** Encrypt the words with the passphrase and remember them on this device. */
 export async function rememberKey(words: string, passphrase: string, iterations = KDF_ITERATIONS): Promise<void> {
   if (passphrase.length < 8) throw new Error("Use a passphrase of at least 8 characters.");
+  const weak = passphraseProblem(passphrase);
+  if (weak) throw new Error(`weak passphrase: ${weak}`);
   if (iterations < KDF_ITERATIONS_MIN) throw new Error("too few KDF iterations");
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
