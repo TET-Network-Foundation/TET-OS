@@ -22,6 +22,10 @@ only when its check has passed and is written next to it with the date.
   verifier's marks). Check: each proof code verifies on the demo; marks.json says published. — F+C
 - [ ] **Re-run the 10-second timing** against the real demo (`scripts/try_ten_seconds.mjs` or the
   current timing test) and correct the number on the page if it's wrong. — C
+- [ ] **Read the repo as a stranger would, from the README down, in ja and en**: the README, then
+  every link it gives (the technical paper, SECURITY.md, CONTRIBUTING.md, THREAT_MODEL.md), checking
+  that nothing claims more than the code does and nothing points at an archived document as current.
+  — F (reads), C (fixes)
 - [ ] **Every page, in ja / en / zh-HK, on a phone and a desktop, with zero console errors.** A
   headless run for the console (CDP, as the CSP check does) plus a real phone by hand. — C (headless),
   F (phone)
