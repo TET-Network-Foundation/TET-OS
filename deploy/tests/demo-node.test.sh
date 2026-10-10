@@ -98,7 +98,7 @@ else flunk "Caddy's allow-list equals tet-core's PUBLIC_ALLOWLIST"; fi
 
 # Ambiguous paths are refused first, inside the single ordered route block.
 if awk '/^\troute \{/{r=1; next} r && NF{print; exit}' deploy/demo/Caddyfile | grep -q 'respond @ambiguous_path 400' \
-   && ! grep -E '^\s*handle' deploy/demo/Caddyfile >/dev/null; then
+   && ! grep -E '^\s*handle(_path)?(\s|\{|$)' deploy/demo/Caddyfile >/dev/null; then
   pass "the Caddyfile refuses ambiguous paths before any other rule"
 else flunk "the Caddyfile refuses ambiguous paths before any other rule"; fi
 
@@ -183,11 +183,23 @@ if docker info >/dev/null 2>&1; then
     elif grep -qE 'remote_ip|client_ip|203\.0\.113\.77|X-Forwarded-For' <<<"$log"; then echo yes
     else echo no; fi
   }
+  # The real Caddyfile answers an upstream failure with handle_errors, which Caddy logs below error
+  # level: nothing names the client either way ("no" or "no-error"). To exercise the log filter
+  # itself, a copy without handle_errors must log the error, without the address.
   got=$(client_logged "edge-$$" 18080)
-  if [ "$got" = no ]; then pass "caddy logs an upstream failure without the client's address"
-  else flunk "caddy logs an upstream failure without the client's address" "got: $got"; fi
+  if [ "$got" = no ] || [ "$got" = no-error ]; then pass "caddy logs no client address when the upstream fails"
+  else flunk "caddy logs no client address when the upstream fails" "got: $got"; fi
+  noerr=$(mktemp)
+  sed '/^\thandle_errors /,/^\t}/d' deploy/demo/Caddyfile > "$noerr"
+  docker run -d --rm --name "edgef-$$" --network "$net" -p 127.0.0.1:18084:8080 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
+    -v "$noerr:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18084/ && break; sleep 1; done
+  got=$(client_logged "edgef-$$" 18084)
+  if [ "$got" = no ]; then pass "caddy logs an upstream failure without the client's address (log filter)"
+  else flunk "caddy logs an upstream failure without the client's address (log filter)" "got: $got"; fi
   unfiltered=$(mktemp)
-  sed '/^\tlog default {/,/^\t}/d' deploy/demo/Caddyfile > "$unfiltered"
+  sed '/^\tlog default {/,/^\t}/d' "$noerr" > "$unfiltered"
   docker run -d --rm --name "edge0-$$" --network "$net" -p 127.0.0.1:18082:8080 \
     -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
     -v "$unfiltered:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
@@ -195,8 +207,29 @@ if docker info >/dev/null 2>&1; then
   got=$(client_logged "edge0-$$" 18082)
   if [ "$got" = yes ]; then pass "control: without the log filter the client's address is logged"
   else flunk "control: without the log filter the client's address is logged" "got: $got"; fi
-  rm -f "$unfiltered"
-  docker rm -f "edge-$$" "edge0-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
+  rm -f "$unfiltered" "$noerr"
+
+  # The upstream down: the maintenance page (503, trilingual) for pages, JSON 503 for the node API,
+  # and the path rules still first. `handle_errors` runs only after a proxy error, so it can't
+  # serve anything the route block refused.
+  docker rm -f "ui-$$" >/dev/null 2>&1
+  docker run -d --rm --name "edgem-$$" --network "$net" -p 127.0.0.1:18083:8080 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
+    -v "$PWD/deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/deploy/demo/maintenance:/srv/maintenance:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18083/robots.txt && break; sleep 1; done
+  page=$(curl -s -w "\n%{http_code}" http://127.0.0.1:18083/try)
+  if [ "$(tail -1 <<<"$page")" = 503 ] && grep -q "TET は更新中です" <<<"$page" && grep -q "TET 正在更新" <<<"$page"; then
+    pass "upstream down: pages get the trilingual maintenance page with 503"
+  else flunk "upstream down: pages get the trilingual maintenance page with 503" "got: $(tail -1 <<<"$page")"; fi
+  api=$(curl -s -w "\n%{http_code}" http://127.0.0.1:18083/tet-node-api/status)
+  if [ "$(tail -1 <<<"$api")" = 503 ] && grep -q '"error":"unavailable"' <<<"$api"; then
+    pass "upstream down: the node API answers JSON 503"
+  else flunk "upstream down: the node API answers JSON 503" "got: $(head -c 120 <<<"$api")"; fi
+  if [ "$(curl --path-as-is -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:18083/try/..%2Fapi")" = 400 ] \
+     && [ "$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18083/tet-node-api/ledger/mine)" = 404 ]; then
+    pass "upstream down: ambiguous paths are still 400 and off-list routes 404"
+  else flunk "upstream down: ambiguous paths are still 400 and off-list routes 404"; fi
+  docker rm -f "edge-$$" "edge0-$$" "edgef-$$" "edgem-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
 elif [ -n "${CI:-}" ]; then
   flunk "caddy behaviour" "no Docker daemon in CI"
 else

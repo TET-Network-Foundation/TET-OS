@@ -56,6 +56,7 @@ services:
       TET_DEMO_ACME_EMAIL: "${TET_DEMO_ACME_EMAIL:?set TET_DEMO_ACME_EMAIL in .env (Caddy refuses an empty email)}"
     volumes:
       - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/demo/maintenance:/srv/maintenance:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

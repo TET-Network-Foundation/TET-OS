@@ -405,6 +405,21 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         run: npm run build
 
+      # Every page in Japanese and Hong Kong Chinese, rendered in a headless browser, has no English
+      # prose left (allowlist: TET, proof codes, IDs, algorithm names, URLs). The node isn't running,
+      # so the error and empty states are what gets checked. Control: an injected English sentence.
+      - if: needs.gate.outputs.code == 'true'
+        name: every page in ja and zh-HK — no English left
+        run: |
+          TET_CORE_ORIGIN=http://127.0.0.1:5999 npx next start -p 3400 > /tmp/next.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:3400/try && break; sleep 1; done
+          CHROME="$(command -v google-chrome || command -v chromium)" TET_UI=http://127.0.0.1:3400 node scripts/lang_render_guard.mjs
+
+      # First visit picks the browser's language; a choice is remembered (English too); ?lang= wins.
+      - if: needs.gate.outputs.code == 'true'
+        name: the page opens in the visitor's language
+        run: node --experimental-strip-types scripts/lang_pick_guard.mjs
+
       # The poster's half of the anonymous-send privacy guard: every request the real
       # anon_poster.mjs makes is recorded, and none may name the poster. Plain Node, no build step.
       # The node's half is `anonymous_post_names_no_poster_to_the_node` in the rust job.

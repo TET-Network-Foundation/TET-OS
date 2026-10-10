@@ -60,8 +60,11 @@ check("control: a made-up cited path is caught", () =>
 
 check("the paper states the full commit it was written against, and the page shows it", () => {
   assert.match(paper.WRITTEN_AGAINST, /^[0-9a-f]{40}$/);
+  // The page renders through PaperView (the visitor's language); the commit is shown there.
   const page = readFileSync(`${UI}app/whitepaper/page.tsx`, "utf8");
-  assert.match(page, /WRITTEN_AGAINST/);
+  const view = readFileSync(`${UI}app/whitepaper/PaperView.tsx`, "utf8");
+  assert.match(page, /<PaperView \/>/);
+  assert.match(view, /EN\.WRITTEN_AGAINST/);
   assert.ok(paperHtml().includes(paper.WRITTEN_AGAINST));
 });
 
@@ -115,6 +118,88 @@ check("quantum resistance is stated as incomplete until wallet_id_v2", () => {
   assert.match(t, /quantum resistance is incomplete until `wallet_id_v2`/);
   assert.match(t, /forging a transaction will require breaking both Ed25519 and ML-DSA-44/);
   assert.doesNotMatch(t, /fully quantum[- ]resistant|quantum[- ]proof|quantum[- ]safe/i);
+});
+
+// ---- 7. the Japanese translation (app/whitepaper/paper_ja.ts) --------------------------------------
+// Same structure as the English (section 0 carries the translation note as an extra leading block),
+// every code span kept, the translation note and the English commit it translates, and the same
+// wording rules in Japanese. English is authoritative.
+const paperJa = await import("../app/whitepaper/paper_ja.ts");
+const blockTexts = (b) => ("p" in b ? [b.p] : "ul" in b ? b.ul : [...b.table.head, ...b.table.rows.flat()]);
+const codeSpans = (s) => s.match(/`[^`]+`/g) ?? [];
+function structureProblems(en, ja) {
+  const out = [];
+  if (ja.SECTIONS.length !== en.SECTIONS.length) return [`${ja.SECTIONS.length} sections, English has ${en.SECTIONS.length}`];
+  en.SECTIONS.forEach((s, i) => {
+    const j = ja.SECTIONS[i];
+    if (j.id !== s.id) out.push(`section ${i}: id ${j.id} ≠ ${s.id}`);
+    if (JSON.stringify(j.sources) !== JSON.stringify(s.sources)) out.push(`${s.id}: sources differ`);
+    const body = s.id === "version" ? j.body.slice(1) : j.body;
+    if (s.id === "version" && !("p" in j.body[0] && j.body[0].p === ja.TRANSLATION_NOTE)) out.push("version: the translation note isn't the leading block");
+    if (body.length !== s.body.length) return out.push(`${s.id}: ${body.length} blocks, English has ${s.body.length}`);
+    s.body.forEach((b, k) => {
+      const c = body[k];
+      const kind = (x) => Object.keys(x)[0];
+      if (kind(b) !== kind(c)) return out.push(`${s.id}[${k}]: ${kind(c)} ≠ ${kind(b)}`);
+      if ("ul" in b && b.ul.length !== c.ul.length) out.push(`${s.id}[${k}]: list length differs`);
+      if ("table" in b && (b.table.head.length !== c.table.head.length || b.table.rows.length !== c.table.rows.length || b.table.rows.some((r, n) => r.length !== c.table.rows[n].length)))
+        out.push(`${s.id}[${k}]: table shape differs`);
+      const jaText = blockTexts(c).join("\n");
+      for (const span of codeSpans(blockTexts(b).join("\n"))) if (!jaText.includes(span)) out.push(`${s.id}[${k}]: code span ${span} missing`);
+    });
+  });
+  return out;
+}
+check("the Japanese paper has the English structure, sources and code spans", () => {
+  const bad = structureProblems(paper, paperJa);
+  assert.deepEqual(bad, [], bad.join("\n     "));
+});
+check("control: a dropped list item and a changed code span are caught", () => {
+  const broken = structuredClone({ SECTIONS: paperJa.SECTIONS, TRANSLATION_NOTE: paperJa.TRANSLATION_NOTE });
+  broken.SECTIONS.find((s) => s.id === "not").body[0].ul.pop();
+  assert.ok(structureProblems(paper, broken).some((p) => p.includes("list length")));
+  const broken2 = structuredClone({ SECTIONS: paperJa.SECTIONS, TRANSLATION_NOTE: paperJa.TRANSLATION_NOTE });
+  const b = broken2.SECTIONS.find((s) => s.id === "architecture").body[0];
+  b.p = b.p.replace("`TET-Core`", "`TET-Kern`");
+  assert.ok(structureProblems(paper, broken2).some((p) => p.includes("code span")));
+});
+check("the Japanese paper names the English commit it translates, and says English is authoritative", () => {
+  assert.match(paperJa.TRANSLATION_OF, /^[0-9a-f]{40}$/);
+  assert.ok(paperJa.TRANSLATION_NOTE.includes(paperJa.TRANSLATION_OF.slice(0, 7)), "the note names the commit");
+  assert.match(paperJa.TRANSLATION_NOTE, /英語版の翻訳/);
+  assert.match(paperJa.TRANSLATION_NOTE, /英語版が正本/);
+  assert.equal(paperJa.WRITTEN_AGAINST, paper.WRITTEN_AGAINST);
+});
+const JA_RULES = [
+  ["a \"first\" claim", /世界初|史上初|初の|最初|初めて|\bfirst\b/i],
+  ["money wording", MONEY],
+  ["\"untraceable\"", /追跡不可能|追跡できない|untraceable/i],
+  ["an authorship claim", /(?:あなた|自分|本人)が(?:作った|作成した|書いた|作者である)ことを証明/],
+  ["an absolute AI claim", /AI\s*(?:は|が)\s*(?:TET\s*に\s*)?(?:アクセスできない|アクセスできません|入れない|入れません)/],
+  ["an unqualified ML-KEM claim", /^(?![\s\S]*(?:ではない|ではありません|移行|互換性がな|互換性があり|\bnot\b))[\s\S]*ML-KEM/i],
+];
+function wordingJa(texts) {
+  const bad = [];
+  for (const t of texts) for (const [what, re] of JA_RULES) if (re.test(t)) bad.push(`${what}: ${t.slice(0, 60)}`);
+  return bad;
+}
+check("the Japanese paper keeps the wording rules", () => {
+  const bad = wordingJa(allText(paperJa));
+  assert.deepEqual(bad, [], bad.join("\n     "));
+});
+check("controls: each Japanese rule catches its phrase", () => {
+  for (const x of ["世界初のネットワークです。", "ノードを動かして TET を稼ぐ。", "メッセージは追跡不可能です。", "印はあなたが作ったことを証明します。", "AI は TET にアクセスできません。", "Tmail は ML-KEM-768 を使います。"]) {
+    assert.equal(wordingJa([x]).length, 1, x);
+  }
+});
+const jaQuantum = (t) => /量子耐性[^。]*`wallet_id_v2`[^。]*不完全|`wallet_id_v2`[^。]*量子耐性[^。]*不完全/.test(t) && /Ed25519 と ML-DSA-44 の両方を破る/.test(t);
+check("the Japanese paper states quantum resistance as incomplete until wallet_id_v2", () => {
+  const t = allText(paperJa).join("\n");
+  assert.ok(jaQuantum(t), "the two quantum sentences");
+  assert.doesNotMatch(t, /完全な量子耐性|量子耐性があります|量子コンピューターでも破れない/);
+});
+check("control: without the quantum sentences, the check fails", () => {
+  assert.equal(jaQuantum(allText(paperJa).join("\n").replaceAll("不完全", "十分")), false);
 });
 
 // ---- 6. images come from the source only --------------------------------------------------------
