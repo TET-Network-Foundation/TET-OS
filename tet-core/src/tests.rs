@@ -16111,6 +16111,11 @@ fn welcome_grant_is_one_per_member_and_wallet_for_a_day_zero_proof() {
         }
         other => panic!("not a transfer: {other:?}"),
     }
+    // A fee rate a block accepts (a block refuses anything outside the consensus range).
+    match &env.tx {
+        crate::protocol::TxV1::Transfer { fee_bps, .. } => crate::fees::validate_transfer_fee_bps(*fee_bps).expect("the grant's fee rate would fail the block"),
+        other => panic!("not a transfer: {other:?}"),
+    }
     crate::rest::helpers::verify_envelope_v1(&env).expect("the grant transfer must verify");
     payer.commit(commit);
     assert_eq!(payer.granted(), 1);
