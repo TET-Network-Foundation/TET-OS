@@ -1,6 +1,5 @@
 # TET Network
 
-![Phrack-style Whitepaper v1.1](docs/WHITEPAPER_v1.1_DRAFT.phrack_preview.png)
 
 **A Layer 1 whose signatures a quantum computer cannot forge, with a desktop on top of it.**
 Written in Rust (`tet-core`): every transaction and message is signed twice, Ed25519 **and**
