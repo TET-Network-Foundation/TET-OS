@@ -138,6 +138,15 @@ dropped. No balance could change without its wallet's signature. This issue's cl
 mistake in a public branch a few hours before the fix was deployed; working logs are now kept out of
 the repository.
 
+**Fixed: a message's time was not checked against the node's clock.** Until 2026-10-11, the time a
+sender put on a message or post was stored as given, so a post could be dated anywhere: backdated
+to the top of a board thread, dated in the future to be kept past the retention limit, or (for an
+anonymous post) dated on another day. Since 404bd86, deployed on both seeds and the demo node on
+2026-10-11, a node refuses a message whose time is more than 5 minutes from its own clock, saying
+"your device clock is off", and an anonymous post must be dated on the node's current UTC day. The
+nodes keep their clocks in sync, and their health check fails if they don't. No message could be
+read or forged this way.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about
