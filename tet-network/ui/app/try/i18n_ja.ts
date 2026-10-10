@@ -1042,4 +1042,12 @@ export const JA: Record<string, string> = {
   "Sources:": "出典:",
   "The English text of this paper ({file}, SHA-256 {sha}) is marked with proof code {code}. It proves this ID marked exactly that text; not who wrote it.": "この文書の英語版の本文（{file}、SHA-256 {sha}）には証明コード {code} の印が付いています。この ID がまさにその本文に印を付けたことを証明します。誰が書いたかは証明しません。",
   "TET technical paper": "TET 技術文書",
+  "built from {sha}.": "{sha} からビルド。",
+  "This build doesn't name its commit.": "このビルドはコミットを名乗っていません。",
+  "This site serves no build manifest, so there is nothing to compare against.": "このサイトはビルドの一覧（マニフェスト）を出していないので、比べる相手がありません。",
+  "The build manifest (commit {commit}) is signed by TET's publisher ID: proof code {code}.": "ビルドの一覧（コミット {commit}）には TET の発行者 ID の署名があります。証明コード {code}。",
+  "The build manifest (commit {commit}) is not signed by TET's publisher ID.": "ビルドの一覧（コミット {commit}）には TET の発行者 ID の署名がありません。",
+  "{n} files this page loaded don't match it.": "このページが読み込んだファイルのうち {n} 件が一致しません。",
+  "All {n} files this page loaded match it.": "このページが読み込んだ {n} 件のファイルはすべて一致します。",
+  "This check runs from this site's own code, so a compromised site could serve one that lies. For a check that doesn't trust this site, run scripts/verify_site.mjs from the source on your own computer.": "この確認はこのサイト自身のコードで動くので、乗っ取られたサイトなら嘘をつく確認を出せます。このサイトを信用しない確認には、ソースにある scripts/verify_site.mjs を自分のコンピューターで実行してください。",
 };

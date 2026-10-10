@@ -45,6 +45,10 @@ const nextConfig: NextConfig = {
   // No effect on `next dev` or `next start`.
   output: "standalone",
 
+  // The build id is the commit, so the same commit builds the same files and the signed build
+  // manifest (scripts/build_manifest.mjs) can be re-derived from the repository.
+  generateBuildId: async () => process.env.NEXT_PUBLIC_TET_BUILD_SHA || "unnamed-build",
+
   experimental: {
     sri: { algorithm: "sha256" },
   },

@@ -57,6 +57,23 @@ node reports it in `GET /status/live` (the try page's **Live** channel) and the 
 page" names it. An archive has no `.git`, so the build can't find it on its own; left out, both say
 the build doesn't name its commit.
 
+## 4b. Sign the build (after each UI deploy)
+
+The UI build writes `/build-manifest.json` (every file the site serves, with its SHA-256). On your
+own machine, with the publisher key. Build the deployed commit yourself first (the same Docker image
+the demo builds, then `node scripts/build_manifest.mjs --out mine.json`): the script signs only if
+the served manifest is byte-identical to yours.
+
+```bash
+cd tet-network/ui
+TET_PAPER_CHAIN_ID=tet-local-dev TET_PAPER_GENESIS_HASH=<genesis> \
+  node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org --local mine.json --publish
+node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org --commit <deployed sha>   # VERIFIED
+```
+
+`--commit` is required (or `--any-commit`): a signature only proves a build was signed once, so the
+check must also know which build should be live, or an older signed build would pass (a rollback).
+
 ## 5. Check from outside
 
 ```bash
