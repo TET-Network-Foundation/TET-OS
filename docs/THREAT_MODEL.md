@@ -100,9 +100,16 @@ with TET are specified now and tested when it is built.
    `'unsafe-inline'` remains for scripts because Next.js bootstraps with inline scripts on static
    pages. Zero third-party scripts, stylesheets or fonts. SRI is switched on, but Next.js adds
    integrity hashes to only part of its chunks today (about half on /try, with either bundler), so
-   "SRI on every script" is **not yet true**. The signed build manifest with "verify this page",
-   which would hash every file whatever SRI covers, is **not built yet**; it is the next step.
-   Guarded by `page_integrity_guard`.
+   "SRI on every script" is **not yet true**.
+   *Signed build manifest (as built, 2026-10-11):* every file the demo serves (the prerendered
+   pages, scripts, styles, public files) is listed with its SHA-256 in `/build-manifest.json`,
+   written by the build (`scripts/build_manifest.mjs`; the build id is the commit, so the same
+   commit gives the same bytes). The founder signs the manifest's SHA-256 with the publisher key on
+   their own machine (`scripts/sign_build_manifest.mjs`) and publishes the mark. Two checks:
+   `scripts/verify_site.mjs <origin>`, run on your own computer, trusts nothing the site serves; it
+   checks the signature and every file. "verify this page" runs the same check in the page on the
+   files it loaded, and says it can't protect against a site that serves a lying checker. Guarded
+   by `page_integrity_guard` and `build_manifest_guard`.
 7. **Keys:** in memory only while the tab is unlocked; the vault encrypted; auto-lock; a
    passphrase-strength check. Argon2id: evaluated (WebCrypto has no Argon2; it would need a WASM
    dependency reviewed by a human); PBKDF2 at 600,000 iterations until then.

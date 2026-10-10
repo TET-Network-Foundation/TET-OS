@@ -28,6 +28,7 @@ import MailPanel from "./MailPanel";
 import NewBoardPanel from "./NewBoardPanel";
 import QuestionsPanel from "./QuestionsPanel";
 import VerifyPanel from "./VerifyPanel";
+import { VerifyThisPage } from "./VerifyThisPage";
 import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
 import { LangProvider, LangSwitch, useLang } from "./i18n";
@@ -206,14 +207,7 @@ function NodeFacts(props: { node: ReturnType<typeof useNode> }) {
         {row(t("prover"), prover === "found" ? t("found (this computer)") : prover === "missing" ? t("not found") : t("checking…"))}
       </dl>
       <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This page")}</h2>
-      <p className="mb-2 text-[#3d434a]">
-        <a className="underline" href={BUILD_SHA ? `${REPO}/tree/${BUILD_SHA}/tet-network/ui` : `${REPO}/tree/main/tet-network/ui`} target="_blank" rel="noreferrer">
-          {t("verify this page")}
-        </a>
-        :{" "}
-        {BUILD_SHA ? t("built from {sha}; rebuild it and compare.", { sha: BUILD_SHA.slice(0, 10) }) : t("the source it was built from. This build doesn't name its commit.")}{" "}
-        {t("Builds are not signed yet.")}
-      </p>
+      <VerifyThisPage buildSha={BUILD_SHA} repo={REPO} />
       <p className="text-[#3d434a]">
         <a className="underline" href={`${REPO}/blob/main/docs/DEMO_NODE.md`} target="_blank" rel="noreferrer">
           {t("how this demo works")}

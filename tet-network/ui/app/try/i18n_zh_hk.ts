@@ -1042,4 +1042,12 @@ export const ZH_HK: Record<string, string> = {
   "Sources:": "來源：",
   "The English text of this paper ({file}, SHA-256 {sha}) is marked with proof code {code}. It proves this ID marked exactly that text; not who wrote it.": "此文件英文版的內文（{file}，SHA-256 {sha}）已以證明碼 {code} 標記。這證明此 ID 標記了正是這段內文；並不證明是誰寫的。",
   "TET technical paper": "TET 技術文件",
+  "built from {sha}.": "由 {sha} 建置。",
+  "This build doesn't name its commit.": "此建置沒有標明其提交。",
+  "This site serves no build manifest, so there is nothing to compare against.": "此網站沒有提供建置清單，所以沒有可比對的對象。",
+  "The build manifest (commit {commit}) is signed by TET's publisher ID: proof code {code}.": "建置清單（提交 {commit}）有 TET 發行者 ID 的簽名：證明碼 {code}。",
+  "The build manifest (commit {commit}) is not signed by TET's publisher ID.": "建置清單（提交 {commit}）沒有 TET 發行者 ID 的簽名。",
+  "{n} files this page loaded don't match it.": "此頁面載入的檔案中有 {n} 個不吻合。",
+  "All {n} files this page loaded match it.": "此頁面載入的全部 {n} 個檔案都吻合。",
+  "This check runs from this site's own code, so a compromised site could serve one that lies. For a check that doesn't trust this site, run scripts/verify_site.mjs from the source on your own computer.": "這項檢查由此網站自己的程式碼執行，所以被入侵的網站可以提供會說謊的檢查。若要一項不信任此網站的檢查，請在你自己的電腦上執行原始碼中的 scripts/verify_site.mjs。",
 };

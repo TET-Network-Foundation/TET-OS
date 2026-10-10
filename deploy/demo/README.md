@@ -57,6 +57,19 @@ node reports it in `GET /status/live` (the try page's **Live** channel) and the 
 page" names it. An archive has no `.git`, so the build can't find it on its own; left out, both say
 the build doesn't name its commit.
 
+## 4b. Sign the build (after each UI deploy)
+
+The UI build writes `/build-manifest.json` (every file the site serves, with its SHA-256). On your
+own machine, with the publisher key, after checking that a build of the same commit gives the same
+manifest:
+
+```bash
+cd tet-network/ui
+TET_PAPER_CHAIN_ID=tet-local-dev TET_PAPER_GENESIS_HASH=<genesis> \
+  node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org --publish
+node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org      # VERIFIED
+```
+
 ## 5. Check from outside
 
 ```bash

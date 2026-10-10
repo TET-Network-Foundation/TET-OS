@@ -468,6 +468,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # The signed build manifest (THREAT_MODEL rule 6): covers what the demo serves, deterministic,
+      # and only the publisher's signature over this manifest counts. Controls included.
+      - if: needs.gate.outputs.code == 'true'
+        name: build manifest — what the demo serves, signed by the publisher
+        run: node --experimental-strip-types scripts/build_manifest_guard.mjs
       # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
       - if: needs.gate.outputs.code == 'true'
         name: try page — the three safety sentences are where they must be
