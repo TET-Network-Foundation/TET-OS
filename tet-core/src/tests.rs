@@ -15919,3 +15919,44 @@ fn shelter_leaving_does_not_dodge_a_case() {
     assert_eq!(st.members[&did].nickname, None, "two members share a nickname after an overturn");
     assert_eq!(st.members[&eid].nickname.as_deref(), Some("Rin"));
 }
+
+/// **Members are told apart by a number nobody can choose:** given from the order they were let
+/// in (the moderator is 1), unique, kept across an overturned case, new if let in again; and
+/// `/shelter/members` serves it. Two look-alike nicknames never share a number.
+/// Negative control: every member numbered 1 → FAILED.
+#[test]
+fn shelter_member_numbers_come_from_the_log_and_are_unique() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let people: Vec<(String, String)> = (0..4).map(|_| tmail_party_for_tests()).collect();
+    for p in &people {
+        submit(&shelter_rec_for_tests(&mw, A::Invite, &p.1, true, "", "", now)).unwrap();
+    }
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.members[&mid].number, 1);
+    let nums: Vec<u32> = people.iter().map(|p| st.members[&p.1].number).collect();
+    assert_eq!(nums, vec![2, 3, 4, 5]);
+    // Overturned: same number. Left and let in again: a new one.
+    let case = submit(&shelter_rec_for_tests(&mw, A::Case, &people[0].1, false, "x", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case, false, "y", "overturn", now)).unwrap();
+    submit(&shelter_rec_for_tests(&people[1].0, A::Withdraw, &people[1].1, false, "", "", now)).unwrap();
+    let (nw, nid) = tmail_party_for_tests();
+    let _ = nw;
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &nid, true, "", "", now)).unwrap();
+    // (A new record: the first invite, sent again, would be refused as a copy.)
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &people[1].1, true, "", "", now + 1)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.members[&people[0].1].number, 2, "an overturn changed the number");
+    assert_eq!(st.members[&nid].number, 6);
+    assert_eq!(st.members[&people[1].1].number, 7, "let in again kept an old number");
+    let mut all: Vec<u32> = st.members.values().map(|m| m.number).collect();
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), st.members.len(), "two members share a number");
+}

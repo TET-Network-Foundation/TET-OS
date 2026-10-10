@@ -201,7 +201,10 @@ fn nickname_char_ok(c: char) -> bool {
         || ('\u{4E00}'..='\u{9FFF}').contains(&c) // CJK ideographs
 }
 
-/// What a nickname looks like, for uniqueness and the reserved words: lower case, separators
+/// What a nickname looks like, for uniqueness and the reserved words. **Best effort**: folding can't
+/// catch every look-alike (the CJK range alone has many), so it's a courtesy, not what tells members
+/// apart; that is the member number ([`ShelterMember::number`]), shown next to every nickname.
+///: lower case, separators
 /// dropped, and characters that look alike within the allowed set folded together (`I`/`l`/`1`,
 /// `O`/`0`, hiragana/katakana pairs, katakana/kanji look-alikes such as `エ`/`工`, `ロ`/`口`).
 pub fn nickname_skeleton(n: &str) -> String {
@@ -269,6 +272,10 @@ pub fn nickname_ok(n: &str) -> bool {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ShelterMember {
     pub wallet: String,
+    /// The member's number, from the order they were let in (the moderator is 1). Given by the
+    /// log, so nobody can choose or copy it: the page shows it next to every nickname, which is
+    /// what tells two look-alike nicknames apart. A member let in again gets a new number.
+    pub number: u32,
     /// Who let them in: the moderator (invite) or a member (vouch). `None` for the moderator.
     pub via: Option<String>,
     pub joined_at_ms: u64,
@@ -306,6 +313,8 @@ pub struct ShelterState {
     pub cases: Vec<ShelterCase>,
     /// Members removed by a case, kept to restore them if it's overturned.
     removed: BTreeMap<String, ShelterMember>,
+    /// The next member's number.
+    next_number: u32,
     /// Members who left, as they were (they can be let in again, and a case can still be decided
     /// about them, so leaving can't dodge one).
     left: BTreeMap<String, ShelterMember>,
@@ -313,10 +322,10 @@ pub struct ShelterState {
 
 impl ShelterState {
     pub fn new(cfg: &ShelterConfig) -> Self {
-        let mut s = Self::default();
+        let mut s = Self { next_number: 2, ..Self::default() };
         s.members.insert(
             cfg.moderator.clone(),
-            ShelterMember { wallet: cfg.moderator.clone(), via: None, joined_at_ms: 0, nickname: None },
+            ShelterMember { wallet: cfg.moderator.clone(), number: 1, via: None, joined_at_ms: 0, nickname: None },
         );
         s
     }
@@ -399,9 +408,11 @@ impl ShelterState {
                 }
                 *self.given.entry(signer.to_string()).or_insert(0) += 1;
                 self.left.remove(subject);
+                let number = self.next_number;
+                self.next_number += 1;
                 self.members.insert(
                     subject.to_string(),
-                    ShelterMember { wallet: subject.to_string(), via: Some(signer.to_string()), joined_at_ms: r.at_ms, nickname: None },
+                    ShelterMember { wallet: subject.to_string(), number, via: Some(signer.to_string()), joined_at_ms: r.at_ms, nickname: None },
                 );
             }
             ShelterAction::Withdraw => {

@@ -101,6 +101,7 @@ pub async fn get_shelter_me(State(state): State<RestState>, headers: HeaderMap, 
             "moderator": who == cfg.moderator,
             "board": cfg.board,
             "nickname": m.nickname,
+            "number": m.number,
             "via": m.via,
             "joined_at_ms": m.joined_at_ms,
             "vouches_left": st.vouches_left(&cfg, &who),
@@ -126,6 +127,7 @@ pub async fn get_shelter_members(State(state): State<RestState>, headers: Header
         .map(|m| {
             serde_json::json!({
                 "wallet": m.wallet,
+                "number": m.number,
                 "nickname": m.nickname,
                 "via": m.via,
                 "joined_at_ms": m.joined_at_ms,
