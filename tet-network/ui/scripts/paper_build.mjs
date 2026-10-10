@@ -16,7 +16,7 @@
 
 import { register } from "node:module";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -70,10 +70,11 @@ async function printPdf(html, out) {
   const src = join(dir, "paper.html");
   writeFileSync(src, html);
   const port = 9900 + Math.floor(Math.random() * 90);
+  const profile = mkdtempSync(join(tmpdir(), "cdp-"));
   const chrome = spawn(process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", [
     "--headless=new",
     `--remote-debugging-port=${port}`,
-    `--user-data-dir=${mkdtempSync(join(tmpdir(), "cdp-"))}`,
+    `--user-data-dir=${profile}`,
     "--no-first-run",
     "about:blank",
   ], { stdio: "ignore" });
@@ -119,6 +120,10 @@ async function printPdf(html, out) {
     writeFileSync(out, Buffer.from(r.result.data, "base64"));
   } finally {
     chrome.kill("SIGKILL");
+    // Each run makes a Chrome profile and a scratch copy; leaving them filled the disk once.
+    await new Promise((r) => setTimeout(r, 500));
+    rmSync(profile, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   }
 }
 

@@ -9,6 +9,7 @@ mod chaos;
 mod conductor;
 mod consensus;
 mod demo_sponsor;
+mod grants;
 mod operator_hide;
 mod e2ee;
 mod executor;
@@ -689,6 +690,17 @@ async fn main() -> Result<(), AnyErr> {
         }
     };
     let ledger_for_hide = ledger.sled_db();
+    let grant_payer = match crate::grants::GrantPayer::from_env(&ledger.sled_db()) {
+        Ok(Some(g)) => {
+            log::info!("[grants] on; grant wallet {}", g.wallet_id());
+            Some(Arc::new(g))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(2);
+        }
+    };
     let state = RestState {
         ledger,
         wallet_id: config.initial_wallet.clone(),
@@ -711,6 +723,7 @@ async fn main() -> Result<(), AnyErr> {
         log_tx,
         log_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         demo_sponsor,
+        grant_payer,
         operator_hide: crate::operator_hide::OperatorHide::open(&ledger_for_hide).unwrap_or_else(|e| {
             eprintln!("[startup] operator hide list: {e}");
             std::process::exit(2);

@@ -1029,4 +1029,12 @@ export const JA: Record<string, string> = {
   "Even if TET disappears, this still works:": "TET がなくなっても、これは動きます：",
   "the offline verifier": "オフライン検証ツール",
   "(one file: it checks a record on your device, with the network off)": "（1つのファイル。ネットに接続しなくても、あなたの端末で記録を確認します）",
+  "Welcome grant: {amount} TET (practice unit, can't be exchanged for money) for the opening {cap} people. {n} granted so far.": "ウェルカム付与：最初の {cap} 人に {amount} TET（練習用の単位。お金とは交換できません）。これまでに {n} 人に付与。",
+  "One per person, decided weakly for now: one per registration in the anonymity set, and registering is free. It moves to vouched members once Shelter's vouches exist.": "1人1回ですが、今の判定は弱いものです。匿名グループへの登録1件につき1回で、登録は無料です。シェルターの推薦ができたら、推薦されたメンバーに切り替えます。",
+  "Granted: {amount} TET (practice unit, can't be exchanged for money) to this ID.": "付与しました：この ID に {amount} TET（練習用の単位。お金とは交換できません）。",
+  "Join the anonymity set first": "先に匿名グループに参加",
+  "Proving on your computer (about 30 s)…": "あなたのコンピューターで証明中（約30秒）…",
+  "Claim the welcome grant": "ウェルカム付与を受け取る",
+  "Your registration takes effect at the next epoch; try again in a minute.": "登録は次の区切りから有効です。1分後にもう一度試してください。",
+  "Claiming needs the native prover on your own computer.": "受け取るには、自分のコンピューターで動く証明プログラムが必要です。",
 };

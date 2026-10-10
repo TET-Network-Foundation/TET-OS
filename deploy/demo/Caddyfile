@@ -70,6 +70,8 @@
 		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/anon/leaves$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/shelter/record$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/shelter/key$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/grants/status$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/grants/welcome$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/sigs/publish$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/sigs/search$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/sites/edit$")) ||

@@ -42,6 +42,9 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/tmail/anon/fast/:receiver/:posting_key"),
     // Shelter (tmail/shelter.rs): whether it's open; signed records; signed reads (members only,
     // except `/shelter/me`, which tells a non-member only that).
+    // Testnet practice grants (grants.rs): the welcome grant's count; a claim.
+    ("GET", "/grants/status"),
+    ("POST", "/grants/welcome"),
     ("GET", "/shelter/status"),
     ("POST", "/shelter/record"),
     ("POST", "/shelter/key"),
