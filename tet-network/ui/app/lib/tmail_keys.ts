@@ -62,6 +62,8 @@ export async function deriveTmailKeysFromMnemonic(mnemonic: string): Promise<Tma
 
 /** Receiver KEM public-key registration (mirrors tet-core `keys.rs::TmailKeyRegistrationV1`). */
 export type TmailKeyRegistrationV1 = {
+  /** Pre-image version: 2 (PAE). Absent or anything else: an older registration, refused. */
+  v?: number;
   wallet_id: string;
   x25519_pub_b64: string;
   mlkem_pub_b64: string;
@@ -69,8 +71,19 @@ export type TmailKeyRegistrationV1 = {
   hybrid_sig: TmailHybridSig;
 };
 
+/** The PAE domain of a key registration's pre-image (tet-core `TMAIL_KEY_PAE_DOMAIN`). */
+export const TMAIL_KEY_PAE_DOMAIN = "tet tmail key v2";
+
+/** `domain SP (len SP field SP)*`: length-prefixed, so no field can be shifted into another. */
+function pae(domain: string, fields: string[]): Uint8Array {
+  const enc = new TextEncoder();
+  let s = `${domain} `;
+  for (const f of fields) s += `${enc.encode(f).length} ${f} `;
+  return enc.encode(s);
+}
+
 /**
- * Hybrid-signature preimage for a key registration — byte-exact with tet-core
+ * Hybrid-signature pre-image for a key registration (v2, PAE) — byte-exact with tet-core
  * `keys.rs::tmail_key_registration_auth_message_bytes`.
  */
 export function tmailKeyRegistrationAuthMessageBytes(opts: {
@@ -82,14 +95,15 @@ export function tmailKeyRegistrationAuthMessageBytes(opts: {
   chainId: string;
   genesisHash: string;
 }): Uint8Array {
-  const line =
-    `tet tmail key v1|chain_id=${opts.chainId}|genesis_hash=${opts.genesisHash}` +
-    `|wallet_id=${opts.walletId.trim().toLowerCase()}` +
-    `|x25519_pub=${opts.x25519PubB64.trim()}` +
-    `|mlkem_pub=${opts.mlkemPubB64.trim()}` +
-    `|registered_at_ms=${opts.registeredAtMs}` +
-    `|mldsa_pk=${opts.mldsaPubkeyB64.trim()}`;
-  return new TextEncoder().encode(line);
+  return pae(TMAIL_KEY_PAE_DOMAIN, [
+    opts.chainId,
+    opts.genesisHash,
+    opts.walletId.trim().toLowerCase(),
+    opts.x25519PubB64.trim(),
+    opts.mlkemPubB64.trim(),
+    String(opts.registeredAtMs),
+    opts.mldsaPubkeyB64.trim(),
+  ]);
 }
 
 /**
@@ -124,6 +138,7 @@ export async function buildTmailKeyRegistrationV1(opts: {
   const mldsaSig = await mldsa44SignDeterministic(sess.mldsa44_keypair_b64, msg);
 
   return {
+    v: 2,
     wallet_id: walletId,
     x25519_pub_b64: x25519PubB64,
     mlkem_pub_b64: mlkemPubB64,

@@ -166,11 +166,11 @@ async function decryptFile(b, rxSk, rmkSk) {
 
 // --- preimages ---
 function keyRegPreimage(o) {
-  return enc(
-    `tet tmail key v1|chain_id=${o.chainId}|genesis_hash=${o.genesisHash}` +
-      `|wallet_id=${o.walletId.toLowerCase()}|x25519_pub=${o.xPubB64.trim()}|mlkem_pub=${o.mlkemPubB64.trim()}` +
-      `|registered_at_ms=${o.registeredAtMs}|mldsa_pk=${o.mldsaPk.trim()}`,
-  );
+  // v2: PAE under "tet tmail key v2" (keys.rs); the node refuses anything else.
+  const fields = [o.chainId, o.genesisHash, o.walletId.toLowerCase(), o.xPubB64.trim(), o.mlkemPubB64.trim(), String(o.registeredAtMs), o.mldsaPk.trim()];
+  let s = "tet tmail key v2 ";
+  for (const f of fields) s += `${new TextEncoder().encode(f).length} ${f} `;
+  return enc(s);
 }
 function fileEnvelopePreimage(o) {
   return enc(
@@ -288,6 +288,7 @@ async function main() {
   {
     const registeredAtMs = Date.now();
     const reg = {
+      v: 2,
       wallet_id: B.walletId,
       x25519_pub_b64: b64(kemB.x25519_pub),
       mlkem_pub_b64: b64(kemB.mlkem_pub),

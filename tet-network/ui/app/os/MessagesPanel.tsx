@@ -28,6 +28,7 @@ import {
   postTmailSend,
   putTmailKeys,
 } from "../lib/tet_core_http";
+import { trustedKeysFor, verifyEnvelopeSender } from "../lib/key_trust";
 import {
   anonLabel,
   buildTmailAnonRegistrationV1,
@@ -177,6 +178,8 @@ export default function MessagesPanel(props: {
       const session = getTmailKeySession();
       if (!session) return null;
       if (normalizeWalletId64(row.receiver_wallet_id) !== myWalletId) return null;
+      // Who sent it, checked here: a message whose signature isn't its claimed sender's isn't shown.
+      if ((await verifyEnvelopeSender(row as never, baseUrl)) === "forged") return null;
       const common = {
         msgId: row.msg_id,
         sender: row.sender_wallet_id,
@@ -210,7 +213,7 @@ export default function MessagesPanel(props: {
         return null;
       }
     },
-    [myWalletId],
+    [myWalletId, baseUrl],
   );
 
   // Inbox polling + decrypt + initial key-registration probe (this panel remounts per wallet via
@@ -303,21 +306,18 @@ export default function MessagesPanel(props: {
     }
     setSendBusy(true);
     try {
-      const keys = await getTmailKeys(baseUrl, to);
-      if (!keys.ok && keys.status !== 404) {
-        setSendNotice({ kind: "err", text: keys.text ?? `Key lookup failed (HTTP ${keys.status}).` });
-        return;
-      }
-      if (!keys.registration) {
-        setSendNotice({ kind: "err", text: "Recipient hasn't registered messaging keys yet." });
+      // Only keys the recipient's own wallet signed (checked here, not trusted from the node).
+      const keys = await trustedKeysFor(baseUrl, to);
+      if (!keys.ok) {
+        setSendNotice({ kind: "err", text: keys.reason === "none" ? "Recipient hasn't registered messaging keys yet." : keys.message });
         return;
       }
       const env = await buildTmailEnvelopeV1({
         senderWalletId: myWalletId,
         receiverWalletId: to,
         plaintextUtf8: text,
-        receiverX25519Pub: b64ToBytes(keys.registration.x25519_pub_b64),
-        receiverMlkemPub: b64ToBytes(keys.registration.mlkem_pub_b64),
+        receiverX25519Pub: keys.x25519Pub,
+        receiverMlkemPub: keys.mlkemPub,
         baseUrl,
         burnAfterRead,
         releaseAtMs: scheduled ? Date.now() + scheduleMinutes * 60_000 : undefined,
@@ -438,9 +438,9 @@ export default function MessagesPanel(props: {
     }
     setSendBusy(true);
     try {
-      const keys = await getTmailKeys(baseUrl, to);
-      if (!keys.registration) {
-        setSendNotice({ kind: "err", text: "Recipient hasn't registered messaging keys yet." });
+      const keys = await trustedKeysFor(baseUrl, to);
+      if (!keys.ok) {
+        setSendNotice({ kind: "err", text: keys.reason === "none" ? "Recipient hasn't registered messaging keys yet." : keys.message });
         return;
       }
       const reg = keys.registration;
