@@ -16107,7 +16107,10 @@ fn welcome_grant_is_one_per_member_and_wallet_for_a_day_zero_proof() {
         crate::protocol::TxV1::Transfer { from_wallet, to_wallet, amount_micro, .. } => {
             assert_eq!(from_wallet, payer.wallet_id());
             assert_eq!(to_wallet, &payout);
-            assert_eq!(*amount_micro, WELCOME_AMOUNT_MICRO);
+            // Exactly the grant arrives: the fee comes out of what the grant wallet sends.
+            assert_eq!(*amount_micro, crate::grants::welcome_transfer_micro());
+            let net = crate::fees::charge(crate::fees::FeeKind::Transfer { fee_bps: crate::fees::TRANSFER_FEE_BPS_MIN }, *amount_micro).unwrap().net_micro;
+            assert_eq!(net, WELCOME_AMOUNT_MICRO, "the recipient must receive exactly the grant");
         }
         other => panic!("not a transfer: {other:?}"),
     }
@@ -16184,4 +16187,18 @@ fn ui_signed_grant_claim_verifies_in_rust() {
     let mut changed = claim.clone();
     changed.payout_wallet = "ef".repeat(32);
     assert_eq!(payer.decide(&changed, &store, now, u64::MAX).err(), Some(GrantRefusal::BadSignature));
+}
+
+/// The grant payer's floor counts grants already in flight: its pending transfers are subtracted
+/// before the floor check. Control (run by hand): returning 0 from pending_outgoing_micro → FAILS.
+#[test]
+fn grant_floor_counts_pending_grants() {
+    let words = crate::wallet::generate_mnemonic_12().unwrap();
+    let w = words.mnemonic_12.clone().unwrap();
+    let id = words.address_hex.to_ascii_lowercase();
+    let mk = |amt: u64| signed_env_for_tests(crate::protocol::TxV1::Transfer { from_wallet: id.clone(), to_wallet: "ab".repeat(32), amount_micro: amt, fee_bps: 100 }, &w, &id);
+    let other = signed_env_for_tests(crate::protocol::TxV1::Transfer { from_wallet: "cd".repeat(32), to_wallet: "ab".repeat(32), amount_micro: 7, fee_bps: 100 }, &w, &id);
+    let pool = vec![mk(100_000_000), mk(100_000_000), other];
+    assert_eq!(crate::rest::handlers::grants::pending_outgoing_micro(&pool, &id), 200_000_000);
+    assert_eq!(crate::rest::handlers::grants::pending_outgoing_micro(&pool, &id.to_ascii_uppercase()), 200_000_000);
 }

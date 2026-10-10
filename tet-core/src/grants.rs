@@ -26,6 +26,21 @@ pub const GRANT_WELCOME: &str = "welcome";
 pub const GRANT_CLAIM_KIND: &str = "tet_grant_claim_v1";
 /// 100 TET (practice unit).
 pub const WELCOME_AMOUNT_MICRO: u64 = 100_000_000;
+
+/// What the grant transfer sends so that exactly [`WELCOME_AMOUNT_MICRO`] arrives: the transfer fee
+/// (the consensus minimum rate) comes out of the amount, so the grant wallet sends a little more.
+/// The smallest amount whose net is at least the grant, from `fees::charge` itself.
+pub fn welcome_transfer_micro() -> u64 {
+    let bps = crate::fees::TRANSFER_FEE_BPS_MIN;
+    let mut g = WELCOME_AMOUNT_MICRO.saturating_mul(10_000) / (10_000 - bps);
+    loop {
+        let net = crate::fees::charge(crate::fees::FeeKind::Transfer { fee_bps: bps }, g).map(|s| s.net_micro).unwrap_or(0);
+        if net >= WELCOME_AMOUNT_MICRO {
+            return g;
+        }
+        g += 1;
+    }
+}
 /// The opening 1,000 people.
 pub const WELCOME_CAP: u64 = 1_000;
 /// The payer keeps at least this much (10 TET, practice).
@@ -245,7 +260,7 @@ impl GrantPayer {
     }
 
     fn sign_transfer(&self, to: &str) -> Result<SignedTxEnvelopeV1, String> {
-        let tx = TxV1::Transfer { from_wallet: self.wallet_id.clone(), to_wallet: to.to_string(), amount_micro: WELCOME_AMOUNT_MICRO, fee_bps: crate::fees::TRANSFER_FEE_BPS_MIN };
+        let tx = TxV1::Transfer { from_wallet: self.wallet_id.clone(), to_wallet: to.to_string(), amount_micro: welcome_transfer_micro(), fee_bps: crate::fees::TRANSFER_FEE_BPS_MIN };
         let msg = crate::wallet::tx_v1_auth_message_bytes(&tx, &self.mldsa_pubkey_b64)?;
         let sig = crate::agent::sign_agent_message_bytes(&self.words, &msg).map_err(|e| e.to_string())?;
         Ok(SignedTxEnvelopeV1 { v: 1, tx, sig, attestation: AttestationV1 { platform: String::new(), report_b64: String::new() } })
@@ -294,7 +309,7 @@ pub(crate) fn decide_journal(
     if p.granted() >= WELCOME_CAP {
         return Err(GrantRefusal::CapReached);
     }
-    if payer_spendable_micro < PAYER_FLOOR_MICRO.saturating_add(WELCOME_AMOUNT_MICRO) {
+    if payer_spendable_micro < PAYER_FLOOR_MICRO.saturating_add(welcome_transfer_micro()) {
         return Err(GrantRefusal::PayerLow);
     }
     let env = p.sign_transfer(payout).map_err(GrantRefusal::Submit)?;

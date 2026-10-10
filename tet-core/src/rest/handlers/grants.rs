@@ -40,7 +40,10 @@ pub async fn post_grants_welcome(State(state): State<RestState>, Json(c): Json<G
     let Some(p) = state.grant_payer.clone() else { return refuse(GrantRefusal::Off) };
     let _one_at_a_time = p.decide_lock.lock().await;
     let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
-    let spendable = state.ledger.spendable_balance_micro_now(p.wallet_id()).unwrap_or(0);
+    // What the grant wallet can still spend: its balance minus its transfers already waiting in
+    // the mempool (grants sent but not yet in a block), so the floor holds for grants in flight.
+    let pending = crate::rest::handlers::grants::pending_outgoing_micro(&state.mempool.lock().await, p.wallet_id());
+    let spendable = state.ledger.spendable_balance_micro_now(p.wallet_id()).unwrap_or(0).saturating_sub(pending);
     let store = state.tmail.clone();
     let (p2, c2) = (p.clone(), c.clone());
     let decided = tokio::task::spawn_blocking(move || p2.decide(&c2, &store, now_ms, spendable)).await;
@@ -62,4 +65,15 @@ pub async fn post_grants_welcome(State(state): State<RestState>, Json(c): Json<G
         Json(serde_json::json!({ "ok": true, "granted_micro": crate::grants::WELCOME_AMOUNT_MICRO, "to": c.payout_wallet.trim().to_ascii_lowercase(), "tx_hash": tx_hash })),
     )
         .into_response()
+}
+
+/// The sum of transfers from `wallet` waiting in `mempool`.
+pub(crate) fn pending_outgoing_micro(mempool: &[crate::protocol::SignedTxEnvelopeV1], wallet: &str) -> u64 {
+    mempool
+        .iter()
+        .filter_map(|e| match &e.tx {
+            crate::protocol::TxV1::Transfer { from_wallet, amount_micro, .. } if from_wallet.trim().eq_ignore_ascii_case(wallet) => Some(*amount_micro),
+            _ => None,
+        })
+        .fold(0u64, |a, b| a.saturating_add(b))
 }
