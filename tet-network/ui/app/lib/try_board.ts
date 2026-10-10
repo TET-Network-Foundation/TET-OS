@@ -132,8 +132,14 @@ export async function openBoard(baseUrl: string, inviteText: string): Promise<Op
 export const HIDDEN_BOARD = "This node no longer serves this board: its operator hid it. Hiding is local to this node; see Terms.";
 
 /** The board's posts, newest first, decrypted with the invite's keys. */
-export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100): Promise<BoardPost[]> {
-  const r = await getTmailInbox(baseUrl, board.boardWalletId, limit);
+export async function readBoard(
+  baseUrl: string,
+  board: OpenBoard,
+  limit = 100,
+  /** Where the rows come from (default: the board's public inbox; Shelter reads its members-only one). */
+  rows: () => Promise<Awaited<ReturnType<typeof getTmailInbox>>> = () => getTmailInbox(baseUrl, board.boardWalletId, limit),
+): Promise<BoardPost[]> {
+  const r = await rows();
   if (r.status === 410) throw new Error(HIDDEN_BOARD);
   if (!r.ok) throw new Error(r.text || `could not read the board (HTTP ${r.status})`);
   const out: BoardPost[] = [];
@@ -284,6 +290,8 @@ export async function postAnonymousTo(
   onState: (s: AnonSendState) => void,
   memberTree?: { leaves: Uint8Array[]; rootHex: string },
   knownMember = false,
+  /** A members-only space with its own tree that still allows fast posts (Shelter; never a poll). */
+  allowFast = false,
 ): Promise<AnonSendState> {
   const ks = getTmailKeySession();
   if (!ks) return { state: "failed", reason: "Create a disposable wallet first." };
@@ -315,7 +323,7 @@ export async function postAnonymousTo(
       now: () => Date.now(),
       onState,
     },
-    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text, memberTree, knownMember },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text, memberTree, knownMember, allowFast },
   )) as AnonSendState;
 }
 

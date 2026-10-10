@@ -214,7 +214,7 @@ export async function prewarmAnonProof(deps, input) {
  *   proveBudgetMs?: number,
  *   proofCache?: Map<string, Promise<AnonProof>>,
  * }} deps
- * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string, memberTree?: { leaves: Uint8Array[], rootHex: string }, knownMember?: boolean }} input
+ * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string, memberTree?: { leaves: Uint8Array[], rootHex: string }, knownMember?: boolean, allowFast?: boolean }} input
  * @returns {Promise<AnonPostState>}
  */
 export async function runAnonPost(deps, input) {
@@ -239,7 +239,7 @@ export async function runAnonPost(deps, input) {
     const ephemeral = (await deps.ephemeralWalletId(ephemeralSeed)).trim().toLowerCase();
     // Ask only for a caller that already knows this is a member: a non-member's request shows the
     // node nothing but the registry download (anon_poster_guard), not a would-be posting key.
-    if (!input.memberTree && input.knownMember) {
+    if ((!input.memberTree || input.allowFast === true) && input.knownMember) {
       const q = await deps.node(`/tmail/anon/fast/${receiver}/${ephemeral}`, { method: "GET" });
       if (q.status === 200 && q.json?.registered === true) {
         emit({ state: "sending" });
@@ -256,7 +256,9 @@ export async function runAnonPost(deps, input) {
     }
 
     // The first anonymous post of the day here: it carries the proof that registers the key.
-    const cached = deps.proofCache?.get(`${receiver}:${bucket}`);
+    // A cached proof is against the node's anonymity set; a members-only tree (a poll, Shelter)
+    // needs a proof against that tree, so it never takes one from the cache.
+    const cached = input.memberTree ? undefined : deps.proofCache?.get(`${receiver}:${bucket}`);
     let proof;
     if (cached) {
       emit({ state: "proving", startedAtMs: sentAtMs });

@@ -244,6 +244,29 @@ function deps(node, states, proveCalls) {
   }
 }
 
+// ---- 6. members-only trees (polls, Shelter) -------------------------------------------------
+// Shelter has its own member tree and allows fast posts (allowFast); a poll never does. Neither
+// takes a cached proof: that one is against the node's open anonymity set, not the member tree.
+// Negative control (run by hand, recorded in the commit): the memberTree condition removed from
+// the cache lookup → "a member tree never takes a cached proof" FAILED.
+{
+  const leaves = [others[0], anonCommitment(memberSecret), others[1]];
+  const tree = { leaves, rootHex: toHex(anonRootAndPath(leaves, -1).root) };
+  {
+    const { node, requests } = fakeNode({ fastRegistered: true });
+    const out = await runAnonPost(deps(node, [], []), { memberSecret, receiverWalletId: "cd".repeat(32), plaintext: "s", knownMember: true, memberTree: tree, allowFast: true });
+    check("Shelter (member tree + allowFast) takes the fast path", out.state === "sent" && out.fast === true && requests.some((r) => r.includes("/tmail/anon/fast/")));
+  }
+  {
+    const { node, requests } = fakeNode({ fastRegistered: false });
+    const proveCalls = [];
+    const cache = new Map([[`${"cd".repeat(32)}:${Math.floor(1_700_000_000_000 / 86_400_000)}`, Promise.resolve({ receipt_b64: "x", journal_b64: "x", image_id_hex: "11".repeat(32), receipt_sha256_hex: "cached" })]]);
+    const d = { ...deps(node, [], proveCalls), proofCache: cache };
+    const out = await runAnonPost(d, { memberSecret, receiverWalletId: "cd".repeat(32), plaintext: "s", knownMember: true, memberTree: tree, allowFast: true });
+    check("SECURITY: a member tree never takes a cached proof", out.state === "sent" && proveCalls.length === 1 && !requests.some((r) => r.includes('"cached"')));
+  }
+}
+
 // ---- 3. anonymous mode never takes the named path -------------------------------------------
 check("SECURITY: anonymous mode uses the anonymous path", sendPathFor({ anonymous: true }) === "anonymous");
 check("named mode uses the named path", sendPathFor({ anonymous: false }) === "named");

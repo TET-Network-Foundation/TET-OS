@@ -25,8 +25,12 @@ something TET detects.
 
 - **Say:** "Members-only and end-to-end encrypted. Joining needs an in-person vouch. House rule:
   don't post AI-written text here."
-- **Never:** "AI cannot enter", "AI-free guaranteed", "AI cannot access TET", "humans only,
-  guaranteed", or any claim that TET detects AI.
+- **Never say** any of these:
+  - never "AI cannot enter";
+  - never "AI-free guaranteed";
+  - never "AI cannot access TET";
+  - never "humans only, guaranteed";
+  - never any claim that TET detects AI.
 - `try_ai_wording_guard` (new) enforces this across the UI, the docs and the i18n files, with a
   negative control. See also the AI access policy below.
 
@@ -159,8 +163,8 @@ doesn't wait for Shelter.
 - **Crawlers:**
   - robots.txt and the Caddy rule list exactly the agents in `deploy/ai-crawlers.txt`;
   - a request with `GPTBot` gets 403, and one with `Googlebot` doesn't.
-- **Wording:** `try_ai_wording_guard` catches "AI cannot enter", "AI-free guaranteed" and "AI
-  cannot access TET" in en, ja and zh.
+- **Wording:** `try_ai_wording_guard` catches the phrases listed above as never to be said, in
+  en, ja and zh.
 
 ## Order
 
