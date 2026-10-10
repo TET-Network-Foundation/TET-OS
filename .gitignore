@@ -55,6 +55,10 @@ secret_founder_terminal.html
 
 # Private working notes (contains personal/strategic material — keep out of the public repo)
 docs/FUTURE_IDEAS.md
+# Working logs of automated or long sessions (run logs, scratch): never committed (CLAUDE.md,
+# "Never stage a directory wholesale").
+docs/NONSTOP_LOG.md
+docs/*_LOG.local.md
 # Essay addressed to investors and collaborators, in Steve's own voice. Kept local:
 # it is context for private conversations, not documentation for a public repo.
 docs/FOUNDER_NOTES.md
