@@ -2397,12 +2397,14 @@ async fn invalid_zk_receipt_is_rejected_by_consensus_mining() {
     let state = rest_state_for_tests(ledger.clone());
     state.mempool.lock().await.push(env);
 
-    let res = crate::consensus::mine_pending_block_as(state, "producer-zk".to_string()).await;
-    assert!(matches!(
-        res,
-        Err(crate::consensus::MineError::Unauthorized(_))
-    ));
-    assert_eq!(ledger.block_height().unwrap(), 0);
+    // Consensus refuses the receipt: the block is made without it (one bad transaction no longer
+    // fails the whole block, SECURITY.md 2026-10-10), it pays no compute reward, and it is dropped.
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-zk".to_string())
+        .await
+        .unwrap();
+    assert_eq!(outcome.tx_count, 0, "the invalid receipt is not in the block");
+    assert_eq!(outcome.reward.compute_reward_micro, 0, "no compute reward for an invalid receipt");
+    assert!(state.mempool.lock().await.is_empty(), "the invalid receipt is dropped");
 }
 
 #[tokio::test]
@@ -2601,12 +2603,17 @@ async fn zk_task_race_loser_is_rejected_after_winner_processed() {
     assert!(outcome.mined);
     assert!(ledger.ai_workload_is_processed(task_id).unwrap());
 
+    // The loser is refused: the next block is made without it, pays it nothing, and drops it
+    // (one bad transaction no longer fails the whole block, SECURITY.md 2026-10-10).
+    let loser_hash = crate::consensus::tx_hash_for_env(&loser).unwrap();
     state.mempool.lock().await.push(loser);
-    let res = crate::consensus::mine_pending_block_as(state, "producer-race".to_string()).await;
-    assert!(matches!(
-        res,
-        Err(crate::consensus::MineError::Unauthorized(_))
-    ));
+    let outcome2 = crate::consensus::mine_pending_block_as(state.clone(), "producer-race".to_string())
+        .await
+        .unwrap();
+    assert_eq!(outcome2.tx_count, 0, "the losing claim is not in the block");
+    assert_eq!(outcome2.reward.compute_reward_micro, 0);
+    assert!(!ledger.is_tx_applied(&loser_hash).unwrap_or(false));
+    assert!(state.mempool.lock().await.is_empty());
 }
 
 #[test]
@@ -3548,8 +3555,12 @@ async fn mempool_limit_evicts_lowest_fee_tx() {
         std::env::set_var("TET_MEMPOOL_MAX_BYTES", "1048576");
     }
     let ledger = std::sync::Arc::new(open_temp_ledger());
-    let state = rest_state_for_tests(ledger);
     let alice = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // Admission refuses transfers the sender can't cover, so alice has funds.
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    ledger.admin_rest_faucet(alice, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let state = rest_state_for_tests(ledger);
     let bob = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let make_env = |fee_bps| crate::protocol::SignedTxEnvelopeV1 {
         v: 1,
@@ -3571,14 +3582,15 @@ async fn mempool_limit_evicts_lowest_fee_tx() {
         },
     };
 
-    assert!(!state.submit_local_tx(make_env(1)).await.unwrap());
-    assert!(state.submit_local_tx(make_env(100)).await.unwrap());
+    // Two rates inside the consensus range (an out-of-range one is refused at admission).
+    assert!(!state.submit_local_tx(make_env(100)).await.unwrap());
+    assert!(state.submit_local_tx(make_env(1000)).await.unwrap());
     let mp = state.mempool.lock().await;
     assert_eq!(mp.len(), 1);
     let crate::protocol::TxV1::Transfer { fee_bps, .. } = mp[0].tx else {
         panic!("expected transfer");
     };
-    assert_eq!(fee_bps, 100);
+    assert_eq!(fee_bps, 1000);
 
     unsafe {
         std::env::remove_var("TET_MEMPOOL_MAX_TXS");
@@ -14323,4 +14335,90 @@ fn ui_signed_key_registration_v2_verifies_in_rust() {
     let mut other = reg.clone();
     other.mlkem_pub_b64 = other.x25519_pub_b64.clone();
     assert!(crate::tmail::keys::verify_tmail_key_registration_v1(&other).is_err());
+}
+
+// ---- one bad transaction can't drop the mempool (SECURITY.md 2026-10-10) ------------------------
+
+fn transfer_with_fee_bps_for_tests(words: &str, from: &str, to: &str, amount_micro: u64, fee_bps: u64) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::Transfer { from_wallet: from.to_string(), to_wallet: to.to_string(), amount_micro, fee_bps };
+    signed_env_for_tests(tx, words, from)
+}
+
+/// Gossip and local submission refuse a transfer no block could accept (a fee rate outside the
+/// consensus range), and still admit a valid one.
+#[tokio::test]
+async fn mempool_admission_refuses_a_transfer_no_block_accepts() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    let to = "ab".repeat(32);
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    ledger.admin_rest_faucet(&id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+
+    let bad = transfer_with_fee_bps_for_tests(&words, &id, &to, crate::ledger::STEVEMON, 0);
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, bad.clone()).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "gossip admitted fee_bps 0: {out:?}");
+    assert!(state.submit_local_tx(bad).await.is_err(), "local submission admitted fee_bps 0");
+    assert!(state.mempool.lock().await.is_empty());
+
+    // An overdraft (a wallet with nothing) is refused at admission too, on both paths.
+    let p = crate::wallet::generate_mnemonic_12().unwrap();
+    let p_words = p.mnemonic_12.clone().unwrap();
+    let p_id = p.address_hex.to_ascii_lowercase();
+    let overdraft = transfer_with_fee_bps_for_tests(&p_words, &p_id, &to, crate::ledger::STEVEMON, 100);
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, overdraft.clone()).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "gossip admitted an overdraft: {out:?}");
+    assert!(state.submit_local_tx(overdraft).await.is_err(), "local submission admitted an overdraft");
+
+    let good = transfer_with_fee_bps_for_tests(&words, &id, &to, crate::ledger::STEVEMON, 100);
+    assert!(state.submit_local_tx(good).await.is_ok());
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+/// A mempool holding transactions a block would refuse (forced past admission: an out-of-range
+/// fee rate, and an overdraft that admission can't see) still gives a block with every valid
+/// transaction, and drops only the bad ones. Negative control (run by hand): with
+/// `select_block_txs` returning its input unchanged, the block fails and the valid transfer is
+/// lost → this test FAILS.
+#[tokio::test]
+async fn one_bad_transaction_does_not_drop_the_others() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let a = crate::wallet::generate_mnemonic_12().unwrap();
+    let a_words = a.mnemonic_12.clone().unwrap();
+    let a_id = a.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&a_id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let poor = crate::wallet::generate_mnemonic_12().unwrap();
+    let poor_words = poor.mnemonic_12.clone().unwrap();
+    let poor_id = poor.address_hex.to_ascii_lowercase();
+    let to = "cd".repeat(32);
+
+    let bad_fee = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, crate::ledger::STEVEMON, 0);
+    let overdraft = transfer_with_fee_bps_for_tests(&poor_words, &poor_id, &to, crate::ledger::STEVEMON, 100);
+    let good = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, 2 * crate::ledger::STEVEMON, 100);
+    let good_hash = crate::consensus::tx_hash_for_env(&good).unwrap();
+    {
+        let mut mp = state.mempool.lock().await;
+        mp.push(bad_fee);
+        mp.push(overdraft);
+        mp.push(good);
+    }
+
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+        .await
+        .expect("the block must still be made");
+    assert!(outcome.mined);
+    assert_eq!(outcome.tx_hashes, vec![good_hash], "only the valid transfer is in the block");
+    assert!(ledger.balance_micro(&to).unwrap() > 0, "the valid transfer settled");
+    assert!(state.mempool.lock().await.is_empty(), "the bad ones are dropped, not kept forever");
 }

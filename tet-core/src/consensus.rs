@@ -1383,6 +1383,121 @@ pub async fn mine_pending_block_as(
         }
         kept
     };
+    // One transaction a block would refuse must not cost everyone else theirs (SECURITY.md,
+    // 2026-10-10): keep the ones that build a valid block, drop only those that break it.
+    let (txs, later) = select_block_txs(&state.ledger, txs, &producer_id);
+    if !later.is_empty() {
+        requeue_txs(&state, later).await;
+    }
+    match build_and_apply_block(&state, &producer_id, &txs).await {
+        Ok(outcome) => Ok(outcome),
+        Err(e) => {
+            // Nothing was applied: the transactions go back, so a failed block loses none of them.
+            requeue_txs(&state, txs).await;
+            Err(e)
+        }
+    }
+}
+
+/// The checks every block makes on a transaction regardless of the ledger's state, run at mempool
+/// admission: the signer acts for itself, and for a transfer: both wallets named, an amount in
+/// range, a fee rate in the consensus range (FEE_SPEC §2.1). Mirrors the preview's stateless arm.
+pub fn tx_admissible(env: &SignedTxEnvelopeV1) -> Result<(), String> {
+    if !crate::protocol::signer_acts_for_itself(env) {
+        return Err("signer must be the wallet the transaction acts for".into());
+    }
+    if let TxV1::Transfer { from_wallet, to_wallet, amount_micro, fee_bps } = &env.tx {
+        if from_wallet.trim().is_empty() || to_wallet.trim().is_empty() {
+            return Err("from/to required".into());
+        }
+        if *amount_micro == 0 || *amount_micro > crate::ledger::MAX_SUPPLY_MICRO {
+            return Err("amount exceeds hard cap".into());
+        }
+        crate::fees::charge(crate::fees::FeeKind::Transfer { fee_bps: *fee_bps }, *amount_micro)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// A transfer whose sender can't cover it right now (spendable balance below the amount) is
+/// refused at admission: it would only be dropped by the producer, and a flood of them, from free
+/// wallets, would cost block-building time. A node behind on sync may refuse one a synced node
+/// accepts; it is then simply not relayed by that node.
+pub fn tx_affordable(ledger: &Ledger, env: &SignedTxEnvelopeV1) -> Result<(), String> {
+    if let TxV1::Transfer { from_wallet, amount_micro, .. } = &env.tx {
+        let from = from_wallet.trim().to_ascii_lowercase();
+        let bal = ledger.balance_micro(&from).map_err(|e| e.to_string())?;
+        let locked = ledger.locked_balance_micro_now(&from).map_err(|e| e.to_string())?;
+        if bal.saturating_sub(locked) < *amount_micro {
+            return Err("insufficient funds for this transfer".into());
+        }
+    }
+    Ok(())
+}
+
+/// Is `txs` a block the preview and apply would accept (the same checks, in the same order)?
+fn block_txs_ok(ledger: &Ledger, txs: &[SignedTxEnvelopeV1], producer_id: &str) -> bool {
+    if validate_zk_task_claims(ledger, txs).is_err() {
+        return false;
+    }
+    let Ok(reward) = reward_for_block(txs) else { return false };
+    ledger
+        .compute_state_root_after_remote_block(txs, producer_id, reward.total_reward_micro)
+        .is_ok()
+}
+
+/// At most this many transactions are examined one by one when a batch fails; the rest wait for
+/// the next block. Each check is a full preview, so this bounds the work a flood of
+/// bad-but-admissible transactions can cause per block.
+pub(crate) const SELECT_ONE_BY_ONE_MAX: usize = 256;
+
+/// The mempool's transactions that make a valid block, in order, and the ones left for a later
+/// block. All of them when the batch is valid (one preview, the usual case); otherwise the first
+/// [`SELECT_ONE_BY_ONE_MAX`] are each kept only if the block so far still previews with them, so
+/// a bad transaction (an out-of-range fee, an overdraft, …) drops alone.
+pub(crate) fn select_block_txs(
+    ledger: &Ledger,
+    mut txs: Vec<SignedTxEnvelopeV1>,
+    producer_id: &str,
+) -> (Vec<SignedTxEnvelopeV1>, Vec<SignedTxEnvelopeV1>) {
+    if block_txs_ok(ledger, &txs, producer_id) {
+        return (txs, Vec::new());
+    }
+    let later = if txs.len() > SELECT_ONE_BY_ONE_MAX { txs.split_off(SELECT_ONE_BY_ONE_MAX) } else { Vec::new() };
+    let mut kept: Vec<SignedTxEnvelopeV1> = Vec::with_capacity(txs.len());
+    for env in txs {
+        kept.push(env);
+        if !block_txs_ok(ledger, &kept, producer_id) {
+            let bad = kept.pop().expect("just pushed");
+            log::warn!(
+                "[consensus] dropped a transaction a block would refuse: {}",
+                tx_hash_for_env(&bad).unwrap_or_default()
+            );
+        }
+    }
+    (kept, later)
+}
+
+/// Put transactions back into the mempool (and its durable copy) after a block failed.
+async fn requeue_txs(state: &RestState, txs: Vec<SignedTxEnvelopeV1>) {
+    let mut mp = state.mempool.lock().await;
+    for env in txs {
+        let Ok(h) = tx_hash_for_env(&env) else { continue };
+        if mp.iter().any(|e| tx_hash_for_env(e).map(|x| x == h).unwrap_or(false)) {
+            continue;
+        }
+        state.ledger.mempool_persist(&h, &env);
+        mp.push(env);
+    }
+}
+
+async fn build_and_apply_block(
+    state: &RestState,
+    producer_id: &str,
+    txs: &[SignedTxEnvelopeV1],
+) -> Result<MineOutcome, MineError> {
+    let producer_id = producer_id.to_string();
+    let txs: Vec<SignedTxEnvelopeV1> = txs.to_vec();
     let tx_hashes: Vec<String> = txs
         .iter()
         .map(tx_hash_for_env)
