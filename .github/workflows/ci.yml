@@ -453,6 +453,10 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # A DM or ID card from a post goes to the post's verified signer key, never the short ID shown.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — DMs from posts go to the verified signer, not the shown ID
+        run: node --experimental-strip-types scripts/dm_target_guard.mjs
       # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
       - if: needs.gate.outputs.code == 'true'
         name: try page — the three safety sentences are where they must be

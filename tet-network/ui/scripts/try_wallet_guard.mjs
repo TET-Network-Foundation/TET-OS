@@ -12,9 +12,12 @@
  *    Negative control: the page fetches /wallet/mnemonic/new → FAILED.
  * 3. The wallet id is the one tet-core derives: the "abandon … about" phrase must give the
  *    agent_wallet_id that tet-core asserts in `agent_payload_envelopes_match_the_rust_signer`.
- * 4. SECURITY REGRESSION GUARD: messaging keys are published only when the visitor taps "Publish
- *    keys" (publishing is public): every `ensureMessagingKeys()` call in app/try sits in an
- *    `onPublish` handler. Controls: a call in an effect, in a send handler, or bare → FAILED.
+ * 4. SECURITY REGRESSION GUARD: messaging keys are published only when the visitor acts (publishing
+ *    is public): when this tab's wallet is made or opened (founder decision 2026-10-10: every
+ *    named poster is reachable), or from a "Publish keys" tap. Every `ensureMessagingKeys()` call
+ *    in app/try sits in an `onPublish` handler, and wallet.tsx calls `publishInbox` only inside
+ *    `ensureWallet` and `openWithWords`, never from an effect, and only with a v2 registration.
+ *    Controls: a call in an effect, in a send handler, or bare; publishInbox from an effect → FAILED.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -106,6 +109,28 @@ const trySources = Object.fromEntries(
 const pubProblems = publishProblems(trySources);
 const pubSites = Object.entries(trySources).filter(([f, s]) => f !== "wallet.tsx" && /\bensureMessagingKeys\s*\(/.test(s)).length;
 check("SECURITY: messaging keys are published only from a Publish keys tap", pubProblems.length === 0 && pubSites >= 2, pubProblems.join("; ") || `${pubSites} panels`);
+// wallet.tsx: publishInbox only where the wallet is made or opened.
+function inboxProblems(src) {
+  const problems = [];
+  const calls = [...src.matchAll(/\bpublishInbox\(/g)];
+  for (const m of calls) {
+    const before = src.slice(0, m.index);
+    const openers = [...before.matchAll(/\b(const (\w+) = useCallback|useEffect)\b/g)];
+    const last = openers.at(-1);
+    const where = last?.[2] ?? last?.[1] ?? "top level";
+    if (where !== "ensureWallet" && where !== "openWithWords") problems.push(`publishInbox() in ${where}`);
+  }
+  if (calls.length !== 2) problems.push(`${calls.length} publishInbox calls (expected 2)`);
+  if (!/registration\.v !== 2/.test(src)) problems.push("no v2 check");
+  return problems;
+}
+const walletSrc = readFileSync(resolve(tryDir, "wallet.tsx"), "utf8");
+const ip = inboxProblems(walletSrc);
+check("SECURITY: wallet.tsx publishes the inbox only when the wallet is made or opened", ip.length === 0, ip.join("; "));
+check(
+  "negative control: publishInbox from an effect FAILS",
+  inboxProblems(walletSrc.replace("void publishInbox(w.walletId);\n      return w;", "return w;").replace("const lockable = useRef(false);", "useEffect(() => { void publishInbox(\"x\"); }, []);\n  const lockable = useRef(false);")).length > 0,
+);
 const controls = {
   "effect.tsx": `useEffect(() => { void ensureMessagingKeys(); }, []);`,
   "send.tsx": `async function onSend() { await ensureWallet(); await ensureMessagingKeys(); }`,

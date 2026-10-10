@@ -73,24 +73,47 @@ export function WalletProvider(props: { children: ReactNode }) {
   const current = useRef<Promise<Wallet> | null>(null);
   const keysFor = useRef<string | null>(null);
 
+  // The inbox is turned on when the wallet is made or opened (signed v2 registration, #101), so
+  // every named poster can be messaged. Best effort: if the node is unreachable, the banner offers
+  // it again. Publishing the keys is public: it says this ID exists, nothing more.
+  const publishInbox = useCallback(async (id: string) => {
+    try {
+      const have = await getTmailKeys(BASE, id);
+      if (!have.ok) return;
+      if (!have.registration || have.registration.v !== 2) {
+        const ks = getTmailKeySession();
+        if (!ks || ks.walletIdHex64 !== id) return;
+        const reg = await buildTmailKeyRegistrationV1({ x25519_pub: ks.x25519_pub, mlkem_pub: ks.mlkem_pub, baseUrl: BASE });
+        const r = await putTmailKeys(BASE, id, reg);
+        if (!r.ok) return setKeys("none");
+      }
+      keysFor.current = id;
+      setKeys("published");
+    } catch {
+      /* the banner offers it again */
+    }
+  }, []);
+
   const ensureWallet = useCallback(async () => {
     current.current ??= (async () => {
       const words = generateDisposableWords();
       const w = { words, walletId: await activateTryWallet(words) };
       setWallet(w);
+      void publishInbox(w.walletId);
       return w;
     })().catch((e: unknown) => {
       current.current = null;
       throw e;
     });
     return (await current.current).walletId;
-  }, []);
+  }, [publishInbox]);
 
   /** Open the tab's wallet from existing words (a key remembered on this device). */
   const openWithWords = useCallback(async (words: string) => {
     current.current = (async () => {
       const w = { words, walletId: await activateTryWallet(words) };
       setWallet(w);
+      void publishInbox(w.walletId);
       return w;
     })().catch((e: unknown) => {
       current.current = null;
@@ -99,7 +122,7 @@ export function WalletProvider(props: { children: ReactNode }) {
     keysFor.current = null;
     setKeys("unknown");
     return (await current.current).walletId;
-  }, []);
+  }, [publishInbox]);
 
   const ensureMessagingKeys = useCallback(async () => {
     const id = await ensureWallet();
