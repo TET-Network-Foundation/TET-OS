@@ -1391,13 +1391,60 @@ pub async fn mine_pending_block_as(
         requeue_txs_front(&state, later).await;
     }
     match build_and_apply_block(&state, &producer_id, &txs).await {
-        Ok(outcome) => Ok(outcome),
-        Err(e) => {
-            // Nothing was applied: the transactions go back, so a failed block loses none of them.
-            requeue_txs_front(&state, txs).await;
+        Ok(outcome) => {
+            PRE_APPLY_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+            Ok(outcome)
+        }
+        Err(BuildError::BeforeApply(e)) => {
+            // Nothing was written: the transactions go back, so a failed block loses none of them.
+            // Bounded: after PRE_APPLY_REQUEUE_MAX failures in a row they are dropped, so a batch
+            // that keeps failing can't stop block production.
+            let n = PRE_APPLY_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if after_failure(true, n) == AfterFailure::Requeue {
+                requeue_txs_front(&state, txs).await;
+            } else {
+                PRE_APPLY_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
+                log::error!("[consensus] block failed {n} times before apply; dropping its {} transactions", txs.len());
+            }
+            Err(e)
+        }
+        Err(BuildError::Apply(e)) => {
+            debug_assert_eq!(after_failure(false, 1), AfterFailure::Drop);
+            // The apply writes in more than one step, so after a failure here some of it may be
+            // written: never requeue (that could apply a transaction twice). The preview passed, so
+            // this is an I/O error or a preview/apply mismatch: a bug to look at, logged as such.
+            log::error!("[consensus] block apply failed after a passing preview; {} transactions dropped: {}", txs.len(), e.message());
             Err(e)
         }
     }
+}
+
+/// Failures of the block step before the apply, in a row (reset by a block that's made).
+static PRE_APPLY_FAILURES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// After this many pre-apply failures in a row, the batch is dropped instead of requeued.
+pub(crate) const PRE_APPLY_REQUEUE_MAX: u32 = 3;
+
+/// What happens to a failed block's transactions.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum AfterFailure {
+    Requeue,
+    Drop,
+}
+
+/// Requeue only when nothing was written (before the apply) and the batch hasn't already failed
+/// [`PRE_APPLY_REQUEUE_MAX`] times in a row; an apply failure never requeues (partial writes).
+pub(crate) fn after_failure(before_apply: bool, failures_in_a_row: u32) -> AfterFailure {
+    if before_apply && failures_in_a_row < PRE_APPLY_REQUEUE_MAX {
+        AfterFailure::Requeue
+    } else {
+        AfterFailure::Drop
+    }
+}
+
+/// Where making a block failed: before anything was written (safe to retry), or in the apply.
+enum BuildError {
+    BeforeApply(MineError),
+    Apply(MineError),
 }
 
 /// The checks every block makes on a transaction regardless of the ledger's state, run at mempool
@@ -1511,7 +1558,38 @@ async fn build_and_apply_block(
     state: &RestState,
     producer_id: &str,
     txs: &[SignedTxEnvelopeV1],
-) -> Result<MineOutcome, MineError> {
+) -> Result<MineOutcome, BuildError> {
+    let (block_height, pre) = prepare_block(state, producer_id, txs).map_err(BuildError::BeforeApply)?;
+    let PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id } = pre;
+    let state_root = state
+        .ledger
+        .apply_consensus_block_batch(
+            block_height,
+            &txs,
+            &tx_hashes,
+            &producer_id,
+            reward.total_reward_micro,
+        )
+        .map_err(|e| BuildError::Apply(MineError::BadRequest(e.to_string())))?;
+    Ok(finish_block(state, block_height, PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id }, state_root).await)
+}
+
+struct PreparedBlock {
+    producer_id: String,
+    txs: Vec<SignedTxEnvelopeV1>,
+    tx_hashes: Vec<String>,
+    parent_block_id: Option<String>,
+    reward: BlockRewardBreakdown,
+    block_id: String,
+}
+
+/// Everything before the apply: hashes, parent, checks, reward, preview, block id, undo record.
+/// Writes only the undo record (keyed by the block id), so a failure here is safe to retry.
+fn prepare_block(
+    state: &RestState,
+    producer_id: &str,
+    txs: &[SignedTxEnvelopeV1],
+) -> Result<(u64, PreparedBlock), MineError> {
     let producer_id = producer_id.to_string();
     let txs: Vec<SignedTxEnvelopeV1> = txs.to_vec();
     let tx_hashes: Vec<String> = txs
@@ -1554,17 +1632,23 @@ async fn build_and_apply_block(
         .store_block_undo(&undo)
         .map_err(|e| MineError::BadRequest(e.to_string()))?;
 
-    let block_height = next_height;
-    let state_root = state
-        .ledger
-        .apply_consensus_block_batch(
-            block_height,
-            &txs,
-            &tx_hashes,
-            &producer_id,
-            reward.total_reward_micro,
-        )
-        .map_err(|e| MineError::BadRequest(e.to_string()))?;
+    Ok((
+        next_height,
+        PreparedBlock {
+            producer_id,
+            txs,
+            tx_hashes,
+            parent_block_id,
+            reward,
+            block_id,
+        },
+    ))
+}
+
+/// Everything after a successful apply: records, indexes, gossip. Its writes are best-effort as
+/// before (`let _`), so it can't fail the block.
+async fn finish_block(state: &RestState, block_height: u64, b: PreparedBlock, state_root: String) -> MineOutcome {
+    let PreparedBlock { producer_id, txs, tx_hashes, parent_block_id, reward, block_id } = b;
 
     let _ =
         state
@@ -1606,7 +1690,7 @@ async fn build_and_apply_block(
         }
     }
 
-    Ok(MineOutcome {
+    MineOutcome {
         mined: true,
         block_height,
         block_id,
@@ -1615,7 +1699,7 @@ async fn build_and_apply_block(
         tx_hashes,
         tx_count: txs.len(),
         reward,
-    })
+    }
 }
 
 /// Outcome of the synchronous (blocking-pool) section of [`apply_remote_block_from_gossip`].

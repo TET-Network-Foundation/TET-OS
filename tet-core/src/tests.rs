@@ -14508,3 +14508,52 @@ async fn deferred_transactions_go_back_in_front_of_newcomers() {
     assert_eq!(mp.len(), 2);
     assert_eq!(crate::consensus::tx_hash_for_env(&mp[0]).unwrap(), deferred_hash, "the deferred one must be first");
 }
+
+/// A failed block's transactions go back only if nothing was written and it hasn't kept failing:
+/// an apply failure (writes may be partial) never requeues, and a batch failing before the apply
+/// is dropped after PRE_APPLY_REQUEUE_MAX tries, so it can't stop block production. Control (run by
+/// hand): `after_failure` always returning Requeue → this test FAILS.
+#[test]
+fn failed_blocks_requeue_only_when_safe_and_not_forever() {
+    use crate::consensus::{after_failure, AfterFailure, PRE_APPLY_REQUEUE_MAX};
+    assert_eq!(after_failure(true, 1), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX - 1), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX), AfterFailure::Drop, "a batch that keeps failing is dropped");
+    assert_eq!(after_failure(false, 1), AfterFailure::Drop, "an apply failure never requeues");
+}
+
+/// Two transfers that together overdraw, submitted at the same moment, can't both be admitted:
+/// the balance check runs under the same mempool lock as the insert.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_double_spend_admits_at_most_one() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 3 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let mut envs = Vec::new();
+    for i in 0..8u8 {
+        envs.push(transfer_with_fee_bps_for_tests(&words, &id, &format!("{:02x}", i).repeat(32), 2 * crate::ledger::STEVEMON, 100));
+    }
+    let mut handles = Vec::new();
+    for (i, env) in envs.into_iter().enumerate() {
+        let st = state.clone();
+        let l = ledger.clone();
+        handles.push(tokio::spawn(async move {
+            if i % 2 == 0 { st.submit_local_tx(env).await.is_ok() } else {
+                matches!(crate::p2p::handle_tx_broadcast(&l, &st.mempool, env).await, crate::p2p::TxGossipOutcome::Enqueued { .. })
+            }
+        }));
+    }
+    let mut admitted = 0;
+    for h in handles {
+        if h.await.unwrap() { admitted += 1; }
+    }
+    assert_eq!(admitted, 1, "exactly one of the overdrawing transfers may be admitted");
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}

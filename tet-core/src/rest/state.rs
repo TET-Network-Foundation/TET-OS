@@ -168,11 +168,7 @@ impl RestState {
         &self,
         env: SignedTxEnvelopeV1,
     ) -> Result<bool, MempoolEnqueueError> {
-        {
-            let pending = self.mempool.lock().await;
-            crate::consensus::tx_affordable(&self.ledger, &env, &pending).map_err(MempoolEnqueueError::Invalid)?;
-        }
-        let evicted = enqueue_without_broadcast(&self.mempool, env.clone()).await?;
+        let evicted = enqueue_without_broadcast(&self.mempool, &self.ledger, env.clone()).await?;
         self.broadcast_mempool_tx(&env).await;
         Ok(evicted)
     }
@@ -192,6 +188,7 @@ impl RestState {
 /// `Arc`, not a `RestState`.
 pub async fn enqueue_without_broadcast(
     mempool: &Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    ledger: &crate::ledger::Ledger,
     env: SignedTxEnvelopeV1,
 ) -> Result<bool, MempoolEnqueueError> {
     use RestState as S;
@@ -211,6 +208,9 @@ pub async fn enqueue_without_broadcast(
 
         let incoming_fee = S::tx_fee_score(&env);
         let mut mp = mempool.lock().await;
+        // Under the same lock as the insert: two submissions at once can't both pass on the
+        // same balance (a double-spend admitted by a race).
+        crate::consensus::tx_affordable(ledger, &env, &mp).map_err(MempoolEnqueueError::Invalid)?;
         let mut total_bytes = mp.iter().map(S::tx_estimated_bytes).sum::<usize>();
         let mut evicted = false;
 
