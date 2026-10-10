@@ -38,6 +38,7 @@ import InsidePanel from "./InsidePanel";
 import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
 import ShelterPanel from "./ShelterPanel";
+import GrantsBox from "./GrantsBox";
 import { shelterOpen } from "../lib/shelter";
 import { formatTet } from "../lib/format_tet";
 
@@ -322,6 +323,7 @@ function CompactWallet() {
             {t("Keep this ID? Save your passphrase (12 words)")}
           </button>
           <span className="block">{t("Lose your passphrase (12 words) and nobody can recover it.")} {t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</span>
+          <GrantsBox />
         </div>
       ) : null}
     </>

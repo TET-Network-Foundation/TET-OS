@@ -135,6 +135,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         log_tx,
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         demo_sponsor: None,
+        grant_payer: None,
         operator_hide: crate::operator_hide::OperatorHide::open(&hide_db).unwrap(),
         sites: std::sync::Arc::new(crate::sites::SiteStore::open(&hide_db).unwrap()),
         sigs: std::sync::Arc::new(crate::sigs::SigStore::open(&hide_db).unwrap()),
@@ -13806,6 +13807,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         "/tmail/anon/fast/:receiver/:posting_key",
         // Shelter: open or not; the signer's own standing; members-only lists (no post content).
         "/shelter/status", "/shelter/me", "/shelter/members", "/shelter/log", "/shelter/anon/leaves",
+        // The welcome grant's count (no content).
+        "/grants/status",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -16044,4 +16047,136 @@ fn ui_signed_key_registration_v2_verifies_in_rust() {
     let mut other = reg.clone();
     other.mlkem_pub_b64 = other.x25519_pub_b64.clone();
     assert!(crate::tmail::keys::verify_tmail_key_registration_v1(&other).is_err());
+}
+
+// ---- testnet practice grants: the welcome grant (grants.rs; docs/plans/TESTNET_REWARDS.md) --------
+
+/// A journal as the membership program would output it, for the grant's policy checks.
+fn welcome_journal_for_tests(root: [u8; 32], nullifier: [u8; 32], eph: &str, receiver_hex: &str, bucket: u64) -> nexus_protocol::TmailAnonMembershipV1 {
+    nexus_protocol::TmailAnonMembershipV1 {
+        journal_kind: nexus_protocol::TMAIL_ANON_JOURNAL_KIND,
+        merkle_root: root,
+        nullifier,
+        ephemeral_pubkey_bytes: hex::decode(eph).unwrap().try_into().unwrap(),
+        receiver_wallet_bytes: hex::decode(receiver_hex).unwrap().try_into().unwrap(),
+        bucket_index: bucket,
+    }
+}
+
+/// **SECURITY: one welcome grant per member and per wallet, only for a proof made out to the grant
+/// on day 0, against a root this node built, within the cap and above the payer's floor.** The
+/// accepted path signs exactly one 100 TET (practice) transfer from the grant wallet.
+/// Negative controls (run by hand): the nullifier check removed → FAILED; the day-0 check removed →
+/// FAILED; the payout-wallet check removed → FAILED.
+#[test]
+fn welcome_grant_is_one_per_member_and_wallet_for_a_day_zero_proof() {
+    use crate::grants::{decide_journal, GrantPayer, GrantRefusal, WELCOME_AMOUNT_MICRO, WELCOME_CAP};
+    let _g = env_lock();
+    set_test_env_base();
+    let _e = anon_fast_epoch_guard();
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    let store = crate::tmail::store::TmailStore::open(&db).unwrap();
+    let payer = GrantPayer::new(&db, &crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap()).unwrap();
+    let (_ids, _) = registered_members_for_tests(&store, 3);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let now = tmail_now_ms_for_tests();
+    let root = store.anon_tree_for_epoch(crate::tmail::store::TmailStore::anon_epoch_index(now)).root();
+    let grant = crate::grants::welcome_receiver_hex();
+    let (_ew, eph) = tmail_party_for_tests();
+    let (_pw, payout) = tmail_party_for_tests();
+    let rich = 1_000 * 1_000_000;
+    let decide = |j: &nexus_protocol::TmailAnonMembershipV1, signer: &str, to: &str, bal: u64| decide_journal(&payer, j, signer, to, &store, now, bal);
+
+    // Not this grant: another receiver, or today instead of day 0.
+    let other = welcome_journal_for_tests(root, [1; 32], &eph, &"ab".repeat(32), 0);
+    assert_eq!(decide(&other, &eph, &payout, rich).err(), Some(GrantRefusal::NotThisGrant));
+    let today = welcome_journal_for_tests(root, [1; 32], &eph, &grant, nexus_protocol::tmail_bucket_index_v1(now));
+    assert_eq!(decide(&today, &eph, &payout, rich).err(), Some(GrantRefusal::NotThisGrant), "a day-N proof claimed the grant");
+    // Signed by another key than the proof's one-time key.
+    let j = welcome_journal_for_tests(root, [1; 32], &eph, &grant, 0);
+    assert_eq!(decide(&j, &"cd".repeat(32), &payout, rich).err(), Some(GrantRefusal::BadSignature));
+    // A root this node never built.
+    let stray = welcome_journal_for_tests([9; 32], [1; 32], &eph, &grant, 0);
+    assert_eq!(decide(&stray, &eph, &payout, rich).err(), Some(GrantRefusal::RootUnknown));
+    // The payer below its floor.
+    assert_eq!(decide(&j, &eph, &payout, 50 * 1_000_000).err(), Some(GrantRefusal::PayerLow));
+    // Accepted: one transfer of 100 TET (practice) from the grant wallet to the payout wallet.
+    let (env, commit) = decide(&j, &eph, &payout, rich).expect("a valid claim was refused");
+    match &env.tx {
+        crate::protocol::TxV1::Transfer { from_wallet, to_wallet, amount_micro, .. } => {
+            assert_eq!(from_wallet, payer.wallet_id());
+            assert_eq!(to_wallet, &payout);
+            assert_eq!(*amount_micro, WELCOME_AMOUNT_MICRO);
+        }
+        other => panic!("not a transfer: {other:?}"),
+    }
+    crate::rest::helpers::verify_envelope_v1(&env).expect("the grant transfer must verify");
+    payer.commit(commit);
+    assert_eq!(payer.granted(), 1);
+    // The same member again (same nullifier), even to another wallet: refused.
+    let (_qw, payout2) = tmail_party_for_tests();
+    assert_eq!(decide(&j, &eph, &payout2, rich).err(), Some(GrantRefusal::AlreadyClaimed), "a member claimed twice");
+    // Another registration, the same wallet: refused (one grant per wallet).
+    let j2 = welcome_journal_for_tests(root, [2; 32], &eph, &grant, 0);
+    assert_eq!(decide(&j2, &eph, &payout, rich).err(), Some(GrantRefusal::WalletAlreadyGranted), "a wallet was granted twice");
+    // The cap.
+    payer.set_granted_for_tests(WELCOME_CAP);
+    assert_eq!(decide(&j2, &eph, &payout2, rich).err(), Some(GrantRefusal::CapReached));
+}
+
+/// The grant routes answer 404 while grants are off; a claim with a bad signature is refused before
+/// any proof work.
+#[tokio::test]
+async fn grant_routes_are_off_by_default_and_refuse_unsigned_claims() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let mut state = rest_state_for_tests(ledger.clone());
+    let router = crate::rest::routes::build_router(state.clone());
+    let get = router.clone().oneshot(axum::http::Request::builder().uri("/grants/status").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(get.status(), axum::http::StatusCode::NOT_FOUND);
+    let payer = crate::grants::GrantPayer::new(&ledger.sled_db(), &crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap()).unwrap();
+    state.grant_payer = Some(std::sync::Arc::new(payer));
+    let router = crate::rest::routes::build_router(state.clone());
+    let get = router.clone().oneshot(axum::http::Request::builder().uri("/grants/status").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(get.status(), axum::http::StatusCode::OK);
+    let (_w, eph) = tmail_party_for_tests();
+    let claim = serde_json::json!({
+        "v": 1, "kind": "tet_grant_claim_v1", "grant": "welcome", "payout_wallet": "ab".repeat(32),
+        "receipt_sha256_hex": "00".repeat(32), "journal_b64": "", "image_id_hex": "00".repeat(32),
+        "claimed_at_ms": tmail_now_ms_for_tests(),
+        "hybrid_sig": { "ed25519_pubkey_hex": eph, "ed25519_sig_b64": "AA==", "mldsa_pubkey_b64": "AA==", "mldsa_sig_b64": "AA==" },
+    });
+    let post = router
+        .oneshot(axum::http::Request::builder().method("POST").uri("/grants/welcome").header("content-type", "application/json").body(axum::body::Body::from(claim.to_string())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(post.status(), axum::http::StatusCode::UNAUTHORIZED);
+}
+
+const UI_GRANT_CLAIM: &str = include_str!("testdata/ui_grant_claim_v1.json");
+
+/// The page's welcome-grant claim (grants.ts) is signed over the same bytes tet-core checks, and
+/// both name the same grant receiver. (The fixture is dated in the past, so a good signature stops
+/// at the clock check; a changed payout wallet stops at the signature.)
+#[test]
+fn ui_signed_grant_claim_verifies_in_rust() {
+    use crate::grants::{GrantPayer, GrantRefusal};
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_GRANT_CLAIM).expect("fixture JSON");
+    let _bound = agent_fixture_chain(&doc);
+    assert_eq!(doc["welcome_receiver"].as_str().unwrap(), crate::grants::welcome_receiver_hex());
+    let claim: crate::grants::GrantClaimV1 = serde_json::from_value(doc["claim"].clone()).unwrap();
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    let store = crate::tmail::store::TmailStore::open(&db).unwrap();
+    let payer = GrantPayer::new(&db, &crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap()).unwrap();
+    let now = tmail_now_ms_for_tests();
+    assert_eq!(payer.decide(&claim, &store, now, u64::MAX).err(), Some(GrantRefusal::Stale), "the page's signature didn't verify");
+    let mut changed = claim.clone();
+    changed.payout_wallet = "ef".repeat(32);
+    assert_eq!(payer.decide(&changed, &store, now, u64::MAX).err(), Some(GrantRefusal::BadSignature));
 }

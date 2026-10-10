@@ -261,6 +261,17 @@ function ephemeralMnemonic(ephemeralSeed: Uint8Array): string {
   return entropyToMnemonic(ephemeralSeed.slice(0, 16), wordlist);
 }
 
+/**
+ * The one-time key pair a membership proof commits to, from its seed: Ed25519 (the id) and
+ * ML-DSA-44. Used to sign something other than an envelope with it (a grant claim).
+ */
+export async function ephemeralKeysFromSeed(ephemeralSeed: Uint8Array) {
+  const words = ephemeralMnemonic(ephemeralSeed);
+  const ed = mnemonicToTetEd25519Keypair(words);
+  const pqc = await mldsa44KeypairFromMnemonic(words);
+  return { walletId: ed.walletIdHex, secretKey: ed.secretKey, mldsaKeypairB64: pqc.keypair_b64, mldsaPubB64: pqc.pubkey_b64 };
+}
+
 /** The ephemeral's wallet id (its Ed25519 public key), which the membership proof commits to. */
 export async function ephemeralWalletIdFromSeed(ephemeralSeed: Uint8Array): Promise<string> {
   return mnemonicToTetEd25519Keypair(ephemeralMnemonic(ephemeralSeed)).walletIdHex;
