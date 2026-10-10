@@ -317,6 +317,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/explorer/tx/:hash",
             axum::routing::get(super::handlers::ledger::get_explorer_tx),
         )
+        .route(
+            "/explorer/block/:height",
+            axum::routing::get(super::handlers::ledger::get_explorer_block),
+        )
         .route("/tmail/anon/fast/:receiver/:posting_key", axum::routing::get(super::handlers::tmail::get_tmail_anon_fast))
         // Shelter (tmail/shelter.rs): 404 while off; reads are signed, most members-only.
         .route("/shelter/status", axum::routing::get(super::handlers::shelter::get_shelter_status))

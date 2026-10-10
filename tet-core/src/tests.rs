@@ -13791,7 +13791,7 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     // `/shelter/inbox` is content, served only to a member's signed read (tests: shelter_*).
     const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id", "/sigs/search", "/shelter/inbox"];
     const NOT_CONTENT: &[&str] = &[
-        "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/status/live",
+        "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/explorer/block/:height", "/status/live",
         "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
         // A membership proof's receipt: no message text, no sender.
         "/tmail/anon/receipt/:hash",
@@ -16044,4 +16044,52 @@ fn ui_signed_key_registration_v2_verifies_in_rust() {
     let mut other = reg.clone();
     other.mlkem_pub_b64 = other.x25519_pub_b64.clone();
     assert!(crate::tmail::keys::verify_tmail_key_registration_v1(&other).is_err());
+}
+
+/// `GET /explorer/block/:height` gives exactly what an offline checker needs ("Verify without TET"
+/// Level 2): the block id recomputes from the header fields it returns, and each transaction's
+/// `tx_json` string is the canonical form its hash covers. Control (run by hand): returning the
+/// tx through serde_json::Value (sorted keys) instead of the canonical string → FAILS.
+#[tokio::test]
+async fn explorer_block_returns_what_an_offline_check_recomputes() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let env = signed_transfer_env_for_tests(&words, &id, &"ab".repeat(32), crate::ledger::STEVEMON);
+    state.submit_local_tx(env).await.unwrap();
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert_eq!(outcome.tx_count, 1);
+
+    let r = crate::rest::handlers::ledger::get_explorer_block(axum::extract::State(state.clone()), axum::extract::Path(outcome.block_height.to_string())).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let b: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 22).await.unwrap()).unwrap();
+    let hashes: Vec<String> = b["tx_hashes"].as_array().unwrap().iter().map(|h| h.as_str().unwrap().to_string()).collect();
+    let recomputed = crate::consensus::block_id_for_block(
+        b["height"].as_u64().unwrap(),
+        b["parent_block_id"].as_str().unwrap(),
+        b["state_root"].as_str().unwrap(),
+        &hashes,
+        b["producer_id"].as_str().unwrap(),
+    );
+    assert_eq!(recomputed, b["block_id"].as_str().unwrap(), "the block id recomputes from the returned header");
+    let t = &b["txs"][0];
+    let preimage = format!(
+        "tet tx v1|chain_id={}|genesis_hash={}|mldsa={}|tx={}",
+        crate::wallet::chain_id_from_env(),
+        crate::wallet::expected_genesis_hash_from_env(),
+        t["mldsa_pubkey_b64"].as_str().unwrap(),
+        t["tx_json"].as_str().unwrap()
+    );
+    let h = format!("0x{}", hex::encode(sha2::Sha256::digest(preimage.as_bytes())));
+    assert_eq!(h, hashes[0], "the tx hash recomputes from tx_json");
+    // Missing height: 404; not a number: 400.
+    let r = crate::rest::handlers::ledger::get_explorer_block(axum::extract::State(state.clone()), axum::extract::Path("999999".into())).await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
 }

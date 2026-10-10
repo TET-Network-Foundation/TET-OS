@@ -32,6 +32,8 @@ const KNOWN = {
 
 // The verifier module, as is, minus its `export` keywords (it becomes part of one script).
 const verifierSrc = read("app/lib/offline_verify.mjs").toString("utf8").replace(/^export /gm, "");
+// Level 2 (app/lib/chain_verify.mjs, unchanged but for its `export` keywords).
+const chainSrc = read("app/lib/chain_verify.mjs").toString("utf8").replace(/^export /gm, "");
 
 // The WASM glue: initSync only. The async loader (the only code that could fetch) is cut out.
 // From the one committed copy of the signer (tet-agent-sdk/vendor/), not public/pqc/: that is a
@@ -56,6 +58,8 @@ async function mldsa44Verify(pubB64, sigB64, msg) {
 }
 // ---- Level 1 verifier (app/lib/offline_verify.mjs, unchanged) ----
 ${verifierSrc}
+// ---- Level 2 verifier (app/lib/chain_verify.mjs, unchanged) ----
+${chainSrc}
 const KNOWN = ${JSON.stringify(KNOWN)};
 `;
 
@@ -76,7 +80,16 @@ const L = {
     lang: "言語",
     what: "これが確かめること",
     l1: "レベル1。オフラインで、チェーンは要りません: 記録にある2つの鍵（Ed25519 と ML-DSA-44）が、このチェーン向けにこの SHA-256 に署名したこと。ファイルを渡せば、そのハッシュがまさにそれと一致すること。鍵を誰が持っているか、内容が本当か、いつ署名されたかは証明しません。",
-    l2: "レベル2（チェーンの写しに含まれていることの確認）は次の段階です。今の TET は1つのブロック生成者と1人の運営者に頼っているので、ブロックに生成者の署名が付くまでは、チェーンの写しはそれ自体の中で矛盾がないかしか確かめられません。生成者を増やすことと外部からの確認は計画中です（ロードマップの段階 3 と 9）。",
+    l2: "レベル2: 押印（スタンプ）がチェーンの写しに含まれているかを確かめます。チェーンの写し（scripts/chain_export.mjs で書き出したもの）とスタンプの受領書を渡すと、印の手数料の取引が送り主の署名付きでそのブロックにあり、各ブロックの ID が中身と一致し、各ブロックが1つ前のブロックを指していることを確かめます。これは写しが自分の中で矛盾がないことの証明で、これが皆の見ているチェーンだという証明ではありません。今の TET は1つのブロック生成者に頼っていて、ブロックにはまだ生成者の署名がありません（フェーズ1）。写しの先頭のブロック ID を、ほかのノードが示すものと比べてください。",
+    l2h: "レベル2: スタンプはチェーンにありますか？",
+    exp: "チェーンの写し（.json、scripts/chain_export.mjs で作成）",
+    stampf: "スタンプの受領書（.stamp.json）",
+    go2: "スタンプを確かめる",
+    needRecord: "まず上で記録（.sig.json）を選んでください。スタンプはその記録のものです。",
+    needFiles: "チェーンの写しとスタンプの受領書を選んでください。",
+    receiptOther: "この受領書は別のファイルのスタンプです。",
+    inChain: (h, n, tip) => \`スタンプはブロック \${h} にあり、写しの先頭（\${tip}）まで \${n} ブロック積まれています。写しは自分の中で矛盾がありません。\`,
+    notProof: "これは皆の見ているチェーンだという証明ではありません。先頭のブロック ID をほかのノードと比べてください。",
     genuine: "このファイルが本物か確かめるには: その SHA-256 は TET の印と一緒に公開されていて、ソースは TET-OS のリポジトリ（tet-network/ui/scripts/build_offline_verifier.mjs）にあります。",
     other: "別のチェーン…",
     noEd: "このブラウザには Ed25519 が組み込まれていません。最新の Chrome、Edge、Firefox、Safari か、CLI を使ってください。",
@@ -126,7 +139,16 @@ const L = {
     lang: "語言",
     what: "這會核對甚麼",
     l1: "第 1 級，離線，不需要鏈：記錄中的兩把金鑰（Ed25519 和 ML-DSA-44）為這條鏈簽署了這個 SHA-256；如果你提供檔案，也核對它的雜湊值正是那個值。這並不證明誰持有金鑰、內容是否真實，或何時簽署。",
-    l2: "第 2 級（核對是否包含在鏈的副本中）是下一步。目前 TET 依賴一個區塊產生者和一個營運者，所以在區塊附上產生者簽名之前，鏈的副本只能核對自身是否一致。增加產生者和外部核對都在計劃中（路線圖第 3 和第 9 階段）。",
+    l2: "第 2 級：核對印記（stamp）是否在鏈的副本中。提供鏈的副本（以 scripts/chain_export.mjs 匯出）和印記收據，它會核對：印記的手續費交易附有發送者的簽名並在那個區塊中、每個區塊的 ID 與內容吻合、每個區塊都指向前一個區塊。這證明副本自身一致，並不證明這就是大家看到的鏈。目前 TET 依賴一個區塊產生者，區塊還沒有產生者簽名（第 1 階段）。請把副本頂端的區塊 ID 與其他節點顯示的比較。",
+    l2h: "第 2 級：印記在鏈上嗎？",
+    exp: "鏈的副本（.json，以 scripts/chain_export.mjs 製作）",
+    stampf: "印記收據（.stamp.json）",
+    go2: "核對印記",
+    needRecord: "請先在上方選擇記錄（.sig.json）：印記屬於那個記錄。",
+    needFiles: "請選擇鏈的副本和印記收據。",
+    receiptOther: "這張收據是另一個檔案的印記。",
+    inChain: (h, n, tip) => \`印記在區塊 \${h}，其上還有 \${n} 個區塊直到副本頂端（\${tip}）。副本自身一致。\`,
+    notProof: "這並不證明這就是大家看到的鏈：請把頂端區塊 ID 與其他節點比較。",
     genuine: "要確認這個檔案是真的：它的 SHA-256 與 TET 的標記一同公開，原始碼在 TET-OS 儲存庫（tet-network/ui/scripts/build_offline_verifier.mjs）。",
     other: "其他鏈…",
     noEd: "這個瀏覽器沒有內置 Ed25519。請使用最新版的 Chrome、Edge、Firefox 或 Safari，或者使用命令列工具。",
@@ -201,6 +223,35 @@ function show(lines, ok) {
   out.className = ok ? "ok" : "bad";
 }
 applyLang();
+$("go2").onclick = async () => {
+  const d = tr();
+  const out = $("out2");
+  const say = (lines, ok) => {
+    out.replaceChildren(...lines.map((l) => Object.assign(document.createElement("p"), { textContent: l })));
+    out.className = ok ? "ok" : "bad";
+  };
+  const recordBytes = await bytesOf($("record"));
+  if (!recordBytes) return say([d ? d.needRecord : "Choose the record (.sig.json) above first: the stamp is for that record."], false);
+  const expBytes = await bytesOf($("exp"));
+  const stampBytes = await bytesOf($("stampr"));
+  if (!expBytes || !stampBytes) return say([d ? d.needFiles : "Choose the chain export and the stamp receipt."], false);
+  let exported, receipt;
+  try {
+    exported = JSON.parse(new TextDecoder().decode(expBytes));
+    receipt = JSON.parse(new TextDecoder().decode(stampBytes));
+  } catch {
+    return say([(d ? d.no : "Does not verify: ") + reasonIn("the record is not JSON")], false);
+  }
+  const fileId = await stampFileIdOf(recordBytes, sha256);
+  if (receipt.file_id && String(receipt.file_id).toLowerCase() !== fileId) return say([d ? d.receiptOther : "This receipt is for another file's stamp."], false);
+  const chain = chainSel.value === "other" ? { chainId: $("cid").value.trim(), genesisHash: $("gh").value.trim().toLowerCase() } : JSON.parse(chainSel.value);
+  const r = await verifyChainExport({ exported, chain, stamp: { txHash: String(receipt.tx_hash ?? ""), fileId }, sha256, ed25519Verify, mldsa44Verify });
+  if (!r.ok) return say([(d ? d.no : "Does not verify: ") + r.reason], false);
+  say([
+    d ? d.inChain(r.stamp.height, r.stamp.confirmations, r.tipBlockId) : "The stamp is in block " + r.stamp.height + ", with " + r.stamp.confirmations + " blocks on top of it up to the copy's tip (" + r.tipBlockId + "). The copy is consistent with itself.",
+    d ? d.notProof : "This doesn't prove it is the chain everyone sees: compare the tip's block id with other nodes.",
+  ], true);
+};
 $("go").onclick = async () => {
   const d = tr();
   if (!(await hasEd25519())) return show([d ? d.noEd : "This browser has no built-in Ed25519. Use a current Chrome, Edge, Firefox or Safari, or the CLI."], false);
@@ -268,7 +319,14 @@ input, select, button { font: inherit; max-width: 100%; } button { margin-top: 1
 <div id="out" role="status" aria-live="polite"></div>
 <h2 data-t="what">What this checks</h2>
 <p class="note" data-t="l1">Level 1, offline, no chain needed: that the two keys in the record (Ed25519 and ML-DSA-44) signed this SHA-256 for this chain, and, if you give the file, that it hashes to exactly that. It doesn't prove who holds the keys, that the content is true, or when it was signed.</p>
-<p class="note" data-t="l2">Level 2, inclusion in a copy of the chain, comes next. Today TET relies on one block producer and one operator, so until blocks carry producer signatures, a chain copy can only be checked for being consistent with itself. More producers and outside checks are planned (roadmap Phases 3 and 9).</p>
+<h2 data-t="l2h">Level 2: is the stamp in the chain?</h2>
+<label for="exp" data-t="exp">Chain export (.json, made by scripts/chain_export.mjs)</label>
+<input id="exp" type="file" accept=".json,application/json">
+<label for="stampr" data-t="stampf">Stamp receipt (.stamp.json)</label>
+<input id="stampr" type="file" accept=".json,application/json">
+<button id="go2" type="button" data-t="go2">Check the stamp</button>
+<div id="out2" role="status" aria-live="polite"></div>
+<p class="note" data-t="l2">Level 2 checks that a stamp is in a copy of the chain. Give it a chain export (from scripts/chain_export.mjs) and the stamp receipt: it checks that the stamp's fee transaction is in its block with its sender's signatures, that each block's id matches its contents, and that each block names the one before it. That shows the copy is consistent with itself, not that it is the chain everyone sees: today TET relies on one block producer, and blocks don't carry producer signatures yet (Phase 1). Compare the copy's tip block id with what other nodes report.</p>
 <p class="note" data-t="genuine">Check that this file is genuine: its SHA-256 is published with TET's marks, and the source is in the TET-OS repository (tet-network/ui/scripts/build_offline_verifier.mjs).</p>
 <script type="module">${script}</script>
 </body>
@@ -283,9 +341,10 @@ ${core}
 const args = process.argv.slice(2);
 const ci = args.indexOf("--chain");
 const chain = ci >= 0 ? { chainId: args[ci + 1], genesisHash: String(args[ci + 2] ?? "").toLowerCase() } : KNOWN.chains[0];
-const pos = ci >= 0 ? args.slice(0, ci) : args;
+const firstFlag = args.findIndex((a) => a.startsWith("--"));
+const pos = firstFlag >= 0 ? args.slice(0, firstFlag) : args;
 if (!pos[0]) {
-  console.log("usage: node tet-verify.mjs <record.json> [file] [--chain <chainId> <genesisHash>]");
+  console.log("usage: node tet-verify.mjs <record.json> [file] [--chain <chainId> <genesisHash>] [--chain-export <export.json> --stamp <.stamp.json>]");
   process.exit(2);
 }
 const r = await verifyRecordOffline({ recordBytes: new Uint8Array(readFileSync(pos[0])), file: pos[1] ? new Uint8Array(readFileSync(pos[1])) : null, chain, mldsa44Verify });
@@ -299,6 +358,25 @@ console.log("ml-dsa-44 key   " + r.mldsaKeyId);
 if (r.signedSha256) console.log("signed sha256   " + r.signedSha256);
 console.log("file matches    " + (r.fileMatches === null ? "(no file given)" : r.fileMatches));
 console.log("proof code      " + r.proofCode);
+// Level 2: --chain-export <file> --stamp <.stamp.json>: the stamp's transaction in a block of a
+// chain copy that holds together (not proof that it is the chain everyone sees).
+const ei = args.indexOf("--chain-export"), si = args.indexOf("--stamp");
+if (ei >= 0 && si >= 0) {
+  const exported = JSON.parse(readFileSync(args[ei + 1], "utf8"));
+  const receipt = JSON.parse(readFileSync(args[si + 1], "utf8"));
+  const fileId = await stampFileIdOf(new Uint8Array(readFileSync(pos[0])), sha256);
+  if (receipt.file_id && String(receipt.file_id).toLowerCase() !== fileId) {
+    console.log("STAMP: the receipt is for another file");
+    process.exit(1);
+  }
+  const l2 = await verifyChainExport({ exported, chain, stamp: { txHash: String(receipt.tx_hash ?? ""), fileId }, sha256, ed25519Verify, mldsa44Verify });
+  if (!l2.ok) {
+    console.log("STAMP DOES NOT VERIFY: " + l2.reason);
+    process.exit(1);
+  }
+  console.log("STAMP (Level 2)  in block " + l2.stamp.height + ", " + l2.stamp.confirmations + " blocks under the copy's tip " + l2.tipBlockId);
+  console.log("                 the copy is consistent with itself; compare its tip with other nodes");
+}
 `;
 
 mkdirSync(OUT, { recursive: true });

@@ -34,6 +34,9 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/ledger/balance/:wallet"),
     // A mined transaction by hash (public chain data): checks a "stamp" receipt on the try page.
     ("GET", "/explorer/tx/:hash"),
+    // A canonical block by height, with each transaction's canonical bytes: the input to
+    // "Verify without TET" Level 2 (checking a stamp's block and the chain above it offline).
+    ("GET", "/explorer/block/:height"),
     // The home page's live strip: the newest canonical block headers and tx hash/kind/signatures.
     ("GET", "/explorer/blocks/recent"),
     // The "Inside" page: counts and how long each kind is kept (no names, no content).
