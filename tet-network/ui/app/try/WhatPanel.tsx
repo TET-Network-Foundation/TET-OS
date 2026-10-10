@@ -51,6 +51,9 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
   return (
     <article className="px-4 pb-4 pt-2 text-[16px] leading-relaxed md:px-5">
       <h1 className="text-[26px] font-bold">{t("What is TET")}</h1>
+      <p className="mt-2 text-[20px] font-semibold">{t("Your proofs and keys, in your hands, not a company's.")}</p>
+      <p className="mt-1">{t("AI makes faking text, pictures and voices easy, so being able to check who signed what, and when, without trusting a company matters more now.")}</p>
+      <p className="mt-1 text-[#5d646d]">{t("The limit: lose your passphrase (12 words) and nobody can recover it. And today TET still runs on one operator; see the roadmap below.")}</p>
 
       <h2 className={H}>{t("What it is")}</h2>
       <p>{t("TET is a public network for checking who made something, and when. Every transaction and message on it is signed twice: once with Ed25519, and once with ML-DSA-44, one of the quantum-resistant signatures (ML-DSA) standardised by NIST as FIPS 204.")}</p>
