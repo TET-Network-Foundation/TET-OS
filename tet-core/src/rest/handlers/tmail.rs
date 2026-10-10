@@ -104,8 +104,28 @@ pub async fn post_tmail_send(
             Err(j) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")).into_response(),
         }
     } else {
+        // Shelter's invisible flood guard for a member's named posts (membership itself is checked
+        // in `store_tmail`).
+        if crate::tmail::shelter::is_shelter_board(&env.receiver_wallet_id) {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let member = env.sender_wallet_id.trim().to_ascii_lowercase();
+            let may = crate::tmail::shelter::config_from_env().is_some_and(|cfg| state.tmail.shelter_state(&cfg).may_post(&member, now));
+            if !may {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": "only a member can post here" }))).into_response();
+            }
+            match state.tmail.shelter_flood_take(&member, now) {
+                Ok(()) => {}
+                Err(crate::tmail::store::FastSendError::DailyCap) => {
+                    return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({ "ok": false, "error": "that's today's posts; try again tomorrow" }))).into_response();
+                }
+                Err(_) => return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({ "ok": false, "error": "try again in a moment" }))).into_response(),
+            }
+        }
         match state.tmail.store_tmail(&env) {
             Ok(s) => s,
+            Err(e @ crate::tmail::store::TmailStoreError::Shelter(_)) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+            }
             Err(e @ crate::tmail::store::TmailStoreError::PollBallot(_)) => {
                 return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
             }
@@ -166,8 +186,8 @@ pub async fn get_tmail_anon_fast(
 ) -> axum::response::Response {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     let bucket = nexus_protocol::tmail_bucket_index_v1(now);
-    let reg = state.tmail.fast_registration(&receiver, bucket, &posting_key);
-    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "bucket": bucket, "registered": reg.is_some() }))).into_response()
+    let registered = state.tmail.fast_registration_counts(&receiver, bucket, &posting_key);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "bucket": bucket, "registered": registered }))).into_response()
 }
 
 pub async fn get_tmail_inbox(
@@ -183,6 +203,18 @@ pub async fn get_tmail_inbox(
     if state.operator_hide.is_wallet_hidden(&w) {
         return crate::rest::helpers::hidden_by_operator();
     }
+    // Shelter's board is members-only: even its ciphertext would show post counts and timing.
+    if crate::tmail::shelter::is_shelter_board(&w) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": "members only" }))).into_response();
+    }
+    inbox_response(&state, &w, q.limit)
+}
+
+/// The inbox rows for `w` (operator hides applied, scheduled messages without their ciphertext).
+/// Shared by `/tmail/inbox` and Shelter's members-only `/shelter/inbox`.
+pub(crate) fn inbox_response(state: &RestState, w: &str, limit: Option<usize>) -> Response {
+    let w = w.to_string();
+    let q = InboxQuery { limit };
     // A poll's wallet holds only verified ballots, one per member; a tally reads them all at once.
     let max = if state.tmail.get_poll_root(&w).is_some() { crate::tmail::poll::POLL_MAX_MEMBERS } else { INBOX_MAX_LIMIT };
     let limit = q.limit.unwrap_or(INBOX_DEFAULT_LIMIT).clamp(1, max);

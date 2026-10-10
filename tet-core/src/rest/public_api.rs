@@ -40,6 +40,16 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/stats/inside"),
     // Fast anonymous posting: is this posting key registered for this board today?
     ("GET", "/tmail/anon/fast/:receiver/:posting_key"),
+    // Shelter (tmail/shelter.rs): whether it's open; signed records; signed reads (members only,
+    // except `/shelter/me`, which tells a non-member only that).
+    ("GET", "/shelter/status"),
+    ("POST", "/shelter/record"),
+    ("POST", "/shelter/key"),
+    ("GET", "/shelter/me"),
+    ("GET", "/shelter/members"),
+    ("GET", "/shelter/log"),
+    ("GET", "/shelter/inbox"),
+    ("GET", "/shelter/anon/leaves"),
     // The public signature registry (sigs.rs): publish a hash-only record; search records.
     ("POST", "/sigs/publish"),
     ("GET", "/sigs/search"),

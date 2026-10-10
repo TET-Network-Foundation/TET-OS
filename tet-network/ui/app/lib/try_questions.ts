@@ -12,7 +12,8 @@ import { answerBody, answerRecipient, classifyBoardItem, questionsWithStatus, re
 import { b64ToBytes } from "./encoding";
 import { mldsa44Verify } from "./pqc";
 import { decryptForReceiver } from "./tmail_e2ee";
-import { getTmailInbox, getTmailKeys } from "./tet_core_http";
+import { getTmailInbox } from "./tet_core_http";
+import { trustedKeysFor } from "./key_trust";
 import { postAnonymousTo, postNamedTo, type OpenBoard, type Recipient } from "./try_board";
 import type { AnonSendState } from "./tmail_anon";
 
@@ -75,10 +76,13 @@ export async function readQuestions(baseUrl: string, board: OpenBoard): Promise<
 /** The asker's inbox, or `null` when it has registered none. */
 export async function askerInbox(baseUrl: string, q: Question): Promise<Recipient | null> {
   const to = answerRecipient(q);
-  const r = await getTmailKeys(baseUrl, to);
-  if (!r.ok) throw new Error(r.text || `could not look up the agent (HTTP ${r.status})`);
-  if (!r.registration) return null;
-  return { walletId: to, x25519Pub: b64ToBytes(r.registration.x25519_pub_b64), mlkemPub: b64ToBytes(r.registration.mlkem_pub_b64) };
+  // Only keys the agent's own wallet signed (checked here, not trusted from the node).
+  const k = await trustedKeysFor(baseUrl, to);
+  if (!k.ok) {
+    if (k.reason === "none") return null;
+    throw new Error(k.message);
+  }
+  return { walletId: to, x25519Pub: k.x25519Pub, mlkemPub: k.mlkemPub };
 }
 
 export async function answerNamed(baseUrl: string, q: Question, to: Recipient, answer: string): Promise<string> {

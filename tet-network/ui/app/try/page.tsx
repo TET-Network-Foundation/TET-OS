@@ -37,6 +37,8 @@ import WhatPanel from "./WhatPanel";
 import InsidePanel from "./InsidePanel";
 import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
+import ShelterPanel from "./ShelterPanel";
+import { shelterOpen } from "../lib/shelter";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -51,6 +53,7 @@ const DIRECTORY_INVITE = (process.env.NEXT_PUBLIC_TET_DIRECTORY_INVITE ?? "").tr
 const TOOLS = [
   { id: "directory", label: "Public boards", group: "boards" },
   { id: "questions", label: "Questions for humans", group: "boards" },
+  { id: "shelter", label: "Shelter", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
   { id: "sign", label: "sign", group: "tools" },
   { id: "genuine", label: "mark as genuine", group: "tools" },
@@ -330,7 +333,7 @@ function CompactWallet() {
 }
 
 /** Every page's footer: the other tools and open boards, the IP note, "this node", About · Terms, language. */
-function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => void; ipNote: string; boards: OpenBoard[] }) {
+function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => void; ipNote: string; boards: OpenBoard[]; shelter: boolean }) {
   const { t } = useLang();
   const [open, setOpen] = useState(false);
   const link = cx(FOCUS, "rounded-sm underline underline-offset-2");
@@ -341,6 +344,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
     [{ tool: "inside" }, t("Inside")],
     [{ tool: "directory" }, t("Public boards")],
     [{ tool: "questions" }, t("Questions for humans")],
+    ...(props.shelter ? ([[{ tool: "shelter" }, t("Shelter")]] as [View, string][]) : []),
     [{ tool: "new" }, t("start or open a board")],
     [{ tool: "verify" }, t("verify")],
     [{ tool: "sign" }, t("sign")],
@@ -403,6 +407,15 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
 function TryApp() {
   const { t } = useLang();
   const node = useNode();
+  // Shelter is listed only on a node that runs it (tmail/shelter.rs).
+  const [shelter, setShelter] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void shelterOpen(BASE).then((o) => live && setShelter(o));
+    return () => {
+      live = false;
+    };
+  }, []);
   const [boards, setBoards] = useState<OpenBoard[]>([]);
   /** The landing's "try this" hint for Sign, and the last board this device opened (device_store). */
   const [signHint, setSignHint] = useState("");
@@ -520,6 +533,7 @@ function TryApp() {
   const TOOL_LABEL: Record<string, string> = {
     directory: t("Public boards"),
     questions: t("Questions for humans"),
+    shelter: t("Shelter"),
     verify: t("verify"),
     sign: t("sign"),
     genuine: t("Mark as genuine"),
@@ -610,6 +624,7 @@ function TryApp() {
           {panel({ tool: "directory" }, <DirectoryPanel directory={directory} listings={listings} error={dirErr} onOpen={addBoard} />)}
           {panel({ tool: "new" }, <NewBoardPanel directory={directory} onOpen={addBoard} onListed={() => directory && void refreshDirectory(directory)} />)}
           {panel({ tool: "questions" }, <QuestionsPanel />)}
+          {panel({ tool: "shelter" }, <ShelterPanel active={"tool" in view && view.tool === "shelter"} />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
           {panel({ tool: "genuine" }, <GenuinePanel />)}
@@ -655,7 +670,7 @@ function TryApp() {
       </main>
 
       {isHome ? <LiveStrip /> : null}
-      <PageFooter node={node} go={go} ipNote={ipNote} boards={boards} />
+      <PageFooter node={node} go={go} ipNote={ipNote} boards={boards} shelter={shelter} />
     </div>
   );
 }

@@ -118,6 +118,15 @@ export function WalletProvider(props: { children: ReactNode }) {
     if (!current.current) return;
     const id = (await current.current).walletId;
     const r = await getTmailKeys(BASE, id);
+    // An inbox turned on with an older version of TET: re-sign it as v2 (pages now refuse older
+    // registrations). Nothing new is published: the inbox was already public, with the same keys.
+    if (r.ok && r.registration && r.registration.v !== 2) {
+      const ks = getTmailKeySession();
+      if (ks && ks.walletIdHex64 === id) {
+        const reg = await buildTmailKeyRegistrationV1({ x25519_pub: ks.x25519_pub, mlkem_pub: ks.mlkem_pub, baseUrl: BASE });
+        await putTmailKeys(BASE, id, reg).catch(() => null);
+      }
+    }
     if (r.ok) setKeys(r.registration ? "published" : "none");
   }, []);
   const joined = useRef(false);

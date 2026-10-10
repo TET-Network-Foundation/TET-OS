@@ -405,6 +405,10 @@ impl RestState {
     /// Same wiring as [`broadcast_mempool_tx`]: serialize a [`crate::models::NetworkEvent`] and push
     /// it onto the gossip channel. Tmail is off-ledger — this never touches the mempool or ledger.
     pub async fn broadcast_tmail(&self, env: &crate::tmail::envelope::TmailEnvelopeV1) {
+        // Shelter's posts stay on this node: never gossiped (tmail/shelter.rs).
+        if crate::tmail::shelter::is_shelter_board(&env.receiver_wallet_id) {
+            return;
+        }
         let Some(tx) = self.gossip_tx.as_ref() else {
             return;
         };

@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { buildFileEnvelopeV1 } from "../lib/files";
 import { settleFileFee } from "../lib/files_fee";
-import { b64ToBytes } from "../lib/encoding";
+import { getTmailKeySession } from "../lib/tmail_session";
 import { getTmailKeys, postFilesUpload } from "../lib/tet_core_http";
 import { checkStamp, signContent, sigJsonBytes, stampFileId, STAMP_RECEIPT_KIND, type SigEnvelope, type StampReceipt } from "../lib/sign_anything";
 import { Button, FilePick, INK, KeysBanner, MONO, PanelHead, PinnedNotice, TextArea, cx } from "./ui";
@@ -18,6 +18,12 @@ import { SigQr } from "./QrPanel";
 import { ProofCodeBox } from "./ProofCode";
 import { publishRecord, signFileHash } from "../lib/proof_code";
 import { sigSha256 } from "../lib/tet_qr";
+
+function ownKeys() {
+  const ks = getTmailKeySession();
+  if (!ks) throw new Error("no wallet in this tab");
+  return ks;
+}
 
 /** What a stamp's upload may be (the demo's file cap); a .sig.json embeds the signed file. */
 const NODE_MAX_BODY = 100 * 1024 * 1024;
@@ -121,8 +127,9 @@ export default function SignPanel(props: { hint?: string } = {}) {
         fileBytes: signed.bytes,
         filename: signed.name,
         mimeType: "application/json",
-        receiverX25519Pub: b64ToBytes(k.registration.x25519_pub_b64),
-        receiverMlkemPub: b64ToBytes(k.registration.mlkem_pub_b64),
+        // To yourself: your own keys from this tab, never a copy the node serves.
+        receiverX25519Pub: ownKeys().x25519_pub,
+        receiverMlkemPub: ownKeys().mlkem_pub,
         baseUrl: BASE,
         ttlMs: STAMP_TTL_MS,
         maxBodyBytes: NODE_MAX_BODY,
