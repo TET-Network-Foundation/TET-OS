@@ -28,6 +28,8 @@ import { getUi, setUi } from "../lib/device_store";
 import { useLang, type T } from "./i18n";
 import { PollBox, PollMaker } from "./PollBox";
 import { parsePoll } from "../lib/poll";
+import { dmTargetFor } from "../lib/dm_target";
+import { IdCard } from "./IdCard";
 
 const FEED_POLL_MS = 8_000;
 /** Room for the thread header inside one Tmail message. */
@@ -46,7 +48,7 @@ type Outgoing = {
 };
 
 type Label = BoardPost["label"];
-type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string; sage?: boolean; name?: string };
+type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string; sage?: boolean; name?: string; verifiedSigner?: string };
 type Thread = { threadId: string; title: string | null; posts: ThreadPost[]; count: number; lastAtMs: number };
 
 function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
@@ -67,32 +69,50 @@ export function shownName(p: { name?: string; label: Label }, t: (s: string) => 
 }
 
 /**
- * Who wrote a post. A named post's short id opens a DM with that wallet; an anonymous post has no
- * author (`postLabel` never gives one), so there is nothing to message. #18 hook: a profile or
- * follow control attaches here.
+ * Who wrote a post. A named post shows its short ID; tapping it opens an ID card (full ID, copy,
+ * QR, "Send DM"). The card and the DM use only the post's **verified signer key**
+ * (`dmTargetFor`), never the short ID on screen: short IDs can be imitated. An anonymous post has
+ * no author, so tapping its name only says it can't receive DMs. #18 hook: a profile or follow
+ * control attaches to the card.
  */
-function Author(props: { walletId: string | null; onDm?: (walletId: string) => void }) {
+function Author(props: { post: ThreadPost; onDm?: (walletId: string) => void }) {
   const { t } = useLang();
-  // The default name for an anonymous post (2ch's 名無しさん).
-  // An anonymous post's name (名無しさん / Anonymous) is shown beside it; there is no ID to DM.
-  if (!props.walletId) return null;
-  const id = props.walletId;
-  return props.onDm ? (
-    <button
-      type="button"
-      translate="no"
-      data-author={id}
-      title={t("DM {id}", { id })}
-      aria-label={t("Send a DM to {id}", { id: id.slice(0, 8) })}
-      onClick={() => props.onDm?.(id)}
-      className={cx(FOCUS, "rounded-sm underline decoration-dotted underline-offset-2", INK.named)}
-    >
-      {id.slice(0, 8)}
-    </button>
-  ) : (
-    <span translate="no" className={INK.named} data-author={id}>
-      {id.slice(0, 8)}
-    </span>
+  const [open, setOpen] = useState(false);
+  const shown = props.post.label.author;
+  if (!shown) {
+    return (
+      <>
+        <button type="button" onClick={() => setOpen((o) => !o)} className={cx(FOCUS, "rounded-sm text-[#5d646d] underline decoration-dotted underline-offset-2")} aria-expanded={open}>
+          {t("no ID")}
+        </button>
+        {open ? <span role="note" className="text-[#5d646d]">{t("Anonymous posts can't receive DMs.")}</span> : null}
+      </>
+    );
+  }
+  const target = dmTargetFor(props.post);
+  return (
+    <>
+      <button
+        type="button"
+        translate="no"
+        data-author={shown}
+        aria-expanded={open}
+        aria-label={t("ID card for {id}", { id: shown.slice(0, 8) })}
+        onClick={() => setOpen((o) => !o)}
+        className={cx(FOCUS, "rounded-sm underline decoration-dotted underline-offset-2", INK.named)}
+      >
+        {shown.slice(0, 8)}
+      </button>
+      {open ? (
+        <span className="block w-full">
+          {target ? (
+            <IdCard walletId={target} onDm={props.onDm} onClose={() => setOpen(false)} />
+          ) : (
+            <span role="note" className="text-[#5d646d]">{t("This post's signature couldn't be checked here, so there's no ID card or DM for it.")}</span>
+          )}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -173,7 +193,7 @@ export default function BoardPanel(props: {
   const [relist, setRelist] = useState<"closed" | "open" | "busy" | "done">("closed");
   const [relistWords, setRelistWords] = useState("");
   const [relistErr, setRelistErr] = useState("");
-  const { wallet, anon, refreshAnon, joinAnon, ensureWallet, prover } = useTryWallet();
+  const { wallet, anon, refreshAnon, joinAnon, noteNamedPost, ensureWallet, prover } = useTryWallet();
   const [joining, setJoining] = useState(false);
   const [posts, setPosts] = useState<BoardPost[]>([]);
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
@@ -379,6 +399,7 @@ export default function BoardPanel(props: {
         const wait = delayBeforeNext(sentTimes.current, Date.now());
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const msgId = await postNamed(BASE, board, plaintext);
+        void noteNamedPost();
         sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
         patch(id, { step: "sent", msgId });
       } else {
@@ -443,6 +464,7 @@ export default function BoardPanel(props: {
             <PollMaker
               post={async (body) => {
                 await postNamed(BASE, board, encodeThreadPost({ threadId: open, body, sage: false }));
+                void noteNamedPost();
                 void refresh();
               }}
               onDone={() => setMakingPoll(false)}
@@ -651,7 +673,7 @@ export default function BoardPanel(props: {
                       >
                         {shownName(p, t)}
                       </span>
-                      <Author walletId={p.label.author} onDm={props.onDm} />
+                      <Author post={p} onDm={props.onDm} />
                       {p.label.dailyId ? (
                         <span translate="no" title={t("Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.")}>
                           ID:{p.label.dailyId}

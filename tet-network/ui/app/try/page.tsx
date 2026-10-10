@@ -15,6 +15,7 @@ import { wordsFileText } from "../lib/disposable_wallet.mjs";
 import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
 import DirectoryPanel from "./DirectoryPanel";
 import AboutPanel from "./AboutPanel";
+import { IdCard } from "./IdCard";
 import TermsPanel from "./TermsPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
@@ -322,6 +323,12 @@ function CompactWallet() {
             {t("Keep this ID? Save your passphrase (12 words)")}
           </button>
           <span className="block">{t("Lose your passphrase (12 words) and nobody can recover it.")} {t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</span>
+          <div className="mt-2 flex justify-end text-left">
+            <div>
+              <p className="font-semibold text-[#1c1f23]">{t("my ID")}</p>
+              <IdCard walletId={wallet.walletId} />
+            </div>
+          </div>
         </div>
       ) : null}
     </>
