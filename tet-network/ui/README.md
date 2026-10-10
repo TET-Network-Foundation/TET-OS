@@ -23,7 +23,7 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 Run `tet-core` with auto-mining, mock ZK, and the POC worker daemon enabled:
 
 ```bash
-cd /Users/sengokukazuma/Nexus_Network/tet-core
+cd ~/Nexus_Network/tet-core
 
 export PORT=5010
 export TET_REST_BIND=127.0.0.1:5010
@@ -54,7 +54,7 @@ RISC0_SKIP_BUILD=1 cargo run --bin TET-Core
 Start the UI:
 
 ```bash
-cd /Users/sengokukazuma/Nexus_Network/tet-network/ui
+cd ~/Nexus_Network/tet-network/ui
 cp .env.example .env.local
 # NEXT_PUBLIC_TET_TREASURY_ADDRESS must match the node's TET_TREASURY_ADDRESS
 NEXT_PUBLIC_TET_CORE_URL=http://127.0.0.1:5010 npm run dev
