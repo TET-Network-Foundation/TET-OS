@@ -1029,4 +1029,5 @@ export const ZH_HK: Record<string, string> = {
   "Even if TET disappears, this still works:": "即使 TET 消失，這仍然可用：",
   "the offline verifier": "離線驗證工具",
   "(one file: it checks a record on your device, with the network off)": "（單一檔案：在你的裝置上檢查紀錄，無需連接網絡）",
+  "The testnet's genesis contains a founder wallet, locked by a one-year cliff, and a treasury address that collects test fees. This chain can never become mainnet; mainnet supply and allocation are undecided.": "測試網的創世區塊包含一個創辦人錢包（以一年的鎖定期鎖住）和一個收取測試手續費的庫房地址。這條鏈永遠不會成為主網；主網的總量和分配尚未決定。",
 };

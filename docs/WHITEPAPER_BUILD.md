@@ -103,6 +103,6 @@ is a dead domain, not personal, so it stays spelled out — there is nothing to 
 | Document | Relation |
 |----------|----------|
 | [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md) | Source of truth for the render |
-| [`../WHITEPAPER.md`](../WHITEPAPER.md) | Canonical whitepaper (kept in sync with the draft) |
+| [`archive/WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) | Canonical whitepaper (kept in sync with the draft) |
 | [`scripts/render_phrack_wp_pdf.py`](./scripts/render_phrack_wp_pdf.py) | The renderer |
 | [`styles/phrack_wp.css`](./styles/phrack_wp.css) | Print stylesheet |

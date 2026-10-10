@@ -34,7 +34,7 @@
 **Method:** Code read at commit `56c91dd`. Every rate and split below is quoted from source, not from a spec.
 **Why:** `WHITEPAPER.md` §11.7 says "50% of all transaction fees burned" and §17.7 records the reconciliation as an open problem. Before that can be closed, the actual surface has to be written down.
 
-**Headline:** the archaeology pass (`TET_STATE_2026-09.md` §2.5) counted six schedules. There are **seven**. The seventh is the v0-era **Imperial Tax**, still hardcoded and still live on the worker-reward path.
+**Headline:** the archaeology pass (`archive/TET_STATE_2026-09.md` §2.5) counted six schedules. There are **seven**. The seventh is the v0-era **Imperial Tax**, still hardcoded and still live on the worker-reward path.
 
 ---
 
@@ -122,7 +122,7 @@ Unifying this is a **consensus change** — every node must agree on the rate, s
 | **Entered by** | `POST /ledger/proof` → `rest/handlers/ledger.rs:586`; `POST /ledger/mint_demo`; genesis-1k claim `ledger.rs:5045`; node bootstrap `main.rs:419` |
 | **Tx types** | None — direct ledger mutation |
 
-This is the last surviving piece of the `.cursor_nexus_project.md` (2026-04-15) economic constitution: *"Mint: 1% (bps=100) is charged and credited to the founder wallet."* That document was superseded by the 25/50/25 genesis model, but this code path was not updated.
+This is the last surviving piece of the `archive/cursor_nexus_project_2026-04.md` (2026-04-15) economic constitution: *"Mint: 1% (bps=100) is charged and credited to the founder wallet."* That document was superseded by the 25/50/25 genesis model, but this code path was not updated.
 
 ---
 
@@ -142,7 +142,7 @@ This is the last surviving piece of the `.cursor_nexus_project.md` (2026-04-15) 
 /// Split: 99% `worker_net` (90-day vest to worker) / 1% imperial tax (unlocked to vault).
 ```
 
-**"Imperial Tax" is v0 CHF-era terminology.** `docs/STATUS.md` §B lists it as *"deprecated WP … 用語は非正本"* (term not canonical) and guessed that *"similar logic may survive in the worker mint path."* Confirmed: it survives under its original name, in the audit output, on a live path. Any external reader running `/founder/audit.csv` will see `imperial_tax_micro` in the JSON.
+**"Imperial Tax" is v0 CHF-era terminology.** `archive/STATUS_2026-09.md` §B lists it as *"deprecated WP … 用語は非正本"* (term not canonical) and guessed that *"similar logic may survive in the worker mint path."* Confirmed: it survives under its original name, in the audit output, on a live path. Any external reader running `/founder/audit.csv` will see `imperial_tax_micro` in the JSON.
 
 ---
 
@@ -254,8 +254,8 @@ No changes are proposed here; these are the decisions a unification would have t
 
 | Document | Relevance |
 |---|---|
-| [`TET_STATE_2026-09.md`](./TET_STATE_2026-09.md) §2.5 | Where the six-schedule count came from |
-| [`WHITEPAPER.md`](../WHITEPAPER.md) §11.5–11.7, §17.7 | Documented fee model and the open reconciliation |
+| [`archive/TET_STATE_2026-09.md`](../archive/TET_STATE_2026-09.md) (archived) §2.5 | Where the six-schedule count came from |
+| [`WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) §11.5–11.7, §17.7 | Documented fee model and the open reconciliation |
 | [`WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md) Gap 6 | 80/15/5 vs §11 tokenomics |
 | [`SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md) Appendix C | Tmail/Pin/Anonymous spec |
-| [`docs/STATUS.md`](./STATUS.md) §B | Records Imperial Tax as deprecated terminology |
+| [`archive/STATUS_2026-09.md`](../archive/STATUS_2026-09.md) (archived) §B | Records Imperial Tax as deprecated terminology |

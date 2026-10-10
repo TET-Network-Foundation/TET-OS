@@ -775,7 +775,7 @@ Original v1 Sprints 3–6, preserved verbatim. **None was executed under these n
 
 ### v1 S6 — Docs, release, Docker recovery (P2)
 
-1. **`docs/STATUS.md` 更新。** — ⬜ **open**; `STATUS.md` still reflects 2026-05-18 state
+1. **`archive/STATUS_2026-09.md` 更新。** — ⬜ **open**; `STATUS.md` still reflects 2026-05-18 state
 2. **Operator runbook 統合。** — ↪ **merged into S4** operator docs
 3. **Docker E2E:** `docker compose up` で 3 ノード + UI smoke。 — ↪ **merged into S4** Docker item
 4. **Commit / tag:** `Phase 0 foundation` タグ；push は CI 緑後。 — ⬜ **open**; repo has no tags
@@ -790,8 +790,8 @@ Original v1 Sprints 3–6, preserved verbatim. **None was executed under these n
 | Public seed SPOF (spec R10) | Network dies with one host | 2nd seed when traffic warrants | **Open, and now load-bearing.** One seed is live (2026-09-22) and it is the only block producer on the network — followers run `TET_AUTO_MINE=0`, so if Helsinki stops, the chain stops. The previous "network is down" state is cleared; the single point of failure it created is not |
 | RISC0 CI が重い | ZK path untested in CI | `RISC0_SKIP_BUILD=1` default, `zk` job optional | Open |
 | Anonymous ZK not ready (spec R1) | Ship slips | Slip the date; never ship placeholder UI | Open — S8 not started |
-| ホワイトペーパーと実装の用語乖離 | docs 混乱 | WP §17 records divergences explicitly | Ongoing; see `TET_STATE_2026-09.md` §3.1 |
-| 3-month dormancy (2026-06-12 → 2026-09-17) | Dependency drift, lost context | This restart pass; `TET_STATE_2026-09.md` | Active |
+| ホワイトペーパーと実装の用語乖離 | docs 混乱 | WP §17 records divergences explicitly | Ongoing; see `archive/TET_STATE_2026-09.md` §3.1 |
+| 3-month dormancy (2026-06-12 → 2026-09-17) | Dependency drift, lost context | This restart pass; `archive/TET_STATE_2026-09.md` | Active |
 
 ---
 
@@ -811,7 +811,7 @@ Original v1 Sprints 3–6, preserved verbatim. **None was executed under these n
 | Document | Holds |
 |---|---|
 | [`SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md) | Sprint *contents*, acceptance tests AT-F1…AT-9, locked decisions, fee economics |
-| [`TET_STATE_2026-09.md`](./TET_STATE_2026-09.md) | Whole-project state, gap analysis, ideas inventory |
+| [`archive/TET_STATE_2026-09.md`](../archive/TET_STATE_2026-09.md) (archived) | Whole-project state, gap analysis, ideas inventory |
 | [`UI_STATUS_PHASE0.md`](./UI_STATUS_PHASE0.md) | S3 evidence |
 | [`SYNC_ISSUE.md`](./SYNC_ISSUE.md) | S1 evidence |
 | [`SPRINT0_ISSUES.md`](../SPRINT0_ISSUES.md) | Production-readiness backlog (unclosed) |
