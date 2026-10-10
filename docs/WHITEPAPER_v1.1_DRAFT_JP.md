@@ -12,8 +12,8 @@
 **肩書:** Founder-Architect, TET Network Project  
 **連絡先:** tetsteve@proton.me  
 
-**ステータス:** レビュー用ドラフト。明示的なコミットによるマージまで、[`WHITEPAPER.md`](../WHITEPAPER.md)（Genesis v1.0、2026-04-28）を**置き換えない**。  
-**実装参照:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md)、[`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md)、[`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md)、[`docs/STATUS.md`](./STATUS.md)  
+**ステータス:** レビュー用ドラフト。明示的なコミットによるマージまで、[`archive/WHITEPAPER_v1.0.md`](../archive/WHITEPAPER_v1.0.md) (archived)（Genesis v1.0、2026-04-28）を**置き換えない**。  
+**実装参照:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md)、[`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md)、[`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md)、[technical paper v2](https://tetnet.org/whitepaper)  
 **正規コード:** `tet-core/`（Rust）、`tet-network/ui/`（Sovereign OS）
 
 ---

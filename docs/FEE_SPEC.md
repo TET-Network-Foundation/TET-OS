@@ -190,5 +190,5 @@ All fee constants live in `fees.rs`. Nothing else may define one.
 | Document | Relation |
 |---|---|
 | [`FEE_AUDIT.md`](./FEE_AUDIT.md) | The pre-unification inventory this spec replaces |
-| [`WHITEPAPER.md`](../WHITEPAPER.md) §5.6, §11.5–11.7, §17.7 | §17.7 reconciliation is closed by this spec for schedules 2, 5, 6, 7 |
+| [`WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) §5.6, §11.5–11.7, §17.7 | §17.7 reconciliation is closed by this spec for schedules 2, 5, 6, 7 |
 | [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) | Strategy C — why a hard fork is affordable now |

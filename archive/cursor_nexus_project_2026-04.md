@@ -4,6 +4,12 @@ owner: CEO directive (Version 1.0)
 updated: 2026-04-15
 ---
 
+> **Superseded. Historical, not the current design.** Kept for the record. The current description of
+> TET is the technical paper v2: <https://tetnet.org/whitepaper> (source
+> `tet-network/ui/app/whitepaper/paper.ts`, files in `tet-network/ui/public/paper/`). Where this
+> document and the paper differ, the paper is right.
+
+
 ## Version 1.0.0-GOLD-GENESIS (Hardware-Verified & Quantum-Ready)
 
 This document is the operational blueprint for the TET Core May launch. It defines non-negotiable

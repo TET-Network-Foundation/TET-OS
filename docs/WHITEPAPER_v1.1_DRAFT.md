@@ -10,8 +10,8 @@
 **Title:** Founder-Architect, TET Network Project  
 **Contact:** tetsteve@proton.me  
 
-**Status:** Draft for review. Does **not** supersede [`WHITEPAPER.md`](../WHITEPAPER.md) (Genesis v1.0, 2026-04-28) until merged by explicit commit.  
-**Implementation references:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md), [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md), [`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md), [`docs/STATUS.md`](./STATUS.md)  
+**Status:** Draft for review. Does **not** supersede [`archive/WHITEPAPER_v1.0.md`](../archive/WHITEPAPER_v1.0.md) (archived) (Genesis v1.0, 2026-04-28) until merged by explicit commit.  
+**Implementation references:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md), [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md), [`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md), [technical paper v2](https://tetnet.org/whitepaper)  
 **Canonical code:** `tet-core/` (Rust), `tet-network/ui/` (Sovereign OS)
 
 ---

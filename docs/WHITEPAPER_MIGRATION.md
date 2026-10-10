@@ -1,7 +1,7 @@
 # Whitepaper 正本統合 — 移行チェックリスト
 
 **日付:** 2026-05-18  
-**決定:** 正本 = **Genesis Draft v1.0 (2026-04-28)** → ルート [`WHITEPAPER.md`](../WHITEPAPER.md)  
+**決定:** 正本 = **Genesis Draft v1.0 (2026-04-28)** → ルート [`archive/WHITEPAPER_v1.0.md`](../archive/WHITEPAPER_v1.0.md) (archived)  
 **退避:** B 版経済モデル → [`archive/WHITEPAPER_v0_economic.md`](../archive/WHITEPAPER_v0_economic.md)  
 **本文状態:** `WHITEPAPER.md` は **GENESIS_V1 全文投入待ち**（プレースホルダー）
 
@@ -56,7 +56,7 @@
 | `tetWhitepaper.ts` の short text のみ表示 | **変更必要** — 全文は PDF または新 WP へのリンクに |
 | 「Short version — TET Network v0.1」 | **変更必要** |
 
-### 1.6 `docs/STATUS.md`
+### 1.6 `archive/STATUS_2026-09.md`
 
 | 内容 | ラベル |
 |------|--------|
@@ -88,7 +88,7 @@
 | `tet-network/ui/app/lib/tx_store.ts` | `amount_stevemon` | **要判断** |
 | `tet-network/ui/app/setup/page.tsx` | `stevemon` 表示 | **要判断** |
 | `tet-agent-sdk/src/agent_client.ts` | `max_stevemon` | **要判断** |
-| `.cursor_nexus_project.md` | micro-stevemon | **要判断** |
+| `archive/cursor_nexus_project_2026-04.md` | micro-stevemon | **要判断** |
 | `archive/WHITEPAPER_v0_economic.md` | 全文 B 版 | **残してOK**（archive） |
 | `archive/LITEPAPER_v0.md` | CHF peg | **残してOK**（archive） |
 
@@ -149,7 +149,7 @@
 
 1. Steve が **`GENESIS_V1.md` 全文**を共有 → `WHITEPAPER.md` プレースホルダー置換  
 2. `README.md` の Further reading を更新（`LITEPAPER` → archive または削除）  
-3. `docs/STATUS.md` / `CODEBASE_OVERVIEW.md` を Genesis 正本前提に再生成  
+3. `archive/STATUS_2026-09.md` / `CODEBASE_OVERVIEW.md` を Genesis 正本前提に再生成  
 4. PDF と新 `WHITEPAPER.md` の目視 diff → `REGEN_NEEDED` 確定  
 5. **別 PR** で UI / API の stevemon 表示名を「TET / micro-TET」等に整理（要判断）
 

@@ -11,9 +11,15 @@
 // 5. Wording, as on the rest of the site: no "first" claims, no money words, no "untraceable", never
 //    "proves you made it", no absolute AI claims, ML-KEM only as "not"/"move to", and quantum
 //    resistance stated as incomplete until wallet_id_v2. Controls.
+// 6. Images of the paper (previews in docs/, anything in public/paper/) are rendered from the paper's
+//    source only: each is listed in public/paper/images.json with its SHA-256 and the exact text it
+//    shows, that text must appear in the paper, and any contact line in an image (an email address,
+//    "Contact:") must be one the paper's text itself carries. No OCR: an image not listed, or changed
+//    since it was rendered, fails. Controls: an unlisted image; a listed one showing a contact line
+//    the text doesn't.
 
 import { register } from "node:module";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
@@ -110,6 +116,56 @@ check("quantum resistance is stated as incomplete until wallet_id_v2", () => {
   assert.match(t, /forging a transaction will require breaking both Ed25519 and ML-DSA-44/);
   assert.doesNotMatch(t, /fully quantum[- ]resistant|quantum[- ]proof|quantum[- ]safe/i);
 });
+
+// ---- 6. images come from the source only --------------------------------------------------------
+const IMAGE = /\.(png|jpe?g|webp|gif|svg)$/i;
+function walk(dir) {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).flatMap((n) => {
+    const f = `${dir}/${n}`;
+    return statSync(f).isDirectory() ? walk(f) : [f];
+  });
+}
+/** Paper images in the tree: under public/paper/, and paper/whitepaper previews in docs/. */
+function paperImages() {
+  const inPaper = walk(`${UI}public/paper`).filter((f) => IMAGE.test(f));
+  const inDocs = walk(`${ROOT}docs`).filter((f) => IMAGE.test(f) && /phrack|whitepaper|paper/i.test(f.split("/").pop()));
+  return [...inPaper, ...inDocs].map((f) => f.slice(ROOT.length));
+}
+const CONTACT = /[\w.+-]+@[\w-]+\.[\w.]+|\bcontact\s*:/gi;
+/** Problems with `images` (repo paths) against `manifest` ({path: {sha256, text}}) and the paper's text. */
+function imageProblems(images, manifest, paperText, sha) {
+  const out = [];
+  for (const f of images) {
+    const m = manifest[f];
+    if (!m) {
+      out.push(`${f}: not rendered from the paper (not in public/paper/images.json)`);
+      continue;
+    }
+    if (sha(f) !== m.sha256) out.push(`${f}: changed since it was rendered`);
+    for (const line of String(m.text).split("\n").map((l) => l.trim()).filter(Boolean)) {
+      if (!paperText.includes(line)) out.push(`${f}: shows text the paper doesn't have: ${line.slice(0, 60)}`);
+      for (const c of line.match(CONTACT) ?? []) if (!paperText.includes(c)) out.push(`${f}: a contact the paper's text doesn't carry: ${c}`);
+    }
+  }
+  return out;
+}
+{
+  const manifestPath = `${UI}public/paper/images.json`;
+  const manifest = existsSync(manifestPath) ? JSON.parse(readFileSync(manifestPath, "utf8")) : {};
+  const paperText = [paper.TITLE, paper.SUBTITLE, paper.ABSTRACT, ...allText(paper)].join("\n");
+  const sha = (f) => createHash("sha256").update(readFileSync(`${ROOT}${f}`)).digest("hex");
+  check("every paper image is rendered from the paper's text, with no contact line the text lacks", () => {
+    assert.deepEqual(imageProblems(paperImages(), manifest, paperText, sha), []);
+  });
+  check("control: an unlisted image, and one showing a contact the text lacks, are caught", () => {
+    const fake = "docs/paper_preview.png";
+    assert.equal(imageProblems([fake], {}, paperText, () => "x").length, 1);
+    const listed = { [fake]: { sha256: "x", text: `${paper.TITLE}\nContact: someone@example.com` } };
+    assert.ok(imageProblems([fake], listed, paperText, () => "x").some((p) => p.includes("contact")));
+    assert.deepEqual(imageProblems([fake], { [fake]: { sha256: "x", text: paper.TITLE } }, paperText, () => "x"), []);
+  });
+}
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

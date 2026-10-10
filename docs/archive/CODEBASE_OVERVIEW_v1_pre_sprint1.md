@@ -1,7 +1,7 @@
 # TET Network — Codebase Overview
 
 **作成日:** 2026-05-18  
-**対象リポジトリ:** `/Users/sengokukazuma/Nexus_Network`（旧 Nexus Network）  
+**対象リポジトリ:** `~/Nexus_Network`（旧 Nexus Network）  
 **読者:** Founder-Architect / シニアエンジニア向けオンボーディング  
 **方法:** コード変更なし。列挙ファイルを実読。
 
@@ -350,7 +350,7 @@ Manu Sheel Gupta レベルの第三者が突くであろう **技術的疑問**�
 | 1 | `WHITEPAPER.md` | ✅ 全文（Genesis v1.0, ~287 行） |
 | 2 | `archive/LITEPAPER_v0.md` | ✅ deprecated |
 | 3 | `README.md` | ✅ |
-| 4 | `docs/STATUS.md`, `SYNC_ISSUE.md`, `SPRINT_PLAN.md` | ✅ |
+| 4 | `archive/STATUS_2026-09.md`, `SYNC_ISSUE.md`, `SPRINT_PLAN.md` | ✅ |
 | 5 | `tet-core/README.md` | ✅ 一部（L1–100+） |
 | 6 | `tet-core/Cargo.toml` | ✅ |
 | 7 | `tet-core/src/main.rs` | ✅ 全文 503 行 |

@@ -1,7 +1,7 @@
 # Whitepaper Genesis v1.0 — 正本反映 完了レポート
 
 **日付:** 2026-05-18  
-**正本:** [`WHITEPAPER.md`](../WHITEPAPER.md), [`GENESIS_V1.md`](../GENESIS_V1.md)  
+**正本:** [`archive/WHITEPAPER_v1.0.md`](../archive/WHITEPAPER_v1.0.md) (archived), [`GENESIS_V1.md`](../GENESIS_V1.md)  
 **タスク:** 仕上げ + 旧経済モデル参照のドキュメント/UI クリーンアップ（`.rs` 変更なし）
 
 ---
@@ -10,7 +10,7 @@
 
 | 状態 | **完了** |
 |------|----------|
-| 内容 | 6 Gap すべて [`WHITEPAPER.md`](../WHITEPAPER.md) からの直接引用 + 行番号（L76–88, L135–147, L173–199, L219–221 等） |
+| 内容 | 6 Gap すべて [`archive/WHITEPAPER_v1.0.md`](../archive/WHITEPAPER_v1.0.md) (archived) からの直接引用 + 行番号（L76–88, L135–147, L173–199, L219–221 等） |
 | 注記 | Gap 3 は §5.1 Sovereign Runtime（optimistic window）+ §14.1 を併記 — 旧「§5.1 = Sharding Plugins」前提を削除 |
 
 ---
@@ -45,7 +45,7 @@
 
 | ファイル | 結果 | 対応 |
 |----------|------|------|
-| `docs/STATUS.md` | **変更必要**だった | Genesis v1.0 ベースに **全面書き換え** |
+| `archive/STATUS_2026-09.md` | **変更必要**だった | Genesis v1.0 ベースに **全面書き換え** |
 | `docs/CODEBASE_OVERVIEW.md` | **変更必要**だった | §0 正本表、§3 マッピング表、§9 査読メモ、読了ログを更新 |
 | `docs/SPRINT_PLAN.md` | **最小修正** | Imperial tax → AI settlement / §14.3 slash 表現 |
 | `docs/WHITEPAPER_MIGRATION.md` | **未更新** | 移行完了済み；必要なら「完了」ステータス追記のみ（本タスクではスコープ外） |
@@ -105,7 +105,7 @@
 | 更新 | `docs/WHITEPAPER_V1.1_GAPS.md` |
 | 更新 | `README.md` |
 | 更新 | `tet-core/README.md` |
-| 更新 | `docs/STATUS.md` |
+| 更新 | `archive/STATUS_2026-09.md` |
 | 更新 | `docs/CODEBASE_OVERVIEW.md` |
 | 更新 | `docs/SPRINT_PLAN.md` |
 | 更新 | `tet-network/ui/app/lib/tetWhitepaper.ts` |
@@ -121,7 +121,7 @@
 ## 10. 検証コマンド
 
 ```bash
-cd /Users/sengokukazuma/Nexus_Network
+cd ~/Nexus_Network
 rg -i 'stevemon|CHF peg|Imperial Tax|Sharding Plugins' README.md tet-core/README.md docs/STATUS.md docs/SPRINT_PLAN.md docs/CODEBASE_OVERVIEW.md
 git diff --stat docs/ README.md tet-core/README.md tet-network/ui/app/lib/tetWhitepaper.ts tet-network/ui/app/whitepaper/page.tsx
 ```

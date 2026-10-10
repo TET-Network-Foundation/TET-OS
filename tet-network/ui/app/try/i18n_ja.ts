@@ -1029,4 +1029,5 @@ export const JA: Record<string, string> = {
   "Even if TET disappears, this still works:": "TET がなくなっても、これは動きます：",
   "the offline verifier": "オフライン検証ツール",
   "(one file: it checks a record on your device, with the network off)": "（1つのファイル。ネットに接続しなくても、あなたの端末で記録を確認します）",
+  "The testnet's genesis contains a founder wallet, locked by a one-year cliff, and a treasury address that collects test fees. This chain can never become mainnet; mainnet supply and allocation are undecided.": "テストネットのジェネシスには、1年のクリフでロックされた創設者のウォレットと、テスト用の手数料を集めるトレジャリーのアドレスが入っています。このチェーンがメインネットになることはありません。メインネットの総量と配分は未定です。",
 };

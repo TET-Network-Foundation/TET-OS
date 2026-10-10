@@ -242,5 +242,5 @@ UI never called this path; it uses `GET /ledger/me?wallet_id=`.
 
 - [`RUNNING_A_NODE.md`](./RUNNING_A_NODE.md) — node env, `/ledger/state` semantics  
 - [`CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md) — monorepo map  
-- [`STATUS.md`](./STATUS.md) — WP vs implementation matrix  
+- [technical paper v2](https://tetnet.org/whitepaper) — WP vs implementation matrix  
 - [`tet-core/README.md`](../tet-core/README.md) — Docker quick start  

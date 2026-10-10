@@ -1,6 +1,6 @@
 //! FIPS-204 (ML-DSA) conformance vectors — **TET's own**, not the dependency's.
 //!
-//! `WHITEPAPER.md` §7.1 claims ML-DSA / FIPS 204. That claim rests entirely on `dilithium-rs`,
+//! `archive/WHITEPAPER_v1.1.md` §7.1 claims ML-DSA / FIPS 204. That claim rests entirely on `dilithium-rs`,
 //! a single-maintainer crate with no published third-party audit. The crate ships its own KATs,
 //! but those live in the dependency: if a future version silently stopped matching FIPS-204,
 //! TET's build would stay green and the whitepaper claim would quietly become false.

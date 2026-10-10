@@ -4,8 +4,8 @@
 **Date:** 2026-05-21  
 **Audience:** External engineers (Protocol Labs, VC diligence), new contributors, AI-assisted review  
 **Read time:** ~2–4 hours (deep pass)  
-**Companion docs:** [`CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md) (high-level v2), [`WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md), [`STATUS.md`](./STATUS.md), [`RUNNING_A_NODE.md`](./RUNNING_A_NODE.md)  
-**Canonical whitepaper:** [`WHITEPAPER.md`](../WHITEPAPER.md) (v1.0; v1.1 draft: [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md))
+**Companion docs:** [`CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md) (high-level v2), [`WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md), [technical paper v2](https://tetnet.org/whitepaper), [`RUNNING_A_NODE.md`](./RUNNING_A_NODE.md)  
+**Current paper:** [technical paper v2](https://tetnet.org/whitepaper) (the v1.x whitepapers are archived)
 
 > **Method:** Code-read only (2026-05-21). Claims not visible in source are marked **Source: unclear in current code**.
 
