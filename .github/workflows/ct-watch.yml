@@ -1,0 +1,37 @@
+# Certificate Transparency watch (docs/THREAT_MODEL.md: certificate mis-issuance). Once a day, ask
+# crt.sh for certificates logged in the last 26 hours for TET's domains, and post any to Discord.
+# Stateless: the 26-hour window overlaps the daily run. No third-party Actions.
+# Needs the repository secret DISCORD_CT_WEBHOOK (a Discord channel webhook URL).
+name: ct-watch
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: New certificates for tetnet.org and stevenexus.org
+        env:
+          DISCORD_CT_WEBHOOK: ${{ secrets.DISCORD_CT_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          since=$(date -u -d '26 hours ago' +%Y-%m-%dT%H:%M:%S)
+          found=""
+          for d in tetnet.org stevenexus.org; do
+            json=$(curl -sf --retry 3 --retry-delay 20 "https://crt.sh/?q=%25.${d}&output=json" || echo "ERR")
+            if [ "$json" = "ERR" ]; then found="${found}crt.sh didn't answer for ${d}; check by hand.\n"; continue; fi
+            new=$(jq -r --arg since "$since" '[.[] | select(.entry_timestamp >= $since)] | unique_by(.id) | .[] | "\(.entry_timestamp)  \(.name_value | gsub("\n"; ", "))  issuer: \(.issuer_name)  https://crt.sh/?id=\(.id)"' <<<"$json")
+            [ -n "$new" ] && found="${found}${d}:\n${new}\n"
+          done
+          if [ -z "$found" ]; then echo "no new certificates"; exit 0; fi
+          printf "%b" "$found"
+          if [ -n "${DISCORD_CT_WEBHOOK:-}" ]; then
+            msg=$(printf "New certificates in CT logs (expected after a renewal; anything else needs a look):\n%b" "$found" | head -c 1900)
+            jq -n --arg c "$msg" '{content: $c}' | curl -sf -H "Content-Type: application/json" -d @- "$DISCORD_CT_WEBHOOK" >/dev/null
+          else
+            echo "::warning::DISCORD_CT_WEBHOOK is not set; nothing was posted"
+          fi

@@ -173,7 +173,7 @@ export default function HowPanel(props: { go: LandingGo }) {
           <li>{t("Now: v0.2 testnet. Two seed nodes, one block producer, coins with no value.")}</li>
           <li>{t("Target: the Phase 1 genesis in Q1 2027. It binds the ML-DSA key to the wallet, signs blocks and renames the chain. It's a target, not a date.")}</li>
           <li>
-            <span className={PLANNED}>{t("planned")}</span> {t("TetSearch at search.stevenexus.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.")} {t("Keys without a human vouch can't publish.")}
+            <span className={PLANNED}>{t("planned")}</span> {t("TetSearch at search.tetnet.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.")} {t("Keys without a human vouch can't publish.")}
           </li>
           <li>
             {t("What's open is in")}{" "}

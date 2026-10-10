@@ -485,7 +485,7 @@ export const JA: Record<string, string> = {
   "Roadmap": "これから",
   "Now: v0.2 testnet. Two seed nodes, one block producer, coins with no value.": "現在: v0.2 テストネット。シードノード2台、ブロック生成は1台、コインに価値なし。",
   "Target: the Phase 1 genesis in Q1 2027. It binds the ML-DSA key to the wallet, signs blocks and renames the chain. It's a target, not a date.": "目標: 2027年第1四半期の Phase 1 ジェネシス。ML-DSA の鍵とウォレットの結びつけ、ブロック署名、チェーン名の変更。目標であって確定日ではありません。",
-  "TetSearch at search.stevenexus.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.": "search.stevenexus.org の TetSearch: 署名付きの TET サイトだけを検索し、紹介された人だけが公開でき、AIによる大量生成を締め出すように作ります。",
+  "TetSearch at search.tetnet.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.": "search.tetnet.org の TetSearch: 署名付きの TET サイトだけを検索し、紹介された人だけが公開でき、AIによる大量生成を締め出すように作ります。",
   "What's open is in": "未解決の点は次にあります:",
   "Shelter": "シェルター",
   "A quiet corner for people who know each other.": "知り合い同士のための静かな場所。",

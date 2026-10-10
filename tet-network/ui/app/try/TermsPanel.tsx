@@ -8,7 +8,7 @@
 import { MONO, PanelHead, cx } from "./ui";
 import { useLang } from "./i18n";
 
-export const ABUSE_CONTACT = "abuse@stevenexus.org";
+export const ABUSE_CONTACT = "abuse@tetnet.org";
 
 export default function TermsPanel() {
   const { t } = useLang();

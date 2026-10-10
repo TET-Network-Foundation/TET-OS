@@ -485,7 +485,7 @@ export const ZH_HK: Record<string, string> = {
   "Roadmap": "路線圖",
   "Now: v0.2 testnet. Two seed nodes, one block producer, coins with no value.": "現在：v0.2 測試網。兩個種子節點、一個區塊產生者，代幣沒有價值。",
   "Target: the Phase 1 genesis in Q1 2027. It binds the ML-DSA key to the wallet, signs blocks and renames the chain. It's a target, not a date.": "目標：2027 年第一季的 Phase 1 創世。會把 ML-DSA 鑰匙與錢包綁定、為區塊簽名，並為區塊鏈改名。這是目標，不是確定日期。",
-  "TetSearch at search.stevenexus.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.": "search.stevenexus.org 的 TetSearch：只搜尋已簽署的 TET 網站；只有獲引薦的人可以發佈；設計用來阻擋 AI 大量生成的內容。",
+  "TetSearch at search.tetnet.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.": "search.tetnet.org 的 TetSearch：只搜尋已簽署的 TET 網站；只有獲引薦的人可以發佈；設計用來阻擋 AI 大量生成的內容。",
   "What's open is in": "尚待處理的事項見於",
   "Shelter": "庇護所",
   "A quiet corner for people who know each other.": "給互相認識的人的安靜角落。",

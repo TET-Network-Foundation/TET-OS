@@ -14,8 +14,17 @@ Design: [`docs/DEMO_NODE.md`](../../docs/DEMO_NODE.md). Needs tet-core with publ
   - `22/tcp`, restricted to your own IP if you can. **The seeds use SSH on 443; here 443 belongs to
     Caddy.**
   - `80/tcp` (ACME and the redirect), `443/tcp` (the page), `8002/tcp` (P2P, like any node).
-- **DNS:** create `A` and `AAAA` records for the demo name (e.g. `try.<your domain>`) pointing at the
-  server, **before** provisioning, so Caddy can get its certificate.
+- **DNS:** create `A` and `AAAA` records for the demo name pointing at the server, **before**
+  provisioning, so Caddy can get its certificate. Today: `tetnet.org` (the main name), plus
+  `www.tetnet.org` and `try.stevenexus.org`, which redirect to it (`TET_DEMO_REDIRECTS`). Point them
+  at the demo server's own addresses, as the Hetzner console shows them for `ubuntu-4gb-fsn1-demo`.
+- **SSH on 8443 too** (some networks block outbound 22): add `8443/tcp` to the Hetzner firewall, and
+  once, from a network that allows 22:
+  ```bash
+  ssh root@<demo-ip> 'mkdir -p /etc/systemd/system/ssh.socket.d && printf "[Socket]\nListenStream=\nListenStream=0.0.0.0:22\nListenStream=[::]:22\nListenStream=0.0.0.0:8443\nListenStream=[::]:8443\n" > /etc/systemd/system/ssh.socket.d/ports.conf && systemctl daemon-reload && systemctl restart ssh.socket && ss -ltn | grep -E ":(22|8443) "'
+  ```
+  The empty `ListenStream=` clears Ubuntu's default before listing both ports. Afterwards every
+  command below works with `ssh -p 8443`.
 
 ## 2. healthchecks.io
 
@@ -32,7 +41,8 @@ COPYFILE_DISABLE=1 git archive --format=tar <commit> \
   | ssh root@<demo-ip> 'mkdir -p /opt/TET-OS && tar -x -C /opt/TET-OS'
 ssh root@<demo-ip> 'cd /opt/TET-OS && \
   TET_NODE_ROLE=demo \
-  TET_DEMO_DOMAIN=try.<your domain> TET_DEMO_ACME_EMAIL=<you@…> \
+  TET_DEMO_DOMAIN=tetnet.org TET_DEMO_ACME_EMAIL=<you@…> \
+  TET_DEMO_REDIRECTS="www.tetnet.org, try.stevenexus.org" \
   TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM \
   TET_HC_URL=<ping url> \
   bash deploy/provision-seed.sh'
@@ -159,7 +169,7 @@ then hide each printed `msg_id`. The invite stays on your machine; the node only
 
 Hiding a wallet also hides everything it sent (its directory listing included) and refuses new
 posts and files to or from it. Copies other nodes already hold stay on those nodes. Reports go to
-abuse@stevenexus.org and are reviewed within 48 hours.
+abuse@tetnet.org and are reviewed within 48 hours.
 
 ## Before going public (checklist)
 

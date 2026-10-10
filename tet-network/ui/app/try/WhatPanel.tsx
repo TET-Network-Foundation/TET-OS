@@ -182,8 +182,8 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
         </li>
         <li>
           {t("Researchers, organizations, anything else:")}{" "}
-          <a className={link} href="mailto:hello@stevenexus.org">
-            hello@stevenexus.org
+          <a className={link} href="mailto:hello@tetnet.org">
+            hello@tetnet.org
           </a>
         </li>
       </ul>
