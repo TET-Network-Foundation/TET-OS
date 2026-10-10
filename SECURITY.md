@@ -127,6 +127,17 @@ to be deleted. Since 39036cf, deployed on both seeds on 2026-10-10, only a value
 proof groups posts; an unverified post stands alone. No post could be forged or deanonymised this
 way.
 
+**Fixed: one invalid transaction could make the block producer drop every pending transaction.**
+Until 2026-10-10, a transaction that the network accepted into its pending pool but a block would
+refuse (sent by anyone, from a free wallet) made the producer's next block fail, and every pending
+transaction was lost with it; repeated, this could keep all transactions off the testnet. Since
+26744ca, deployed on both seeds and the demo node on 2026-10-10, transactions no block can accept,
+and transfers their sender can't cover (counting the sender's other pending transfers), are refused
+when they arrive; a block is built without any transaction that would break it, and only that one is
+dropped. No balance could change without its wallet's signature. This issue's class was named by
+mistake in a public branch a few hours before the fix was deployed; working logs are now kept out of
+the repository.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about
