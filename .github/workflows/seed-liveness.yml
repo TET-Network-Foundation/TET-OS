@@ -60,14 +60,13 @@ jobs:
             exit 1
           fi
           curl -fsS -m 20 -H "X-Api-Key: ${HC_API_KEY}" https://healthchecks.io/api/v3/checks/ > checks.json
-          # tet-demo: the demo host isn't provisioned yet, so its check has never pinged ("new").
-          # Allowed only as "new"; remove this flag when the demo goes live.
-          python3 scripts/hc_status.py --min-checks 2 --not-yet-live tet-demo checks.json
+          # The two seeds and the demo host (tetnet.org, live since 2026-10-10): every check up.
+          python3 scripts/hc_status.py --min-checks 3 checks.json
 
       - name: P2P port reachable from the internet (exposure, not liveness)
         run: |
           set -euo pipefail
-          for host in 95.217.158.153 46.224.223.54; do
+          for host in 95.217.158.153 46.224.223.54 167.233.239.82; do
             ok=0
             for attempt in 1 2 3; do
               if timeout 10 bash -c ">/dev/tcp/${host}/8002" 2>/dev/null; then ok=1; break; fi
@@ -80,7 +79,7 @@ jobs:
       - name: REST must NOT be reachable
         run: |
           set -euo pipefail
-          for host in 95.217.158.153 46.224.223.54; do
+          for host in 95.217.158.153 46.224.223.54 167.233.239.82; do
             if timeout 10 bash -c ">/dev/tcp/${host}/5010" 2>/dev/null; then
               echo "::error::${host}: REST port 5010 is reachable from the internet — it must not be"
               exit 1
