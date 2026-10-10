@@ -1,12 +1,12 @@
 {
   "html": {
-    "code": "TET-418B-CFT2",
-    "sha256": "c2c6428ad4430e248d6024c98a762a10f15785bdac889c56537a8b89c6410a6a",
+    "code": "TET-ZSK3-VQ1J",
+    "sha256": "54461c77ae03c170d9ef53e0b5f84fec849eb0e84b31a571d486d2e679d70324",
     "file": "paper/tet-technical-paper.html"
   },
   "pdf": {
-    "code": "TET-QQGQ-B5MM",
-    "sha256": "ec805fffa2d49e2fdc02b5847d92061c6c83a2a69cf039649c343ff722e24081",
+    "code": "TET-YJ9J-TS4Z",
+    "sha256": "b7e0990da9a1671289198fa8d60a242582443b409dc98b538b8ff10b25ec7b98",
     "file": "paper/tet-technical-paper.pdf"
   },
   "signer": "e93a3597f03a8ee4621d8c7340d37fe871875f8dedbc5ec9e139293d0af847bd",
@@ -14,5 +14,24 @@
     "chainId": "tet-local-dev",
     "genesisHash": "0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36"
   },
-  "published": false
+  "published": false,
+  "history": [
+    {
+      "version": "1",
+      "date": "2026-10-09",
+      "superseded_by": "2",
+      "html": {
+        "code": "TET-418B-CFT2",
+        "sha256": "c2c6428ad4430e248d6024c98a762a10f15785bdac889c56537a8b89c6410a6a",
+        "file": "paper/tet-technical-paper-v1.html",
+        "record": "paper/marks/v1/html.record.json"
+      },
+      "pdf": {
+        "code": "TET-QQGQ-B5MM",
+        "sha256": "ec805fffa2d49e2fdc02b5847d92061c6c83a2a69cf039649c343ff722e24081",
+        "file": "paper/tet-technical-paper-v1.pdf",
+        "record": "paper/marks/v1/pdf.record.json"
+      }
+    }
+  ]
 }

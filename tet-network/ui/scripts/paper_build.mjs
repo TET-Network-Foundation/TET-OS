@@ -158,6 +158,8 @@ writeFileSync(
       signer: a.signer,
       chain: CHAIN,
       published: false,
+      // Every earlier version, with its proof codes (kept; the paper's changelog lists them).
+      history: JSON.parse(readFileSync(new URL("../app/whitepaper/marks.json", import.meta.url), "utf8")).history ?? [],
     },
     null,
     2,

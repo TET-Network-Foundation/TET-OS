@@ -101,6 +101,17 @@ export default function Whitepaper() {
           </>
         ) : null}
       </p>
+      <p className="mt-1 text-[13px] text-[#5d646d]">
+        Version 1 (2026-10-09, superseded, kept):{" "}
+        <a className={link} href="/paper/tet-technical-paper-v1.html">
+          text
+        </a>{" "}
+        ·{" "}
+        <a className={link} href="/paper/tet-technical-paper-v1.pdf" download>
+          PDF
+        </a>{" "}
+        · proof codes <span className="font-mono">TET-418B-CFT2</span> and <span className="font-mono">TET-QQGQ-B5MM</span>
+      </p>
 
       <p className="mt-6 border-l-2 border-[#c9ced4] pl-4">{ABSTRACT}</p>
 
