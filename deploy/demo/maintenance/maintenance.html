@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>TET is being updated</title>
+<style>
+:root { color-scheme: light dark; --ink: #1c1f23; --muted: #5d646d; --bg: #fff; --line: #c9ced4; }
+@media (prefers-color-scheme: dark) { :root { --ink: #e8eaed; --muted: #a3a9b1; --bg: #15171a; --line: #3a3f45; } }
+body { margin: 0 auto; max-width: 36rem; padding: 48px 16px; font: 17px/1.6 system-ui, sans-serif; color: var(--ink); background: var(--bg); }
+h1 { font-size: 1.4rem; margin: 0 0 .75rem; } p { margin: .5rem 0; } .muted { color: var(--muted); font-size: .95rem; }
+nav { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: .75rem; font-size: .9rem; }
+nav a { color: inherit; margin-right: 1rem; }
+</style>
+</head>
+<body>
+<!-- Shown by Caddy when the page or the node can't answer (deploy/demo/Caddyfile, handle_errors).
+     One file, no requests, no external code. Language as on the site: ?lang=, else the choice the
+     site saved on this device (same origin, key tet.ui.v1.lang), else the browser's languages. -->
+<main id="m">
+<section lang="en" data-lang="en">
+<h1>TET is being updated</h1>
+<p>The page or the node isn't answering right now. Nothing you made is lost: your ID lives in your browser and on your saved passphrase (12 words), and signed records stay valid.</p>
+<p class="muted">Try again in a few minutes. This is a testnet run by one operator, so it can be down for a while.</p>
+</section>
+<section lang="ja" data-lang="ja" hidden>
+<h1>TET は更新中です</h1>
+<p>今、ページかノードが応答していません。あなたが作ったものは失われていません。ID はあなたのブラウザと保存した合言葉（12語）にあり、署名した記録はそのまま有効です。</p>
+<p class="muted">数分後にもう一度試してください。1人の運営者が動かしているテストネットなので、しばらく止まることがあります。</p>
+</section>
+<section lang="zh-HK" data-lang="zh-HK" hidden>
+<h1>TET 正在更新</h1>
+<p>網頁或節點暫時沒有回應。你製作的東西不會遺失：你的 ID 在你的瀏覽器和你保存的密語（12 個字）中，已簽署的記錄依然有效。</p>
+<p class="muted">請過幾分鐘再試。這是一個由一位營運者運行的測試網，可能會停一段時間。</p>
+</section>
+</main>
+<nav><a href="?lang=en">English</a><a href="?lang=ja">日本語</a><a href="?lang=zh-HK">繁體中文（香港）</a></nav>
+<script>
+(() => {
+  const as = (v) => { const x = String(v || "").trim().toLowerCase(); return x === "en" ? "en" : x === "ja" ? "ja" : x === "zh-hk" ? "zh-HK" : null; };
+  const fromBrowser = (ls) => { for (const r of ls) { const l = String(r).toLowerCase(); if (l === "ja" || l.startsWith("ja-")) return "ja"; if (l === "zh" || l.startsWith("zh-")) return "zh-HK"; if (l === "en" || l.startsWith("en-")) return "en"; } return null; };
+  let stored = null;
+  try { stored = localStorage.getItem("tet.ui.v1.lang"); } catch {}
+  const lang = as(new URLSearchParams(location.search).get("lang")) || as(stored) || fromBrowser(navigator.languages || [navigator.language]) || "en";
+  for (const s of document.querySelectorAll("[data-lang]")) s.hidden = s.dataset.lang !== lang;
+  document.documentElement.lang = lang;
+  document.title = document.querySelector(`[data-lang="${lang}"] h1`).textContent;
+})();
+</script>
+</body>
+</html>

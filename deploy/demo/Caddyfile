@@ -106,4 +106,22 @@
 		reverse_proxy @page ui:3000
 		respond 404
 	}
+
+	# The page or the node can't answer (502/503/504 from a proxy): the node API answers a plain
+	# JSON 503 (the page's code expects JSON); every other path gets the trilingual maintenance page
+	# (deploy/demo/maintenance/maintenance.html), also with 503.
+	# One ordered `route` (as above): a named matcher with `handle` blocks here sent every path to
+	# the first block in Caddy 2.8, so this is written the way that was tested.
+	handle_errors 502 503 504 {
+		route {
+			@api path /tet-node-api/*
+			header @api Content-Type application/json
+			respond @api `{"ok":false,"error":"unavailable"}` 503
+			rewrite * /maintenance.html
+			file_server {
+				root /srv/maintenance
+				status 503
+			}
+		}
+	}
 }
