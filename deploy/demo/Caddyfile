@@ -62,8 +62,14 @@
 		({method} == "GET" && {path}.matches("^/tet-node-api/explorer/blocks/recent$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/stats/inside$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/tmail/anon/fast/[^/%]+/[^/%]+$")) ||
-		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/(status|me|members|log|inbox|anon/leaves)$")) ||
-		({method} == "POST" && {path}.matches("^/tet-node-api/shelter/(record|key)$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/status$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/me$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/members$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/log$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/inbox$")) ||
+		({method} == "GET" && {path}.matches("^/tet-node-api/shelter/anon/leaves$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/shelter/record$")) ||
+		({method} == "POST" && {path}.matches("^/tet-node-api/shelter/key$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/sigs/publish$")) ||
 		({method} == "GET" && {path}.matches("^/tet-node-api/sigs/search$")) ||
 		({method} == "POST" && {path}.matches("^/tet-node-api/sites/edit$")) ||
