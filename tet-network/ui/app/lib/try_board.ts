@@ -93,6 +93,7 @@ export async function createBoard(
     genesisHash,
   });
   const reg: TmailKeyRegistrationV1 = {
+    v: 2,
     wallet_id: walletId,
     x25519_pub_b64: pub.x25519_pub_b64,
     mlkem_pub_b64: pub.mlkem_pub_b64,

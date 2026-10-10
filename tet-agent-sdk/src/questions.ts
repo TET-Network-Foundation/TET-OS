@@ -185,7 +185,10 @@ export async function buildNamedTmailEnvelope(o: {
   };
 }
 
-/** UI `tmailKeyRegistrationAuthMessageBytes` / tet-core `tmail_key_registration_auth_message_bytes`. */
+/**
+ * UI `tmailKeyRegistrationAuthMessageBytes` / tet-core `tmail_key_registration_auth_message_bytes`:
+ * v2, PAE under "tet tmail key v2" (the node refuses anything else).
+ */
 export function tmailKeyRegistrationAuthMessageBytes(o: {
   chain: TetChainBinding;
   walletId: string;
@@ -194,11 +197,19 @@ export function tmailKeyRegistrationAuthMessageBytes(o: {
   registeredAtMs: number;
   mldsaPubkeyB64: string;
 }): Uint8Array {
-  return new TextEncoder().encode(
-    `tet tmail key v1|chain_id=${o.chain.chainId}|genesis_hash=${o.chain.genesisHash}` +
-      `|wallet_id=${o.walletId.trim().toLowerCase()}|x25519_pub=${o.x25519PubB64.trim()}` +
-      `|mlkem_pub=${o.mlkemPubB64.trim()}|registered_at_ms=${o.registeredAtMs}|mldsa_pk=${o.mldsaPubkeyB64.trim()}`,
-  );
+  const enc = new TextEncoder();
+  const fields = [
+    o.chain.chainId,
+    o.chain.genesisHash,
+    o.walletId.trim().toLowerCase(),
+    o.x25519PubB64.trim(),
+    o.mlkemPubB64.trim(),
+    String(o.registeredAtMs),
+    o.mldsaPubkeyB64.trim(),
+  ];
+  let s = "tet tmail key v2 ";
+  for (const f of fields) s += `${enc.encode(f).length} ${f} `;
+  return enc.encode(s);
 }
 
 function join(nodeUrl: string, path: string): string {
@@ -235,6 +246,7 @@ export async function registerAgentInbox(o: { nodeUrl: string; wallet: HybridKey
     mldsaPubkeyB64: o.wallet.mldsa44PubkeyB64,
   });
   const body = {
+    v: 2,
     wallet_id: walletId,
     x25519_pub_b64: x,
     mlkem_pub_b64: k,

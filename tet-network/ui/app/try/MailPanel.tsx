@@ -16,7 +16,9 @@ import { buildTmailBurnRevokeV1, TMAIL_BURN_DISCLOSURE } from "../lib/tmail_burn
 import { TMAIL_MAX_SCHEDULE_MINUTES, TMAIL_MIN_SCHEDULE_MINUTES, TMAIL_TIME_LOCK_DISCLOSURE } from "../lib/tmail_timelock";
 import { getTmailKeySession } from "../lib/tmail_session";
 import { b64ToBytes } from "../lib/encoding";
-import { getTmailInbox, getTmailKeys, normalizeWalletId64, postTmailReadReceipt, postTmailSend } from "../lib/tet_core_http";
+import { getTmailInbox, normalizeWalletId64, postTmailReadReceipt, postTmailSend } from "../lib/tet_core_http";
+import { safetyNumber, trustedKeysFor, verifyEnvelopeSender } from "../lib/key_trust";
+import { bytesToB64 } from "../lib/encoding";
 import { Button, FOCUS, INK, Input, KeysBanner, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtWhen } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
@@ -39,7 +41,7 @@ type Sent = { id: string; to: string; at: number; text: string; burn: boolean; r
 type Bubble = { id: string; mine: boolean; at: number; text: string | null; burn: boolean; releaseAtMs: number | null; lockedNote?: string };
 
 const limits = (t: (en: string) => string) => [
-  t("Messages are end-to-end encrypted in this tab. The node still sees who writes to whom, and when."),
+  t("Messages are end-to-end encrypted in this tab: only the two of you can read them, if your safety numbers match. The node still sees who writes to whom, and when."),
   t("Key exchange is Kyber round 3, not the final ML-KEM standard (FIPS 203)."),
   t("Your own messages show from this tab only: what you send is encrypted to the recipient, so the node can't give it back to you. Close the tab and they are gone from this view."),
   t("A conversation keeps its newest 5 messages; messages expire after 7 days."),
@@ -63,6 +65,8 @@ export default function MailPanel(props: {
   const [received, setReceived] = useState<Received[]>([]);
   const [sent, setSent] = useState<Sent[]>([]);
   const [current, setCurrent] = useState<string>(props.demoContact || "self");
+  const [forged, setForged] = useState(0);
+  const [safety, setSafety] = useState<{ peer: string; number: string | null; error: string }>({ peer: "", number: null, error: "" });
   const [view, setView] = useState<"list" | "thread">("thread");
   const [newTo, setNewTo] = useState("");
   const [text, setText] = useState("");
@@ -93,15 +97,41 @@ export default function MailPanel(props: {
   // "self" stands for this tab's wallet before it exists.
   const peer = current === "self" ? me : current;
 
+  // The safety number with the person in this conversation (from keys checked here).
+  useEffect(() => {
+    const ks = getTmailKeySession();
+    const other = current === "self" || current === ANON || current === props.demoContact ? null : normalizeWalletId64(current);
+    if (!me || !ks || !other) return;
+    let live = true;
+    void trustedKeysFor(BASE, other).then((k) => {
+      if (!live) return;
+      if (!k.ok) return setSafety({ peer: other, number: null, error: k.reason === "none" ? "" : t(k.message) });
+      const mine = { walletId: me, x25519PubB64: bytesToB64(ks.x25519_pub), mlkemPubB64: bytesToB64(ks.mlkem_pub) };
+      const theirs = { walletId: other, x25519PubB64: k.registration.x25519_pub_b64, mlkemPubB64: k.registration.mlkem_pub_b64 };
+      setSafety({ peer: other, number: safetyNumber(mine, theirs), error: "" });
+    });
+    return () => {
+      live = false;
+    };
+  }, [current, me, props.demoContact, t]);
+
   const refresh = useCallback(async () => {
     const ks = getTmailKeySession();
     if (!wallet || !ks) return;
     const r = await getTmailInbox(BASE, wallet.walletId, 50);
     if (!r.ok || !mounted.current) return;
     const out: Received[] = [];
+    let forged = 0;
     for (const row of r.messages) {
       let plain: string | null = null;
       const locked = row.locked === true || !row.e2ee;
+      // Who sent it, checked here: a message whose signature isn't its claimed sender's is not
+      // shown at all (the node, or anyone in between, could have made it up).
+      const sender = await verifyEnvelopeSender(row as never, BASE);
+      if (sender === "forged") {
+        forged++;
+        continue;
+      }
       if (!locked && row.e2ee) {
         try {
           const pt = await decryptForReceiver(
@@ -130,7 +160,10 @@ export default function MailPanel(props: {
         lockedNote: row.locked_note ?? TMAIL_TIME_LOCK_DISCLOSURE,
       });
     }
-    if (mounted.current) setReceived(out);
+    if (mounted.current) {
+      setReceived(out);
+      setForged(forged);
+    }
   }, [wallet]);
 
   useEffect(() => {
@@ -217,17 +250,20 @@ export default function MailPanel(props: {
         const mins = (releaseAtMs - Date.now()) / 60_000;
         if (!(mins >= TMAIL_MIN_SCHEDULE_MINUTES && mins <= TMAIL_MAX_SCHEDULE_MINUTES)) throw new Error(t("Pick a release time between 1 minute and 30 days from now."));
       }
-      const k = await getTmailKeys(BASE, to);
-      if (!k.ok) throw new Error(k.text || `could not look up the recipient (HTTP ${k.status})`);
-      if (!k.registration) {
-        throw new Error(to === myId ? t("Publish your keys first (the banner above), then you can write to yourself.") : t("That wallet has not published messaging keys yet, so it cannot receive."));
+      // Only keys the recipient's own wallet signed (checked here, not trusted from the node).
+      const k = await trustedKeysFor(BASE, to);
+      if (!k.ok) {
+        if (k.reason === "none") {
+          throw new Error(to === myId ? t("Publish your keys first (the banner above), then you can write to yourself.") : t("That wallet has not published messaging keys yet, so it cannot receive."));
+        }
+        throw new Error(t(k.message));
       }
       const env = await buildTmailEnvelopeV1({
         senderWalletId: myId,
         receiverWalletId: to,
         plaintextUtf8: body,
-        receiverX25519Pub: b64ToBytes(k.registration.x25519_pub_b64),
-        receiverMlkemPub: b64ToBytes(k.registration.mlkem_pub_b64),
+        receiverX25519Pub: k.x25519Pub,
+        receiverMlkemPub: k.mlkemPub,
         baseUrl: BASE,
         burnAfterRead: burn,
         releaseAtMs,
@@ -326,6 +362,23 @@ export default function MailPanel(props: {
           </div>
           <div className="px-4">
             <PinnedNotice lines={limits(t)} />
+            {safety.peer && safety.peer === normalizeWalletId64(current) ? (
+              <details className="mt-2 text-[13.5px]">
+                <summary className={cx(FOCUS, "cursor-pointer")}>
+                  {safety.number ? (
+                    <>
+                      {t("Safety number")}: <span translate="no" className={MONO}>{safety.number}</span>
+                    </>
+                  ) : (
+                    <span className={INK.bad}>{safety.error}</span>
+                  )}
+                </summary>
+                <p className="mt-1 text-[#5d646d]">
+                  {t("Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between changed a key: don't send anything private.")}
+                </p>
+              </details>
+            ) : null}
+            {forged ? <p className={cx("mt-2 text-[13.5px]", INK.bad)}>{t("{n} messages weren't shown: their signature isn't their sender's.", { n: forged })}</p> : null}
           </div>
           <div className="flex flex-1 flex-col gap-1.5 px-4 pb-3" aria-live="polite">
             {thread.length === 0 ? <p className="text-[15px] text-[#5d646d]">{t("No messages yet.")}</p> : null}
@@ -342,7 +395,8 @@ export default function MailPanel(props: {
                 >
                   {m.releaseAtMs && !m.mine ? (
                     <span>
-                      {t("Scheduled message, released {when}.", { when: fmtWhen(m.releaseAtMs, now, locale) })} <span className="text-[13.5px]">{t(m.lockedNote ?? "")}</span>
+                      {t("Scheduled message, released {when}.", { when: fmtWhen(m.releaseAtMs, now, locale) })} <span className="text-[13.5px]">{t(m.lockedNote ?? "")}</span>{" "}
+                      <span className="text-[13.5px]">{t("Who sent it is checked when it's released.")}</span>
                     </span>
                   ) : hiddenBurn ? (
                     <button type="button" onClick={() => void onOpenBurn(m.id)} className={cx(FOCUS, "rounded text-left underline")}>
