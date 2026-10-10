@@ -174,7 +174,7 @@ route("POST /login", (req, res, s) => {                  // 1. the site's own pa
               nonce: randomBytes(32).toString("hex"), issued_at_ms: Date.now(),
               expires_at_ms: Date.now() + 300_000 };
   pending.set(s.id, c);                                  // tied to THIS session
-  res.redirect(`https://try.stevenexus.org/sign-in?challenge=${encode(c)}`);
+  res.redirect(`https://tetnet.org/sign-in?challenge=${encode(c)}`);
 });
 
 route("GET /tet/callback", (req, res, s) => {            // 2. the signer redirects back here
