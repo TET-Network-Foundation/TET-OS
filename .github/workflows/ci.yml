@@ -449,6 +449,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # Verify without TET: the offline verifier agrees with the page's, its files are what the build
+      # makes now, they can't reach the network, and the CLI verifies with networking disabled.
+      - if: needs.gate.outputs.code == 'true'
+        name: verify without TET — offline, deterministic, no network
+        run: node --experimental-strip-types scripts/offline_verify_guard.mjs
 
       # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
       # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in

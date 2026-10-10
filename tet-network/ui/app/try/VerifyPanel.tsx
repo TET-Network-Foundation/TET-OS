@@ -9,7 +9,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { gradedVerdict } from "../lib/verify_anything.mjs";
 import { mldsa44Verify } from "../lib/pqc";
-import { Badge, Button, FOCUS, FilePick, INK, Input, PanelHead, PinnedNotice, TextArea, cx } from "./ui";
+import { Badge, Button, FOCUS, FilePick, INK, Input, OfflineVerifier, PanelHead, PinnedNotice, TextArea, cx } from "./ui";
 import { useLang } from "./i18n";
 import { checkStamp, type StampCheck } from "../lib/sign_anything";
 import { fetchExplorerTx } from "./SignPanel";
@@ -193,6 +193,7 @@ export default function VerifyPanel(props: { baseUrl: string }) {
       <PanelHead title={t("Verify")} sub={t("checked in this tab")} todo={t("Add a file (or text) and its .sig.json, then press Verify.")} />
       <div className="max-w-[46rem] space-y-3 px-4 pb-6 md:px-5">
       <PinnedNotice lines={LIMITS(t)} />
+      <OfflineVerifier />
       {qr ? (
         <div className="rounded-md border border-[#c9d6e6] bg-[#f3f7fc] px-3 py-2.5 text-[15px] leading-relaxed">
           <p className="font-semibold">{t("Opened from a TET QR")}</p>

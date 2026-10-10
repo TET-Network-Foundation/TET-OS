@@ -926,4 +926,7 @@ export const JA: Record<string, string> = {
   "Messages are end-to-end encrypted in this tab: only the two of you can read them, if your safety numbers match. The node still sees who writes to whom, and when.": "メッセージはこのタブでエンドツーエンドで暗号化されます。安全番号が一致していれば、読めるのは2人だけです。誰が誰にいつ書いたかは、ノードに見えます。",
   "A delivered file proves which ID sent it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who is behind that ID, or that the file is what its name says.": "届いたファイルは、どの ID が送ったかを示します。開けるのは受取人だけです（DM で見える安全番号が相手と一致していれば）。その ID の背後に誰がいるか、ファイルが名前どおりの中身かは示しません。",
   "Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between may be reading along: don't send anything private.": "この番号を相手と、直接または通話で見比べてください。2人とも同じ番号なら、メッセージを読めるのは2人だけです。番号が違うなら、途中の誰かが読んでいるおそれがあります。大事なことは送らないでください。",
+  "Even if TET disappears, this still works:": "TET がなくなっても、これは動きます：",
+  "the offline verifier": "オフライン検証ツール",
+  "(one file: it checks a record on your device, with the network off)": "（1つのファイル。ネットに接続しなくても、あなたの端末で記録を確認します）",
 };

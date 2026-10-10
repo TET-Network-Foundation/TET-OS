@@ -926,4 +926,7 @@ export const ZH_HK: Record<string, string> = {
   "Messages are end-to-end encrypted in this tab: only the two of you can read them, if your safety numbers match. The node still sees who writes to whom, and when.": "訊息在此分頁以端對端加密：如果你們的安全號碼相符，就只有你們兩人能讀到。節點仍可看到誰在何時寫給誰。",
   "A delivered file proves which ID sent it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who is behind that ID, or that the file is what its name says.": "已送達的檔案證明由哪個 ID 傳送。只有收件人能開啟（前提是你在 DM 看到的安全號碼與對方的一致）。它不能證明該 ID 背後是誰，亦不能證明檔案內容與檔名相符。",
   "Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between may be reading along: don't send anything private.": "請與對方親身或透過通話核對這個號碼。如果雙方看到的號碼相同，就只有你們兩人能讀到訊息。如果號碼不同，中途可能有人在偷看：請不要傳送任何私密內容。",
+  "Even if TET disappears, this still works:": "即使 TET 消失，這仍然可用：",
+  "the offline verifier": "離線驗證工具",
+  "(one file: it checks a record on your device, with the network off)": "（單一檔案：在你的裝置上檢查紀錄，無需連接網絡）",
 };

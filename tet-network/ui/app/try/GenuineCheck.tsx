@@ -11,7 +11,7 @@ import { useEffect, useState } from "react";
 import { sha256 } from "@noble/hashes/sha2";
 import { findSignatures, registryRecords, type FoundSignature } from "../lib/proof_code";
 import { mldsa44Verify } from "../lib/pqc";
-import { FOCUS, MONO, cx } from "./ui";
+import { FOCUS, MONO, cx, OfflineVerifier } from "./ui";
 import { BASE } from "./wallet";
 import { useLang } from "./i18n";
 
@@ -116,6 +116,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
     );
   return (
     <div className="space-y-3">
+      <OfflineVerifier />
       {hits.map((h, i) => (
         <article key={i} className={cx("rounded-md border p-3 text-[15px]", h.verified ? "border-[#c9ced4]" : "border-[#8a1f1f]")}>
           {h.verified ? (
