@@ -98,5 +98,23 @@ await check("the Docker build writes the manifest; the build id is the commit", 
   assert.match(cfg, /generateBuildId: async \(\) => process\.env\.NEXT_PUBLIC_TET_BUILD_SHA/);
 });
 
+// 6. the review's two rules: the checker needs the expected commit (no silent rollback), and the
+//    signer signs only a manifest identical to one built locally.
+const verifySrc = readFileSync(new URL("./verify_site.mjs", import.meta.url), "utf8");
+const signSrc = readFileSync(new URL("./sign_build_manifest.mjs", import.meta.url), "utf8");
+const rollbackRule = (src) => {
+  assert.match(src, /if \(!EXPECT && !process\.argv\.includes\("--any-commit"\)\) throw/);
+  assert.match(src, /const ok = !!code && commitOk &&/);
+};
+const localRule = (src) => {
+  assert.match(src, /if \(!localPath \|\| !existsSync\(localPath\)\) throw/);
+  assert.match(src, /\.equals\(Buffer\.from\(bytes\)\)\) throw/);
+  assert.ok(src.indexOf("equals(Buffer.from(bytes))") < src.indexOf("signFileHash("), "the comparison comes before signing");
+};
+await check("verify_site requires the expected commit and fails another one", () => rollbackRule(verifySrc));
+await check("control: accepting any signed build FAILS", () => fails(() => rollbackRule(verifySrc.replace("const ok = !!code && commitOk &&", "const ok = !!code &&"))).then(assert.ok));
+await check("sign_build_manifest signs only a manifest identical to a local build", () => localRule(signSrc));
+await check("control: signing the served manifest unchecked FAILS", () => fails(() => localRule(signSrc.replace(/if \(!Buffer\.from[^\n]*\n/, ""))).then(assert.ok));
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

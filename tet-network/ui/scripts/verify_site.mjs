@@ -2,7 +2,12 @@
 // doesn't depend on any code the site serves, so a compromised server can't make it lie
 // (docs/THREAT_MODEL.md rule 6).
 //
-//   node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org
+//   node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org --commit <sha>
+//
+// --commit is the build you expect to be live (e.g. `git ls-remote https://github.com/TET-Network-Foundation/TET-OS main`):
+// a signed manifest only proves the publisher once signed that build, so without it a compromised
+// site could serve an older signed build (a rollback). Without --commit the check refuses unless
+// you pass --any-commit, and then it says which commit you got.
 //
 // 1. Fetches /build-manifest.json and hashes it.
 // 2. Looks up signatures on that hash in the node's registry (/tet-node-api/sigs/search) and checks
@@ -17,7 +22,10 @@ import { readFileSync } from "node:fs";
 register("./lib/ts_hooks.mjs", import.meta.url);
 
 const origin = (process.argv[2] || "").replace(/\/+$/, "");
-if (!/^https?:\/\//.test(origin)) throw new Error("usage: verify_site.mjs <origin>");
+if (!/^https?:\/\//.test(origin)) throw new Error("usage: verify_site.mjs <origin> --commit <sha> | --any-commit");
+const ci = process.argv.indexOf("--commit");
+const EXPECT = ci > 0 ? String(process.argv[ci + 1] ?? "").toLowerCase() : "";
+if (!EXPECT && !process.argv.includes("--any-commit")) throw new Error("say which build you expect: --commit <sha> (or --any-commit to accept whichever signed build is served)");
 const marks = JSON.parse(readFileSync(new URL("../app/whitepaper/marks.json", import.meta.url), "utf8"));
 const PUBLISHER = marks.signer;
 const CHAIN = marks.chain;
@@ -56,6 +64,9 @@ const c = sv.compareFiles(manifest, got);
 console.log(`files: ${c.matched.length} match, ${c.changed.length} changed, ${c.missing.length} missing`);
 for (const p of c.changed) console.log(`  CHANGED ${p}`);
 for (const p of c.missing) console.log(`  MISSING ${p}`);
-const ok = !!code && c.changed.length === 0 && c.missing.length === 0;
+const commitOk = EXPECT ? manifest.commit.toLowerCase().startsWith(EXPECT) || EXPECT.startsWith(manifest.commit.toLowerCase()) : true;
+if (EXPECT && !commitOk) console.log(`WRONG BUILD: the site serves commit ${manifest.commit}, you expected ${EXPECT} (an older signed build is a rollback)`);
+if (!EXPECT) console.log(`note: --any-commit: this is the signed build of commit ${manifest.commit}; check that it is the current one`);
+const ok = !!code && commitOk && c.changed.length === 0 && c.missing.length === 0;
 console.log(ok ? "VERIFIED: every file this site serves is the publisher-signed build." : "NOT VERIFIED");
 process.exit(ok ? 0 : 1);

@@ -105,9 +105,11 @@ with TET are specified now and tested when it is built.
    pages, scripts, styles, public files) is listed with its SHA-256 in `/build-manifest.json`,
    written by the build (`scripts/build_manifest.mjs`; the build id is the commit, so the same
    commit gives the same bytes). The founder signs the manifest's SHA-256 with the publisher key on
-   their own machine (`scripts/sign_build_manifest.mjs`) and publishes the mark. Two checks:
-   `scripts/verify_site.mjs <origin>`, run on your own computer, trusts nothing the site serves; it
-   checks the signature and every file. "verify this page" runs the same check in the page on the
+   their own machine (`scripts/sign_build_manifest.mjs`), only when the served manifest is
+   byte-identical to one they built themselves, and publishes the mark. Two checks:
+   `scripts/verify_site.mjs <origin> --commit <sha>`, run on your own computer, trusts nothing the
+   site serves; it checks the signature, that the build is the commit you expect (an older signed
+   build would otherwise pass: a rollback), and every file. "verify this page" runs the same check in the page on the
    files it loaded, and says it can't protect against a site that serves a lying checker. Guarded
    by `page_integrity_guard` and `build_manifest_guard`.
 7. **Keys:** in memory only while the tab is unlocked; the vault encrypted; auto-lock; a

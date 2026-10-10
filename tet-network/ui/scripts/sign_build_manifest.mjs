@@ -2,12 +2,12 @@
 // on their own machine, never on a server:
 //
 //   TET_PAPER_CHAIN_ID=… TET_PAPER_GENESIS_HASH=… \
-//     node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org [--publish]
+//     node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org --local <manifest.json> [--publish]
 //
 // 1. Fetches <origin>/build-manifest.json (the bytes the site serves).
-// 2. Checks it is a TET build manifest and prints its commit and file count. Before signing, rebuild
-//    that commit yourself (the Docker image, as the demo does) and compare: sign only what you can
-//    reproduce. `node scripts/build_manifest.mjs --out x.json` after the build gives the same bytes.
+// 2. Refuses unless it is byte-identical to --local, a manifest you built yourself from that commit
+//    (the Docker image, as the demo does, then `node scripts/build_manifest.mjs --out x.json`): the
+//    server's word is never what gets signed.
 // 3. Signs the manifest's SHA-256 like any mark (a record plus the publisher's consent), prints the
 //    proof code, and with --publish sends both to <origin>/tet-node-api/sigs/publish so anyone can
 //    find it by the manifest's hash. Nothing else leaves this machine; the words never do.
@@ -37,6 +37,10 @@ const bytes = new Uint8Array(await r.arrayBuffer());
 const m = JSON.parse(new TextDecoder().decode(bytes));
 const problems = manifestProblems(m);
 if (problems.length) throw new Error(`not a build manifest: ${problems.join("; ")}`);
+const li = process.argv.indexOf("--local");
+const localPath = li > 0 ? process.argv[li + 1] : "";
+if (!localPath || !existsSync(localPath)) throw new Error("--local <manifest you built yourself> is required: only a build you reproduced gets signed");
+if (!Buffer.from(readFileSync(localPath)).equals(Buffer.from(bytes))) throw new Error("the served manifest differs from the one you built: not signing");
 const shaHex = createHash("sha256").update(bytes).digest("hex");
 console.log(`manifest: commit ${m.commit}, ${Object.keys(m.files).length} files, sha256 ${shaHex}`);
 
