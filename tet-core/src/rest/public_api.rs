@@ -58,6 +58,9 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/sigs/search"),
     // Signed sites (sites.rs): append a signed edit; read a site's chain.
     ("POST", "/sites/edit"),
+    // TetSearch v1: a member lists their site (signed by both keys); members read the listings.
+    ("POST", "/search/list"),
+    ("GET", "/search/listings"),
     ("GET", "/sites/:site_id"),
     // The try page's Live channel: height, peers, apply-queue depth, recent gossip kinds, commit.
     ("GET", "/status/live"),

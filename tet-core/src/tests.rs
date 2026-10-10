@@ -137,6 +137,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         demo_sponsor: None,
         operator_hide: crate::operator_hide::OperatorHide::open(&hide_db).unwrap(),
         sites: std::sync::Arc::new(crate::sites::SiteStore::open(&hide_db).unwrap()),
+        search: std::sync::Arc::new(crate::search::SearchStore::open(&hide_db).unwrap()),
         sigs: std::sync::Arc::new(crate::sigs::SigStore::open(&hide_db).unwrap()),
     }
 }
@@ -13806,6 +13807,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         "/tmail/anon/fast/:receiver/:posting_key",
         // Shelter: open or not; the signer's own standing; members-only lists (no post content).
         "/shelter/status", "/shelter/me", "/shelter/members", "/shelter/log", "/shelter/anon/leaves",
+        // TetSearch: which sites members listed (members only; no page content, the sites are public).
+        "/search/listings",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -16092,4 +16095,147 @@ async fn explorer_block_returns_what_an_offline_check_recomputes() {
     // Missing height: 404; not a number: 400.
     let r = crate::rest::handlers::ledger::get_explorer_block(axum::extract::State(state.clone()), axum::extract::Path("999999".into())).await;
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+// ---- TetSearch v1: listings (search.rs) -------------------------------------------------------
+
+fn sign_listing_part_for_tests(words: &str, l: &crate::search::SearchListingV1) -> crate::tmail::envelope::TmailHybridSig {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(kp.public_key());
+    let msg = crate::search::listing_auth_message_bytes(l, &pk);
+    crate::tmail::envelope::TmailHybridSig {
+        ed25519_pubkey_hex: hex::encode(ed_sk.verifying_key().to_bytes()),
+        ed25519_sig_b64: base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(&msg).to_bytes()),
+        mldsa_pubkey_b64: pk,
+        mldsa_sig_b64: base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap()),
+    }
+}
+
+fn listing_for_tests(member_words: &str, member: &str, site_words: &str, site: &str, at: u64) -> crate::search::SearchListingV1 {
+    let empty = crate::tmail::envelope::TmailHybridSig { ed25519_pubkey_hex: String::new(), ed25519_sig_b64: String::new(), mldsa_pubkey_b64: String::new(), mldsa_sig_b64: String::new() };
+    let mut l = crate::search::SearchListingV1 {
+        v: 1,
+        kind: crate::search::LISTING_KIND.to_string(),
+        site_wallet_id: site.to_string(),
+        member_wallet_id: member.to_string(),
+        listed_at_ms: at,
+        member_sig: empty.clone(),
+        site_sig: empty,
+    };
+    l.member_sig = sign_listing_part_for_tests(member_words, &l);
+    l.site_sig = sign_listing_part_for_tests(site_words, &l);
+    l
+}
+
+/// **Only a vouched member can publish their own site, a few a day.** A listing needs both the
+/// member's and the site's signature; the site must exist; the member must be in Shelter's set; at
+/// most LISTINGS_PER_MEMBER_PER_DAY a day; its time within the clock window. Controls (run by
+/// hand): the membership check removed → FAILS; the site signature check removed → FAILS.
+#[tokio::test]
+async fn search_listing_needs_a_vouched_member_and_the_sites_own_key() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let mut sites = Vec::new();
+    for _ in 0..(crate::search::LISTINGS_PER_MEMBER_PER_DAY + 1) {
+        let (sw, sid) = tmail_party_for_tests();
+        let e = signed_site_edit_for_tests(&sw, &sid, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"heading","level":1,"text":"Titration results"}}"#);
+        state.sites.append(&e).unwrap();
+        sites.push((sw, sid));
+    }
+    let post = |l: crate::search::SearchListingV1| {
+        let st = state.clone();
+        async move { crate::rest::handlers::search::post_search_list(axum::extract::State(st), axum::Json(l)).await.status() }
+    };
+    let (sw, sid) = &sites[0];
+    // Not a member: refused.
+    assert_eq!(post(listing_for_tests(&xw, &xid, sw, sid, now)).await, StatusCode::FORBIDDEN);
+    // The site's signature by another key: refused.
+    let (ow, _) = tmail_party_for_tests();
+    let mut forged = listing_for_tests(&aw, &aid, sw, sid, now);
+    forged.site_sig = sign_listing_part_for_tests(&ow, &forged);
+    assert_eq!(post(forged).await, StatusCode::UNAUTHORIZED);
+    // A site this node doesn't hold: refused.
+    let (gw, gid) = tmail_party_for_tests();
+    assert_eq!(post(listing_for_tests(&aw, &aid, &gw, &gid, now)).await, StatusCode::NOT_FOUND);
+    // A clock 10 minutes off: refused.
+    assert_eq!(post(listing_for_tests(&aw, &aid, sw, sid, now - 10 * 60_000)).await, StatusCode::BAD_REQUEST);
+    // A member's own sites: accepted, up to the daily cap.
+    for (i, (sw, sid)) in sites.iter().enumerate() {
+        let want = if (i as u64) < crate::search::LISTINGS_PER_MEMBER_PER_DAY { StatusCode::OK } else { StatusCode::TOO_MANY_REQUESTS };
+        assert_eq!(post(listing_for_tests(&aw, &aid, sw, sid, now)).await, want, "listing {i}");
+    }
+}
+
+/// **Listings are for members only, and only current ones are served.** Unsigned → 401; a
+/// non-member → 403; a member gets them; a listing whose member is no longer in the set isn't served.
+#[tokio::test]
+async fn search_listings_are_members_only_and_current() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, _xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let (sw, sid) = tmail_party_for_tests();
+    state.sites.append(&signed_site_edit_for_tests(&sw, &sid, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"text","text":"hello"}}"#)).unwrap();
+    let r = crate::rest::handlers::search::post_search_list(axum::extract::State(state.clone()), axum::Json(listing_for_tests(&aw, &aid, &sw, &sid, now))).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let get = |auth: Option<String>| {
+        let router = router.clone();
+        let mut b = axum::http::Request::builder().uri("/search/listings");
+        if let Some(a) = auth {
+            b = b.header("x-tet-shelter-auth", a);
+        }
+        let req = b.body(axum::body::Body::empty()).unwrap();
+        async move {
+            let resp = router.oneshot(req).await.unwrap();
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (st, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    assert_eq!(get(None).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(get(Some(shelter_read_auth_for_tests(&xw, "/search/listings", now))).await.0, StatusCode::FORBIDDEN);
+    let (st, body) = get(Some(shelter_read_auth_for_tests(&aw, "/search/listings", now))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body.contains(&sid), "the member didn't get the listing: {body}");
+    // A member who is no longer in the set: their listings aren't served.
+    let kept = state.search.current(|w| w != aid, |_| true);
+    assert!(kept.is_empty(), "a former member's listing was served");
+}
+
+const UI_SEARCH_LISTING: &str = include_str!("testdata/ui_search_listing_v1.json");
+
+/// A listing signed by the page's own code (tetsearch.ts) verifies in Rust, both signatures, byte
+/// for byte; a changed field doesn't. Fixture: scripts/make_search_listing_fixture.mjs.
+#[test]
+fn ui_signed_search_listing_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_SEARCH_LISTING).expect("fixture JSON");
+    let _bound = agent_fixture_chain(&doc);
+    let l: crate::search::SearchListingV1 = serde_json::from_value(doc["listing"].clone()).unwrap();
+    let ledger = open_temp_ledger();
+    let store = crate::search::SearchStore::open(&ledger.sled_db()).unwrap();
+    assert!(store.list(&l, l.listed_at_ms, |_| true, |_| true).is_ok(), "the page's listing didn't verify");
+    let mut changed = l.clone();
+    changed.member_wallet_id = "ef".repeat(32);
+    assert!(matches!(store.list(&changed, l.listed_at_ms, |_| true, |_| true), Err(crate::search::ListingRefusal::BadSignature(_))));
 }

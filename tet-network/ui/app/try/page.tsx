@@ -39,6 +39,7 @@ import InsidePanel from "./InsidePanel";
 import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
 import ShelterPanel from "./ShelterPanel";
+import SearchPanel from "./SearchPanel";
 import { shelterOpen } from "../lib/shelter";
 import { formatTet } from "../lib/format_tet";
 
@@ -56,6 +57,7 @@ const TOOLS = [
   { id: "directory", label: "Public boards", group: "boards" },
   { id: "questions", label: "Questions for humans", group: "boards" },
   { id: "shelter", label: "Shelter", group: "boards" },
+  { id: "search", label: "TetSearch", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
   { id: "sign", label: "sign", group: "tools" },
   { id: "genuine", label: "mark as genuine", group: "tools" },
@@ -334,7 +336,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
     [{ tool: "inside" }, t("Inside")],
     [{ tool: "directory" }, t("Public boards")],
     [{ tool: "questions" }, t("Questions for humans")],
-    ...(props.shelter ? ([[{ tool: "shelter" }, t("Shelter")]] as [View, string][]) : []),
+    ...(props.shelter ? ([[{ tool: "shelter" }, t("Shelter")], [{ tool: "search" }, "TetSearch"]] as [View, string][]) : []),
     [{ tool: "new" }, t("start or open a board")],
     [{ tool: "verify" }, t("verify")],
     [{ tool: "sign" }, t("sign")],
@@ -524,6 +526,7 @@ function TryApp() {
     directory: t("Public boards"),
     questions: t("Questions for humans"),
     shelter: t("Shelter"),
+    search: "TetSearch",
     verify: t("verify"),
     sign: t("sign"),
     genuine: t("Mark as genuine"),
@@ -615,6 +618,7 @@ function TryApp() {
           {panel({ tool: "new" }, <NewBoardPanel directory={directory} onOpen={addBoard} onListed={() => directory && void refreshDirectory(directory)} />)}
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "shelter" }, <ShelterPanel active={"tool" in view && view.tool === "shelter"} />)}
+          {panel({ tool: "search" }, <SearchPanel active={"tool" in view && view.tool === "search"} />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
           {panel({ tool: "genuine" }, <GenuinePanel />)}
