@@ -168,7 +168,10 @@ impl RestState {
         &self,
         env: SignedTxEnvelopeV1,
     ) -> Result<bool, MempoolEnqueueError> {
-        crate::consensus::tx_affordable(&self.ledger, &env).map_err(MempoolEnqueueError::Invalid)?;
+        {
+            let pending = self.mempool.lock().await;
+            crate::consensus::tx_affordable(&self.ledger, &env, &pending).map_err(MempoolEnqueueError::Invalid)?;
+        }
         let evicted = enqueue_without_broadcast(&self.mempool, env.clone()).await?;
         self.broadcast_mempool_tx(&env).await;
         Ok(evicted)

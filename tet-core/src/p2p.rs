@@ -1450,7 +1450,11 @@ pub(crate) async fn handle_tx_broadcast(
         }
     }
 
-    if let Err(why) = crate::consensus::tx_affordable(ledger, &env) {
+    let affordable = {
+        let pending = mempool.lock().await;
+        crate::consensus::tx_affordable(ledger, &env, &pending)
+    };
+    if let Err(why) = affordable {
         return TxGossipOutcome::Rejected { reason: format!("mempool admission: {why}") };
     }
     match crate::rest::state::enqueue_without_broadcast(mempool, env).await {

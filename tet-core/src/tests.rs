@@ -14422,3 +14422,89 @@ async fn one_bad_transaction_does_not_drop_the_others() {
     assert!(ledger.balance_micro(&to).unwrap() > 0, "the valid transfer settled");
     assert!(state.mempool.lock().await.is_empty(), "the bad ones are dropped, not kept forever");
 }
+
+/// Admission counts the sender's pending transfers: a second transfer that would only fit if the
+/// first didn't exist (a double-spend) is refused, on both paths.
+#[tokio::test]
+async fn mempool_admission_refuses_a_double_spend() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 3 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let first = transfer_with_fee_bps_for_tests(&words, &id, &"ab".repeat(32), 2 * crate::ledger::STEVEMON, 100);
+    let second = transfer_with_fee_bps_for_tests(&words, &id, &"cd".repeat(32), 2 * crate::ledger::STEVEMON, 100);
+    assert!(state.submit_local_tx(first).await.is_ok());
+    assert!(state.submit_local_tx(second.clone()).await.is_err(), "a double-spend was admitted locally");
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, second).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "a double-spend was admitted by gossip: {out:?}");
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+/// Bad transactions filling the one-by-one budget can't keep a valid one out for good: it is
+/// deferred, and lands in a following block even as more bad ones arrive.
+#[tokio::test]
+async fn deferred_transactions_land_in_the_next_block() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let a = crate::wallet::generate_mnemonic_12().unwrap();
+    let a_words = a.mnemonic_12.clone().unwrap();
+    let a_id = a.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&a_id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let poor = crate::wallet::generate_mnemonic_12().unwrap();
+    let poor_words = poor.mnemonic_12.clone().unwrap();
+    let poor_id = poor.address_hex.to_ascii_lowercase();
+    let to = "ef".repeat(32);
+    let n = crate::consensus::SELECT_ONE_BY_ONE_MAX;
+    let bad = |i: u64| transfer_with_fee_bps_for_tests(&poor_words, &poor_id, &to, crate::ledger::STEVEMON + i, 100);
+    let good = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, crate::ledger::STEVEMON, 100);
+    let good_hash = crate::consensus::tx_hash_for_env(&good).unwrap();
+    {
+        let mut mp = state.mempool.lock().await;
+        for i in 0..n as u64 {
+            mp.push(bad(i));
+        }
+        mp.push(good);
+    }
+    let b1 = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert_eq!(b1.tx_count, 0, "the budget went to the bad ones");
+    // More bad ones arrive before the next block.
+    {
+        let mut mp = state.mempool.lock().await;
+        for i in n as u64..(2 * n) as u64 {
+            mp.push(bad(i));
+        }
+    }
+    let b2 = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert!(b2.tx_hashes.contains(&good_hash), "the deferred valid transfer must land next");
+}
+
+/// Deferred transactions go back AHEAD of whatever arrived while the block was being made, so a
+/// backlog always advances. Control (run by hand): appending them at the back → this test FAILS.
+#[tokio::test]
+async fn deferred_transactions_go_back_in_front_of_newcomers() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    let newcomer = transfer_with_fee_bps_for_tests(&words, &id, &"ab".repeat(32), 1, 100);
+    let deferred = transfer_with_fee_bps_for_tests(&words, &id, &"cd".repeat(32), 2, 100);
+    let deferred_hash = crate::consensus::tx_hash_for_env(&deferred).unwrap();
+    state.mempool.lock().await.push(newcomer);
+    crate::consensus::requeue_txs_front(&state, vec![deferred]).await;
+    let mp = state.mempool.lock().await;
+    assert_eq!(mp.len(), 2);
+    assert_eq!(crate::consensus::tx_hash_for_env(&mp[0]).unwrap(), deferred_hash, "the deferred one must be first");
+}
