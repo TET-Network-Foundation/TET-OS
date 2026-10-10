@@ -1026,4 +1026,7 @@ export const ZH_HK: Record<string, string> = {
   "That device password is too common. A few words you'll remember is easiest.": "這個裝置密碼太常見。用幾個你記得的字詞最容易。",
   "That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.": "這個裝置密碼太容易被猜中。請使用 12 個或以上字元，或混合字母、數字和符號。",
   "A remembered ID locks itself after 15 minutes without use; open it again with your device password.": "已記住的 ID 在 15 分鐘沒有使用後會自動上鎖；用裝置密碼即可再次開啟。",
+  "Your proofs and keys, in your hands, not a company's.": "自己的證明與金鑰，從公司手中拿回自己手上。",
+  "AI makes faking text, pictures and voices easy, so being able to check who signed what, and when, without trusting a company matters more now.": "AI 令偽造文字、圖片和聲音變得容易，所以能夠無需信任任何公司，自行核實誰在何時簽署了甚麼，現在更加重要。",
+  "The limit: lose your passphrase (12 words) and nobody can recover it. And today TET still runs on one operator; see the roadmap below.": "限制：遺失密語（12 個字），任何人都無法替你復原。而目前 TET 仍由一位營運者運作；請看下面的路線圖。",
 };

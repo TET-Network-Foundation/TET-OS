@@ -1026,4 +1026,7 @@ export const JA: Record<string, string> = {
   "That device password is too common. A few words you'll remember is easiest.": "その端末パスワードはよく使われすぎています。覚えやすい単語をいくつか並べるのが簡単です。",
   "That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols.": "その端末パスワードは推測されやすすぎます。12文字以上にするか、文字・数字・記号を混ぜてください。",
   "A remembered ID locks itself after 15 minutes without use; open it again with your device password.": "端末に覚えさせた ID は、15分使わないと自動でロックされます。端末パスワードでまた開けます。",
+  "Your proofs and keys, in your hands, not a company's.": "自分の証明と鍵を、会社から自分の手に。",
+  "AI makes faking text, pictures and voices easy, so being able to check who signed what, and when, without trusting a company matters more now.": "AI で文章や画像や声を偽るのが簡単になった今、誰がいつ何に署名したかを、会社を信用しなくても確かめられることが大事になっています。",
+  "The limit: lose your passphrase (12 words) and nobody can recover it. And today TET still runs on one operator; see the roadmap below.": "限界：合言葉（12語）をなくすと、誰にも復旧できません。そして今の TET は、まだ1人の運営者で動いています。下のロードマップを見てください。",
 };
