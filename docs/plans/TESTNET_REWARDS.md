@@ -31,6 +31,7 @@ worded that way.
     founder's);
   - checked end to end against a local node with the real prover: 0 → 100, and the same member's second
     claim, to another wallet, refused.
+- **Thread grants stay dry-run only until vouching exists** (founder decision 2026-10-11): `--pay` refuses while the node reports no vouched members, because with free wallets "3 distinct repliers" can be one person.
 - **Thread grants, as built** (`tet-network/ui/app/lib/thread_grants.mjs` decides,
   `scripts/thread_grants.mjs` is the operator's rewarder, run by hand or on a timer; dry run by
   default, `--pay` pays):

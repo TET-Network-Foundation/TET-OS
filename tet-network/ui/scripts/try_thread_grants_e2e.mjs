@@ -2,8 +2,8 @@
 //   TET_E2E_NODE=http://127.0.0.1:5040 node --experimental-strip-types scripts/try_thread_grants_e2e.mjs
 // A node that mines. Makes a directory and a public board; thread 1 gets named replies from 3
 // distinct people, thread 2 from 2. The rewarder (scripts/thread_grants.mjs) dry-run lists only
-// thread 1; with --pay, its starter receives exactly the grant in a block; a second run grants
-// nothing more.
+// thread 1; --pay refuses while the node has no vouched members (dry run only until vouching
+// exists), and the starter receives nothing.
 import { register } from "node:module";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
@@ -60,7 +60,13 @@ for (const [i, w] of repliers.entries()) {
 console.log(`board ${board.boardWalletId.slice(0, 8)}…: thread 1 has 3 distinct repliers, thread 2 has 2`);
 
 const env = { ...process.env, TET_NODE: BASE, TET_DIRECTORY_INVITE: directory.invite, TET_THREAD_GRANT_WORDS: join(dir, "grant.words"), TET_THREAD_GRANT_STATE: join(dir, "state.json") };
-const run = (...a) => execFileSync("node", ["--experimental-strip-types", "scripts/thread_grants.mjs", ...a], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+const run = (...a) => {
+  try {
+    return execFileSync("node", ["--experimental-strip-types", "scripts/thread_grants.mjs", ...a], { env, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch (e) {
+    return `${e.stdout ?? ""}exit ${e.status}`;
+  }
+};
 const dry = run();
 console.log(dry.trim().split("\n").map((l) => `  dry: ${l}`).join("\n"));
 assert.match(dry, new RegExp(`would grant ${board.boardWalletId}:${t1} `), "thread 1 is granted");
@@ -68,9 +74,8 @@ assert.doesNotMatch(dry, new RegExp(`grant ${board.boardWalletId}:${t2} `), "thr
 
 const before = await balance(starter);
 const paid = run("--pay");
-assert.match(paid, new RegExp(`granted ${board.boardWalletId}:${t1}`));
-assert.ok(await until(async () => Math.abs((await balance(starter)) - before - 10) < 1e-9), "the starter didn't receive exactly 10 TET (practice)");
-console.log(`the starter: ${before} → ${await balance(starter)} TET (practice)`);
-const again = run("--pay");
-assert.doesNotMatch(again, /granted /, "nothing is granted twice");
-console.log("a second run grants nothing more\nall passed");
+assert.match(paid, /not paying: thread grants pay only once vouching exists/, "--pay must refuse without vouched members");
+assert.match(paid, /exit 2$/);
+await sleep(8_000);
+assert.equal(await balance(starter), before, "nothing was paid");
+console.log("--pay refused without vouched members; the starter received nothing\nall passed");

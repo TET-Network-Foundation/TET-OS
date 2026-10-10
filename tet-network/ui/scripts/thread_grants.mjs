@@ -7,7 +7,8 @@
 //   TET_THREAD_GRANT_WORDS=~/.tet/thread-grants.words \
 //     node --experimental-strip-types scripts/thread_grants.mjs [--pay]
 //
-// Without --pay it only prints what it would grant. The node only sees public inbox reads (and, with
+// Without --pay it only prints what it would grant. With --pay it still refuses until the node has
+// vouched members (Shelter): until then the rewarder is dry-run only. The node only sees public inbox reads (and, with
 // --pay, the transfers). Named posts count only when their signature checks here; anonymous posts
 // count by daily ID. State (what was granted, today's totals) and one log line per grant (board,
 // thread, number of counted repliers, amount; never post content) go to TET_THREAD_GRANT_STATE
@@ -99,6 +100,12 @@ console.log(`${listings.length} public boards, ${threads.length} threads; vouche
 for (const s of decision.skipped) console.log(`skip ${s.thread}: ${s.reason}`);
 for (const g of decision.grants) console.log(`${PAY ? "grant" : "would grant"} ${g.thread} → ${g.wallet.slice(0, 8)}… ${tet(g.micro)} (${g.repliers} distinct repliers)`);
 if (!PAY || decision.grants.length === 0) process.exit(0);
+// Dry run only until vouching exists (founder decision 2026-10-11): with free wallets, "3 distinct
+// repliers" can be one person. --pay refuses while the node reports no vouched members.
+if (vouched === 0) {
+  console.log("not paying: thread grants pay only once vouching exists (Shelter's vouched members); this was a dry run");
+  process.exit(2);
+}
 
 const { activateTryWallet } = await import("../app/lib/try_session.ts");
 const { buildTransferEnvelope } = await import("../app/lib/transfer.ts");

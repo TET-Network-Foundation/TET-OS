@@ -122,5 +122,16 @@ const rule8 = (gross) => {
 check("the transfer sends enough that exactly the grant arrives", () => rule8(tg.grossForNet));
 check("control: sending the net amount FAILS", () => assert.ok(fails(() => rule8((n) => n))));
 
+// 9. the rewarder pays nothing until vouching exists (dry run only)
+import { readFileSync as rf } from "node:fs";
+const rewarder = rf(new URL("./thread_grants.mjs", import.meta.url), "utf8");
+const gated = (src) => {
+  const pay = src.indexOf("activateTryWallet");
+  const gate = src.search(/if \(vouched === 0\) \{[^}]*process\.exit\(2\)/);
+  assert.ok(gate > 0 && pay > gate, "--pay must stop before any wallet is opened while no vouched members exist");
+};
+check("the rewarder refuses to pay until vouching exists", () => gated(rewarder));
+check("control: without the gate FAILS", () => assert.ok(fails(() => gated(rewarder.replace(/if \(vouched === 0\) \{[^}]*process\.exit\(2\);\n\}/, "")))));
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
