@@ -38,8 +38,10 @@ only when its check has passed and is written next to it with the date.
   `ct-watch` workflow by hand once, see the message. — **F** (secret), C (check)
 - [ ] **robots.txt and security.txt live** on the demo domain, with the AI-crawler list
   (`deploy/ai-crawlers.txt`). Check: `curl` both; a GPTBot user agent gets 403 on the demo. — C
-- [ ] **The demo's healthcheck is real and green:** its own healthchecks.io check (not a seed's),
-  Discord alert tested once by stopping it on purpose. — F (healthchecks.io account), C (install)
+- [x] **The demo's healthcheck is real and green:** its own healthchecks.io check `tet-demo` (not a
+  seed's), period 5 minutes, grace 5 minutes; the probe on the host pings it every 60 s. Done
+  2026-10-11. — F (healthchecks.io account), C (install)
+- [ ] **The demo's Discord alert tested once** by stopping its probe on purpose. — C
 
 ## 2. Operator readiness
 
