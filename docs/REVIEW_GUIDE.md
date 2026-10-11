@@ -4,7 +4,7 @@ For the founder's review before anything below is merged. Each PR has a few plai
 
 Nothing here is merged or deployed unless it says so. I merge only after you say "merge the stack".
 
-**The review server:** http://127.0.0.1:3200/try. It runs the combined branch `review-all` at `4010902`, which contains every open PR below except #68 (see "Not merged"). That build, from your local node pair (5010 producing, 5020 following by gossip) and your local prover, passes:
+**The review server:** http://127.0.0.1:3200/try. It runs the combined branch `review-all` (build `0cef196`), which contains every open PR below except #68 (see "Not merged"). That build, from your local node pair (5010 producing, 5020 following by gossip) and your local prover, passes:
 - all 397 Rust tests;
 - all 47 UI guards;
 - the fast anonymous posting end-to-end test, with the real prover and gossip to the second node;
