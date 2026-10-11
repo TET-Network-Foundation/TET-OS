@@ -20,6 +20,7 @@ Nothing here is merged or deployed unless it says so. I merge only after you say
   - **The fix** is on #106, carried up to #113, #121 and #127.
   - **A new guard check** fails if anything the page runs evaluates a string as code. Control: the old `pqc.ts` fails it.
   - **Checked in a browser:** a site was built and every edit signed and verified in the tab.
+- **#110 and #113 had a red CI check since 2026-10-10, which I missed:** the demo test checked HSTS after it had stopped the page, when every answer is a 502 without headers. HSTS itself was always sent. The check now runs while the page is up, and its control is the Caddyfile without `preload`, which fails it.
 - **The offline verifier must be rebuilt after #118:** it inlines the signer WASM that #118 rebuilds. The review build carries a rebuilt copy. The real rebuild and re-mark are a step in the merge order below.
 
 ## The PRs
