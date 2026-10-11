@@ -170,6 +170,11 @@ if docker info >/dev/null 2>&1; then
   ua "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" /robots.txt 200
   ua "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" /try 200
   ua "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15" /try 200
+  # The main name sends preload-ready HSTS. Checked while the page is up: an upstream error (502)
+  # carries no header Caddy set, so this must run before the logging check stops the page.
+  hsts=$(curl -s -D - -o /dev/null http://127.0.0.1:18080/try | tr -d '\r' | grep -i '^strict-transport-security:')
+  if grep -q 'includeSubDomains; preload' <<<"$hsts"; then pass "caddy: HSTS includeSubDomains; preload"
+  else flunk "caddy: HSTS includeSubDomains; preload" "got: $hsts"; fi
   # Rule 5: no client address in any log. A failed upstream makes Caddy log the whole request as an
   # error; the entry must exist and hold no address, no forwarding header and not the marker.
   # Control: the same request through the Caddyfile without its log filter does show the client,
@@ -196,12 +201,9 @@ if docker info >/dev/null 2>&1; then
   if [ "$got" = yes ]; then pass "control: without the log filter the client's address is logged"
   else flunk "control: without the log filter the client's address is logged" "got: $got"; fi
   rm -f "$unfiltered"
-  # The main name sends preload-ready HSTS; another name (TET_DEMO_REDIRECTS) redirects permanently
-  # to it with the same path, so old links keep working. (The edge above ran with it unset: the
-  # placeholder default parses and serves nothing.)
-  hsts=$(curl -s -D - -o /dev/null http://127.0.0.1:18080/try | tr -d '\r' | grep -i '^strict-transport-security:')
-  if grep -q 'includeSubDomains; preload' <<<"$hsts"; then pass "caddy: HSTS includeSubDomains; preload"
-  else flunk "caddy: HSTS includeSubDomains; preload" "got: $hsts"; fi
+  # Another name (TET_DEMO_REDIRECTS) redirects permanently to the main one with the same path, so
+  # old links keep working. (The edge above ran with it unset: the placeholder default parses and
+  # serves nothing.)
   docker run -d --rm --name "edge2-$$" --network "$net" -p 127.0.0.1:18083:8081 \
     -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" -e TET_DEMO_REDIRECTS=":8081" \
     -v "$PWD/deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
