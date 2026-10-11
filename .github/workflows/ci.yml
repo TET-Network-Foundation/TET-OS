@@ -442,6 +442,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — every string is translated, placeholders intact
         run: node --experimental-strip-types scripts/try_i18n_guard.mjs
+      # Japanese terms (founder, 2026-10-11): vouch is 推薦 (not 保証), the 12 words are パスフレーズ (not
+      # 合言葉), the anonymity set is 匿名グループ (not 匿名セット). Control included.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the Japanese terms stay 推薦, パスフレーズ, 匿名グループ
+        run: node scripts/ja_terms_guard.mjs
 
       # Try TET "Sign anything": what the page signs is what Verify accepts; a stamp counts only for
       # this .sig.json's file fee in a canonical block. Controls.
