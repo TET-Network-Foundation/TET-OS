@@ -153,7 +153,7 @@ Nothing here is merged or deployed unless it says so. I merge only after you say
 - **Click:** see step 7 of the click-through; it needs two browser windows.
 
 **#106: the threat model and design rules 6–11.** `docs/THREAT_MODEL.md` marks each scenario defended, partly or out of scope. Six rules have guards: CSP, device-password strength and auto-lock, the three safety sentences, pinned Actions, and security.txt. This is where the CSP bug above was introduced and fixed.
-- **Click:** read `docs/THREAT_MODEL.md`. On the page: 合言葉（12語）で ID を開く.
+- **Click:** read `docs/THREAT_MODEL.md`. On the page: パスフレーズ（12語）で ID を開く.
 
 **#107: technical paper v2.** Sections 0–14, written against a pinned commit, with security fixes named by class only. It's marked with the publisher key, and the marks are published at launch.
 - **Click:** footer → 技術文書. In Japanese it shows the ja draft from #119.
@@ -226,14 +226,14 @@ Nothing here is merged or deployed unless it says so. I merge only after you say
 **#130: CI refuses duplicate keys in workflow files.** A separate workflow, so it runs even when `ci.yml` is broken.
 - **Click:** nothing.
 
-**Japanese terms to settle in your ja review:** vouch appears as both 推薦 (Shelter) and 保証 (TetSearch), and the 12 words as both 合言葉（12語） and パスフレーズ（12語）. The anonymity set appears as both 匿名セット and 匿名グループ. Tell me which of each to keep and I'll make them one.
+**Japanese terms (settled 2026-10-11):** vouch is 推薦 (保証 reads as a money guarantee), the 12 words are パスフレーズ, and the anonymity set is 匿名グループ. グループ isn't used for anything in Shelter; its only other use is the paper's Sign in with TET line 「グループ X のメンバー」, which means the same kind of member set. The two agent-manifest lines ("the owner vouched for the key") now say 認めた, because 推薦 reads oddly for a key. `ja_terms_guard` keeps all of this in CI.
 
 ## Not merged
 
-- **#68 (quantum wording)** conflicts with the stack's About line, which says quantum resistance is incomplete until Phase 1. #68 says "so it stays secure", which is stronger. I'll rebase it after the stack, keeping its guard (no "quantum-powered" or "unbreakable") and the stack's About line, unless you prefer #68's line.
+- **#68 (quantum wording)** conflicts with the stack's About line, which says quantum resistance is incomplete until Phase 1. #68 says "so it stays secure", which is stronger. Decided: the stack's About line stays, and I rebase #68 after the stack, keeping its guard (no "quantum-powered" or "unbreakable").
 - **#69 (remove the old home and participate pages)** merges with one small TopNav conflict, resolved in `review-all` to "Try TET" plus "Technical paper". I'll rebase it after the stack.
 - **#75** is the wordmark draft: pick one first.
-- **#90 (Shelter plan) and #93 (rewards plan)** are superseded: #105 and #121 carry the later versions of those documents. I suggest closing both.
+- **#90 and #93** are closed as superseded (2026-10-11); #105 and #121 carry the later versions.
 - **#62 and #64** (old landing and plans docs) are outside this review. Your call: merge as history, or close.
 
 ## Merge order
@@ -344,7 +344,7 @@ Each merge goes through only with green CI. After step 6, `main` has the same tr
    - あとで検索するので、本文に珍しい単語を一つ入れておきます。
 6. **シェルター（3分、ウィンドウを2つ使います）**
    - **シークレットウィンドウで:**
-     - 同じページを開き、「合言葉（12語）で ID を開く」でモデレーターの12語を入れます。
+     - 同じページを開き、「パスフレーズ（12語）で ID を開く」でモデレーターの12語を入れます。
      - 「シェルター」で「掲示板の招待」にテスト用の招待を一度だけ貼り、「ニックネームを設定」します。
    - **普通のウィンドウで:** 「シェルター」→「参加コードを表示」で出たコードをコピーします。
    - **シークレットウィンドウで:** 「誰かを招待」の「相手の参加コード」に貼って招待します。

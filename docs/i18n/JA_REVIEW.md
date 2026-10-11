@@ -154,12 +154,12 @@ translation starts after that, so your changes carry over.
 | Publishing the record… | 記録を公開しています… |
 | Get a proof code | 証明コードを取得 |
 | Add a poll | 投票を追加 |
-| Not in the anonymity set yet. | まだ匿名セットに入っていません。 |
+| Not in the anonymity set yet. | まだ匿名グループに入っていません。 |
 | Vote | 投票する |
 | Open until 00:00 UTC. | 00:00 UTC まで受付中。 |
 | Closed. | 締め切りました。 |
 | Members-only: {n} listed members can vote. | メンバー限定：名簿の {n} 人が投票できます。 |
-| Anyone in this node's anonymity set can vote. | このノードの匿名セットに入っている人なら誰でも投票できます。 |
+| Anyone in this node's anonymity set can vote. | このノードの匿名グループに入っている人なら誰でも投票できます。 |
 | {n} verified votes. | 検証済みの票 {n}。 |
 | {n} not verified (not counted). | 未検証 {n}（数えていません）。 |
 | Voting needs the native prover on this device. | 投票には、この端末にネイティブ証明器が必要です。 |
@@ -173,7 +173,7 @@ translation starts after that, so your changes carry over.
 | Cancel | キャンセル |
 | You're not on this poll's member list. | あなたはこの投票の名簿に入っていません。 |
 | Only the newest {n} ballots are counted. | 数えるのは新しい順に {n} 票までです。 |
-| Your vote is hidden among this node's anonymity set. | あなたの票は、このノードの匿名セットの中に隠れます。 |
+| Your vote is hidden among this node's anonymity set. | あなたの票は、このノードの匿名グループの中に隠れます。 |
 | One vote per member. Anyone who can read this thread sees votes as they arrive, so when few people vote, the timing can give a vote away. The node sees your IP address. | 1人1票です。このスレッドを読める人には票が届いた順に見えるので、投票する人が少ないと、タイミングから票が分かることがあります。ノードにはあなたの IP アドレスが見えます。 |
 | continue: | 続き: |
 | This node's newest blocks | このノードの最新ブロック |
@@ -251,7 +251,7 @@ translation starts after that, so your changes carry over.
 | this key signed exactly this file. | この鍵がまさにこのファイルに署名したこと。 |
 | who holds the key, that the work is original, or that a person made it. | 鍵を誰が持っているか、作品がオリジナルか、人が作ったか。 |
 | Boards with anonymous posts | 匿名投稿のできる掲示板 |
-| a post came from a member of this node's anonymity set, at most one per board per day. | 投稿がこのノードの匿名セットのメンバーから来たこと（1つの掲示板につき1日1件まで）。 |
+| a post came from a member of this node's anonymity set, at most one per board per day. | 投稿がこのノードの匿名グループのメンバーから来たこと（1つの掲示板につき1日1件まで）。 |
 | which member wrote it. The node still sees IP addresses. | どのメンバーが書いたか。ノードには IP アドレスが見えます。 |
 | Encrypted messages and files | 暗号化されたメッセージとファイル |
 | only the receiver can read them (X25519 + Kyber round 3, not yet the final ML-KEM standard). | 受け取った人だけが読めること（X25519 + Kyber ラウンド3。最終版の ML-KEM 標準ではまだありません）。 |
@@ -443,7 +443,7 @@ translation starts after that, so your changes carry over.
 | Send something first: that makes your ID and its inbox. | まず何か送ってください。それであなたの ID と受信箱ができます。 |
 | Your vote is hidden only among the {n} listed members. The poll's maker chose the list: if they control most of those IDs, they can work out how the others voted. | あなたの票が隠れるのは、名簿の {n} 人の中だけです。名簿は投票の作成者が決めました。作成者がその ID の大半を握っていれば、ほかの人の投票内容を割り出せます。 |
 | Members-only: list the IDs that may vote | メンバー限定：投票できる ID を指定する |
-| IDs, one per line, at least 3. Each must have joined the anonymity set on this node. | ID を1行に1つ、3つ以上。どれもこのノードで匿名セットに参加済みである必要があります。 |
+| IDs, one per line, at least 3. Each must have joined the anonymity set on this node. | ID を1行に1つ、3つ以上。どれもこのノードで匿名グループに参加済みである必要があります。 |
 | The member list is public: anyone can see which IDs may vote, not how they voted. | 名簿は公開されます。どの ID が投票できるかは誰にでも見えますが、どう投票したかは見えません。 |
 | No ID yet: your first post or message makes one in this tab. | まだ ID はありません。最初の投稿かメッセージで、このタブに作られます。 |
 | your ID | あなたの ID |
@@ -547,7 +547,7 @@ translation starts after that, so your changes carry over.
 | This node serves Shelter only to members and never passes its posts to other nodes. | このノードはシェルターをメンバーにだけ表示し、投稿を他のノードに渡しません。 |
 | Show this to a member, in person. They scan it (or type the code) to let you in. | これを直接会ったメンバーに見せてください。メンバーが読み取る（またはコードを入力する）とあなたが参加できます。 |
 | Your join code | あなたの参加コード |
-| Your membership belongs to this ID: save your passphrase so you can come back. | メンバーであることはこの ID にひも付きます。また来られるように、合言葉を保存してください。 |
+| Your membership belongs to this ID: save your passphrase so you can come back. | メンバーであることはこの ID にひも付きます。また来られるように、パスフレーズを保存してください。 |
 | Waiting for a member to let you in… | メンバーが参加させてくれるのを待っています… |
 | Don't post AI-written text here. | ここに AI が書いた文章は載せないでください |
 | This is a promise between members, not a filter. TET can't tell who or what wrote a text. | これはメンバー同士の約束で、フィルターではありません。TET には、文章を誰が・何が書いたかは分かりません。 |
@@ -622,12 +622,12 @@ translation starts after that, so your changes carry over.
 | The node operator can't read posts, as long as each member's page checks the keys it seals the board key to (it does) and you compare safety numbers when you meet. It sees which ID reads and posts, when, and from which address. | ノードの運営者は投稿を読めません。ただし、各メンバーの画面が掲示板の鍵を渡す相手の鍵を確認していること（確認しています）と、会ったときに安全番号を見比べることが条件です。どの ID がいつ、どのアドレスから読んだり投稿したりしたかは見えます。 |
 | Board key from {who}: check it's the member who let you in. | 掲示板の鍵の送り主：{who}。あなたを参加させたメンバーか確かめてください。 |
 | On a device managed by your school or employer, the admin can see everything. | 学校や会社が管理している端末では、管理者がすべてを見られます。 |
-| Open an ID with your passphrase (12 words) | 合言葉（12語）で ID を開く |
-| Open an ID with your passphrase (12 words): | 合言葉（12語）で ID を開く： |
+| Open an ID with your passphrase (12 words) | パスフレーズ（12語）で ID を開く |
+| Open an ID with your passphrase (12 words): | パスフレーズ（12語）で ID を開く： |
 | Those aren't 12 valid words. Check them and try again. | 正しい12語ではありません。確認してもう一度試してください。 |
-| TET asks for your passphrase (12 words) only on the restore screen; support never DMs you. | TET が合言葉（12語）を求めるのは復元画面だけです。サポートが DM で聞くことはありません。 |
-| Lose your passphrase (12 words) and nobody can recover it. | 合言葉（12語）をなくすと、誰にも復旧できません。 |
-| Your passphrase (12 words) | あなたの合言葉（12語） |
+| TET asks for your passphrase (12 words) only on the restore screen; support never DMs you. | TET がパスフレーズ（12語）を求めるのは復元画面だけです。サポートが DM で聞くことはありません。 |
+| Lose your passphrase (12 words) and nobody can recover it. | パスフレーズ（12語）をなくすと、誰にも復旧できません。 |
+| Your passphrase (12 words) | あなたのパスフレーズ（12語） |
 | That device password is too common. A few words you'll remember is easiest. | その端末パスワードはよく使われすぎています。覚えやすい単語をいくつか並べるのが簡単です。 |
 | That device password is too easy to guess. Use 12 or more characters, or mix letters, digits and symbols. | その端末パスワードは推測されやすすぎます。12文字以上にするか、文字・数字・記号を混ぜてください。 |
 | A remembered ID locks itself after 15 minutes without use; open it again with your device password. | 端末に覚えさせた ID は、15分使わないと自動でロックされます。端末パスワードでまた開けます。 |
