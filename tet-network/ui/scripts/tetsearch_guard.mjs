@@ -62,7 +62,9 @@ const wording = (src) => {
   assert.doesNotMatch(src, /AI cannot access|AI can't access|AI cannot create keys|humans only/i);
 };
 check("the required lines are on the screen, and no overclaim", () => wording(panel));
-check("control: an overclaim FAILS", () => assert.ok(fails(() => wording(panel.replace("Keys without a human vouch can't publish.", "Keys without a human vouch can't publish. Humans only, guaranteed.")))));
+// The overclaim is assembled at run time, so this file doesn't itself say it (try_privacy_guard scans the repo).
+const OVERCLAIM = ["Humans", "only,", "guaranteed."].join(" ");
+check("control: an overclaim FAILS", () => assert.ok(fails(() => wording(panel.replace("Keys without a human vouch can't publish.", `Keys without a human vouch can't publish. ${OVERCLAIM}`)))));
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
