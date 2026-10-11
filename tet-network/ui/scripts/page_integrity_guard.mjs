@@ -6,6 +6,9 @@
 //    visitor's local prover), no framing, no plugins, no <base>, forms only to this origin.
 // 2. SRI is on (experimental.sri): Next adds integrity hashes to the scripts its bundler can hash.
 // 3. Zero third-party code: no page source loads a script, stylesheet or font from another origin.
+// 4. Nothing the page runs evaluates a string as code (`new Function`, `eval`, a string given to
+//    setTimeout/setInterval): script-src has no 'unsafe-eval', so the browser would refuse it at run
+//    time, which no build or Node test notices. Control: a sample with `new Function` is caught.
 // Negative control (run by hand, recorded in the commit): a CDN added to script-src → FAILED.
 
 import { register } from "node:module";
@@ -69,6 +72,27 @@ await check("SECURITY: no page source loads a script, stylesheet or font from an
   };
   walk(new URL("../app", import.meta.url).pathname);
   assert.deepEqual(bad, []);
+});
+
+const EVAL = /\bnew\s+Function\s*\(|(?<![.\w])eval\s*\(|\bset(?:Timeout|Interval)\s*\(\s*["'`]/;
+const evalHits = (src) => src.split("\n").filter((l) => !/^\s*(\/\/|\*)/.test(l) && EVAL.test(l));
+await check("the page never evaluates a string as code (the CSP has no 'unsafe-eval')", () => {
+  const bad = [];
+  const walk = (d) => {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      if (statSync(p).isDirectory()) walk(p);
+      else if (/\.(tsx?|mjs|js)$/.test(f) && evalHits(readFileSync(p, "utf8")).length) bad.push(p.replace(/^.*?\/ui\//, ""));
+    }
+  };
+  walk(new URL("../app", import.meta.url).pathname);
+  assert.deepEqual(bad, []);
+});
+await check("control: `new Function` and `eval(` are caught; a comment or `.eval(` method isn't", () => {
+  assert.equal(evalHits(`const f = new Function('return import("/x.js")');`).length, 1);
+  assert.equal(evalHits(`const v = eval("1+1");`).length, 1);
+  assert.equal(evalHits(`setTimeout("go()", 10);`).length, 1);
+  assert.equal(evalHits(`// new Function(...) would be refused\nconst r = model.eval(x);`).length, 0);
 });
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);
