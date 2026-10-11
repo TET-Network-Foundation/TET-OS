@@ -10,8 +10,10 @@ let initPromise: Promise<PqcWasmModule> | null = null;
 export async function pqcInit(): Promise<PqcWasmModule> {
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    const importer = new Function('return import("/pqc/tet_pqc_wasm.js")') as () => Promise<PqcWasmModule>;
-    const mod = await importer();
+    // Loaded at run time from /pqc (not bundled). A plain import the bundler leaves alone: the page's
+    // CSP has no 'unsafe-eval', so `new Function(...)` would be refused (page_integrity_guard check 4).
+    const url = "/pqc/tet_pqc_wasm.js";
+    const mod = (await import(/* webpackIgnore: true */ /* turbopackIgnore: true */ url)) as PqcWasmModule;
     await mod.default("/pqc/tet_pqc_wasm_bg.wasm");
     return mod;
   })();
