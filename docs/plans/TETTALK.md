@@ -56,7 +56,7 @@ Boards keep posts 7 days today. TETtalk is meant to be a record, so:
 ## Tests (each with a negative control)
 
 - Announcements: a post not marked by the publisher key isn't shown there.
-- The wording guard: "completely anonymous" refused in en, ja and zh-HK; the required line present.
+- The wording guard: never "completely anonymous" in en, ja or zh-HK; the required line present.
 - Import: a post with a bad signature or proof is refused; a hidden post isn't exported.
 - Anchor: a post's inclusion verifies against its day's root; a changed post doesn't.
 
