@@ -315,6 +315,7 @@ Each merge goes through only with green CI. After step 6, `main` has the same tr
 - sign the demo's build manifest on your machine (`sign_build_manifest.mjs https://tetnet.org --local … --publish`, see `deploy/demo/README.md`), then I run `verify_site.mjs` against the demo;
 - the launch checklist items: hide the test boards, mark the sample, publish the paper and verifier marks;
 - Shelter's moderator and board, and the grant decision, as above.
+- **The demo's file-fee sponsor is off today.** Its log says `/run/tet-demo/sponsor.mnemonic does not exist`. Posting doesn't need it: board posts, DMs, joining 匿名グループ, Shelter, sites, TetSearch, 本物として記録 and 予言の封印 are all off-ledger and cost a visitor nothing. But a stamp (署名 → 刻印, the on-chain date) and a sent file's fee are paid only by the sponsor, never by the visitor's own TET, so on the demo today every stamp ends with "Not stamped" (files still arrive, fee unpaid). To turn it on, a funded sponsor wallet's 12 words go in that file (caps: 5 per connection and per ID a day, 500 a day in all, floor 10 TET). The welcome grant doesn't change this: the page never spends the visitor's TET on a fee.
 
 ## 15分クリックテスト（ローカル、日本語）
 
