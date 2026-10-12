@@ -251,7 +251,7 @@ Every stack PR currently conflicts with `main`, because main gained #115 and #12
 2. **The independent small PRs:** #103, #124, #117, #112, #116, #109, #123, #128, #129.
 3. **#118** (the signer).
 4. **#127:**
-   - first #131 (libp2p page and probe), #132 (chain label, FAQ lines) and #133 (genesis_bridge removal) merge into its branch: they're stacked on it;
+   - first #131 (libp2p page and probe), #132 (chain label, FAQ lines), #133 (genesis_bridge removal) and #138 (the zh-HK paper draft) merge into its branch: they're stacked on it;
    - I merge main into its branch with exactly the resolutions in `review-all`;
    - I rebuild the offline verifier on #118's signer and re-mark it with the publisher key (new proof codes, not yet published);
    - when CI is green, it gets a merge commit.
