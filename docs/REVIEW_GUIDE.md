@@ -317,7 +317,9 @@ Each merge goes through only with green CI. After step 6, `main` has the same tr
 - Shelter's moderator and board, and the grant decision, as above.
 - **The demo's file-fee sponsor (2026-10-12):**
   - **Its wallet exists:** `b16806a45943545792c049b85ceb2cd2f5ea28c9a230157a8366137fedaee13d`. The 12 words were made on the demo host, in a container with no network, and written straight to `/etc/tet-demo/sponsor.mnemonic` (root, mode 600; inside the node it's `/run/tet-demo/sponsor.mnemonic`). They were never printed or copied anywhere.
-  - **It's not active yet:** the node reads that file only at start-up, and the wallet has 0 TET. You fund it, then the node container restarts (`docker restart tet-core-mainnet` on the demo host), and its log should say `[demo-sponsor] on; sponsor wallet b16806a4…`.
+  - **It's active (2026-10-12):**
+    - **Funded:** the wallet claimed the welcome airdrop of 1,000 TET (practice unit, can't be exchanged for money), signed on the demo host with no network and submitted through Nuremberg (tx `0x7882e1f4…`). The founder wallet couldn't fund it: it's locked until 2027-09-22.
+    - **Loaded:** the demo node was restarted, and its log says `[demo-sponsor] on; sponsor wallet b16806a4…`.
   - **Why it matters:** posting doesn't need it. Board posts, DMs, joining 匿名グループ, Shelter, sites, TetSearch, 本物として記録 and 予言の封印 are all off-ledger and cost a visitor nothing. But a stamp (署名 → チェーンにスタンプする（任意）, the on-chain date) and a sent file's fee are paid only by the sponsor, never by the visitor's own TET. Until it's on, every stamp ends with "スタンプできませんでした" (files still arrive, fee unpaid).
   - **Its limits:** each fee is 1,000 µTET (0.001 TET). The caps are 5 per connection and per ID a day and 500 a day in all, so at most 0.5 TET a day. The sponsor stops below a 10 TET floor. The welcome grant doesn't change any of this: the page never spends the visitor's TET on a fee.
 
