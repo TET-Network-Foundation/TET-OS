@@ -6,6 +6,7 @@
 # stub for it, and a stub healthchecks.io records what it was sent. Each guarantee in the tool's
 # header has a case, and each case that could pass vacuously has a negative control next to it.
 set -uo pipefail
+export PYTHONDONTWRITEBYTECODE=1  # the test imports the tool; keep the source folder clean
 cd "$(dirname "$0")/../.." || exit 1
 TOOL="$PWD/deploy/logseal/tet-logseal"
 WORK=$(mktemp -d)
