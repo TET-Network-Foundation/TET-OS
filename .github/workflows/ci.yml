@@ -618,6 +618,12 @@ jobs:
         name: seed-healthcheck.sh behaves as documented
         run: bash deploy/tests/seed-healthcheck.test.sh
 
+      # The log seal (docs/LOG_SEAL.md): seals chain, secret values never leave the env file, an
+      # unaccepted change alerts by name, log bytes are hashed exactly, tampering is caught. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: log seal behaves as documented
+        run: bash deploy/tests/logseal.test.sh && shellcheck deploy/logseal/install.sh
+
       # The demo node (docs/DEMO_NODE.md): provision refuses an unsafe demo role, and the composed
       # config exposes only Caddy on 80/443, REST on loopback, no UI port, public mode on, the
       # trusted-proxy range equal to the pinned subnet, and a Caddyfile that trusts no client XFF.

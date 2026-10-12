@@ -1,0 +1,11 @@
+[Unit]
+Description=TET log seal: hash this seed's logs and config and record them on TET
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# TET_HC_URL (this host's healthchecks.io check) for change alerts; the seal settings.
+EnvironmentFile=-/etc/tet/healthcheck.env
+EnvironmentFile=/etc/tet-logseal/logseal.env
+ExecStart=/opt/tet-logseal/tet-logseal run
