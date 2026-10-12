@@ -9,9 +9,9 @@
 // names in the switch. Allowlisted tokens: TET, proof codes, hex IDs, algorithm and product names,
 // URLs, emails, file names, numbers. Two or more English words in a row left over = FAIL.
 //
-// Known, listed exception: the technical paper's Hong Kong Chinese translation isn't written yet,
-// so in zh-HK /whitepaper shows the English text inside `[data-pending-translation]` (with a Chinese
-// note above it). That block is reported, not failed, and only on that route.
+// No exceptions: every page, the technical paper included, is translated in both languages (the
+// paper's zh-HK draft since 2026-10-13). A block marked `[data-pending-translation]` (English shown
+// for a language without a translation) FAILS wherever it appears.
 //
 // Negative control: an English sentence injected into a rendered page must FAIL.
 
@@ -128,7 +128,7 @@ try {
       }
       if (process.env.TET_LANG_DEBUG) console.log(`debug ${lang} ${r.name}: ${got.texts.length} texts; ${got.texts.slice(0, 6).join(" | ").slice(0, 300)}`);
       const left = [...new Set(got.texts.flatMap(englishLeft))];
-      if (got.pending && !(r.name === "whitepaper" && lang === "zh-HK")) {
+      if (got.pending) {
         report.push(`FAIL ${lang} ${r.name}: a pending-translation block outside the listed exception`);
         failed++;
       }
@@ -136,7 +136,7 @@ try {
         failed++;
         report.push(`FAIL ${lang} ${r.name}: ${left.length} English\n${left.slice(0, 40).map((x) => `       · ${x}`).join("\n")}`);
       } else {
-        report.push(`ok   ${lang} ${r.name}${got.pending ? " (listed exception: the paper's zh-HK translation is pending)" : ""}`);
+        report.push(`ok   ${lang} ${r.name}`);
       }
     }
   }
