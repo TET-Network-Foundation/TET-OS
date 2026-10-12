@@ -9,7 +9,6 @@ use serde::Serialize;
 use std::net::SocketAddr;
 
 use crate::{
-    attestation::AttestationReport,
     ledger::{
         BlockSummary, MAX_SUPPLY_MICRO,
         MIN_WORKER_STAKE_MICRO, STEVEMON, TxIndexRecordV1,
@@ -422,55 +421,6 @@ async fn post_transfer_enveloped_impl(
         .into_response()
 }
 
-async fn post_genesis_bridge_enveloped_impl(
-    State(state): State<RestState>,
-    _headers: HeaderMap,
-    Json(env): Json<SignedTxEnvelopeV1>,
-) -> impl IntoResponse {
-    let _tx_bytes = match verify_envelope_v1(&env) {
-        Ok(b) => b,
-        Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
-    };
-    let founder = state.ledger.founder_wallet_public().unwrap_or_default();
-    let TxV1::GenesisBridge {
-        founder_wallet,
-        to_wallet,
-        amount_micro,
-    } = env.tx.clone()
-    else {
-        return (StatusCode::BAD_REQUEST, "expected genesis_bridge tx").into_response();
-    };
-    if founder_wallet != founder {
-        return (StatusCode::UNAUTHORIZED, "founder wallet required").into_response();
-    }
-    if amount_micro == 0 || amount_micro > MAX_SUPPLY_MICRO {
-        return (StatusCode::BAD_REQUEST, "amount exceeds hard cap").into_response();
-    }
-    let att = AttestationReport {
-        v: 1,
-        platform: env.attestation.platform.clone(),
-        report_b64: env.attestation.report_b64.clone(),
-    };
-    // FEE_SPEC §3.1: the genesis bridge moves founder allocation inside the protocol.
-    // It is not a user-to-user transfer and is not a taxable event.
-    let _ = &att;
-    match state
-        .ledger
-        .transfer_no_fee(&founder_wallet, &to_wallet, amount_micro)
-        .map(|net| (net, 0u64))
-    {
-        Ok((net, fee)) => {
-            // No gossip announcement: peers refuse balance events that are not in a block.
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"net_micro": net, "fee_micro": fee})),
-            )
-                .into_response()
-        }
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
-}
-
 async fn post_tx_submit_impl(
     State(state): State<RestState>,
     headers: HeaderMap,
@@ -491,11 +441,13 @@ async fn post_tx_submit_impl(
         TxV1::InitialAirdrop { .. } => post_initial_airdrop_claim_impl(State(state), Json(env))
             .await
             .into_response(),
-        TxV1::GenesisBridge { .. } => {
-            post_genesis_bridge_enveloped_impl(State(state), headers, Json(env))
-                .await
-                .into_response()
-        }
+        // Removed (SECURITY.md): it wrote balances directly, outside any block, so the node that
+        // served it diverged from every other node's state. Blocks don't apply this variant either.
+        TxV1::GenesisBridge { .. } => (
+            StatusCode::BAD_REQUEST,
+            "genesis_bridge is not accepted: it would change balances outside a block",
+        )
+            .into_response(),
         TxV1::EnterpriseInference { .. } => {
             crate::rest::handlers::enterprise::post_enterprise_inference_submit(
                 State(state),
@@ -894,14 +846,6 @@ pub async fn get_proof_by_id(
     Path(id): Path<u64>,
 ) -> impl IntoResponse {
     get_proof_by_id_impl(State(state), Path(id)).await
-}
-
-pub async fn post_genesis_bridge_enveloped(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-    Json(env): Json<SignedTxEnvelopeV1>,
-) -> impl IntoResponse {
-    post_genesis_bridge_enveloped_impl(State(state), headers, Json(env)).await
 }
 
 pub async fn post_tx_submit(

@@ -30,7 +30,8 @@ arm for that `TxV1` variant. A signable variant is not an appliable one.
 Its catch-all returns `Err("unsupported tx in consensus block")` rather than ignoring the tx, so
 enqueueing a variant it does not handle does not silently drop the write — it makes **every node
 reject the whole block**. `TxV1::GenesisBridge` is exactly this case: present in the enum, signed
-and verified by its handler, and absent from the apply match.
+and verified, and absent from the apply match. Its REST route wrote balances directly instead, outside
+any block; it was removed (SECURITY.md), and `/tx/submit` refuses the variant.
 
 ## A mock-only path counts as untested
 

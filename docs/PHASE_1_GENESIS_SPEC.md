@@ -419,7 +419,7 @@ By class:
 |---|---|---|
 | Stake / unstake / worker bond | 3 | new `TxV1` variants — `TxV1` has no `Stake`, `Unstake` or `WorkerBond` |
 | AI settlement and worker-reward mints | 4 | client-signed settlement envelopes and consensus-validated mint amounts; blocked on the optimistic-execution model below |
-| Genesis bridge | 1 | an **apply arm** — the variant is signable but `apply_consensus_block_batch` has none, so enqueueing one would make every node reject the block |
+| ~~Genesis bridge~~ | ~~1~~ | **closed:** the route is removed and `/tx/submit` refuses the variant (SECURITY.md). If founder funds ever need to move before the cliff, that's a new consensus variant with an apply arm, not this |
 | Admin-gated slash | 1 | a slash tx variant |
 | ZK-Court challenger bond | 1 | settle at block-apply, not at challenge submission |
 | Dev faucet | 1 | not network-reachable, off by default, refused on mainnet |

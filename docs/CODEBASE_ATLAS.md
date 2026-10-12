@@ -803,7 +803,6 @@ Generated from `tet-core/src/rest/routes.rs` (2026-05-21). Duplicate paths (alia
 | POST | `/faucet` | `post_ledger_faucet` |
 | GET | `/ledger/proof` | `get_proofs` |
 | GET | `/ledger/proof/:id` | `get_proof_by_id` |
-| POST | `/ledger/genesis_bridge` | `post_genesis_bridge_enveloped` |
 | POST | `/tx/submit` | `post_tx_submit` |
 | GET | `/ai/pricing` | `get_ai_pricing` |
 | POST | `/ai/proxy` | `post_ai_proxy` |

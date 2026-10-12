@@ -145,7 +145,7 @@ Deleting schedule 1 leaves callers that move value *within* the protocol rather 
 | Caller | Now |
 |---|---|
 | `p2p_dex.rs` — 6 escrow hops | `transfer_internal_no_fee` |
-| `/ledger/genesis_bridge` | `transfer_internal_no_fee` |
+| `/ledger/genesis_bridge` | removed (it wrote balances outside a block; SECURITY.md) |
 | `/ai/proxy` payment | `FeeKind::Transfer` at the default rate |
 
 This fixes a live bug. All six DEX hops passed `fee_bps: None`, and schedule 1 charged 1% anyway —
