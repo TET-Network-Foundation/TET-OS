@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""tet-logseal: a seed records hashes of its own logs and configuration on TET (the "log seal").
+
+Every run (a systemd timer, every 10 minutes) writes one **seal**: a small JSON manifest with
+  - the SHA-256 of each tracked config file (secret values in env files are removed first),
+  - the node's container image and binary hashes,
+  - the SHA-256 of the node's log bytes since the previous seal (a gzip copy is kept KEEP_DAYS),
+  - the SHA-256 of the previous seal, so the seals form one chain.
+About once an hour the newest seal is **stamped** on TET: a file-fee transaction from this host's
+own seal wallet whose file_id is the first 16 bytes of the seal's SHA-256 (the same rule as a
+.sig.json stamp). A stamp anchors that seal and, through the chain, every seal before it.
+
+A config change that wasn't accepted (`tet-logseal accept`, run after a deploy) is reported to this
+host's healthchecks.io check as a failure, so it reaches Discord.
+
+What it proves: a recorded seal was not changed afterwards, and roughly when a change happened.
+What it doesn't: that nothing bad happened between seals or before the first one, or anything
+about a secret's value (only that the secret's name is there). Never records secrets or log text:
+only hashes leave the host. Docs: docs/LOG_SEAL.md.
+
+    tet-logseal run       one seal (and a stamp, if one is due)
+    tet-logseal accept    take the current config as the expected one (after a deploy)
+    tet-logseal verify    re-check the chain, the stored log copies and every stamp on chain
+    tet-logseal status    the newest seal, pending changes and the last stamp
+"""
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+from pathlib import Path
+
+ENV = os.environ.get
+STATE = Path(ENV("TET_LOGSEAL_STATE", "/var/lib/tet-logseal"))
+HOST = ENV("TET_LOGSEAL_HOST", "seed")
+TREE = ENV("TET_LOGSEAL_TREE", "/opt/TET-OS")
+CONTAINER = ENV("TET_LOGSEAL_CONTAINER", "tet-core-mainnet")
+NODE = ENV("TET_LOGSEAL_NODE", "http://127.0.0.1:5010").rstrip("/")
+WORDS = ENV("TET_LOGSEAL_WORDS", "/etc/tet-logseal/seal.mnemonic")
+SIGNER_DIR = ENV("TET_LOGSEAL_SIGNER_DIR", "/opt/tet-logseal")
+SIGNER_IMAGE = ENV("TET_LOGSEAL_SIGNER_IMAGE", "mirror.gcr.io/library/node:22-slim")
+STAMP_EVERY_SEC = int(ENV("TET_LOGSEAL_STAMP_EVERY_SEC", "3600"))
+KEEP_DAYS = int(ENV("TET_LOGSEAL_KEEP_DAYS", "7"))
+HC_URL = ENV("TET_HC_URL", "")
+# Paths sealed besides the tree's own files. `{tree}` is replaced. Env-style files are redacted.
+DEFAULT_FILES = (
+    "{tree}/.env:env,{tree}/docker-compose.yml,{tree}/deploy/docker-compose.seed.yml,"
+    "/etc/systemd/system/tet-healthcheck.service,/etc/systemd/system/tet-healthcheck.timer,"
+    "/etc/systemd/system/tet-logseal.service,/etc/systemd/system/tet-logseal.timer,"
+    "/usr/local/bin/tet-healthcheck,/etc/tet/healthcheck.env:env,/etc/tet-logseal/logseal.env:env,"
+    "/opt/tet-logseal/tet-logseal,/opt/tet-logseal/stamp_sign.mjs,"
+    "/etc/ssh/sshd_config,/root/.ssh/authorized_keys,/etc/ufw/user.rules,/etc/ufw/user6.rules"
+)
+FILES = ENV("TET_LOGSEAL_FILES", DEFAULT_FILES)
+
+# A value is secret when its key names one of these (env files: KEY=VALUE).
+SECRET_KEY = re.compile(r"(KEY|SECRET|TOKEN|PASS|MNEMONIC|WORDS|PRIVATE|WEBHOOK|URL|SEED|SALT|AUTH)", re.I)
+
+
+def sha256(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def canonical(obj) -> bytes:
+    """The exact bytes of a seal: sorted keys, no spaces, one trailing newline."""
+    return (json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True) + "\n").encode()
+
+
+def redact_env(text: str) -> str:
+    """An env file with every secret value removed (the key stays, so adding or removing a secret
+    still changes the hash; changing a secret's value does not, and can't be seen here)."""
+    out = []
+    for line in text.splitlines():
+        m = re.match(r"^\s*(export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$", line)
+        if m and SECRET_KEY.search(m.group(2)):
+            out.append(f"{m.group(2)}=<redacted>")
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def file_items(files: str = FILES, tree: str = TREE) -> dict:
+    items = {}
+    for spec in [s.strip() for s in files.split(",") if s.strip()]:
+        path, _, kind = spec.partition(":")
+        path = path.replace("{tree}", tree)
+        p = Path(path)
+        if not p.is_file():
+            items[path] = "absent"
+            continue
+        data = p.read_bytes()
+        if kind == "env":
+            data = redact_env(data.decode("utf-8", "replace")).encode()
+        items[path] = sha256(data)
+    return items
+
+
+def run_cmd(args: list, inp: bytes | None = None, timeout: int = 60) -> tuple[int, bytes]:
+    try:
+        p = subprocess.run(args, input=inp, capture_output=True, timeout=timeout)
+        return p.returncode, p.stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 1, b""
+
+
+def container_items() -> dict:
+    items = {}
+    rc, out = run_cmd(["docker", "inspect", CONTAINER, "--format", "{{.Image}}"])
+    items[f"container:{CONTAINER}:image"] = out.decode().strip() if rc == 0 else "absent"
+    rc, out = run_cmd(["docker", "exec", CONTAINER, "sha256sum", "/usr/local/bin/TET-Core"])
+    items[f"container:{CONTAINER}:binary"] = out.decode().split()[0] if rc == 0 and out else "absent"
+    return items
+
+
+def log_segment(state: dict, now_ms: int) -> tuple[dict, bytes]:
+    """The node's log bytes since the previous seal, read straight from Docker's log file."""
+    rc, out = run_cmd(["docker", "inspect", CONTAINER, "--format", "{{.LogPath}}"])
+    path = out.decode().strip() if rc == 0 else ""
+    if not path or not Path(path).is_file():
+        return {"source": CONTAINER, "sha256": None, "note": "no log file"}, b""
+    st = os.stat(path)
+    prev = state.get("log") or {}
+    restarted = prev.get("path") != path or prev.get("inode") != st.st_ino or st.st_size < prev.get("offset", 0)
+    start = 0 if restarted else prev.get("offset", 0)
+    with open(path, "rb") as f:
+        f.seek(start)
+        data = f.read(st.st_size - start)
+    end = start + len(data)
+    state["log"] = {"path": path, "inode": st.st_ino, "offset": end}
+    return {"source": CONTAINER, "from": start, "to": end, "new_file": bool(restarted and prev), "sha256": sha256(data)}, data
+
+
+def load_json(p: Path, default):
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def write_atomic(p: Path, data: bytes, mode: int = 0o600) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    with os.fdopen(fd, "wb") as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
+def stamp_file_id(manifest: bytes) -> str:
+    h = hashlib.sha256(manifest).hexdigest()[:32]
+    return f"{h[0:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
+
+
+def http_json(url: str, body: bytes | None = None, timeout: int = 15):
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"} if body else {})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        try:
+            return e.code, json.loads(e.read() or b"null")
+        except ValueError:
+            return e.code, None
+    except (OSError, ValueError):
+        return 0, None
+
+
+def ping_hc(path: str, body: str) -> None:
+    if not HC_URL:
+        return
+    try:
+        urllib.request.urlopen(urllib.request.Request(HC_URL + path, data=body.encode()[:9000]), timeout=10).read()
+    except OSError:
+        print("NOTE: could not reach healthchecks.io", file=sys.stderr)
+
+
+def sign_stamp(manifest_path: Path, chain_id: str, genesis: str) -> dict | None:
+    """Sign the file-fee for one seal in a container with no network; only the envelope comes out."""
+    args = [
+        "docker", "run", "--rm", "--network", "none",
+        "-v", f"{SIGNER_DIR}:/w:ro", "-v", f"{os.path.dirname(WORDS)}:/k:ro", "-v", f"{manifest_path}:/m/seal.json:ro",
+        SIGNER_IMAGE, "node", "/w/stamp_sign.mjs", f"/k/{os.path.basename(WORDS)}", chain_id, genesis, "/w", "/m/seal.json",
+    ]
+    rc, out = run_cmd(args, timeout=120)
+    if rc != 0:
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def stamp_due(state: dict, now_ms: int) -> bool:
+    return now_ms - state.get("last_stamp_ms", 0) >= STAMP_EVERY_SEC * 1000
+
+
+def do_stamp(state: dict, seq: int, manifest_path: Path, manifest: bytes, now_ms: int) -> str:
+    code, chain = http_json(f"{NODE}/chain")
+    if code != 200 or not chain:
+        return "stamp skipped: node not reachable"
+    signed = sign_stamp(manifest_path, chain["chain_id"], chain["genesis_hash"])
+    if not signed or signed.get("file_id") != stamp_file_id(manifest):
+        return "stamp skipped: signing failed"
+    code, resp = http_json(f"{NODE}/files/fee", json.dumps(signed["env"]).encode())
+    rec = {"seq": seq, "seal_sha256": sha256(manifest), "file_id": signed["file_id"], "tx_hash": signed["tx_hash"],
+           "wallet": signed["wallet"], "submitted_at_ms": now_ms, "http": code, "height": None}
+    with open(STATE / "stamps.jsonl", "a") as f:
+        f.write(json.dumps(rec, sort_keys=True) + "\n")
+    if code == 202:
+        state["last_stamp_ms"] = now_ms
+        return f"stamped seal {seq} (tx {signed['tx_hash'][:18]}…)"
+    return f"stamp refused: HTTP {code} {str(resp)[:120]}"
+
+
+def prune(now_ms: int) -> None:
+    cutoff = now_ms - KEEP_DAYS * 86_400_000
+    for p in (STATE / "log").glob("*.log.gz"):
+        try:
+            if int(p.stem.split(".")[0].split("-")[1]) < cutoff:
+                p.unlink()
+        except (ValueError, IndexError, OSError):
+            pass
+
+
+def cmd_run() -> int:
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    now_ms = int(time.time() * 1000)
+    state = load_json(STATE / "state.json", {})
+    config = {**file_items(), **container_items()}
+    log, log_bytes = log_segment(state, now_ms)
+    seq = state.get("seq", 0) + 1
+    head = state.get("head")
+    baseline = load_json(STATE / "baseline.json", None)
+    changed = sorted(k for k in config if baseline is not None and baseline.get(k) != config[k])
+    changed += sorted(k for k in (baseline or {}) if k not in config)
+    seal = {"v": 1, "kind": "tet-log-seal", "host": HOST, "seq": seq, "at_ms": now_ms, "prev": head,
+            "config": config, "log": log, "changed": changed, "baseline_set": baseline is not None}
+    manifest = canonical(seal)
+    mpath = STATE / "seals" / f"{seq:08d}.json"
+    write_atomic(mpath, manifest)
+    if log_bytes:
+        write_atomic(STATE / "log" / f"{seq:08d}-{now_ms}.log.gz", gzip.compress(log_bytes))
+    state.update({"seq": seq, "head": sha256(manifest), "last_seal_ms": now_ms})
+    msg = f"seal {seq} {sha256(manifest)[:16]} ({len(config)} items, log {len(log_bytes)} bytes)"
+    if stamp_due(state, now_ms):
+        msg += "; " + do_stamp(state, seq, mpath, manifest, now_ms)
+    check_pending_stamps()
+    write_atomic(STATE / "state.json", json.dumps(state, sort_keys=True).encode())
+    prune(now_ms)
+    status = {"seq": seq, "at_ms": now_ms, "changed": changed, "baseline_set": baseline is not None}
+    write_atomic(STATE / "status.json", json.dumps(status, sort_keys=True).encode(), 0o644)
+    if changed:
+        reason = f"log seal ({HOST}): changed since the last accepted seal: {', '.join(changed)}. If this was a deploy, run: tet-logseal accept"
+        print("CHANGED: " + reason)
+        ping_hc("/fail", reason)
+    print(msg)
+    return 0
+
+
+def stamp_tx_of(explorer_tx: dict) -> dict:
+    """The transaction inside `GET /explorer/tx/:hash`: its `tx` is the signed envelope, whose own
+    `tx` is the transaction ({"kind":"file_fee", ...})."""
+    env = explorer_tx.get("tx") or {}
+    inner = env.get("tx") if isinstance(env, dict) else None
+    return inner if isinstance(inner, dict) else {}
+
+
+def check_pending_stamps() -> None:
+    p = STATE / "stamps.jsonl"
+    if not p.is_file():
+        return
+    rows = [json.loads(l) for l in p.read_text().splitlines() if l.strip()]
+    updated = False
+    for r in rows:
+        if r.get("height") is None and r.get("http") == 202:
+            code, tx = http_json(f"{NODE}/explorer/tx/{r['tx_hash']}")
+            if code == 200 and tx and tx.get("found") and tx.get("canonical"):
+                t = stamp_tx_of(tx)
+                if t.get("kind") == "file_fee" and t.get("file_id") == r["file_id"]:
+                    r["height"] = tx.get("block_height")
+                    updated = True
+    if updated:
+        write_atomic(p, "".join(json.dumps(r, sort_keys=True) + "\n" for r in rows).encode())
+
+
+def cmd_accept() -> int:
+    STATE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    config = {**file_items(), **container_items()}
+    write_atomic(STATE / "baseline.json", json.dumps(config, sort_keys=True, indent=1).encode())
+    print(f"accepted {len(config)} items as the expected configuration ({sha256(canonical(config))[:16]})")
+    return 0
+
+
+def cmd_verify() -> int:
+    """Re-check every stored seal: the chain links, the log copies, and each stamp on chain."""
+    problems, prev, n = [], None, 0
+    for p in sorted((STATE / "seals").glob("*.json")):
+        b = p.read_bytes()
+        s = json.loads(b)
+        if canonical(s) != b:
+            problems.append(f"{p.name}: not in canonical form (edited?)")
+        if s.get("prev") != prev:
+            problems.append(f"{p.name}: prev {str(s.get('prev'))[:16]} does not match the seal before it")
+        logs = list((STATE / "log").glob(f"{s['seq']:08d}-*.log.gz"))
+        if logs and s.get("log", {}).get("sha256") != sha256(gzip.decompress(logs[0].read_bytes())):
+            problems.append(f"{p.name}: the stored log copy does not match its hash")
+        prev, n = sha256(b), n + 1
+    check_pending_stamps()
+    stamps = [json.loads(l) for l in (STATE / "stamps.jsonl").read_text().splitlines() if l.strip()] if (STATE / "stamps.jsonl").is_file() else []
+    anchored = 0
+    for r in stamps:
+        sp = STATE / "seals" / f"{r['seq']:08d}.json"
+        if not sp.is_file() or stamp_file_id(sp.read_bytes()) != r["file_id"]:
+            problems.append(f"stamp of seal {r['seq']}: file_id doesn't match the stored seal")
+        elif r.get("height"):
+            anchored += 1
+    print(f"{n} seals, chain {'intact' if not any('prev' in x or 'canonical' in x for x in problems) else 'BROKEN'}; "
+          f"{anchored} of {len(stamps)} stamps anchored on chain")
+    for x in problems:
+        print("PROBLEM: " + x)
+    return 1 if problems else 0
+
+
+def cmd_status() -> int:
+    st = load_json(STATE / "status.json", {})
+    state = load_json(STATE / "state.json", {})
+    print(json.dumps({**st, "head": state.get("head"), "last_stamp_ms": state.get("last_stamp_ms")}, indent=1, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    cmds = {"run": cmd_run, "accept": cmd_accept, "verify": cmd_verify, "status": cmd_status}
+    if len(sys.argv) != 2 or sys.argv[1] not in cmds:
+        print(__doc__.strip().splitlines()[0] + "\nusage: tet-logseal run|accept|verify|status", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(cmds[sys.argv[1]]())
