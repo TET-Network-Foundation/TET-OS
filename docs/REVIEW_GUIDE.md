@@ -251,6 +251,7 @@ Every stack PR currently conflicts with `main`, because main gained #115 and #12
 2. **The independent small PRs:** #103, #124, #117, #112, #116, #109, #123, #128, #129.
 3. **#118** (the signer).
 4. **#127:**
+   - first #131 (libp2p page and probe), #132 (chain label, FAQ lines) and #133 (genesis_bridge removal) merge into its branch: they're stacked on it;
    - I merge main into its branch with exactly the resolutions in `review-all`;
    - I rebuild the offline verifier on #118's signer and re-mark it with the publisher key (new proof codes, not yet published);
    - when CI is green, it gets a merge commit.
@@ -278,12 +279,13 @@ Each merge goes through only with green CI. After step 6, `main` has the same tr
   - Shelter (#105; off without `TET_SHELTER_*`);
   - the grants route (#121; off without `TET_GRANT_MNEMONIC_FILE`);
   - TetSearch (#127; off without Shelter);
-  - the Verify Level 2 route (#126).
+  - the Verify Level 2 route (#126);
+  - the `genesis_bridge` route removed (#133).
 
   Shelter and grants stay off on the seeds: Shelter lives on the node where its members are, and the seeds have no grant wallet.
 - **The demo:** everything: node, UI and Caddy allowlist. Shelter is on only once you give me your moderator ID and board, and grants only once you decide (leaving them off at first is my recommendation).
 
-**Why mixed versions are safe during the rollout:** the stack changes no consensus or ledger code; the only change is one comment line in `ledger.rs`. Old and new nodes therefore build and accept the same blocks. New data goes into new database trees only, so rolling back to `404bd86` reads the database unchanged. Fast anonymous posts only start once the demo runs the new code, which comes last.
+**Why mixed versions are safe during the rollout:** the stack changes no consensus or ledger code; the only change is one comment line in `ledger.rs`. (#133 removes a REST route that wrote outside blocks; it changes nothing blocks do.) Old and new nodes therefore build and accept the same blocks. New data goes into new database trees only, so rolling back to `404bd86` reads the database unchanged. Fast anonymous posts only start once the demo runs the new code, which comes last.
 
 **When:** your daytime, while you're reachable, starting no later than early afternoon so that a rollback still happens in daylight. Not on launch day. It takes about 90 minutes in all.
 
