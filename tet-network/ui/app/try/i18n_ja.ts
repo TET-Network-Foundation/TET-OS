@@ -1066,4 +1066,7 @@ export const JA: Record<string, string> = {
   "only vouched members can publish to TetSearch: keys without a human vouch can't publish": "TetSearch に公開できるのは推薦を受けたメンバーだけです。人による推薦のない鍵は公開できません",
   "members only: TetSearch results are for vouched members": "メンバー限定: TetSearch の結果は推薦を受けたメンバー向けです",
   "TetSearch is not open on this node (it needs Shelter)": "このノードでは TetSearch は開いていません（Shelter が必要です）",
+  "TET testnet ({id})": "TET テストネット ({id})",
+  "The founder allocation is locked until 2027-09-22: a one-year cliff from this testnet's genesis on 2026-09-22.": "創業者の割り当ては 2027-09-22 までロックされています。このテストネットのジェネシス（2026-09-22）から1年間のクリフです。",
+  "The welcome airdrop is 1,000 TET (practice unit, can't be exchanged for money), once per wallet, for up to 10,000 wallets.": "ウェルカム・エアドロップは 1,000 TET（練習用の単位。お金とは交換できません）で、1つのウォレットにつき1回、最大 10,000 ウォレットまでです。",
 };
