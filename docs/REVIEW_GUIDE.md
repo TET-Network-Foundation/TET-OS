@@ -294,7 +294,7 @@ Each merge goes through only with green CI. After step 6, `main` has the same tr
 - on my machine: the full Rust tests and every guard on that commit, and the Docker images built;
 - on each host: record the height, state root, commit and `docker image ls` (the rollback target is `404bd86`).
 
-**For each host, in this order: Helsinki, then Nuremberg, then the demo.** Each one is deployed with the `.env`-safe update in `docs/RUNNING_A_NODE.md` ("Updating a running seed"), and the health check is reinstalled. Then I check:
+**For each host, in this order: Helsinki, then Nuremberg, then the demo.** Each one is deployed with the `.env`-safe update in `docs/RUNNING_A_NODE.md` ("Updating a running seed"), and the health check is reinstalled, and `tet-logseal accept` is run on each seed right after its deploy (the log seal, #137, would otherwise alert on the new binary and image). Then I check:
 
 1. **`/status/live`** shows the new commit and an advancing height.
    - Helsinki waits its 120 s solo-producer grace before mining again. **If it isn't mining 5 minutes after the restart, I roll it back.**
