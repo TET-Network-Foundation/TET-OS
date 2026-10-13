@@ -245,6 +245,21 @@ Note what 2 and 3 have in common: the tempting option was the *convenient* one â
 simpler envelope â€” and the principle is what made the cost visible. Expect it to argue against
 convenience most of the time it applies.
 
+## Nothing new runs on the seeds or the demo without an explicit go
+
+Nothing new is installed or started on the seeds (Helsinki, Nuremberg) or the demo host without the
+founder's explicit go for that specific thing, and only in the daytime. That covers binaries,
+services, systemd timers, containers, scripts and wallets. "It's not the node binary", "it's an
+add-on" or "the task said dogfood" is not an exception: build and test it locally, open the PR, and
+stop before touching the host. Then ask, naming exactly what will run and where.
+
+Read-only checks (status, logs, balances, `verify`) are fine without asking. Deploys of the node
+itself already follow the deploy plan and need their own go.
+
+This rule exists because on 2026-10-13 the log seal (a systemd timer and two funded seal wallets)
+was installed on both seeds overnight under a general "finish these, don't ask me". It ran fine;
+it was still outside the go.
+
 ## Devlog
 The public site repo is at ~/site (github.com/Nexus-Network-Foundation/site).
 At the end of every session where something shipped, was fixed, or was found:
