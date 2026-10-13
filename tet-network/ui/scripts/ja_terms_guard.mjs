@@ -19,6 +19,7 @@ const ROOT = new URL("../../../", import.meta.url).pathname;
 const FILES = [
   "tet-network/ui/app/try/i18n_ja.ts",
   "tet-network/ui/app/whitepaper/paper_ja.ts",
+  "tet-network/ui/app/agents/agents_text.ts",
   "deploy/demo/maintenance/maintenance.html",
 ];
 
@@ -46,7 +47,7 @@ check("Japanese uses 推薦, パスフレーズ and 匿名グループ (no 保�
   }
   assert.deepEqual(bad, []);
 });
-const ZH_FILES = ["tet-network/ui/app/try/i18n_zh_hk.ts", "tet-network/ui/app/whitepaper/paper_zh_hk.ts"];
+const ZH_FILES = ["tet-network/ui/app/try/i18n_zh_hk.ts", "tet-network/ui/app/whitepaper/paper_zh_hk.ts", "tet-network/ui/app/agents/agents_text.ts"];
 /** The lines of zh-HK `text` that use 擔保 or 作保 (vouch must be 引薦). */
 export function oldTermsZh(text) {
   return text.split("\n").filter((l) => /擔保|作保/.test(l));

@@ -143,6 +143,7 @@ if docker info >/dev/null 2>&1; then
   expect GET    /os 404
   expect GET    /try 200
   expect GET    /whitepaper 200
+  expect GET    /agents 200
   expect GET    /paper/tet-technical-paper.pdf 200
   expect GET    /paper/tet-technical-paper.html 200
   expect GET    /_next/static/chunk.js 200

@@ -6,7 +6,7 @@
 //   NEXT_PUBLIC_TET_BUILD_SHA=<commit> node scripts/build_manifest.mjs [--out <file>]
 //
 // What is listed is exactly what deploy/demo/Caddyfile's `@page` matcher serves (build_manifest_guard
-// checks the two lists agree): the prerendered /try and /whitepaper pages, the app icons, and every
+// checks the two lists agree): the prerendered /try, /whitepaper and /agents pages, the app icons, and every
 // file under the served public folders and /_next/static. The same build gives the same bytes: keys
 // sorted, and the build id is the commit (next.config.ts).
 
@@ -20,7 +20,7 @@ const UI = fileURLToPath(new URL("../", import.meta.url));
 
 /** The paths deploy/demo/Caddyfile serves from the UI (`@page`), besides the node API. */
 export const SERVED = {
-  exact: ["/try", "/whitepaper", "/build-manifest.json", "/favicon.ico", "/apple-icon.png"],
+  exact: ["/try", "/whitepaper", "/agents", "/build-manifest.json", "/favicon.ico", "/apple-icon.png"],
   prefixes: ["/paper/", "/verify/", "/_next/static/", "/pqc/", "/brand/"],
 };
 
@@ -48,6 +48,7 @@ export function buildManifest(ui = UI, commit = process.env.NEXT_PUBLIC_TET_BUIL
   for (const [path, file] of [
     ["/try", "try.html"],
     ["/whitepaper", "whitepaper.html"],
+    ["/agents", "agents.html"],
     ["/favicon.ico", "favicon.ico.body"],
     ["/apple-icon.png", "apple-icon.png.body"],
   ]) {
