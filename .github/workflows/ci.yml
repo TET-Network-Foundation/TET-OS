@@ -618,6 +618,12 @@ jobs:
         name: seed-healthcheck.sh behaves as documented
         run: bash deploy/tests/seed-healthcheck.test.sh
 
+      # The guard runner (CLAUDE.md: a push never happens while any guard is red): it stops at the
+      # first red guard with exit 1, never runs the guards after it, exits 0 only when all ran green.
+      - if: needs.gate.outputs.code == 'true'
+        name: run_guards.sh stops at the first red guard
+        run: bash scripts/run_guards.test.sh && shellcheck scripts/run_guards.sh scripts/run_guards.test.sh
+
       # The demo node (docs/DEMO_NODE.md): provision refuses an unsafe demo role, and the composed
       # config exposes only Caddy on 80/443, REST on loopback, no UI port, public mode on, the
       # trusted-proxy range equal to the pinned subnet, and a Caddyfile that trusts no client XFF.
