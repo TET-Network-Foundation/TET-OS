@@ -1030,7 +1030,7 @@ export const ZH_HK: Record<string, string> = {
   "the offline verifier": "離線驗證工具",
   "(one file: it checks a record on your device, with the network off)": "（單一檔案：在你的裝置上檢查紀錄，無需連接網絡）",
   "Welcome grant: {amount} TET (practice unit, can't be exchanged for money) for the opening {cap} people. {n} granted so far.": "迎新發放：首 {cap} 人各獲 {amount} TET（練習單位，不能兌換成金錢）。至今已發放 {n} 份。",
-  "One per person, decided weakly for now: one per registration in the anonymity set, and registering is free. It moves to vouched members once Shelter's vouches exist.": "每人一份，但目前的判定較弱：匿名名單中每個登記一份，而登記是免費的。待避風港的作保推出後，會改為只限經引薦的成員。",
+  "One per person, decided weakly for now: one per registration in the anonymity set, and registering is free. It moves to vouched members once Shelter's vouches exist.": "每人一份，但目前的判定較弱：匿名名單中每個登記一份，而登記是免費的。待避風港的引薦推出後，會改為只限經引薦的成員。",
   "Granted: {amount} TET (practice unit, can't be exchanged for money) to this ID.": "已發放：{amount} TET（練習單位，不能兌換成金錢）到此 ID。",
   "Join the anonymity set first": "先加入匿名名單",
   "Proving on your computer (about 30 s)…": "正在你的電腦上證明（約 30 秒）…",
