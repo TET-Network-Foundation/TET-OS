@@ -8,7 +8,9 @@
 // - the anonymity set is 匿名グループ, never 匿名セット.
 // Scanned: the page's Japanese dictionary, the Japanese paper and the maintenance page. The guards'
 // own lists of banned phrases (which name 保証 on purpose) are not scanned.
-// Control: a sample with each old term is caught; the allowed "保証はありません" is not.
+// - zh-HK (founder, 2026-10-13): vouch is 引薦, never 擔保 or 作保 (both read as a money guarantee).
+//   保證 (no warranty) is a different word and is allowed.
+// Control: a sample with each old term is caught; the allowed "保証はありません" and "保證" are not.
 
 import { readFileSync, existsSync } from "node:fs";
 import assert from "node:assert/strict";
@@ -43,6 +45,24 @@ check("Japanese uses 推薦, パスフレーズ and 匿名グループ (no 保�
     for (const l of oldTerms(readFileSync(ROOT + f, "utf8"))) bad.push(`${f}: ${l.trim().slice(0, 120)}`);
   }
   assert.deepEqual(bad, []);
+});
+const ZH_FILES = ["tet-network/ui/app/try/i18n_zh_hk.ts", "tet-network/ui/app/whitepaper/paper_zh_hk.ts"];
+/** The lines of zh-HK `text` that use 擔保 or 作保 (vouch must be 引薦). */
+export function oldTermsZh(text) {
+  return text.split("\n").filter((l) => /擔保|作保/.test(l));
+}
+check("zh-HK uses 引薦 for vouch (no 擔保, no 作保)", () => {
+  const bad = [];
+  for (const f of ZH_FILES) {
+    if (!existsSync(ROOT + f)) continue;
+    for (const l of oldTermsZh(readFileSync(ROOT + f, "utf8"))) bad.push(`${f}: ${l.trim().slice(0, 120)}`);
+  }
+  assert.deepEqual(bad, []);
+});
+check("control: 擔保 and 作保 are caught in zh-HK; 引薦 and 保證 are not", () => {
+  assert.equal(oldTermsZh("只有獲擔保的人才能發佈。").length, 1);
+  assert.equal(oldTermsZh("尚餘 3 次作保。").length, 1);
+  assert.equal(oldTermsZh("只有獲引薦的人才能發佈。不提供任何保證。").length, 0);
 });
 check("control: each old term is caught; 保証はありません is not", () => {
   assert.equal(oldTerms("公開できるのは保証を受けた人だけです。").length, 1);
