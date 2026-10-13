@@ -805,7 +805,7 @@ inference plane has no such constraint (keys are ephemeral).
 
 - **Key migration** — re-registration flow vs discarding the directory at the Phase 1 genesis.
 - **Dual-read window** — whether nodes should accept both algorithms during a transition, and for how long.
-- **Library maturity** — FIPS-203 crate selection on both sides, and whether either has an audit.
+- **Library maturity** — which FIPS-203 crate to move to on both sides, and whether either has an audit.
 - **Wire format** — the `mlkem_*` field names are legacy and currently misleading; renaming them is a protocol change and is deliberately deferred.
 
 **Status: open.** Target **Phase 1 genesis**, where key migration is free because a new genesis is

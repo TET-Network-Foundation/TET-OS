@@ -1018,7 +1018,7 @@ Anchor-only audit trail (REST, hybrid-signed) — voluntary disclosure path</pre
 <p><strong>Open questions:</strong></p>
 <p>- <strong>Key migration</strong> — re-registration flow vs discarding the directory at the Phase 1 genesis.</p>
 <p>- <strong>Dual-read window</strong> — whether nodes should accept both algorithms during a transition, and for how long.</p>
-<p>- <strong>Library maturity</strong> — FIPS-203 crate selection on both sides, and whether either has an audit.</p>
+<p>- <strong>Library maturity</strong> — which FIPS-203 crate to move to on both sides, and whether either has an audit.</p>
 <p>- <strong>Wire format</strong> — the <code>mlkem_*</code> field names are legacy and currently misleading; renaming them is a protocol change and is deliberately deferred.</p>
 <p><strong>Status: open.</strong> Target <strong>Phase 1 genesis</strong>, where key migration is free because a new genesis is</p>
 <p>being cut regardless (see <code>docs/SPRINT_PLAN.md</code>, Strategy C). <strong>Phase 0 does not ship this.</strong></p>

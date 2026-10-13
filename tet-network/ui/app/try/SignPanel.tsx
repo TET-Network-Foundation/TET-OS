@@ -137,7 +137,7 @@ export default function SignPanel(props: { hint?: string } = {}) {
       });
       const up = await postFilesUpload(BASE, built.envelope, built.bodyCiphertext);
       if (!up.ok) throw new Error(up.text || `HTTP ${up.status}`);
-      setBusy(t("Asking the demo's sponsor to pay the fee…"));
+      setBusy(t("Asking the demo's sponsor to cover the fee…"));
       const fee = await settleFileFee({ mode: "demo-sponsor", baseUrl: BASE, fileId, senderWalletId: me, storageWallet: up.storageWallet ?? "" });
       if (fee.state !== "sponsored" || !fee.txHash) throw new Error(t("Not stamped: {why}", { why: fee.text }));
       setBusy(t("Waiting for the fee to be mined…"));
@@ -189,8 +189,8 @@ export default function SignPanel(props: { hint?: string } = {}) {
             t("A signature proves that this wallet's two keys (Ed25519 and ML-DSA-44) signed these exact bytes. Not who holds the wallet, and not when."),
             t("The .sig.json contains the file itself: share it only where you would share the file."),
             t("A stamp puts a fee transaction on chain whose id is the first 128 bits of the .sig.json's SHA-256. With the .sig.json and the receipt, anyone can check it existed by that block."),
-            t("A stamp doesn't show who made the document (the demo's sponsor pays the fee), and it anchors a 128-bit prefix: two documents prepared in advance to share it (about 2^64 work) would share a stamp."),
-            t("Stamping stores the .sig.json, encrypted to you, on the demo node for 7 days; that is the file the fee pays for. The stamp stays on chain."),
+            t("A stamp doesn't show who made the document (the demo's sponsor covers the fee), and it anchors a 128-bit prefix: two documents prepared in advance to share it (about 2^64 work) would share a stamp."),
+            t("Stamping stores the .sig.json, encrypted to you, on the demo node for 7 days; that is the file the fee covers. The stamp stays on chain."),
             t("This is a testnet: the chain can be reset, and a stamp lasts only as long as the chain."),
           ]}
         />

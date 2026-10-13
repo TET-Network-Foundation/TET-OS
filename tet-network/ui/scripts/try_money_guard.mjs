@@ -8,6 +8,10 @@
 //
 // 1. No such wording in anything /try shows: its panels, the libraries it takes text from, and the
 //    ja / zh-HK dictionaries. Control: each kind of wording is caught.
+// 1b. No money words either (added 2026-10-13): "money", "pay"/"paid"/"payment", "coin(s)", "funds",
+//    お金 / 支払 / コイン, 金錢 / 付款 / 支付 / 硬幣. The only exceptions are the practice-unit
+//    phrases that say TET is not money ("can't be exchanged for money" and its translations).
+//    Control: the stevenexus.org lines that talked about sending money, coins and payments are caught.
 // 2. Where the landing plan exists, its FAQ carries the one sanctioned line, word for word:
 //    "Testnet TET is a practice unit. It has no monetary value and cannot be bought."
 //    Control: the line itself doesn't trip check 1; a plan without it is caught.
@@ -84,6 +88,65 @@ const files = [...panels.map((n) => [`app/try/${n}`, read(new URL(n, tryDir))]),
 await check(`no money wording in what /try shows (${files.length} files)`, () => {
   const found = moneyWording(files);
   assert.equal(found.length, 0, found.join("\n     "));
+});
+
+// 1b. Money words, in what /try and /agents show.
+export const MONEY_WORDS = /\bmoney\b|\bpay(?:s|ing|ment|ments|out|outs)?\b|\bpaid\b|\bcoins?\b|\bfunds?\b|お金|支払|コイン|金錢|付款|支付|硬幣/i;
+const NOT_MONEY = [
+  "can't be exchanged for money",
+  "お金とは交換できません",
+  "お金で手に入れることもできません",
+  "お金には換えられません",
+  "不能兌換成金錢",
+  "沒有金錢價值",
+  "無法用錢換取",
+];
+/** The text a file puts on the page: t("…") strings, dictionary entries, /agents text, and template
+ *  strings (libraries return their messages that way). Identifiers, state names and comments aren't. */
+function shownText(path, text) {
+  const out = [];
+  const lines = text.split("\n");
+  lines.forEach((line, i) => {
+    if (/^\s*(?:\/\/|\*|\/\*)/.test(line)) return;
+    const take = (re) => { for (const m of line.matchAll(re)) out.push([i + 1, m[1]]); };
+    take(/\bt\("((?:[^"\\]|\\.)*)"/g);
+    take(/`((?:[^`\\]|\\.)*)`/g);
+    if (/i18n_[a-z_]+\.ts$|agents_text\.ts$/.test(path)) take(/"((?:[^"\\]|\\.)*)"/g);
+  });
+  return out;
+}
+export function moneyWords(files) {
+  const found = [];
+  for (const [path, text] of files) {
+    for (const [n, str] of shownText(path, text)) {
+      let shown = str;
+      for (const p of NOT_MONEY) shown = shown.split(p).join("");
+      const m = MONEY_WORDS.exec(shown);
+      if (m) found.push(`${path}:${n}: "${m[0]}" in ${str.slice(0, 100)}`);
+    }
+  }
+  return found;
+}
+const agentsDir = new URL("app/agents/", UI);
+const agentFiles = existsSync(agentsDir) ? readdirSync(agentsDir).filter((n) => /\.tsx?$/.test(n)).map((n) => [`app/agents/${n}`, read(new URL(n, agentsDir))]) : [];
+await check(`no money words in what /try and /agents show (${files.length + agentFiles.length} files)`, () => {
+  const found = moneyWords([...files, ...agentFiles]);
+  assert.equal(found.length, 0, found.join("\n     "));
+});
+await check("control: the stevenexus.org money lines are caught; the practice-unit phrases aren't", () => {
+  for (const s of [
+    "with a small desktop on top where you send money, send messages and send files, all with one key.",
+    "- **Send coins.** Transfers go through consensus like any chain.",
+    "Most apps keep your messages, files and payment history on their servers",
+    "- **Computation you can check.** Pay other nodes to run AI models",
+    "seven that could move other people's money.",
+    "A second claim returns `already_claimed` and pays nothing.",
+    "デジタルのお金",
+    "費用由示範的贊助者支付",
+  ]) assert.equal(moneyWords([["x.tsx", `t("${s}")`]]).length, 1, s);
+  for (const s of ["{amount} TET (practice unit, can't be exchanged for money)", "練習用の単位。お金とは交換できません", "練習用單位，不能兌換成金錢", "沒有金錢價值"]) {
+    assert.equal(moneyWords([["x.tsx", `t("${s}")`]]).length, 0, s);
+  }
 });
 
 await check("control: each kind of money wording is caught; the FAQ line isn't", () => {

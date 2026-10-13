@@ -17,7 +17,7 @@ export default function TermsPanel() {
       <PanelHead title={t("Terms")} todo={t("Short rules for using this demo node.")} />
       <div className="max-w-[40rem] space-y-5 px-4 py-4 text-base leading-relaxed md:px-5">
         <ol className="list-decimal space-y-1.5 pl-5">
-          <li>{t("This is a testnet run by one person. The coins have no value and the chain can be reset. It comes with no warranty.")}</li>
+          <li>{t("This is a testnet run by one person. TET here is a practice unit with no value, and the chain can be reset. It comes with no warranty.")}</li>
           <li>{t("Don't post anything illegal.")}</li>
           <li>{t("Don't post copyrighted material you don't own or have the right to share.")}</li>
           <li>{t("The operator may hide any board, thread, post or file from this node's public API. Hiding never deletes chain data, and copies other nodes already hold stay on those nodes.")}</li>
