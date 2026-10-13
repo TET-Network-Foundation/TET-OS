@@ -14,6 +14,7 @@ pub mod network;
 pub mod operator;
 pub mod pages;
 pub mod sigs;
+pub mod grants;
 pub mod shelter;
 pub mod search;
 pub mod sites;

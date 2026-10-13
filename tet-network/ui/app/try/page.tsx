@@ -40,6 +40,7 @@ import InsidePanel from "./InsidePanel";
 import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
 import ShelterPanel from "./ShelterPanel";
+import GrantsBox from "./GrantsBox";
 import SearchPanel from "./SearchPanel";
 import { shelterOpen } from "../lib/shelter";
 import { formatTet } from "../lib/format_tet";
@@ -327,6 +328,7 @@ function CompactWallet() {
               <IdCard walletId={wallet.walletId} />
             </div>
           </div>
+          <GrantsBox />
         </div>
       ) : null}
     </>

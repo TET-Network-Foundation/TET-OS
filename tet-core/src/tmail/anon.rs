@@ -314,6 +314,11 @@ pub fn verify_anonymous_proof(
     }
 }
 
+/// [`decode_image_id_hex`] for other modules (the grants claim).
+pub fn decode_image_id_hex_pub(s: &str) -> Result<[u32; 8], ()> {
+    decode_image_id_hex(s)
+}
+
 /// `image_id_hex` is 8 little-endian `u32` words, 64 hex chars.
 fn decode_image_id_hex(s: &str) -> Result<[u32; 8], ()> {
     let bytes = hex::decode(s.trim()).map_err(|_| ())?;

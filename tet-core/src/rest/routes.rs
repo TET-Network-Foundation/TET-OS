@@ -319,6 +319,9 @@ pub fn build_router(state: RestState) -> axum::Router {
         )
         .route("/tmail/anon/fast/:receiver/:posting_key", axum::routing::get(super::handlers::tmail::get_tmail_anon_fast))
         // Shelter (tmail/shelter.rs): 404 while off; reads are signed, most members-only.
+        // Testnet practice grants (grants.rs): 404 while the payer is off.
+        .route("/grants/status", axum::routing::get(super::handlers::grants::get_grants_status))
+        .route("/grants/welcome", axum::routing::post(super::handlers::grants::post_grants_welcome))
         .route("/shelter/status", axum::routing::get(super::handlers::shelter::get_shelter_status))
         .route("/shelter/record", axum::routing::post(super::handlers::shelter::post_shelter_record))
         .route("/shelter/key", axum::routing::post(super::handlers::shelter::post_shelter_key))
