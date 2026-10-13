@@ -22,12 +22,13 @@ import { join } from "node:path";
 
 const UI = (process.env.TET_UI || "http://127.0.0.1:3400").replace(/\/+$/, "");
 const CHROME = process.env.CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const TABS = ["home", "how", "what", "inside", "new", "directory", "questions", "search", "verify", "sign", "genuine", "seal", "qr", "files", "site", "mail", "live", "about", "terms"];
+const TABS = ["home", "how", "what", "inside", "id", "new", "directory", "questions", "search", "verify", "sign", "genuine", "seal", "qr", "files", "site", "mail", "live", "about", "terms"];
 const ONLY = process.env.TET_LANG_ONLY;
 const ROUTES0 = [
   ...TABS.map((t) => ({ path: `/try?tab=${t}`, name: `try:${t}` })),
   { path: "/try?tab=verify#code=TET-AAAA-AAAA", name: "try:verify-code" },
   { path: "/whitepaper", name: "whitepaper" },
+  { path: "/agents", name: "agents" },
   { path: "/verify/tet-verify.html", name: "offline-verifier" },
 ];
 const ROUTES = ONLY ? ROUTES0.filter((r) => r.name === ONLY) : ROUTES0;

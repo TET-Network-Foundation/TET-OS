@@ -1092,4 +1092,13 @@ export const JA: Record<string, string> = {
   "The welcome airdrop is 1,000 TET (practice unit, can't be exchanged for money), once per wallet, for up to 10,000 wallets.": "ウェルカム・エアドロップは 1,000 TET（練習用の単位。お金とは交換できません）で、1つのウォレットにつき1回、最大 10,000 ウォレットまでです。",
   "your device clock is off: set it to the right time and try again": "端末の時計がずれています。正しい時刻に合わせてから、もう一度試してください。",
   "the UTC day changed while this anonymous post was on its way; send it again": "この匿名の書き込みを送っている間に UTC の日付が変わりました。もう一度送ってください。",
+  "My ID": "自分の ID",
+  "This tab's ID: copy it, show its QR code, keep it.": "このタブの ID：コピーする、QR コードを表示する、残す。",
+  "This tab has no ID yet.": "このタブにはまだ ID がありません。",
+  "Make my ID": "自分の ID を作る",
+  "This node is busy right now. Try again in a moment.": "このノードは今混み合っています。少し待ってから、もう一度試してください。",
+  "This node is busy right now. Shelter will load in a moment.": "このノードは今混み合っています。シェルターはまもなく表示されます。",
+  "Couldn't reach this node. Shelter will load when it answers.": "このノードにつながりませんでした。応答があればシェルターを表示します。",
+  "Try again": "もう一度試す",
+  "Agents": "エージェント",
 };

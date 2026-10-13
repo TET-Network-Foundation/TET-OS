@@ -27,7 +27,6 @@ import {
   shelterLog,
   shelterMe,
   shelterMembers,
-  shelterOpen,
   submitRecord,
   type ShelterCase,
   type ShelterLogLine,
@@ -37,6 +36,7 @@ import {
 import { qrSvgPath } from "../lib/tet_qr";
 import { Badge, Button, FOCUS, KeysBanner, MONO, PanelHead, cx, fmtDate, fmtWhen } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
+import { isBusyError, shelterState, type ShelterState } from "../lib/shelter_state";
 import { useLang } from "./i18n";
 
 /** The house rule was shown in this tab (memory only). */
@@ -68,7 +68,8 @@ export default function ShelterPanel(props: { active: boolean }) {
   useEffect(() => {
     if (props.active && wallet) void checkKeys();
   }, [props.active, wallet, checkKeys]);
-  const [open, setOpen] = useState<boolean | null>(null);
+  const [open, setOpen] = useState<ShelterState | null>(null);
+  const [statusTry, setStatusTry] = useState(0);
   const [me, setMe] = useState<ShelterMe | null>(null);
   const [board, setBoard] = useState<OpenBoard | null>(null);
   const [keyFrom, setKeyFrom] = useState("");
@@ -94,7 +95,7 @@ export default function ShelterPanel(props: { active: boolean }) {
   useEffect(() => {
     if (!props.active) return;
     let live = true;
-    void shelterOpen(BASE).then((o) => live && setOpen(o));
+    void shelterState(BASE).then((o) => live && setOpen(o));
     const tick = async () => {
       setNow(Date.now());
       if (wallet && (!me || !me.member)) await refreshMe();
@@ -106,7 +107,14 @@ export default function ShelterPanel(props: { active: boolean }) {
       clearTimeout(first);
       clearInterval(id);
     };
-  }, [props.active, wallet, me, refreshMe]);
+  }, [props.active, wallet, me, refreshMe, statusTry]);
+
+  // A busy (429) or unreachable node is temporary: ask again in a few seconds while the tab is open.
+  useEffect(() => {
+    if (!props.active || (open !== "busy" && open !== "unreachable")) return;
+    const id = setTimeout(() => setStatusTry((n) => n + 1), 5_000);
+    return () => clearTimeout(id);
+  }, [props.active, open]);
 
   // A member's board key: open it once.
   useEffect(() => {
@@ -170,14 +178,28 @@ export default function ShelterPanel(props: { active: boolean }) {
         {body}
         {err ? (
           <p role="alert" className="text-[14px] text-[#9a1c1c]">
-            {err}
+            {isBusyError(err) ? t("This node is busy right now. Try again in a moment.") : err}
           </p>
         ) : null}
       </div>
     </section>
   );
 
-  if (open === false) return wrap(<p className="text-[15px]">{t("Shelter isn't open on this node.")}</p>);
+  if (open === "closed") return wrap(<p className="text-[15px]">{t("Shelter isn't open on this node.")}</p>);
+  if (open === "busy" || open === "unreachable") {
+    return wrap(
+      <>
+        <p role="status" className="text-[15px]">
+          {open === "busy"
+            ? t("This node is busy right now. Shelter will load in a moment.")
+            : t("Couldn't reach this node. Shelter will load when it answers.")}
+        </p>
+        <Button kind="secondary" onClick={() => setStatusTry((n) => n + 1)}>
+          {t("Try again")}
+        </Button>
+      </>,
+    );
+  }
   if (open === null) return wrap(<p className="text-[15px] text-[#5d646d]">{t("Checking…")}</p>);
 
   // ── Not a member (or no ID yet): the join code ─────────────────────────────────────────────────

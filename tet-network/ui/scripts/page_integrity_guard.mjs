@@ -33,7 +33,7 @@ const directives = (csp) => Object.fromEntries(csp.split(";").map((d) => d.trim(
 
 await check("SECURITY: the public pages get a CSP that admits no other origin's scripts", async () => {
   const rules = await cfg.headers();
-  for (const page of ["/", "/try", "/whitepaper", "/verify/:path*"]) {
+  for (const page of ["/", "/try", "/whitepaper", "/agents", "/verify/:path*"]) {
     const r = rules.find((x) => x.source === page);
     assert.ok(r, `no headers for ${page}`);
     const csp = r.headers.find((h) => h.key === "Content-Security-Policy")?.value ?? "";

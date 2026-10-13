@@ -31,18 +31,22 @@ export function sameAsMarked(markedSha256: string, copy: Uint8Array): boolean {
   return hex(sha256(copy)) === markedSha256.toLowerCase();
 }
 
-function CheckCopy(props: { fileSha256: string; sample?: { url: string } }) {
+/** One "check your copy" for the whole list: the copy is compared with every verified record's fingerprint. */
+function CheckCopy(props: { marked: { code: string; fileSha256: string }[]; sample?: { url: string } }) {
   const { t } = useLang();
-  const [result, setResult] = useState<null | { ok: boolean; what: string }>(null);
+  const [result, setResult] = useState<null | { ok: boolean; what: string; codes: string[] }>(null);
   const [text, setText] = useState("");
-  const check = (bytes: Uint8Array, what: string) => setResult({ ok: sameAsMarked(props.fileSha256, bytes), what });
+  const check = (bytes: Uint8Array, what: string) => {
+    const codes = props.marked.filter((m) => sameAsMarked(m.fileSha256, bytes)).map((m) => m.code);
+    setResult({ ok: codes.length > 0, what, codes });
+  };
   const sample = async (change: boolean) => {
     const bytes = new Uint8Array(await (await fetch(props.sample!.url)).arrayBuffer());
     if (change) bytes[0] ^= 0x20; // change one letter's case: one byte
     check(bytes, change ? t("the sample with one letter changed") : t("the sample file"));
   };
   return (
-    <div className="mt-3 space-y-2 border-t border-[#eceef1] pt-3">
+    <div className="space-y-2 rounded-md border border-[#e3e5e8] p-3 text-[15px]">
       <p className="font-semibold">{t("Check your copy")}</p>
       <input type="file" aria-label={t("Your copy of the file")} onChange={async (e) => {
         const f = e.target.files?.[0];
@@ -69,6 +73,7 @@ function CheckCopy(props: { fileSha256: string; sample?: { url: string } }) {
         result.ok ? (
           <p role="status" className="rounded-md border border-[#1f5132] bg-[#e8f5ec] px-3 py-2 text-[15px] font-semibold text-[#1f5132]">
             ✓ {t("Matches: {what} is exactly the one that was marked.", { what: result.what })}
+            {props.marked.length > 1 ? <span className={cx(MONO, "ml-1 font-normal")}>({result.codes.join(", ")})</span> : null}
           </p>
         ) : (
           <p role="status" className="rounded-md border border-[#8a1f1f] bg-[#fbeaea] px-3 py-2 text-[15px] font-semibold text-[#8a1f1f]">
@@ -114,46 +119,60 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
         {props.byFile ? exact : null}
       </div>
     );
+  const marked = hits.filter((h) => h.verified).map((h) => ({ code: h.code, fileSha256: h.fileSha256 }));
+  const firstFile = hits.findIndex((x) => x.match === "file" && x.verified);
   return (
     <div className="space-y-3">
       <OfflineVerifier />
-      {hits.map((h, i) => (
-        <article key={i} className={cx("rounded-md border p-3 text-[15px]", h.verified ? "border-[#c9ced4]" : "border-[#8a1f1f]")}>
-          {h.verified ? (
-            <p className="text-[17px] font-semibold text-[#1f5132]">
-              ✓ {h.match === "file" ? (hits.findIndex((x) => x.match === "file" && x.verified) === i ? t("First marked as genuine") : t("Also marked later, by another ID")) : t("Marked as genuine")}
-            </p>
-          ) : (
-            <p className="text-[17px] font-semibold text-[#8a1f1f]">✗ {t("This record doesn't check out. Don't trust it.")}</p>
-          )}
-          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-            <dt className="text-[#5d646d]">{t("Who")}</dt>
-            <dd className="m-0">
-              {t("ID")}{" "}
-              {props.onId ? (
-                <button type="button" title={t("Everything this ID has marked")} className={cx(FOCUS, MONO, "rounded-sm underline underline-offset-2")} onClick={() => props.onId!(h.signerEd25519)}>
-                  {h.signerEd25519.slice(0, 8)}
-                </button>
-              ) : (
-                <span className={MONO}>{h.signerEd25519.slice(0, 8)}</span>
-              )}
-            </dd>
-            <dt className="text-[#5d646d]">{t("When")}</dt>
-            <dd className="m-0">{t("recorded on this node at {when}", { when: new Date(h.publishedAtMs).toLocaleString(locale) })}</dd>
-            <dt className="text-[#5d646d]">{t("What")}</dt>
-            <dd className={cx(MONO, "m-0 break-all text-[13px]")}>{t("fingerprint (SHA-256)")} {h.fileSha256}</dd>
-            <dt className="text-[#5d646d]">{t("Code")}</dt>
-            <dd className={cx(MONO, "m-0")}>{h.code}</dd>
-          </dl>
-          {h.verified ? <p className="mt-2 text-[13.5px] text-[#5d646d]">{t("This shows that this ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.")}</p> : <p className="mt-1 text-[13.5px]">{h.reason}</p>}
-          {h.verified ? <CheckCopy fileSha256={h.fileSha256} sample={props.sample} /> : null}
-          <p className="mt-2 text-[13px]">
-            <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2 text-[#5d646d]")} onClick={() => download(`${h.code}.proof.json`, h.recordBytes)}>
-              {t("Download the proof file")}
-            </button>
-          </p>
-        </article>
-      ))}
+      {marked.length ? <CheckCopy marked={marked} sample={props.sample} /> : null}
+      <ul className="divide-y divide-[#eceef1] rounded-md border border-[#c9ced4]">
+        {hits.map((h, i) => (
+          <li key={i} className={cx(!h.verified && "bg-[#fbeaea]")}>
+            <details className="group" open={hits.length === 1}>
+              {/* One line: verdict, code, short ID, date. The rest opens on click. */}
+              <summary className={cx(FOCUS, "flex cursor-pointer list-none flex-wrap items-baseline gap-x-3 gap-y-0.5 px-3 py-2 text-[15px]")}>
+                <span aria-hidden className={h.verified ? "text-[#1f5132]" : "text-[#8a1f1f]"}>{h.verified ? "✓" : "✗"}</span>
+                <span className={cx(MONO, "font-semibold")}>{h.code}</span>
+                <span className={cx(MONO, "text-[13.5px] text-[#5d646d]")}>{h.signerEd25519.slice(0, 8)}</span>
+                <span className="text-[13.5px] text-[#5d646d]">{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>
+                <span aria-hidden className="ml-auto text-[#5d646d] group-open:rotate-90">›</span>
+              </summary>
+              <div className="space-y-2 px-3 pb-3 text-[15px]">
+                {h.verified ? (
+                  <p className="font-semibold text-[#1f5132]">
+                    {h.match === "file" ? (firstFile === i ? t("First marked as genuine") : t("Also marked later, by another ID")) : t("Marked as genuine")}
+                  </p>
+                ) : (
+                  <p className="font-semibold text-[#8a1f1f]">{t("This record doesn't check out. Don't trust it.")}</p>
+                )}
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                  <dt className="text-[#5d646d]">{t("Who")}</dt>
+                  <dd className="m-0">
+                    {t("ID")}{" "}
+                    {props.onId ? (
+                      <button type="button" title={t("Everything this ID has marked")} className={cx(FOCUS, MONO, "rounded-sm underline underline-offset-2")} onClick={() => props.onId!(h.signerEd25519)}>
+                        {h.signerEd25519.slice(0, 8)}
+                      </button>
+                    ) : (
+                      <span className={MONO}>{h.signerEd25519.slice(0, 8)}</span>
+                    )}
+                  </dd>
+                  <dt className="text-[#5d646d]">{t("When")}</dt>
+                  <dd className="m-0">{t("recorded on this node at {when}", { when: new Date(h.publishedAtMs).toLocaleString(locale) })}</dd>
+                  <dt className="text-[#5d646d]">{t("What")}</dt>
+                  <dd className={cx(MONO, "m-0 break-all text-[13px]")}>{t("fingerprint (SHA-256)")} {h.fileSha256}</dd>
+                </dl>
+                {h.verified ? <p className="text-[13.5px] text-[#5d646d]">{t("This shows that this ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.")}</p> : <p className="text-[13.5px]">{h.reason}</p>}
+                <p className="text-[13px]">
+                  <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2 text-[#5d646d]")} onClick={() => download(`${h.code}.proof.json`, h.recordBytes)}>
+                    {t("Download the proof file")}
+                  </button>
+                </p>
+              </div>
+            </details>
+          </li>
+        ))}
+      </ul>
       {exact}
     </div>
   );
