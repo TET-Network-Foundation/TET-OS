@@ -78,6 +78,7 @@ struct StartupConfig {
     enable_p2p: bool,
     rest_bind: String,
     http_rps: u64,
+    http_rps_per_addr: u64,
     is_prod: bool,
     is_mainnet: bool,
 }
@@ -141,6 +142,12 @@ impl StartupConfig {
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(25)
             .max(1);
+        // Each client address's own limit under that ceiling (`HttpRateLimit`); default: the ceiling.
+        let http_rps_per_addr = std::env::var("TET_HTTP_RPS_PER_ADDR")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(http_rps)
+            .max(1);
         let treasury_address = match crate::ledger::treasury_address_from_env() {
             Ok(a) => a,
             Err(e) => {
@@ -157,6 +164,7 @@ impl StartupConfig {
             enable_p2p,
             rest_bind,
             http_rps,
+            http_rps_per_addr,
             is_prod,
             is_mainnet,
         }
@@ -717,7 +725,7 @@ async fn main() -> Result<(), AnyErr> {
         files_fetch_tx,
         tx_submit_tx,
         anon_register_tx,
-        http_ratelimit: Arc::new(tokio::sync::Mutex::new(HttpRateLimit::new(config.http_rps))),
+        http_ratelimit: Arc::new(tokio::sync::Mutex::new(HttpRateLimit::with_per_address(config.http_rps, config.http_rps_per_addr))),
         workers: Arc::new(StdMutex::new(WorkerRegistry::default())),
         e2ee_jobs: Arc::new(StdMutex::new(crate::rest::E2eeJobQueue::default())),
         genesis_1k_lock: Arc::new(tokio::sync::Mutex::new(())),

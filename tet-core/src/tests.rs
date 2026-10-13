@@ -13068,6 +13068,95 @@ async fn public_mode_rate_limit_fires_per_client() {
     assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "writes have their own, tighter limit");
 }
 
+/// **SECURITY REGRESSION GUARD: one address flooding can't make the node refuse another.** The node-wide
+/// limit is per address under a shared ceiling (`HttpRateLimit`). Address A sends 200 requests in one
+/// window, far past the ceiling of 25 and its own 25; address B's request in the same window is
+/// served. The window count is past the ceiling when B asks, so a shared-only counter would have
+/// refused B. Also: A is refused (the flood is limited), and with many addresses each light one is
+/// still served. Negative control (run by hand): `allow_at` returns `self.count <= self.max_per_sec`
+/// (the old shared-only counter) → FAILED at "B must still be served".
+#[test]
+fn http_limit_per_address_one_floods_the_other_is_served() {
+    let mut rl = crate::rest::HttpRateLimit::with_per_address(25, 25);
+    let now = std::time::Instant::now();
+    let mut a_served = 0;
+    for _ in 0..200 {
+        if rl.allow_at("198.51.100.1", now) {
+            a_served += 1;
+        }
+    }
+    assert_eq!(a_served, 25, "A gets its own 25 and no more");
+    assert!(rl.window_count() > 25, "the flood is past the shared ceiling");
+    assert!(rl.allow_at("198.51.100.2", now), "B must still be served");
+    for i in 0..10 {
+        let addr = format!("203.0.113.{i}");
+        assert!(rl.allow_at(&addr, now), "light address {addr} must still be served");
+    }
+    // The next window starts clean.
+    assert!(rl.allow_at("198.51.100.1", now + std::time::Duration::from_secs(1)));
+}
+
+/// The same through the router, in the demo's public mode: two clients behind Caddy (the right-most
+/// `X-Forwarded-For`), the public gate's own per-client burst set high so only the node-wide limit is
+/// tested. A floods; B is served, and A's refusals say the node is busy, not that a route is closed.
+/// Negative control (run by hand): the middleware keys every request as one client → FAILED.
+#[tokio::test]
+async fn http_limit_public_mode_flooding_client_does_not_starve_another() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _r = EnvVarGuard::set("TET_PUBLIC_READ_BURST", "1000");
+    let _guard = (
+        EnvVarGuard::set("TET_PUBLIC_API", "1"),
+        EnvVarGuard::set("TET_PUBLIC_TRUSTED_PROXIES", "172.30.77.0/24"),
+    );
+    let state = rest_state_for_tests(std::sync::Arc::new(open_temp_ledger()));
+    *state.http_ratelimit.lock().await = crate::rest::HttpRateLimit::with_per_address(10, 10);
+    let router = crate::rest::routes::build_router(state);
+    let mut refused = 0;
+    for _ in 0..60 {
+        let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.7")).await;
+        if s == StatusCode::TOO_MANY_REQUESTS {
+            refused += 1;
+        }
+    }
+    assert!(refused > 0, "A's flood must be limited");
+    let (s, _) = public_call_for_tests(&router, "GET", "/status", Some("198.51.100.8")).await;
+    assert_ne!(s, StatusCode::TOO_MANY_REQUESTS, "B must still be served");
+}
+
+/// Without public mode (a node's own REST), the address is the TCP peer: two peers, one flooding,
+/// the other served. Negative control (run by hand): the same as above → FAILED.
+#[tokio::test]
+async fn http_limit_private_mode_flooding_peer_does_not_starve_another() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _p = EnvVarGuard::set("TET_PUBLIC_API", "0");
+    let state = rest_state_for_tests(std::sync::Arc::new(open_temp_ledger()));
+    *state.http_ratelimit.lock().await = crate::rest::HttpRateLimit::with_per_address(10, 10);
+    let router = crate::rest::routes::build_router(state);
+    let call = |peer: &'static str| {
+        let router = router.clone();
+        async move {
+            let req = axum::http::Request::builder()
+                .uri("/status")
+                .extension(axum::extract::ConnectInfo(peer.parse::<std::net::SocketAddr>().unwrap()))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            router.oneshot(req).await.unwrap()
+        }
+    };
+    let mut last = None;
+    for _ in 0..60 {
+        last = Some(call("10.0.0.1:5000").await);
+    }
+    let last = last.unwrap();
+    assert_eq!(last.status(), StatusCode::TOO_MANY_REQUESTS, "A's flood must be limited");
+    let body = axum::body::to_bytes(last.into_body(), 4096).await.unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("busy"), "a refusal says the node is busy");
+    assert_ne!(call("10.0.0.2:5000").await.status(), StatusCode::TOO_MANY_REQUESTS, "B must still be served");
+}
+
 /// Public mode is opt-in: without `TET_PUBLIC_API` the router is unchanged (the seeds' behaviour).
 #[tokio::test]
 async fn public_mode_is_off_by_default() {

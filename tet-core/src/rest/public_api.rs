@@ -365,6 +365,8 @@ pub async fn public_api_gate(
         )
             .into_response();
     }
+    let mut req = req;
+    req.extensions_mut().insert(super::ClientKey(client.clone()));
     let day = crate::swarm_health::now_ms() / 86_400_000;
     // The page asks before a large upload, so a visitor sees how much is left instead of a refusal.
     if req.method() == Method::GET && req.uri().path() == "/files/upload-budget" {

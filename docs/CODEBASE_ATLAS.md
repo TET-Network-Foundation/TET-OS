@@ -503,7 +503,7 @@ Builds WASM ML-DSA-44 for browsers. UI loads via `pqc.ts`; tet-core uses native 
 
 **Source of truth:** `tet-core/src/rest/routes.rs` (bind address `TET_REST_BIND`, default `0.0.0.0:5010`).
 
-**Global middleware:** CORS (permissive), body limit 2MB, `global_http_ratelimit` (`TET_HTTP_RPS`).
+**Global middleware:** CORS (permissive), body limit 2MB, `global_http_ratelimit` (per client address, `TET_HTTP_RPS_PER_ADDR`, under a shared ceiling `TET_HTTP_RPS`; past the ceiling an address under its fair share is still served).
 
 ### 6.1 Phase 0 stability legend
 
@@ -571,7 +571,8 @@ See `tet-core/src/rest/routes.rs` for all **~115** bindings (including `/faucet`
 | `TET_ZK_COURT_CHALLENGE_MS` | dispute window | 24h default | tune |
 | `TET_SLASH_LAMBDA_MULTIPLIER` | telemetry λ | `100` | tune (not slash cap today) |
 | `TET_MLDSA_SECURITY_LEVEL` | `44`/`65`/`87` | `65` | `65` |
-| `TET_HTTP_RPS` | REST rate limit | configured | tune |
+| `TET_HTTP_RPS` | REST rate limit: shared ceiling | configured | tune |
+| `TET_HTTP_RPS_PER_ADDR` | REST rate limit: each client address | default = `TET_HTTP_RPS` | tune |
 | `TET_SYNC_*` | catch-up batching | see `sync.rs` | tune |
 
 **Full enumeration:** ripgrep `std::env::var` under `tet-core/src` (~80+ names). Source: unclear in current code for a single consolidated doc inside repo.

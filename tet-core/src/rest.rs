@@ -7,7 +7,7 @@ pub mod public_api;
 pub mod routes;
 
 pub use routes::serve;
-pub use state::{E2eeJobQueue, HttpRateLimit, RestState};
+pub use state::{ClientKey, E2eeJobQueue, HttpRateLimit, RestState};
 pub use types::*;
 
 // Pure module hub: all endpoint logic lives in `rest/handlers/*`,
