@@ -1,6 +1,7 @@
 "use client";
 
 /** /agents in the visitor's language (the same pick as /try: `?lang=`, the earlier choice, the browser). */
+import { useEffect } from "react";
 import { LangSwitch, useLang } from "../try/i18n";
 import { EN, JA, PLAN_URL, ZH, type Block } from "./agents_text";
 
@@ -20,6 +21,13 @@ function Body({ block }: { block: Block }) {
 export function AgentsView() {
   const { lang } = useLang();
   const T = lang === "ja" ? JA : lang === "zh-HK" ? ZH : EN;
+  // The tab's title in the visitor's language too (the metadata is English); again after Next sets it.
+  useEffect(() => {
+    const title = `${T.title} · TET`;
+    document.title = title;
+    const id = setTimeout(() => (document.title = title), 300);
+    return () => clearTimeout(id);
+  }, [T.title]);
   return (
     <main lang={lang === "en" ? "en" : lang} className="mx-auto max-w-3xl bg-white px-5 py-12 text-[16px] leading-relaxed text-[#1c1f23]">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3 text-[14px]">
