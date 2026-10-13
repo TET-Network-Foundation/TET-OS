@@ -6,7 +6,7 @@
 // Negative control (run by hand, recorded in the commit): <SafetyLines /> removed from the restore
 // screen → FAILED.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import assert from "node:assert/strict";
 
 const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
@@ -26,7 +26,10 @@ function check(name, fn) {
   }
 }
 const cont = read("../app/try/ContinueBlock.tsx");
-const page = read("../app/try/page.tsx");
+// Wherever the page offers to save the 12 words (the "My ID" tab today), wherever it moves.
+const SAVE = "Keep this ID? Save your passphrase (12 words)";
+const tryFiles = readdirSync(new URL("../app/try/", import.meta.url)).filter((f) => f.endsWith(".tsx"));
+const saveFiles = tryFiles.map((f) => [f, read(`../app/try/${f}`)]).filter(([, src]) => src.includes(`t(${JSON.stringify(SAVE)})`));
 const words = read("../app/lib/disposable_wallet.mjs");
 const model = read("../../../docs/THREAT_MODEL.md");
 const ja = read("../app/try/i18n_ja.ts");
@@ -42,8 +45,15 @@ check("they're on the restore screen and the remember-on-this-device screen", ()
   const remember = /showRemember \? \([\s\S]*?\) : \(/.exec(cont)?.[0] ?? "";
   assert.ok(remember.includes("<SafetyLines />"), "not on the remember screen");
 });
-check("the save-your-passphrase line says the first and third", () => {
-  for (const l of [LINES[0], LINES[2]]) assert.ok(page.includes(`t(${JSON.stringify(l)})`), `missing on the save line: ${l}`);
+function saveLinesSay(files) {
+  assert.ok(files.length >= 1, "no file offers to save the passphrase");
+  for (const [f, src] of files)
+    for (const l of [LINES[0], LINES[2]]) assert.ok(src.includes(`t(${JSON.stringify(l)})`), `${f}: missing on the save line: ${l}`);
+}
+check("the save-your-passphrase line says the first and third", () => saveLinesSay(saveFiles));
+check("control: a save line without one of them is caught", () => {
+  const cut = saveFiles.map(([f, src]) => [f, src.replace(`t(${JSON.stringify(LINES[2])})`, "")]);
+  assert.throws(() => saveLinesSay(cut), /missing on the save line/);
 });
 check("the saved words file says all three", () => {
   for (const l of LINES) assert.ok(words.includes(JSON.stringify(l)), `missing in the words file: ${l}`);
