@@ -245,6 +245,15 @@ Note what 2 and 3 have in common: the tempting option was the *convenient* one �
 simpler envelope — and the principle is what made the cost visible. Expect it to argue against
 convenience most of the time it applies.
 
+## Never stage a directory wholesale
+
+Stage the exact files a commit is about: `git add path/to/file …`. Never `git add -A <dir>`,
+`git add <dir>` or `git add .`, and before every commit read `git status --short` and check that
+nothing unexpected is staged. Working logs (run logs, notes, scratch) are gitignored, never just
+"left untracked": on 2026-10-10 a commit that staged all of `docs/` published a local working log
+that named an unfixed issue in deployed code. Vulnerability details live only in the private
+security repository; a public file names a fixed issue by class, after the fix is deployed.
+
 ## Devlog
 The public site repo is at ~/site (github.com/Nexus-Network-Foundation/site).
 At the end of every session where something shipped, was fixed, or was found:
