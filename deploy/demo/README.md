@@ -17,6 +17,12 @@ Design: [`docs/DEMO_NODE.md`](../../docs/DEMO_NODE.md). Needs tet-core with publ
 - **DNS:** create `A` and `AAAA` records for the demo name (e.g. `try.<your domain>`) pointing at the
   server, **before** provisioning, so Caddy can get its certificate.
 
+- **Cloud config (optional):** `deploy/demo/cloud-config.yaml` enables `ssh.socket` on 22 and
+  8443 and adds **no** firewall rules. Don't put nftables/iptables reject rules in a cloud-config:
+  a reject answers with a reset, which looks from outside like sshd isn't listening.
+  `provision-seed.sh` also sets the SSH ports (`TET_SSH_EXTRA_PORTS`, 8443 by default on the demo),
+  checks they listen, and warns about reject rules outside ufw.
+
 ## 2. healthchecks.io
 
 A new check, `tet-demo`:

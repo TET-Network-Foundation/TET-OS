@@ -2400,12 +2400,14 @@ async fn invalid_zk_receipt_is_rejected_by_consensus_mining() {
     let state = rest_state_for_tests(ledger.clone());
     state.mempool.lock().await.push(env);
 
-    let res = crate::consensus::mine_pending_block_as(state, "producer-zk".to_string()).await;
-    assert!(matches!(
-        res,
-        Err(crate::consensus::MineError::Unauthorized(_))
-    ));
-    assert_eq!(ledger.block_height().unwrap(), 0);
+    // Consensus refuses the receipt: the block is made without it (one bad transaction no longer
+    // fails the whole block, SECURITY.md 2026-10-10), it pays no compute reward, and it is dropped.
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-zk".to_string())
+        .await
+        .unwrap();
+    assert_eq!(outcome.tx_count, 0, "the invalid receipt is not in the block");
+    assert_eq!(outcome.reward.compute_reward_micro, 0, "no compute reward for an invalid receipt");
+    assert!(state.mempool.lock().await.is_empty(), "the invalid receipt is dropped");
 }
 
 #[tokio::test]
@@ -2604,12 +2606,17 @@ async fn zk_task_race_loser_is_rejected_after_winner_processed() {
     assert!(outcome.mined);
     assert!(ledger.ai_workload_is_processed(task_id).unwrap());
 
+    // The loser is refused: the next block is made without it, pays it nothing, and drops it
+    // (one bad transaction no longer fails the whole block, SECURITY.md 2026-10-10).
+    let loser_hash = crate::consensus::tx_hash_for_env(&loser).unwrap();
     state.mempool.lock().await.push(loser);
-    let res = crate::consensus::mine_pending_block_as(state, "producer-race".to_string()).await;
-    assert!(matches!(
-        res,
-        Err(crate::consensus::MineError::Unauthorized(_))
-    ));
+    let outcome2 = crate::consensus::mine_pending_block_as(state.clone(), "producer-race".to_string())
+        .await
+        .unwrap();
+    assert_eq!(outcome2.tx_count, 0, "the losing claim is not in the block");
+    assert_eq!(outcome2.reward.compute_reward_micro, 0);
+    assert!(!ledger.is_tx_applied(&loser_hash).unwrap_or(false));
+    assert!(state.mempool.lock().await.is_empty());
 }
 
 #[test]
@@ -3551,8 +3558,12 @@ async fn mempool_limit_evicts_lowest_fee_tx() {
         std::env::set_var("TET_MEMPOOL_MAX_BYTES", "1048576");
     }
     let ledger = std::sync::Arc::new(open_temp_ledger());
-    let state = rest_state_for_tests(ledger);
     let alice = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // Admission refuses transfers the sender can't cover, so alice has funds.
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    ledger.admin_rest_faucet(alice, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let state = rest_state_for_tests(ledger);
     let bob = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let make_env = |fee_bps| crate::protocol::SignedTxEnvelopeV1 {
         v: 1,
@@ -3574,14 +3585,15 @@ async fn mempool_limit_evicts_lowest_fee_tx() {
         },
     };
 
-    assert!(!state.submit_local_tx(make_env(1)).await.unwrap());
-    assert!(state.submit_local_tx(make_env(100)).await.unwrap());
+    // Two rates inside the consensus range (an out-of-range one is refused at admission).
+    assert!(!state.submit_local_tx(make_env(100)).await.unwrap());
+    assert!(state.submit_local_tx(make_env(1000)).await.unwrap());
     let mp = state.mempool.lock().await;
     assert_eq!(mp.len(), 1);
     let crate::protocol::TxV1::Transfer { fee_bps, .. } = mp[0].tx else {
         panic!("expected transfer");
     };
-    assert_eq!(fee_bps, 100);
+    assert_eq!(fee_bps, 1000);
 
     unsafe {
         std::env::remove_var("TET_MEMPOOL_MAX_TXS");
@@ -15966,7 +15978,7 @@ fn shelter_member_numbers_come_from_the_log_and_are_unique() {
     assert_eq!(all.len(), st.members.len(), "two members share a number");
 }
 
-// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-11) ----------
+// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-10) ----------
 
 const UI_KEY_REGISTRATION_V2: &str = include_str!("testdata/ui_key_registration_v2.json");
 
@@ -16288,4 +16300,318 @@ async fn genesis_bridge_cannot_write_balances_outside_a_block() {
     assert_eq!(ledger.balance_micro(&f_id).unwrap(), founder_before);
     assert!(state.mempool.lock().await.is_empty());
     assert_eq!(ledger.compute_state_root().unwrap(), root);
+}
+
+// ---- one bad transaction can't drop the mempool (SECURITY.md 2026-10-10) ------------------------
+
+fn transfer_with_fee_bps_for_tests(words: &str, from: &str, to: &str, amount_micro: u64, fee_bps: u64) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::Transfer { from_wallet: from.to_string(), to_wallet: to.to_string(), amount_micro, fee_bps };
+    signed_env_for_tests(tx, words, from)
+}
+
+/// Gossip and local submission refuse a transfer no block could accept (a fee rate outside the
+/// consensus range), and still admit a valid one.
+#[tokio::test]
+async fn mempool_admission_refuses_a_transfer_no_block_accepts() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    let to = "ab".repeat(32);
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    ledger.admin_rest_faucet(&id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+
+    let bad = transfer_with_fee_bps_for_tests(&words, &id, &to, crate::ledger::STEVEMON, 0);
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, bad.clone()).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "gossip admitted fee_bps 0: {out:?}");
+    assert!(state.submit_local_tx(bad).await.is_err(), "local submission admitted fee_bps 0");
+    assert!(state.mempool.lock().await.is_empty());
+
+    // An overdraft (a wallet with nothing) is refused at admission too, on both paths.
+    let p = crate::wallet::generate_mnemonic_12().unwrap();
+    let p_words = p.mnemonic_12.clone().unwrap();
+    let p_id = p.address_hex.to_ascii_lowercase();
+    let overdraft = transfer_with_fee_bps_for_tests(&p_words, &p_id, &to, crate::ledger::STEVEMON, 100);
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, overdraft.clone()).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "gossip admitted an overdraft: {out:?}");
+    assert!(state.submit_local_tx(overdraft).await.is_err(), "local submission admitted an overdraft");
+
+    let good = transfer_with_fee_bps_for_tests(&words, &id, &to, crate::ledger::STEVEMON, 100);
+    assert!(state.submit_local_tx(good).await.is_ok());
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+/// A mempool holding transactions a block would refuse (forced past admission: an out-of-range
+/// fee rate, and an overdraft that admission can't see) still gives a block with every valid
+/// transaction, and drops only the bad ones. Negative control (run by hand): with
+/// `select_block_txs` returning its input unchanged, the block fails and the valid transfer is
+/// lost → this test FAILS.
+#[tokio::test]
+async fn one_bad_transaction_does_not_drop_the_others() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let a = crate::wallet::generate_mnemonic_12().unwrap();
+    let a_words = a.mnemonic_12.clone().unwrap();
+    let a_id = a.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&a_id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let poor = crate::wallet::generate_mnemonic_12().unwrap();
+    let poor_words = poor.mnemonic_12.clone().unwrap();
+    let poor_id = poor.address_hex.to_ascii_lowercase();
+    let to = "cd".repeat(32);
+
+    let bad_fee = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, crate::ledger::STEVEMON, 0);
+    let overdraft = transfer_with_fee_bps_for_tests(&poor_words, &poor_id, &to, crate::ledger::STEVEMON, 100);
+    let good = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, 2 * crate::ledger::STEVEMON, 100);
+    let good_hash = crate::consensus::tx_hash_for_env(&good).unwrap();
+    {
+        let mut mp = state.mempool.lock().await;
+        mp.push(bad_fee);
+        mp.push(overdraft);
+        mp.push(good);
+    }
+
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+        .await
+        .expect("the block must still be made");
+    assert!(outcome.mined);
+    assert_eq!(outcome.tx_hashes, vec![good_hash], "only the valid transfer is in the block");
+    assert!(ledger.balance_micro(&to).unwrap() > 0, "the valid transfer settled");
+    assert!(state.mempool.lock().await.is_empty(), "the bad ones are dropped, not kept forever");
+}
+
+/// Admission counts the sender's pending transfers: a second transfer that would only fit if the
+/// first didn't exist (a double-spend) is refused, on both paths.
+#[tokio::test]
+async fn mempool_admission_refuses_a_double_spend() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 3 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let first = transfer_with_fee_bps_for_tests(&words, &id, &"ab".repeat(32), 2 * crate::ledger::STEVEMON, 100);
+    let second = transfer_with_fee_bps_for_tests(&words, &id, &"cd".repeat(32), 2 * crate::ledger::STEVEMON, 100);
+    assert!(state.submit_local_tx(first).await.is_ok());
+    assert!(state.submit_local_tx(second.clone()).await.is_err(), "a double-spend was admitted locally");
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, second).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "a double-spend was admitted by gossip: {out:?}");
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+/// Bad transactions filling the one-by-one budget can't keep a valid one out for good: it is
+/// deferred, and lands in a following block even as more bad ones arrive.
+#[tokio::test]
+async fn deferred_transactions_land_in_the_next_block() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let a = crate::wallet::generate_mnemonic_12().unwrap();
+    let a_words = a.mnemonic_12.clone().unwrap();
+    let a_id = a.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&a_id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let poor = crate::wallet::generate_mnemonic_12().unwrap();
+    let poor_words = poor.mnemonic_12.clone().unwrap();
+    let poor_id = poor.address_hex.to_ascii_lowercase();
+    let to = "ef".repeat(32);
+    let n = crate::consensus::SELECT_ONE_BY_ONE_MAX;
+    let bad = |i: u64| transfer_with_fee_bps_for_tests(&poor_words, &poor_id, &to, crate::ledger::STEVEMON + i, 100);
+    let good = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, crate::ledger::STEVEMON, 100);
+    let good_hash = crate::consensus::tx_hash_for_env(&good).unwrap();
+    {
+        let mut mp = state.mempool.lock().await;
+        for i in 0..n as u64 {
+            mp.push(bad(i));
+        }
+        mp.push(good);
+    }
+    let b1 = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert_eq!(b1.tx_count, 0, "the budget went to the bad ones");
+    // More bad ones arrive before the next block.
+    {
+        let mut mp = state.mempool.lock().await;
+        for i in n as u64..(2 * n) as u64 {
+            mp.push(bad(i));
+        }
+    }
+    let b2 = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert!(b2.tx_hashes.contains(&good_hash), "the deferred valid transfer must land next");
+}
+
+/// Deferred transactions go back AHEAD of whatever arrived while the block was being made, so a
+/// backlog always advances. Control (run by hand): appending them at the back → this test FAILS.
+#[tokio::test]
+async fn deferred_transactions_go_back_in_front_of_newcomers() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    let newcomer = transfer_with_fee_bps_for_tests(&words, &id, &"ab".repeat(32), 1, 100);
+    let deferred = transfer_with_fee_bps_for_tests(&words, &id, &"cd".repeat(32), 2, 100);
+    let deferred_hash = crate::consensus::tx_hash_for_env(&deferred).unwrap();
+    state.mempool.lock().await.push(newcomer);
+    crate::consensus::requeue_txs_front(&state, vec![deferred]).await;
+    let mp = state.mempool.lock().await;
+    assert_eq!(mp.len(), 2);
+    assert_eq!(crate::consensus::tx_hash_for_env(&mp[0]).unwrap(), deferred_hash, "the deferred one must be first");
+}
+
+/// A failed block's transactions go back when nothing was written; a batch of more than one is
+/// never dropped (blocks then carry one at a time, isolating the failing one), and a single
+/// transaction is dropped only after failing alone PRE_APPLY_REQUEUE_MAX times; a storage error
+/// that may have written part of a block never requeues. Controls (run by hand): dropping a
+/// multi-transaction batch after the limit, or requeueing after a partial write → FAILS.
+#[test]
+fn failed_blocks_isolate_the_failing_transaction() {
+    use crate::consensus::{after_failure, AfterFailure, PRE_APPLY_REQUEUE_MAX};
+    assert_eq!(after_failure(true, 1, 5), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX + 10, 5), AfterFailure::Requeue, "honest transactions in a failing batch are never dropped");
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX - 1, 1), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX, 1), AfterFailure::Drop, "the one that keeps failing alone is dropped");
+    assert_eq!(after_failure(false, 1, 5), AfterFailure::Drop, "a maybe-partial write never requeues");
+}
+
+/// Two transfers that together overdraw, submitted at the same moment, can't both be admitted:
+/// the balance check runs under the same mempool lock as the insert.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_double_spend_admits_at_most_one() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 3 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let mut envs = Vec::new();
+    for i in 0..8u8 {
+        envs.push(transfer_with_fee_bps_for_tests(&words, &id, &format!("{:02x}", i).repeat(32), 2 * crate::ledger::STEVEMON, 100));
+    }
+    let mut handles = Vec::new();
+    for (i, env) in envs.into_iter().enumerate() {
+        let st = state.clone();
+        let l = ledger.clone();
+        handles.push(tokio::spawn(async move {
+            if i % 2 == 0 { st.submit_local_tx(env).await.is_ok() } else {
+                matches!(crate::p2p::handle_tx_broadcast(&l, &st.mempool, env).await, crate::p2p::TxGossipOutcome::Enqueued { .. })
+            }
+        }));
+    }
+    let mut admitted = 0;
+    for h in handles {
+        if h.await.unwrap() { admitted += 1; }
+    }
+    assert_eq!(admitted, 1, "exactly one of the overdrawing transfers may be admitted");
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+// ---- Tmail sent_at_ms is held to the node's clock (SECURITY.md 2026-10-11) ---------------------
+
+#[test]
+fn sent_at_window_is_five_minutes_and_anonymous_posts_stay_in_their_utc_day() {
+    use crate::tmail::envelope::{check_sent_at, SentAtRefusal, SENT_AT_SKEW_MS};
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    let mut named = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-1", tmail_flags_for_tests(false), None);
+    let now = 1_791_700_000_000u64;
+    named.sent_at_ms = now - SENT_AT_SKEW_MS;
+    assert_eq!(check_sent_at(&named, now), Ok(()), "exactly 5 minutes behind is accepted");
+    named.sent_at_ms = now + SENT_AT_SKEW_MS;
+    assert_eq!(check_sent_at(&named, now), Ok(()), "exactly 5 minutes ahead is accepted");
+    named.sent_at_ms = now - SENT_AT_SKEW_MS - 1;
+    assert_eq!(check_sent_at(&named, now), Err(SentAtRefusal::ClockOff));
+    named.sent_at_ms = now + SENT_AT_SKEW_MS + 1;
+    assert_eq!(check_sent_at(&named, now), Err(SentAtRefusal::ClockOff));
+
+    // The UTC day boundary: dated 2 s before midnight.
+    let midnight = (now / 86_400_000 + 1) * 86_400_000;
+    let mut anon = named.clone();
+    anon.flags.anonymous = true;
+    anon.sent_at_ms = midnight - 2_000;
+    assert_eq!(check_sent_at(&anon, midnight - 1_000), Ok(()), "arrives before midnight: accepted");
+    assert_eq!(check_sent_at(&anon, midnight + 1_000), Err(SentAtRefusal::AnonDayChanged), "arrives after midnight: refused");
+    // Dated just after midnight by a clock a little ahead, arriving just before: also another day.
+    anon.sent_at_ms = midnight + 2_000;
+    assert_eq!(check_sent_at(&anon, midnight - 1_000), Err(SentAtRefusal::AnonDayChanged));
+    // A named post across midnight is fine (no daily ID).
+    named.sent_at_ms = midnight - 2_000;
+    assert_eq!(check_sent_at(&named, midnight + 1_000), Ok(()));
+}
+
+/// Through the real send handler: a post with a clock 10 minutes off is refused with the plain
+/// message and not stored; an anonymous post dated before midnight arriving after it is refused
+/// cleanly and not stored, while the same post arriving before midnight is not refused for its
+/// time. Controls (run by hand): without the check in the handler → FAILS.
+#[tokio::test]
+async fn send_refuses_posts_dated_off_the_node_clock_and_stores_nothing() {
+    let _g = env_lock();
+    set_test_env_base();
+    let node = TmailNode::new();
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    let body = |r: axum::response::Response| async move {
+        let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        String::from_utf8_lossy(&b).to_string()
+    };
+
+    let mut env = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-2", tmail_flags_for_tests(false), None);
+    env.sent_at_ms -= 10 * 60_000;
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(env)).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert!(body(r).await.contains("your device clock is off"));
+    assert_eq!(node.inbox_len(&receiver), 0, "nothing stored");
+
+    let midnight = (tmail_now_ms_for_tests() / 86_400_000 + 1) * 86_400_000;
+    let mut anon = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-3", tmail_flags_for_tests(false), None);
+    anon.flags.anonymous = true;
+    anon.sent_at_ms = midnight - 2_000;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(Some(midnight + 1_000));
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(anon.clone())).await;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(None);
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert!(body(r).await.contains("the UTC day changed"), "a clean refusal, with the reason");
+    assert_eq!(node.inbox_len(&receiver), 0, "not stored");
+
+    crate::tmail::envelope::set_sent_at_clock_for_tests(Some(midnight - 1_000));
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(anon)).await;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(None);
+    let text = body(r).await;
+    assert!(!text.contains("clock") && !text.contains("UTC day"), "before midnight it is not refused for its time: {text}");
+}
+
+/// Gossip ingest applies the same rule: a peer can't plant a backdated or future-dated envelope.
+#[test]
+fn gossip_refuses_envelopes_dated_off_the_node_clock() {
+    let _g = env_lock();
+    set_test_env_base();
+    let node = TmailNode::new();
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    for (id, shift) in [("clock-g1", -(10 * 60_000i64)), ("clock-g2", 10 * 60_000)] {
+        let mut env = signed_tmail_env_for_tests(&words, &sender, &receiver, id, tmail_flags_for_tests(false), None);
+        env.sent_at_ms = (env.sent_at_ms as i64 + shift) as u64;
+        let out = node.receive_gossip(&tmail_wire_envelope(&env));
+        assert!(matches!(out, crate::p2p::TmailGossipOutcome::Rejected { ref reason } if reason.starts_with("time:")), "{id}: {out:?}");
+    }
+    assert_eq!(node.inbox_len(&receiver), 0);
 }

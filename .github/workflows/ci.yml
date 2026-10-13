@@ -469,7 +469,7 @@ jobs:
         name: try page — a page signature verifies and a stamp anchors only its own .sig.json
         run: node --experimental-strip-types scripts/try_sign_guard.mjs
       # The page checks keys and senders itself: a node that swaps a key, a key signed by another
-      # wallet, an older (unsigned) key and a forged sender are all refused (SECURITY.md 2026-10-11).
+      # wallet, an older (unsigned) key and a forged sender are all refused (SECURITY.md 2026-10-10).
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
@@ -516,6 +516,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: verify without TET — offline, deterministic, no network
         run: node --experimental-strip-types scripts/offline_verify_guard.mjs
+      # The node's clock refusals ("your device clock is off", the UTC day changed) are shown plainly
+      # and translated word for word.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the node's clock refusals are translated
+        run: node --experimental-strip-types scripts/node_messages_guard.mjs
 
       # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
       # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in
@@ -807,6 +812,12 @@ jobs:
         name: operator-hide.sh refuses incomplete commands
         run: bash deploy/tests/operator-hide.test.sh
 
+      # SSH listeners: every port on IPv4 and IPv6, ssh.socket enabled, IPv4 checked, no firewall
+      # rules in the provisioning script or the demo cloud-config. Controls included.
+      - if: needs.gate.outputs.code == 'true'
+        name: provisioning keeps SSH on IPv4 and IPv6
+        run: bash deploy/tests/provision-ssh.test.sh
+
       # seed-liveness.yml's verdict on healthchecks.io's status: every check "up", at least two,
       # and a malformed or empty answer is a failure, never a pass.
       - if: needs.gate.outputs.code == 'true'
@@ -919,6 +930,14 @@ jobs:
             }
             echo "ok  tet-agent-sdk/vendor/$f  $(shasum -a 256 "tet-agent-sdk/vendor/$f" | cut -c1-12)"
           done
+          # The committed signer must not carry the build machine's home directory (rustc embeds
+          # source paths in panic messages). Rebuild it with
+          #   RUSTFLAGS="--remap-path-prefix=$HOME=/build --remap-path-prefix=$PWD=/src" wasm-pack build tet-pqc-wasm --target web
+          # Control (2026-10-10): the previous signer, which named a home directory, fails this.
+          if LC_ALL=C grep -aoE '/(Users|home)/[A-Za-z0-9._-]+/' tet-agent-sdk/vendor/tet_pqc_wasm_bg.wasm | head -3 | grep .; then
+            echo "::error::tet-agent-sdk/vendor/tet_pqc_wasm_bg.wasm names a home directory; rebuild it with --remap-path-prefix (above)"
+            exit 1
+          fi
 
       - if: needs.gate.outputs.code == 'true'
         name: The committed signer reproduces the interop fixture

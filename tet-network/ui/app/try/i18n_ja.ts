@@ -1069,4 +1069,6 @@ export const JA: Record<string, string> = {
   "TET testnet ({id})": "TET テストネット ({id})",
   "The founder allocation is locked until 2027-09-22: a one-year cliff from this testnet's genesis on 2026-09-22.": "創業者の割り当ては 2027-09-22 までロックされています。このテストネットのジェネシス（2026-09-22）から1年間のクリフです。",
   "The welcome airdrop is 1,000 TET (practice unit, can't be exchanged for money), once per wallet, for up to 10,000 wallets.": "ウェルカム・エアドロップは 1,000 TET（練習用の単位。お金とは交換できません）で、1つのウォレットにつき1回、最大 10,000 ウォレットまでです。",
+  "your device clock is off: set it to the right time and try again": "端末の時計がずれています。正しい時刻に合わせてから、もう一度試してください。",
+  "the UTC day changed while this anonymous post was on its way; send it again": "この匿名の書き込みを送っている間に UTC の日付が変わりました。もう一度送ってください。",
 };

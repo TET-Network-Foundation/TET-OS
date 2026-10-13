@@ -1,0 +1,25 @@
+#cloud-config
+# Optional cloud-config for the demo host (Hetzner: "Cloud config" when creating the server).
+# Deliberately NO firewall rules: no nftables/iptables, no reject rules. The Hetzner cloud firewall
+# and the ufw rules deploy/provision-seed.sh writes are the only filters; a reject rule here answers
+# connections with a reset, which looks from outside like sshd isn't listening.
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+write_files:
+  # SSH on 22 and 8443 (some networks block outbound 22), IPv4 and IPv6 explicitly.
+  - path: /etc/systemd/system/ssh.socket.d/tet-ports.conf
+    content: |
+      [Socket]
+      ListenStream=
+      ListenStream=0.0.0.0:22
+      ListenStream=[::]:22
+      ListenStream=0.0.0.0:8443
+      ListenStream=[::]:8443
+      BindIPv6Only=ipv6-only
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable ssh.socket
+  - systemctl restart ssh.socket
+  - ss -ltn | grep -E ':(22|8443) ' > /var/log/tet-ssh-ports.txt
