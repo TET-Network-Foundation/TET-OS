@@ -251,7 +251,7 @@ Every stack PR currently conflicts with `main`, because main gained #115 and #12
 2. **The independent small PRs:** #103, #124, #117, #112, #116, #109, #123, #128, #129.
 3. **#118** (the signer).
 4. **#127:**
-   - first #131 (libp2p page and probe), #132 (chain label, FAQ lines) and #133 (genesis_bridge removal) merge into its branch: they're stacked on it;
+   - first #131 (libp2p page and probe), #132 (chain label, FAQ lines), #133 (genesis_bridge removal) and #138 (the zh-HK paper draft) merge into its branch: they're stacked on it;
    - I merge main into its branch with exactly the resolutions in `review-all`;
    - I rebuild the offline verifier on #118's signer and re-mark it with the publisher key (new proof codes, not yet published);
    - when CI is green, it gets a merge commit.
@@ -294,7 +294,7 @@ Each merge goes through only with green CI. After step 6, `main` has the same tr
 - on my machine: the full Rust tests and every guard on that commit, and the Docker images built;
 - on each host: record the height, state root, commit and `docker image ls` (the rollback target is `404bd86`).
 
-**For each host, in this order: Helsinki, then Nuremberg, then the demo.** Each one is deployed with the `.env`-safe update in `docs/RUNNING_A_NODE.md` ("Updating a running seed"), and the health check is reinstalled. Then I check:
+**For each host, in this order: Helsinki, then Nuremberg, then the demo.** Each one is deployed with the `.env`-safe update in `docs/RUNNING_A_NODE.md` ("Updating a running seed"), and the health check is reinstalled, and `tet-logseal accept` is run on each seed right after its deploy (the log seal, #137, would otherwise alert on the new binary and image). Then I check:
 
 1. **`/status/live`** shows the new commit and an advancing height.
    - Helsinki waits its 120 s solo-producer grace before mining again. **If it isn't mining 5 minutes after the restart, I roll it back.**
