@@ -1066,4 +1066,7 @@ export const ZH_HK: Record<string, string> = {
   "only vouched members can publish to TetSearch: keys without a human vouch can't publish": "只有獲引薦的成員才能在 TetSearch 發佈：沒有真人引薦的金鑰不能發佈",
   "members only: TetSearch results are for vouched members": "僅限成員：TetSearch 的結果供獲引薦的成員使用",
   "TetSearch is not open on this node (it needs Shelter)": "這個節點沒有開放 TetSearch（需要 Shelter）",
+  "TET testnet ({id})": "TET 測試網（{id}）",
+  "The founder allocation is locked until 2027-09-22: a one-year cliff from this testnet's genesis on 2026-09-22.": "創辦人的分配鎖定至 2027-09-22：由這個測試網的創世（2026-09-22）起計一年的懸崖期。",
+  "The welcome airdrop is 1,000 TET (practice unit, can't be exchanged for money), once per wallet, for up to 10,000 wallets.": "歡迎空投為 1,000 TET（練習用單位，不能兌換成金錢），每個錢包一次，最多 10,000 個錢包。",
 };

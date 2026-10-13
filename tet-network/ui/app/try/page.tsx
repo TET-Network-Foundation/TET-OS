@@ -188,7 +188,9 @@ function NodeFacts(props: { node: ReturnType<typeof useNode> }) {
     <>
       <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This node")}</h2>
       <dl className="mb-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        {row(t("chain"), chain?.chainId ?? "…")}
+        {/* The live testnet's chain id is "tet-local-dev" (it's in every signature, so it changes only
+            with a new genesis); the page names it plainly and keeps the id visible. */}
+        {row(t("chain"), chain ? t("TET testnet ({id})", { id: chain.chainId }) : "…")}
         {row(t("genesis"), chain ? `${chain.genesis.slice(0, 14)}…` : "…")}
         {row(t("height"), down ? <span className={INK.bad}>{t("not answering")}</span> : <span className="tabular-nums">{height?.toLocaleString() ?? "…"}</span>)}
         {row(t("api"), BASE)}

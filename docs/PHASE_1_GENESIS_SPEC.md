@@ -444,6 +444,21 @@ ignoring the rest — so enqueueing an unhandled variant does not silently drop 
 every node reject the whole block. An earlier draft of this section claimed two of these paths were
 cheap sprint wins "because the variants already exist"; that was derived from the enum and the
 signing path without reading the apply path, and it was wrong in both cases.
+### 2.6 Block rewards go to an unspendable label
+
+The producer is configured as `TET_VALIDATOR_IDS=local-wallet`, and block rewards are credited to the
+producer id as given. So on the live testnet they accrue to a ledger entry literally named
+`local-wallet` (13,768.7 TET (practice unit, can't be exchanged for money) on 2026-10-12, growing
+with every block). It is not a 64-hex wallet, no key controls it, and a transfer must be signed by
+the wallet it moves funds from, so **these rewards can never be spent**. Nothing is lost that
+matters on a testnet, but a mainnet genesis must not repeat it.
+
+At the ceremony:
+- **A producer id must be a real wallet** (64-hex Ed25519 public key): the node refuses to start
+  as a producer otherwise, and block validation refuses a block whose producer id isn't one.
+- **Rewards go to that wallet,** so the operator holds them with the producer's own key.
+- **What already sits on `local-wallet` stays where it is:** this chain ends at the new genesis.
+
 ## 3. Fixed before Phase 1 — do not redo
 
 Recorded so the ceremony checklist does not re-litigate them.
