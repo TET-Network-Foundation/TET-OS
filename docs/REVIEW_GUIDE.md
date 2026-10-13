@@ -226,7 +226,7 @@ Nothing here is merged or deployed unless it says so. I merge only after you say
 **#130: CI refuses duplicate keys in workflow files.** A separate workflow, so it runs even when `ci.yml` is broken.
 - **Click:** nothing.
 
-**Japanese terms (settled 2026-10-11):** vouch is 推薦 (保証 reads as a money guarantee), the 12 words are パスフレーズ, and the anonymity set is 匿名グループ. グループ isn't used for anything in Shelter; its only other use is the paper's Sign in with TET line 「グループ X のメンバー」, which means the same kind of member set. The two agent-manifest lines ("the owner vouched for the key") now say 認めた, because 推薦 reads oddly for a key. `ja_terms_guard` keeps all of this in CI.
+**Japanese terms (settled 2026-10-11):** vouch is 推薦 (保証 reads as a money guarantee), the 12 words are パスフレーズ, and the anonymity set is 匿名グループ. グループ isn't used for anything in Shelter; its only other use is the paper's Sign in with TET line 「グループ X のメンバー」, which means the same kind of member set. The two agent-manifest lines ("the owner vouched for the key") now say 認めた, because 推薦 reads oddly for a key. `ja_terms_guard` keeps all of this in CI. In zh-HK (settled 2026-10-13), vouch is 引薦 everywhere: 擔保 and 作保 are gone, the agent-manifest lines say 認可, and the same guard refuses the old words.
 
 ## Not merged
 
