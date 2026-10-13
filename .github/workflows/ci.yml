@@ -445,7 +445,7 @@ jobs:
         name: try page — a page signature verifies and a stamp anchors only its own .sig.json
         run: node --experimental-strip-types scripts/try_sign_guard.mjs
       # The page checks keys and senders itself: a node that swaps a key, a key signed by another
-      # wallet, an older (unsigned) key and a forged sender are all refused (SECURITY.md 2026-10-11).
+      # wallet, an older (unsigned) key and a forged sender are all refused (SECURITY.md 2026-10-10).
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
