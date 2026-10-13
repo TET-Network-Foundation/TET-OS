@@ -1,7 +1,7 @@
 // Publish the technical paper's two marks (made by paper_build.mjs) to a node's signature registry.
 // Run once the demo is open; the records were signed earlier, so the codes don't change.
 //
-//   TET_TRY_ORIGIN=https://try.stevenexus.org node --experimental-strip-types scripts/paper_publish_marks.mjs
+//   TET_TRY_ORIGIN=https://tetnet.org node --experimental-strip-types scripts/paper_publish_marks.mjs
 //
 // It sends the saved record and the publisher's saved consent; no key is needed here.
 

@@ -108,7 +108,7 @@ export default function MailPanel(props: {
     let live = true;
     void trustedKeysFor(BASE, other).then((k) => {
       if (!live) return;
-      if (!k.ok) return setSafety({ peer: other, number: null, error: k.reason === "none" ? "" : t(k.message) });
+      if (!k.ok) return setSafety({ peer: other, number: null, error: k.reason === "none" ? t("That ID hasn't turned on its inbox yet, so it can't receive messages.") : t(k.message) });
       const mine = { walletId: me, x25519PubB64: bytesToB64(ks.x25519_pub), mlkemPubB64: bytesToB64(ks.mlkem_pub) };
       const theirs = { walletId: other, x25519PubB64: k.registration.x25519_pub_b64, mlkemPubB64: k.registration.mlkem_pub_b64 };
       setSafety({ peer: other, number: safetyNumber(mine, theirs), error: "" });

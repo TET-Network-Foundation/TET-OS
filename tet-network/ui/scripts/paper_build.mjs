@@ -132,14 +132,14 @@ const htmlBytes = new Uint8Array(Buffer.from(html));
 const a = await mark("html", htmlBytes);
 
 // 3. The PDF, with code A on its last page.
-const verifyLink = `https://try.stevenexus.org/try#code=${a.code}`;
+const verifyLink = `https://tetnet.org/try#code=${a.code}`;
 const { size, d } = qrSvgPath(verifyLink);
 const last = `<div class="lastpage">
 <h2>This paper's proof code</h2>
 <p style="font:700 1.7rem ui-monospace,Menlo,monospace;margin:.5rem 0">${a.code}</p>
 <svg viewBox="0 0 ${size} ${size}" width="170" height="170" shape-rendering="crispEdges" style="background:#fff"><path d="${d}" fill="#000"/></svg>
 <p>The code marks the text of this paper: the file <code>paper/tet-technical-paper.html</code>, SHA-256<br><code style="word-break:break-all">${a.sha256}</code>,<br>marked by TET's publisher ID <code style="word-break:break-all">${a.signer}</code>.</p>
-<p>Check it: enter the code at try.stevenexus.org, or scan the QR. Or drop that HTML file into the search box: an exact copy matches; a copy changed by one byte doesn't.</p>
+<p>Check it: enter the code at tetnet.org, or scan the QR. Or drop that HTML file into the search box: an exact copy matches; a copy changed by one byte doesn't.</p>
 <p class="meta">What it proves: this ID marked exactly that text. What it doesn't prove: who wrote it, or that it is correct. This PDF file has a code of its own, shown next to its download link (a file can't contain its own code).</p>
 </div>`;
 const pdfPath = new URL("tet-technical-paper.pdf", OUT);
