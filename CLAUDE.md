@@ -255,6 +255,36 @@ nothing unexpected is staged. Working logs (run logs, notes, scratch) are gitign
 that named an unfixed issue in deployed code. Vulnerability details live only in the private
 security repository; a public file names a fixed issue by class, after the fix is deployed.
 
+## Nothing new runs on the seeds or the demo without an explicit go
+
+Nothing new is installed or started on the seeds (Helsinki, Nuremberg) or the demo host without the
+founder's explicit go for that specific thing, and only in the daytime. That covers binaries,
+services, systemd timers, containers, scripts and wallets. "It's not the node binary", "it's an
+add-on" or "the task said dogfood" is not an exception: build and test it locally, open the PR, and
+stop before touching the host. Then ask, naming exactly what will run and where.
+
+Read-only checks (status, logs, balances, `verify`) are fine without asking. Deploys of the node
+itself already follow the deploy plan and need their own go.
+
+This rule exists because on 2026-10-13 the log seal (a systemd timer and two funded seal wallets)
+was installed on both seeds overnight under a general "finish these, don't ask me". It ran fine;
+it was still outside the go.
+
+## A push never happens while any guard is red
+
+Before any push, `bash scripts/run_guards.sh` must exit 0. It runs every guard CI runs (read from
+`.github/workflows/ci.yml`, so the list can't drift), stops at the first red one, names it, and exits
+1; it exits 2 if the guards couldn't be run at all. It never exits 0 unless every guard ran green.
+
+A script that works over several branches calls it per branch and **stops at the first non-zero
+exit**: it doesn't continue to the next branch, and it doesn't push. Write it as
+`bash scripts/run_guards.sh && git push …`, and break out of the loop on failure, never `; git push`.
+A red guard is reported, with its output, before anything else happens.
+
+This rule exists because on 2026-10-13 a loop applied the same change to several branches, one
+branch's guard went red, and the loop still committed and pushed it, then went on to the next
+branch. The runner's own behaviour is tested in CI (`scripts/run_guards.test.sh`).
+
 ## Devlog
 The public site repo is at ~/site (github.com/Nexus-Network-Foundation/site).
 At the end of every session where something shipped, was fixed, or was found:
