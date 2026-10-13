@@ -116,6 +116,14 @@ to be deleted. Since 39036cf, deployed on both seeds on 2026-10-10, only a value
 proof groups posts; an unverified post stands alone. No post could be forged or deanonymised this
 way.
 
+**Fixed: a founder-signed route moved funds outside the block pipeline.** One of the paths below: a
+request to a node's own local API, signed by the founder wallet, moved founder funds by writing
+balances directly instead of through a block, so the node that served it would no longer agree with
+the others on state. It could not be reached from the internet (not on the demo's public API) and
+needed the founder's key; it did not bypass the founder lock. Since the review stack's deploy
+(commit and date added at deploy), the route is gone and the transaction endpoint refuses that kind
+of transaction; blocks never accepted it.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about

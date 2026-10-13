@@ -248,20 +248,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", serde_json::to_string_pretty(&env)?);
             Ok(())
         }
-        "genesis-bridge" => {
-            let to = need_arg(&mut args, "--to")?;
-            let amount_tet = need_arg(&mut args, "--amount-tet")?.parse::<f64>()?;
-            let from_wallet = need_arg(&mut args, "--from-wallet")?;
-            let amount_micro = (amount_tet * STEVEMON).round().max(0.0) as u64;
-            let tx = TxV1::GenesisBridge {
-                founder_wallet: from_wallet.clone(),
-                to_wallet: to,
-                amount_micro,
-            };
-            let env = build_envelope(tx)?;
-            println!("{}", serde_json::to_string_pretty(&env)?);
-            Ok(())
-        }
         "help" | "--help" | "-h" => {
             eprintln!(
                 "TET-Signer (native signing helper)\n\n\
@@ -270,7 +256,7 @@ Commands:\n\
   link [--wallet-id <string|auto>]\n\
   founding-enroll [--member-wallet <hex|auto>]\n\
   transfer --from-wallet <hex> --to <hex> --amount-tet <f64> [--fee-bps <u64>]\n\
-  genesis-bridge --from-wallet <hex> --to <hex> --amount-tet <f64>\n\n\
+\n\
 This tool prints a SignedTxEnvelope v1 JSON.\n"
             );
             Ok(())

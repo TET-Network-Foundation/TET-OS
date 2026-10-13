@@ -184,10 +184,6 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::ledger::get_proof_by_id),
         )
         .route(
-            "/ledger/genesis_bridge",
-            axum::routing::post(super::handlers::ledger::post_genesis_bridge_enveloped),
-        )
-        .route(
             "/tx/submit",
             axum::routing::post(super::handlers::ledger::post_tx_submit),
         )

@@ -16239,3 +16239,53 @@ fn ui_signed_search_listing_verifies_in_rust() {
     changed.member_wallet_id = "ef".repeat(32);
     assert!(matches!(store.list(&changed, l.listed_at_ms, |_| true, |_| true), Err(crate::search::ListingRefusal::BadSignature(_))));
 }
+
+// ---- genesis_bridge removed: no balance write outside a block (SECURITY.md) -------------------
+
+/// `/ledger/genesis_bridge` is gone and `/tx/submit` refuses `TxV1::GenesisBridge`. The bridge moved
+/// founder funds by writing balances directly, outside any block, so the node that served it
+/// diverged from every other node. Here a valid, founder-signed bridge from a founder with
+/// spendable funds changes nothing on either path: no credit, no queued tx, the same state root.
+/// Negative control (run by hand): restoring the old route and dispatch → FAILS (route 200 and the
+/// recipient credited).
+#[tokio::test]
+async fn genesis_bridge_cannot_write_balances_outside_a_block() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let f = crate::wallet::generate_mnemonic_12().unwrap();
+    let (f_words, f_id) = (f.mnemonic_12.clone().unwrap(), f.address_hex.to_ascii_lowercase());
+    let _founder = EnvVarGuard::set("TET_FOUNDER_WALLET", &f_id);
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation(&f_id).unwrap(); // the test base sets the cliff to 0: spendable
+    assert_eq!(ledger.founder_wallet_public().unwrap(), f_id, "the test's founder is the signer");
+    let founder_before = ledger.balance_micro(&f_id).unwrap();
+    assert!(ledger.spendable_balance_micro(&f_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap() >= crate::ledger::STEVEMON, "the founder can spend, so only the removal stops the bridge");
+    let state = rest_state_for_tests(ledger.clone());
+    let to = "ab".repeat(32);
+    let env = signed_env_for_tests(
+        crate::protocol::TxV1::GenesisBridge { founder_wallet: f_id.clone(), to_wallet: to.clone(), amount_micro: crate::ledger::STEVEMON },
+        &f_words,
+        &f_id,
+    );
+    crate::rest::helpers::verify_envelope_v1(&env).expect("a valid founder signature");
+    let root = ledger.compute_state_root().unwrap();
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ledger/genesis_bridge")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::to_vec(&env).unwrap()))
+        .unwrap();
+    let resp = crate::rest::routes::build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "the off-block bridge route must not exist");
+
+    let res = crate::rest::handlers::ledger::post_tx_submit(axum::extract::State(state.clone()), axum::http::HeaderMap::new(), axum::Json(env)).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "tx submit must refuse a genesis bridge");
+
+    assert_eq!(ledger.balance_micro(&to).unwrap(), 0, "the recipient was credited outside a block");
+    assert_eq!(ledger.balance_micro(&f_id).unwrap(), founder_before);
+    assert!(state.mempool.lock().await.is_empty());
+    assert_eq!(ledger.compute_state_root().unwrap(), root);
+}
