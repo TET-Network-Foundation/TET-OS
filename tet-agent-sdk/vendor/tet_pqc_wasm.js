@@ -61,17 +61,18 @@ export function mldsa44_verify_b64(pubkey_b64, sig_b64, msg_bytes) {
     }
     return ret[0] !== 0;
 }
+
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg___wbindgen_throw_6b64449b9b9ed33c: function(arg0, arg1) {
+        __wbg___wbindgen_throw_be289d5034ed271b: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
-        __wbg_new_aa8d0fa9762c29bd: function() {
+        __wbg_new_361308b2356cecd0: function() {
             const ret = new Object();
             return ret;
         },
-        __wbg_set_022bee52d0b05b19: function() { return handleError(function (arg0, arg1, arg2) {
+        __wbg_set_6cb8631f80447a67: function() { return handleError(function (arg0, arg1, arg2) {
             const ret = Reflect.set(arg0, arg1, arg2);
             return ret;
         }, arguments); },

@@ -37,6 +37,7 @@ mod sync;
 mod tee_compute;
 mod sigs;
 mod sites;
+mod search;
 mod tmail;
 mod updater;
 mod vision;
@@ -717,6 +718,10 @@ async fn main() -> Result<(), AnyErr> {
         }),
         sites: Arc::new(crate::sites::SiteStore::open(&ledger_for_hide).unwrap_or_else(|e| {
             eprintln!("[startup] site store: {e}");
+            std::process::exit(2);
+        })),
+        search: Arc::new(crate::search::SearchStore::open(&ledger_for_hide).unwrap_or_else(|e| {
+            eprintln!("[startup] search store: {e}");
             std::process::exit(2);
         })),
         sigs: Arc::new(crate::sigs::SigStore::open(&ledger_for_hide).unwrap_or_else(|e| {

@@ -13,7 +13,8 @@ import { appendEdit, fetchSite, newSite, siteIdOf, verifyChain, type ChainVerdic
 import { expectedChainBinding } from "../lib/chain_binding";
 import { mldsa44Verify } from "../lib/pqc";
 import { Badge, Button, FOCUS, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx } from "./ui";
-import { BASE } from "./wallet";
+import { BASE, useTryWallet } from "./wallet";
+import { listSite } from "../lib/tetsearch";
 import { useLang } from "./i18n";
 
 type Kind = Block["type"];
@@ -40,6 +41,8 @@ export default function SitePanel() {
   const [state, setState] = useState<SiteState | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [listNote, setListNote] = useState("");
+  const { ensureWallet } = useTryWallet();
   // the block being written
   const [kind, setKind] = useState<Kind>("text");
   const [a, setA] = useState("");
@@ -194,6 +197,23 @@ export default function SitePanel() {
         }
         todo={t("Add a block and it appears. Each add or removal is one edit, marked as genuine by the site's ID.")}
       />
+      {edits.length ? (
+        <div className="flex flex-wrap items-center gap-2 border-b border-[#e3e5e8] px-4 py-2 text-[14px] md:px-5">
+          <Button
+            kind="secondary"
+            disabled={busy}
+            onClick={async () => {
+              setListNote("");
+              await ensureWallet();
+              const r = await listSite(BASE, words);
+              setListNote(r.ok ? t("Listed in TetSearch: vouched members can now find it.") : t(r.error));
+            }}
+          >
+            {t("List in TetSearch")}
+          </Button>
+          <span className="text-[#5d646d]">{listNote || t("Only vouched members can list a site (your ID signs, and so does the site's ID).")}</span>
+        </div>
+      ) : null}
       <div className="max-w-[56rem] space-y-5 px-4 pb-6 md:px-5">
         <p className="text-[14px]">
           {verdict?.ok ? (

@@ -166,6 +166,12 @@ status=$(docker inspect -f '{{.State.Health.Status}}' "$CONTAINER" 2>/dev/null |
 disk=$(df --output=pcent / | tail -1 | tr -dc '0-9')
 [ "${disk:-0}" -lt "$DISK_PCT_MAX" ] || fail "disk ${disk}% >= ${DISK_PCT_MAX}%"
 
+# --- 2b. clock -------------------------------------------------------------
+# The node holds every post's time to its own clock (±5 min, tmail::envelope::check_sent_at), so a
+# drifting host clock would refuse honest posts. The host must keep NTP time.
+ntp=$(timedatectl show -p NTPSynchronized --value 2>/dev/null || echo unknown)
+[ "$ntp" = yes ] || fail "clock not NTP-synchronized (NTPSynchronized=$ntp); posts are checked against this clock"
+
 # --- 3. chain progress -----------------------------------------------------
 state=$(curl -fsS -m 10 "$NODE/ledger/state" 2>/dev/null) || node_down "REST /ledger/state unreachable"
 rm -f "$DOWN_FILE"   # it answered: any down streak is over

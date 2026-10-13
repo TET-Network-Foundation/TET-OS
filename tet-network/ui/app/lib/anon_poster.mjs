@@ -8,6 +8,7 @@
 // Everything that needs the browser (WASM signing, Kyber, the prover helper) is injected, so the
 // guard runs the real request sequence under plain Node.
 
+import { plainNodeError } from "./node_error.mjs";
 import {
   anonCommitment,
   anonRootAndPath,
@@ -328,7 +329,7 @@ export async function runAnonPost(deps, input) {
     });
     const sent = await deps.node("/tmail/send", { method: "POST", body: JSON.stringify(env) });
     if (sent.status < 200 || sent.status >= 300) {
-      return fail(sent.text || `send failed (HTTP ${sent.status})`);
+      return fail(plainNodeError(sent.text) || `send failed (HTTP ${sent.status})`);
     }
     deps.proofCache?.delete(`${receiver}:${bucket}`);
     return emit({ state: "sent", msgId: sent.json?.msg_id ?? env.msg_id });

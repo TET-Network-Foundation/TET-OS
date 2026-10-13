@@ -1,65 +1,68 @@
-# TET Network
+# TET
 
-![Phrack-style Whitepaper v1.1](docs/WHITEPAPER_v1.1_DRAFT.phrack_preview.png)
+**In an age when AI can make anything: prove "I put this out, on this day" in 10 seconds.**
 
-**A Layer 1 whose signatures a quantum computer cannot forge, with a desktop on top of it.**
-Written in Rust (`tet-core`): every transaction and message is signed twice, Ed25519 **and**
-ML-DSA-44 (FIPS 204), over libp2p. The Sovereign OS UI ships a wallet, encrypted mail and file
-sharing as a Win95-style desktop, so the chain is something you use rather than something you query.
+Your proofs and keys, in your hands, not a company's. TET is a public **test network** for checking
+who signed something, and when. Every transaction and signed record carries two signatures, Ed25519
+and ML-DSA-44, and the page checks them in your browser instead of trusting a server.
 
-> **Your keys, your data, your device — TET only proves, never stores.**
->
-> Secrets (passwords, personal data, biometric/neural data, private keys) live only on the user's
-> device. The chain holds public keys and proofs. Any design that would put a secret — or anything
-> derived from one that could re-identify it — on chain or in replicated state is rejected.
+Try it: **<https://tetnet.org>** (no sign-up; an ID is made in your browser).
 
-> ⚠️ **Phase 0 — public testnet / developer preview. Unaudited. The token has no value.**
-> Read [`SECURITY.md`](./SECURITY.md) before running anything: it lists the known limitations as
-> plainly as we can state them, including the ones that are still broken.
-> See [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./docs/SOVEREIGN_OS_PHASE0_SPEC.md) for the Phase 0 plan
-> and [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md) for operator guidance.
+> **Testnet. One block producer, one operator. Not audited. The units have no value:** they are
+> practice units that can't be exchanged for money, and the chain may be reset.
 
----
+## What works today, and what each part proves
 
-## What TET ships in Phase 0
+| Part | What it does | What it proves, and what it doesn't |
+|---|---|---|
+| Sign | Sign a file or text with your key; optionally stamp it on chain. | This key signed these exact bytes (and, stamped, that they existed by a block). Not who holds the key, and not authorship by itself. |
+| Verify | Check a `.sig.json`, a proof code, a stamp; also offline, without TET (`tet-network/ui/public/verify/`). | Each step says what it proves; a valid signature alone doesn't say who holds the key. |
+| Boards | Threads with anonymous or named posts. | An anonymous post proves a member wrote it, not which one. It doesn't hide your IP from the node. |
+| DM | End-to-end encrypted messages; a safety number to compare in person. | Which key sent it. The node still sees who writes to whom, and when. |
+| Files | Encrypted files up to 100 MB, kept 7 days. | Only the recipient can open it. Not that the file is what its name says. |
+| Sealed prediction | Seal a text now (only its salted hash is posted); reveal it later. | The text was fixed when it was sealed. Not that it was a good guess, or that the same person didn't seal others. |
 
-- **Sovereign OS UI** — Win95-style desktop: wallet, Tmail and Files in a tabbed shell
-- **Tmail** — encrypted P2P messaging (X25519 + CRYSTALS-Kyber-768 Round-3 + ChaCha20-Poly1305),
-  with three things you can try today, all verified between two countries:
-  - **Scheduled release** — a message that will not decrypt before a chosen time
-  - **Burn-after-read** — the ciphertext is gone from both nodes once it is read
-  - **Anonymous sending** — a zero-knowledge proof that the sender is a registered
-    user, without revealing which one. Hash-only (SHA-256), so the proof itself has
-    nothing in it for a quantum computer to break. From the desktop it needs the
-    native prover running on your own computer (`cargo run --release -p tet-prover-host`;
-    see [RUNNING_A_NODE § Anonymous sending](./docs/RUNNING_A_NODE.md#anonymous-sending)).
-    Without it, the desktop says so instead of sending
+## Honest limits
 
-  Not built: pinned messages, and the deposit that would make anonymous sending cost
-  something. Both are Phase 1 and both have acceptance tests that fail on purpose.
-  (WP §17.17 covers the FIPS-203 ML-KEM migration)
-- **Hybrid wallet** — Ed25519 + **ML-DSA-44** (FIPS 204, NIST level 2) signatures, BIP39 seed compatible.
-  Verification infers the level from public-key length and accepts 44/65/87; operators may select
-  65 or 87 node-side via `TET_MLDSA_SECURITY_LEVEL` (WP §7.1)
-- **Multi-node testnet** — libp2p block plane, faucet, public seed node
-- **Energy-pegged tokenomics** — `R(T) = Σ[η(W_i)·C(t_i)] / D(t)` (Phase 0 approximation; formal η in §17.1)
+- **Testnet.** One block producer and one operator today; a sustained attack, or the operator,
+  can stop it. More producers are on the roadmap (technical paper §13).
+- **No external audit yet.** It is planned (Phase 2).
+- **Quantum resistance is incomplete.** Every signature is hybrid, but the wallet ID is the Ed25519
+  key and the ML-DSA key isn't bound to it until `wallet_id_v2` (Phase 1). Once it is, forging a
+  transaction will require breaking both Ed25519 and ML-DSA-44. Messages use X25519 + Kyber-768
+  (Round 3), not the final ML-KEM standard (FIPS 203); moving to ML-KEM is planned.
+- **No token value.** Testnet units are practice units; there is no sale, and this chain can never
+  become mainnet. Its genesis contains a founder wallet, locked by a one-year cliff, and a treasury
+  address that collects test fees. Mainnet supply and allocation are undecided.
+- **Not IP privacy.** Nodes see addresses and timing; use Tor or your own node.
+- **Lose your passphrase (12 words) and nobody can recover it.**
 
-Worker mode (AI inference earn) ships in **Phase 0.5**, after the Phase 0 ship.
+## Read more
 
-## Canonical components
+- **Technical paper v2:** <https://tetnet.org/whitepaper> (source
+  `tet-network/ui/app/whitepaper/paper.ts`; HTML and PDF in `tet-network/ui/public/paper/`, each with
+  a proof code you can check, also offline).
+- **Security:** [`SECURITY.md`](./SECURITY.md) (how to report, and every known limitation and fixed
+  issue) and [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md).
+- **Contributing:** [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+- **Discord:** <https://discord.gg/ANcpc76k8m> (questions, reports of things that look wrong; security problems go through `SECURITY.md`, not Discord).
+- Older documents (whitepapers v1.0 and v1.1, status snapshots) are in [`archive/`](./archive):
+  historical, not the current design.
 
-- [`tet-core/`](./tet-core) — Sovereign Layer 1 node (Rust). **The canonical L1.**
-- [`tet-network/ui/`](./tet-network/ui) — Sovereign OS frontend (Next.js)
-- [`tet-agent-sdk/`](./tet-agent-sdk) — M2M agent client (TypeScript)
-- [`tet-pqc-wasm/`](./tet-pqc-wasm) — Post-quantum signature WASM (ML-DSA-44). **Build artifact is
-  gitignored** — a fresh clone must build it before the UI can sign; see
-  [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md)
-- [`methods/`](./methods), [`prover/`](./prover) — RISC0 zkVM foundation for ZK-Court
+## Repository
 
-## Quick start — join the live testnet in about 10 minutes
+- [`tet-core/`](./tet-core): the node (Rust), one binary, `TET-Core`.
+- [`tet-network/ui/`](./tet-network/ui): the web app (Next.js): the `/try` page, the technical paper,
+  the offline verifier.
+- [`tet-pqc-wasm/`](./tet-pqc-wasm): ML-DSA-44 compiled to WebAssembly for the browser. The build
+  artifact is gitignored: a fresh clone builds it first (see `docs/RUNNING_A_NODE.md`).
+- [`methods/`](./methods), [`prover/`](./prover): the RISC Zero membership proof (anonymous posts).
+- [`deploy/`](./deploy): the seed and demo host setup.
 
-This brings up a node that syncs from the public seed in Helsinki, plus the desktop UI.
-Most of the ten minutes is the Docker build.
+## Quick start: run a node on the public testnet
+
+This brings up a node that syncs from the public seeds, plus the web app. Most of the ten minutes
+is the Docker build.
 
 ```bash
 git clone https://github.com/TET-Network-Foundation/TET-OS.git
@@ -81,8 +84,8 @@ EOF
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
-Then confirm you are actually on the seed's chain. Equal height is **not** enough — a fork can sit
-at the same height — so compare `block_id` and `state_root`:
+Then confirm you are actually on the seed's chain. Equal height is **not** enough (a fork can sit
+at the same height), so compare `block_id` and `state_root`:
 
 ```bash
 curl -sf http://127.0.0.1:5010/health/swarm | jq '.peer_count'        # 1 once the dial lands
@@ -90,55 +93,20 @@ H=$(curl -sf http://127.0.0.1:5010/ledger/blocks | jq '.[0].height')
 curl -sf http://127.0.0.1:5010/ledger/block/$H | jq '.block | {height, block_id, state_root}'
 ```
 
-Open the desktop at **http://localhost:3000/os**, create a wallet, and the three Tmail features
-above work against the live network.
+Open **http://localhost:3000/try** for the same page as tetnet.org, against your own node.
 
 Leave the genesis variables in the committed compose alone: they are what the seed runs, and a
 mismatch changes the genesis hash, which makes every signed request fail with
 `401 ed25519 verification failed`.
 
-**The seed's REST API is deliberately not public** — only `8002/tcp` is open, so port 5010 in the
+**The seeds' REST API is deliberately not public**: only `8002/tcp` is open, so port 5010 in the
 commands above is *your* node, not the seed's.
 
 Single node with no network, or the full three-node local stack: [`tet-core/README.md`](./tet-core/README.md).
 Operator detail, env reference and troubleshooting: [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md).
 
-## Further reading
-
-### Canonical specifications
-
-- [`WHITEPAPER.md`](./WHITEPAPER.md) — **Whitepaper v1.1** (current, Sovereign OS Suite integrated, 2026-05-21)
-- **Phrack-style PDF** — not tracked; regenerate with `python3 docs/scripts/render_phrack_wp_pdf.py` (see [`docs/WHITEPAPER_BUILD.md`](./docs/WHITEPAPER_BUILD.md))
-- [`docs/WHITEPAPER_v1.1_DRAFT_JP.md`](./docs/WHITEPAPER_v1.1_DRAFT_JP.md) — Japanese translation
-- [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./docs/SOVEREIGN_OS_PHASE0_SPEC.md) — Phase 0 ship plan
-
-### Project context
-
-- [`docs/CODEBASE_ATLAS.md`](./docs/CODEBASE_ATLAS.md) — Codebase deep-dive for new contributors
-- [`docs/WORKER_MODE_AUDIT.md`](./docs/WORKER_MODE_AUDIT.md) — AI worker mode current state (Phase 0.5 backlog)
-- [`docs/AUDIT_WORKER_REGISTER_AND_STAKE.md`](./docs/AUDIT_WORKER_REGISTER_AND_STAKE.md) — Worker register + stake audit
-
-### Archive (historical)
-
-- [`archive/WHITEPAPER_v1.0.md`](./archive/WHITEPAPER_v1.0.md) — Genesis Draft v1.0 (2026-04-28)
-- [`archive/LITEPAPER_v0.md`](./archive/LITEPAPER_v0.md) — deprecated short overview
-- [`docs/WHITEPAPER_v1.0_GAPS.md`](./docs/WHITEPAPER_v1.0_GAPS.md) — v1.0 vs implementation gaps audit
-
-### Removed workspaces (2026-05-20)
-
-Substrate / Solana experiments and legacy nested copies were **removed from this repository** to reduce clone size and CI noise. Canonical L1 is **`tet-core/`** only.
-
-| Former path | Was |
-|-------------|-----|
-| `tet-core-node/` | Substrate node template |
-| `tet-network/chain/` | Duplicate Substrate chain template |
-| `nexus-onchain/` | Solana Anchor experiment |
-| `nexus network/` | Legacy nested copies |
-
-To recover sources, check git history before [`a43eb22`](https://github.com/TET-Network-Foundation/TET-OS/commit/a43eb22).
-
 > Commit hashes before 2026-09-26 were rewritten when key material was purged from history
-> (see [`SECURITY.md`](./SECURITY.md)). `32f8eee` was this commit's hash prior to that rewrite.
+> (see [`SECURITY.md`](./SECURITY.md)).
 
 ## License
 

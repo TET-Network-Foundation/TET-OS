@@ -3,8 +3,8 @@
 /**
  * Try TET's languages: English, 日本語, 繁體中文 (Hong Kong). `t()` is keyed by the English text, so
  * English is always the fallback and the source of truth; `{name}` placeholders are filled from
- * `vars`. The choice lives in the URL (`?lang=ja`), so it survives a reload of this tab and nothing
- * else: the try page keeps nothing in browser storage (scripts/try_wallet_guard.mjs).
+ * `vars`. Which language opens: `?lang=` in a link, else the visitor's earlier choice on this device
+ * (device_store, plain UI state), else the browser's languages on a first visit (lib/pick_lang.ts).
  *
  * Translations are by meaning, not word for word. Tmail's locked disclosures stay byte-identical in
  * English (tet-core asserts them); the other languages carry their meaning.
@@ -12,6 +12,7 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { getUi, setUi } from "../lib/device_store";
+import { pickLang } from "../lib/pick_lang";
 import { JA } from "./i18n_ja";
 import { ZH_HK } from "./i18n_zh_hk";
 
@@ -40,16 +41,13 @@ export function translate(lang: Lang, en: string, vars?: Vars): string {
 type Ctx = { lang: Lang; locale: string | undefined; t: T; setLang: (l: Lang) => void };
 const LangCtx = createContext<Ctx>({ lang: "en", locale: undefined, t: (en, v) => fill(en, v), setLang: () => {} });
 
-const isLang = (x: string | null): x is Lang => LANGS.some((l) => l.id === x);
 
 export function LangProvider(props: { children: ReactNode }) {
   const [lang, setLangState] = useState<Lang>("en");
 
-  // The language in `?lang=` (this tab only).
   useEffect(() => {
-    // `?lang=` wins; otherwise the language this device chose before (device_store, plain UI state).
-    const q = new URLSearchParams(window.location.search).get("lang") ?? getUi("tet.ui.v1.lang");
-    if (!isLang(q) || q === "en") return;
+    const q = pickLang(new URLSearchParams(window.location.search).get("lang"), getUi("tet.ui.v1.lang"), navigator.languages ?? [navigator.language]);
+    if (q === "en") return;
     const t0 = setTimeout(() => setLangState(q), 0);
     return () => clearTimeout(t0);
   }, []);
@@ -60,7 +58,8 @@ export function LangProvider(props: { children: ReactNode }) {
 
   const setLang = useCallback((l: Lang) => {
     setLangState(l);
-    setUi("tet.ui.v1.lang", l === "en" ? null : l);
+    // Remembered even when it's English, so a later visit doesn't switch to the browser's language.
+    setUi("tet.ui.v1.lang", l);
     const url = new URL(window.location.href);
     if (l === "en") url.searchParams.delete("lang");
     else url.searchParams.set("lang", l);

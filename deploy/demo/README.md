@@ -26,6 +26,12 @@ Design: [`docs/DEMO_NODE.md`](../../docs/DEMO_NODE.md). Needs tet-core with publ
   The empty `ListenStream=` clears Ubuntu's default before listing both ports. Afterwards every
   command below works with `ssh -p 8443`.
 
+- **Cloud config (optional):** `deploy/demo/cloud-config.yaml` enables `ssh.socket` on 22 and
+  8443 and adds **no** firewall rules. Don't put nftables/iptables reject rules in a cloud-config:
+  a reject answers with a reset, which looks from outside like sshd isn't listening.
+  `provision-seed.sh` also sets the SSH ports (`TET_SSH_EXTRA_PORTS`, 8443 by default on the demo),
+  checks they listen, and warns about reject rules outside ufw.
+
 ## 2. healthchecks.io
 
 A new check, `tet-demo`:
@@ -66,6 +72,23 @@ ssh root@<demo-ip> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0
 node reports it in `GET /status/live` (the try page's **Live** channel) and the page's "verify this
 page" names it. An archive has no `.git`, so the build can't find it on its own; left out, both say
 the build doesn't name its commit.
+
+## 4b. Sign the build (after each UI deploy)
+
+The UI build writes `/build-manifest.json` (every file the site serves, with its SHA-256). On your
+own machine, with the publisher key. Build the deployed commit yourself first (the same Docker image
+the demo builds, then `node scripts/build_manifest.mjs --out mine.json`): the script signs only if
+the served manifest is byte-identical to yours.
+
+```bash
+cd tet-network/ui
+TET_PAPER_CHAIN_ID=tet-local-dev TET_PAPER_GENESIS_HASH=<genesis> \
+  node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org --local mine.json --publish
+node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org --commit <deployed sha>   # VERIFIED
+```
+
+`--commit` is required (or `--any-commit`): a signature only proves a build was signed once, so the
+check must also know which build should be live, or an older signed build would pass (a rollback).
 
 ## 5. Check from outside
 

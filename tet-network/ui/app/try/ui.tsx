@@ -262,3 +262,24 @@ export function FilePick({
     </label>
   );
 }
+
+/**
+ * "Verify without TET": the standalone verifier (public/verify/, scripts/build_offline_verifier.mjs).
+ * One file that checks a record on the visitor's own device with no server at all.
+ */
+export function OfflineVerifier() {
+  const { t } = useLang();
+  const link = cx(FOCUS, "rounded-sm underline underline-offset-2");
+  return (
+    <p className="text-[13.5px] text-[#5d646d]">
+      {t("Even if TET disappears, this still works:")}{" "}
+      <a href="/verify/tet-verify.html" download className={link}>
+        {t("the offline verifier")}
+      </a>{" "}
+      {t("(one file: it checks a record on your device, with the network off)")} ·{" "}
+      <a href="/verify/SHA256SUMS" className={link}>
+        SHA-256
+      </a>
+    </p>
+  );
+}

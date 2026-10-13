@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { findSignatures, registryRecords, type FoundSignature } from "../lib/proof_code";
 import { mldsa44Verify } from "../lib/pqc";
 import { qrSvgPath } from "../lib/tet_qr";
-import { Badge, Button, MONO, cx } from "./ui";
+import { Badge, Button, MONO, cx, OfflineVerifier } from "./ui";
 import { BASE } from "./wallet";
 import { useLang } from "./i18n";
 
@@ -44,6 +44,7 @@ export function ProofCodeBox(props: { code: string; recordBytes: Uint8Array; nam
       <p className="text-[14px]">{t("The code finds it; the signature proves it.")}</p>
       <p className="text-[14px] text-[#5d646d]">{t("Proves this key signed this file's SHA-256, and that it was published on this node at that time. Doesn't prove the work is original or that a person made it.")}</p>
       <p className="text-[14px] text-[#5d646d]">{t("Published in this node's public signature registry, at your request. Keep the .sig.json: with it and the file, anyone can check the signature in Verify.")}</p>
+      <OfflineVerifier />
       <div className="flex flex-wrap gap-2">
         <Button kind="secondary" onClick={() => void navigator.clipboard?.writeText(url)}>
           {t("Copy the link")}

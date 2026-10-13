@@ -58,6 +58,7 @@ services:
       TET_DEMO_REDIRECTS: "${TET_DEMO_REDIRECTS:-http://redirects.invalid}"
     volumes:
       - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/demo/maintenance:/srv/maintenance:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

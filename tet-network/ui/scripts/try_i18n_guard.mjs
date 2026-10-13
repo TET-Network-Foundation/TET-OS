@@ -61,11 +61,16 @@ function dictProblems(name, dict, keys) {
 }
 
 const dir = new URL("../app/try/", import.meta.url);
-const sources = Object.fromEntries(
-  readdirSync(dir)
+// The try page, and the other pages that use its dictionaries (the technical paper's page).
+const wpDir = new URL("../app/whitepaper/", import.meta.url);
+const sources = Object.fromEntries([
+  ...readdirSync(dir)
     .filter((n) => /\.tsx?$/.test(n) && !/^i18n_/.test(n))
     .map((n) => [n, readFileSync(new URL(n, dir), "utf8")]),
-);
+  ...readdirSync(wpDir)
+    .filter((n) => /\.tsx$/.test(n))
+    .map((n) => [`whitepaper/${n}`, readFileSync(new URL(n, wpDir), "utf8")]),
+]);
 const keys = pageKeys(sources);
 
 // `--keys` prints every key the page uses (the dictionary generator keeps exactly these).

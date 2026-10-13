@@ -5493,7 +5493,7 @@ impl Ledger {
     /// Worker receives 100% of gross on a 90-day vest.
     ///
     /// FEE_SPEC §3: the 1% "imperial tax" (`imperial_bps`) is deleted. It was v0 CHF-era
-    /// terminology that `docs/STATUS.md` had already marked non-canonical, and it leaked into
+    /// terminology that `archive/STATUS_2026-09.md` had already marked non-canonical, and it leaked into
     /// audit output as `imperial_tax_micro`.
     pub fn mint_worker_network_reward(
         &self,

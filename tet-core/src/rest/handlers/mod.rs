@@ -15,6 +15,7 @@ pub mod operator;
 pub mod pages;
 pub mod sigs;
 pub mod shelter;
+pub mod search;
 pub mod sites;
 pub mod phase4;
 pub mod system;
