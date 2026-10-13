@@ -1509,6 +1509,10 @@ pub(crate) fn handle_tmail_network_event(
 ) -> TmailGossipOutcome {
     match event {
         crate::models::NetworkEvent::TmailGossip { envelope } => {
+            // Shelter's posts never arrive by gossip: they are made on this node only.
+            if crate::tmail::shelter::is_shelter_board(&envelope.receiver_wallet_id) {
+                return TmailGossipOutcome::Rejected { reason: "Shelter posts are not gossiped".into() };
+            }
             // The same clock rule as a REST send, so every node keeps the same posts.
             if let Err(r) = crate::tmail::envelope::check_sent_at(envelope, crate::tmail::envelope::sent_at_clock_now_ms()) {
                 return TmailGossipOutcome::Rejected {
@@ -1518,6 +1522,15 @@ pub(crate) fn handle_tmail_network_event(
             if let Err(e) = crate::tmail::envelope::verify_tmail_envelope_v1(envelope) {
                 return TmailGossipOutcome::Rejected {
                     reason: format!("envelope: {e}"),
+                };
+            }
+            // A fast anonymous post (no proof of its own) is taken only for a registered posting
+            // key, or held briefly while its registering post's proof is being checked here.
+            if crate::tmail::store::is_fast_post(envelope) {
+                return match tmail_store.receive_fast_anonymous(envelope) {
+                    Ok(true) => TmailGossipOutcome::Stored { msg_id: envelope.msg_id.clone() },
+                    Ok(false) => TmailGossipOutcome::Duplicate { msg_id: envelope.msg_id.clone() },
+                    Err(e) => TmailGossipOutcome::Rejected { reason: format!("fast post: {e:?}") },
                 };
             }
             match tmail_store.store_tmail(envelope) {
@@ -3042,8 +3055,9 @@ async fn run_mdns_ping_swarm(
                     // content-addressed, so this cannot be confused with another message's.
                     let mut handled = 0usize;
                     for (msg_id, env) in tmail_store.pending_anon_envelopes() {
-                        let Some(anon) = env.anonymous.as_ref() else { continue };
-                        let expected = anon.anchor_proof.receipt_sha256_hex.clone();
+                        // Fast posts have no receipt of their own (they follow their registration).
+                        let Some(proof) = env.anonymous.as_ref().and_then(|a| a.anchor_proof.as_ref()) else { continue };
+                        let expected = proof.receipt_sha256_hex.clone();
                         if tmail_store.put_anon_receipt(&expected, &bytes).unwrap_or(false) {
                             let verdict =
                                 crate::tmail::anon::verify_anonymous_proof(&tmail_store, &env, &bytes);
@@ -3800,10 +3814,12 @@ async fn run_mdns_ping_swarm(
                                         // receiver offline for days still reads a checked result,
                                         // and the registry root window only has to cover
                                         // send -> verify rather than send -> inbox-open.
+                                        // Only a post with a proof has a receipt to pull; a fast
+                                        // post's verdict was set by `receive_fast_anonymous`.
                                         if let Some(env) = tmail_store.get_by_msg_id(&msg_id)
-                                            && let Some(anon) = env.anonymous.as_ref()
+                                            && let Some(proof) = env.anonymous.as_ref().and_then(|a| a.anchor_proof.as_ref())
                                         {
-                                            let hash = anon.anchor_proof.receipt_sha256_hex.clone();
+                                            let hash = proof.receipt_sha256_hex.clone();
                                             let _ = tmail_store.set_anon_verdict(
                                                 &msg_id,
                                                 &crate::tmail::store::AnonVerdict::Pending,

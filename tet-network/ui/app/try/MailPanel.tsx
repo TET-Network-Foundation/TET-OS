@@ -45,8 +45,8 @@ const limits = (t: (en: string) => string) => [
   t("Key exchange is Kyber round 3, not the final ML-KEM standard (FIPS 203)."),
   t("Your own messages show from this tab only: what you send is encrypted to the recipient, so the node can't give it back to you. Close the tab and they are gone from this view."),
   t("A conversation keeps its newest 5 messages; messages expire after 7 days."),
-  t("Publishing your messaging keys is public: it shows this wallet can receive."),
-  t("A message proves which key sent it, or for an anonymous one, that a member did. It doesn't prove who holds that key."),
+  t("Turning on your inbox is public: it shows this ID can receive messages."),
+  t("A message proves which ID sent it, or for an anonymous one, that a member did. It doesn't prove who is behind that ID."),
 ];
 
 function toLocalInput(ms: number): string {
@@ -58,9 +58,12 @@ export default function MailPanel(props: {
   demoContact: string;
   /** A DM someone started from a named post: open that conversation (`at` makes repeats count). */
   dmTarget?: { walletId: string; at: number } | null;
+  /** This panel is the one on screen (it polls only then). */
+  active: boolean;
 }) {
   const { t, locale } = useLang();
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
+  const [unreachable, setUnreachable] = useState(false);
   const me = wallet?.walletId ?? "";
   const [received, setReceived] = useState<Received[]>([]);
   const [sent, setSent] = useState<Sent[]>([]);
@@ -119,7 +122,10 @@ export default function MailPanel(props: {
     const ks = getTmailKeySession();
     if (!wallet || !ks) return;
     const r = await getTmailInbox(BASE, wallet.walletId, 50);
-    if (!r.ok || !mounted.current) return;
+    if (!mounted.current) return;
+    // A real failure: one plain message (an empty inbox is not a failure).
+    setUnreachable(!r.ok);
+    if (!r.ok) return;
     const out: Received[] = [];
     let forged = 0;
     for (const row of r.messages) {
@@ -175,15 +181,16 @@ export default function MailPanel(props: {
     };
   }, []);
 
+  // Only while this panel is the one on screen: home and other pages never fetch your inbox or keys.
   useEffect(() => {
-    if (!wallet) return;
+    if (!wallet || !props.active) return;
     const first = setTimeout(() => void checkKeys().then(refresh).catch(() => {}), 0);
     const t = setInterval(() => void refresh(), POLL_MS);
     return () => {
       clearTimeout(first);
       clearInterval(t);
     };
-  }, [wallet, checkKeys, refresh]);
+  }, [wallet, checkKeys, refresh, props.active]);
 
   const name = useCallback(
     (id: string) => (id === ANON ? t("anonymous senders") : id === "self" || (me && id === me) ? t("you (notes to self)") : id === props.demoContact ? t("demo inbox") : id.slice(0, 8)),
@@ -243,7 +250,7 @@ export default function MailPanel(props: {
     try {
       const myId = await ensureWallet();
       const to = current === "self" ? myId : normalizeWalletId64(current);
-      if (!to) throw new Error(t("That is not a 64-character wallet id."));
+      if (!to) throw new Error(t("That isn't a 64-character ID."));
       let releaseAtMs: number | undefined;
       if (schedule) {
         releaseAtMs = new Date(releaseAt).getTime();
@@ -254,7 +261,7 @@ export default function MailPanel(props: {
       const k = await trustedKeysFor(BASE, to);
       if (!k.ok) {
         if (k.reason === "none") {
-          throw new Error(to === myId ? t("Publish your keys first (the banner above), then you can write to yourself.") : t("That wallet has not published messaging keys yet, so it cannot receive."));
+          throw new Error(to === myId ? t("Turn on your inbox first (the banner above), then you can write to yourself.") : t("That ID hasn't turned on its inbox yet, so it can't receive messages."));
         }
         throw new Error(t(k.message));
       }
@@ -295,7 +302,7 @@ export default function MailPanel(props: {
   function startConvo() {
     const id = normalizeWalletId64(newTo);
     if (!id) {
-      setNote({ ok: false, text: t("That is not a 64-character wallet id.") });
+      setNote({ ok: false, text: t("That isn't a 64-character ID.") });
       return;
     }
     setNewTo("");
@@ -316,7 +323,8 @@ export default function MailPanel(props: {
         }
         todo={t("Pick a conversation, write a message and send it. To DM someone from a board, tap their id on a named post.")}
       />
-      {keys !== "published" ? <KeysBanner what={t("To receive DMs, publish your messaging keys.")} onPublish={() => void onPublish()} busy={publishing} error={publishErr} /> : null}
+      {unreachable ? <p className="border-b border-[#e3d6b3] bg-[#fdf8ea] px-4 py-2 text-[14px] text-[#6b4e00] md:px-5">{t("The node can't be reached right now. New messages will show when it's back.")}</p> : null}
+      {keys !== "published" ? <KeysBanner what={t("To receive messages, turn on your inbox.")} onPublish={() => void onPublish()} busy={publishing} error={publishErr} /> : null}
 
       <div className="grid flex-1 md:grid-cols-[16rem_minmax(0,1fr)]">
         <nav aria-label={t("Conversations")} className={cx("border-[#e3e5e8] md:border-r", view === "thread" && "hidden md:block")}>
@@ -344,7 +352,7 @@ export default function MailPanel(props: {
             ))}
           </ul>
           <div className="space-y-2 px-4 py-3">
-            <Input ariaLabel={t("Write to a wallet id")} value={newTo} onChange={setNewTo} mono placeholder={t("New: 64-character wallet id…")} />
+            <Input ariaLabel={t("Write to an ID")} value={newTo} onChange={setNewTo} mono placeholder={t("New: 64-character ID…")} />
             <Button kind="secondary" className="min-h-9 px-3 text-[14px]" disabled={!newTo.trim()} onClick={startConvo}>
               {t("Start a conversation")}
             </Button>
@@ -374,7 +382,7 @@ export default function MailPanel(props: {
                   )}
                 </summary>
                 <p className="mt-1 text-[#5d646d]">
-                  {t("Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between changed a key: don't send anything private.")}
+                  {t("Compare this number with the other person, in person or on a call. If both of you see the same number, only the two of you can read your messages. If the numbers differ, someone in between may be reading along: don't send anything private.")}
                 </p>
               </details>
             ) : null}
@@ -403,7 +411,7 @@ export default function MailPanel(props: {
                       {t("Burn after read: open it (this deletes it from cooperating nodes)")}
                     </button>
                   ) : (
-                    <span className="whitespace-pre-wrap break-words">{m.text ?? t("Can't be read with this tab's keys.")}</span>
+                    <span className="whitespace-pre-wrap break-words">{m.text ?? t("Can't be opened in this tab.")}</span>
                   )}
                   <span className={cx(MONO, "mt-0.5 block text-[11.5px] opacity-75")}>
                     {fmtWhen(m.at, now, locale)}

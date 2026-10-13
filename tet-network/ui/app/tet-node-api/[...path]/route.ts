@@ -3,8 +3,10 @@ export const dynamic = "force-dynamic";
 
 import { isOperatorPath } from "../../lib/proxy_paths";
 
+// Next 16 passes `params` as a Promise (its route type check requires exactly that); tests may pass
+// a plain object, which `await` handles the same.
 type RouteContext = {
-  params: Promise<{ path?: string[] }> | { path?: string[] };
+  params: Promise<{ path?: string[] }>;
 };
 
 function absoluteOrigin(raw: string | undefined): string {

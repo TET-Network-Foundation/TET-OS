@@ -58,10 +58,10 @@ export default function NewBoardPanel(props: { directory: OpenBoard | null; onOp
   if (made) {
     return (
       <section aria-label={t("Your public board")}>
-        <PanelHead title={made.board.name} sub={t("public · listed")} todo={t("Save the board's 12 words, then open the board.")} />
+        <PanelHead title={made.board.name} sub={t("public · listed")} todo={t("Save the board's passphrase (12 words), then open the board.")} />
         <div className="max-w-[34rem] space-y-3 px-4 py-4 md:px-5">
           <p className="text-[15px]">
-            {t("These are the board's own 12 words, not your wallet's. A listing lasts 7 days; to keep the board listed, announce it again with these words (from the board's page). They are shown only now.")}
+            {t("This is the board's own passphrase (12 words), not yours. A listing lasts 7 days; to keep the board listed, announce it again with it (from the board's page). It's shown only now.")}
           </p>
           <p translate="no" className={cx(MONO, "rounded-md border border-[#c9ced4] bg-[#fafbfc] px-3 py-2 text-[14px] break-words")}>
             {made.words}
@@ -78,8 +78,8 @@ export default function NewBoardPanel(props: { directory: OpenBoard | null; onOp
       <div className="max-w-[34rem] space-y-5 px-4 py-4 md:px-5">
         <PinnedNotice
           lines={[
-            t("A public board is listed in the directory with its invite, so anyone can read every post. Listing it is signed by the board's own wallet, not yours."),
-            t("An invite-only board is readable by anyone with its invite link. The link is the key; it sits after the #, so it is never sent to the node."),
+            t("A public board is listed in the directory with its invite, so anyone can read every post. It's listed by the board's own ID, not yours."),
+            t("An invite-only board is readable by anyone with its invite link. The link is what opens it; the part after the # is never sent to the node."),
             t("An invite cannot be revoked: to shut people out, start a new board."),
           ]}
         />

@@ -71,7 +71,25 @@ pub async fn post_tmail_send(
     // included) is refused with the reason, never kept or relayed. The check, the store and any
     // release run as one unit on a blocking thread (`TmailStore::send_anonymous`), so neither a
     // burst of sends nor a client hanging up mid-check can split them.
-    let stored = if env.flags.anonymous {
+    // A fast anonymous post (no proof of its own; docs/plans/FAST_ANON_POSTING.md): accepted only
+    // for a posting key a verified proof registered for this board today, within the invisible
+    // flood guard. Never for polls. Nothing refused is stored.
+    let stored = if env.flags.anonymous && crate::tmail::store::is_fast_post(&env) {
+        use crate::tmail::store::FastSendError as F;
+        let (store, e2) = (state.tmail.clone(), env.clone());
+        let err = |code: StatusCode, msg: &str| (code, Json(serde_json::json!({ "ok": false, "error": msg }))).into_response();
+        match tokio::task::spawn_blocking(move || store.send_fast_anonymous(&e2)).await {
+            Ok(Ok(stored)) => stored,
+            Ok(Err(F::NotRegistered)) => return err(StatusCode::FORBIDDEN, "no proof for this board today yet: the first anonymous post of the day carries one"),
+            Ok(Err(F::Poll)) => return err(StatusCode::FORBIDDEN, "a ballot needs its own membership proof"),
+            Ok(Err(F::WrongDay)) => return err(StatusCode::BAD_REQUEST, "a posting key is for one UTC day; this post is dated another"),
+            Ok(Err(F::Busy)) => return err(StatusCode::TOO_MANY_REQUESTS, "try again in a moment"),
+            Ok(Err(F::DailyCap)) => return err(StatusCode::TOO_MANY_REQUESTS, "today's anonymous posts on this board are used; try again tomorrow"),
+            Ok(Err(F::NotFast)) => return err(StatusCode::BAD_REQUEST, "not a fast post"),
+            Ok(Err(F::Store(e))) => return (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+            Err(j) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")).into_response(),
+        }
+    } else if env.flags.anonymous {
         let (store, e2) = (state.tmail.clone(), env.clone());
         match tokio::task::spawn_blocking(move || store.send_anonymous(&e2)).await {
             Ok(Ok(stored)) => stored,
@@ -82,12 +100,39 @@ pub async fn post_tmail_send(
             Ok(Err(crate::tmail::store::AnonSendError::Refused(reason))) => {
                 return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": format!("the anonymous proof doesn't verify: {reason}") }))).into_response();
             }
+            // A ballot the poll's rules refuse (closed, not a member list's root, …): the reason, not a 500.
+            Ok(Err(crate::tmail::store::AnonSendError::Ballot(reason))) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": reason }))).into_response();
+            }
             Ok(Err(crate::tmail::store::AnonSendError::Store(e))) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
             Err(j) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("the check didn't finish: {j}")).into_response(),
         }
     } else {
+        // Shelter's invisible flood guard for a member's named posts (membership itself is checked
+        // in `store_tmail`).
+        if crate::tmail::shelter::is_shelter_board(&env.receiver_wallet_id) {
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let member = env.sender_wallet_id.trim().to_ascii_lowercase();
+            let may = crate::tmail::shelter::config_from_env().is_some_and(|cfg| state.tmail.shelter_state(&cfg).may_post(&member, now));
+            if !may {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": "only a member can post here" }))).into_response();
+            }
+            match state.tmail.shelter_flood_take(&member, now) {
+                Ok(()) => {}
+                Err(crate::tmail::store::FastSendError::DailyCap) => {
+                    return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({ "ok": false, "error": "that's today's posts; try again tomorrow" }))).into_response();
+                }
+                Err(_) => return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({ "ok": false, "error": "try again in a moment" }))).into_response(),
+            }
+        }
         match state.tmail.store_tmail(&env) {
             Ok(s) => s,
+            Err(e @ crate::tmail::store::TmailStoreError::Shelter(_)) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+            }
+            Err(e @ crate::tmail::store::TmailStoreError::PollBallot(_)) => {
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+            }
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e}")).into_response(),
         }
     };
@@ -136,6 +181,19 @@ pub struct InboxQuery {
 /// Phase 0.1.
 ///
 /// One clock reading is taken for the whole response so rows cannot disagree about "now".
+/// `GET /tmail/anon/fast/:receiver/:posting_key` — is this posting key registered for this board
+/// today? (The page asks before posting: registered means the next post needs no proof.) Reveals
+/// nothing a reader of the board doesn't already see: posting keys sign the posts.
+pub async fn get_tmail_anon_fast(
+    State(state): State<RestState>,
+    Path((receiver, posting_key)): Path<(String, String)>,
+) -> axum::response::Response {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let bucket = nexus_protocol::tmail_bucket_index_v1(now);
+    let registered = state.tmail.fast_registration_counts(&receiver, bucket, &posting_key);
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "bucket": bucket, "registered": registered }))).into_response()
+}
+
 pub async fn get_tmail_inbox(
     State(state): State<RestState>,
     Path(wallet_id): Path<String>,
@@ -149,10 +207,21 @@ pub async fn get_tmail_inbox(
     if state.operator_hide.is_wallet_hidden(&w) {
         return crate::rest::helpers::hidden_by_operator();
     }
-    let limit = q
-        .limit
-        .unwrap_or(INBOX_DEFAULT_LIMIT)
-        .clamp(1, INBOX_MAX_LIMIT);
+    // Shelter's board is members-only: even its ciphertext would show post counts and timing.
+    if crate::tmail::shelter::is_shelter_board(&w) {
+        return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "ok": false, "error": "members only" }))).into_response();
+    }
+    inbox_response(&state, &w, q.limit)
+}
+
+/// The inbox rows for `w` (operator hides applied, scheduled messages without their ciphertext).
+/// Shared by `/tmail/inbox` and Shelter's members-only `/shelter/inbox`.
+pub(crate) fn inbox_response(state: &RestState, w: &str, limit: Option<usize>) -> Response {
+    let w = w.to_string();
+    let q = InboxQuery { limit };
+    // A poll's wallet holds only verified ballots, one per member; a tally reads them all at once.
+    let max = if state.tmail.get_poll_root(&w).is_some() { crate::tmail::poll::POLL_MAX_MEMBERS } else { INBOX_MAX_LIMIT };
+    let limit = q.limit.unwrap_or(INBOX_DEFAULT_LIMIT).clamp(1, max);
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -589,5 +658,46 @@ pub async fn get_tmail_anon_receipt(
             Json(serde_json::json!({ "ok": false, "error": "not held by this node" })),
         )
             .into_response(),
+    }
+}
+
+/// `POST /tmail/poll/root` — register a members-only poll's member root (tmail/poll.rs), signed by
+/// the poll's own wallet. Immutable once set; the poll must be open today (UTC).
+pub async fn post_tmail_poll_root(State(state): State<RestState>, Json(r): Json<crate::tmail::poll::TmailPollRootV1>) -> Response {
+    if let Err(e) = crate::tmail::poll::verify_tmail_poll_root_v1(&r) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": e.to_string() }))).into_response();
+    }
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+    );
+    if r.bucket_index != now_bucket {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": "a poll is registered on the UTC day it opens" }))).into_response();
+    }
+    match state.tmail.register_poll_root(&r) {
+        Ok(stored) => {
+            let root_hex = state.tmail.get_poll_root(&r.poll_wallet_id).map(|p| p.root_hex);
+            (StatusCode::ACCEPTED, Json(serde_json::json!({ "ok": true, "stored": stored, "root_hex": root_hex }))).into_response()
+        }
+        Err(e) => {
+            let status = if e.starts_with("this poll already") { StatusCode::CONFLICT } else { StatusCode::BAD_REQUEST };
+            (status, Json(serde_json::json!({ "ok": false, "error": e }))).into_response()
+        }
+    }
+}
+
+/// `GET /tmail/poll/root/:wallet_id` — a poll's registered member root, or 404.
+pub async fn get_tmail_poll_root(State(state): State<RestState>, Path(wallet_id): Path<String>) -> Response {
+    match state.tmail.get_poll_root(&wallet_id) {
+        Some(r) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "poll_root": r }))).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false }))).into_response(),
+    }
+}
+
+/// `GET /tmail/anon/commitment/:wallet_id` — a member's public commitment (registrations are
+/// public), so a poll's creator can build the poll's member tree.
+pub async fn get_tmail_anon_commitment(State(state): State<RestState>, Path(wallet_id): Path<String>) -> Response {
+    match state.tmail.get_anon_registration(&wallet_id) {
+        Some(r) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "wallet_id": r.wallet_id, "commitment_hex": r.commitment_hex }))).into_response(),
+        None => (StatusCode::NOT_FOUND, Json(serde_json::json!({ "ok": false, "error": "not a registered member" }))).into_response(),
     }
 }

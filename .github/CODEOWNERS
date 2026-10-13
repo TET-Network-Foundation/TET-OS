@@ -1,0 +1,10 @@
+# A person reviews every dependency and workflow change (docs/THREAT_MODEL.md, rule 9).
+# Enforced once branch protection requires a code-owner review (an infra item for the maintainer).
+/Cargo.toml                         @Nexus-Network-Foundation
+/Cargo.lock                         @Nexus-Network-Foundation
+**/Cargo.toml                       @Nexus-Network-Foundation
+/tet-network/ui/package.json        @Nexus-Network-Foundation
+/tet-network/ui/package-lock.json   @Nexus-Network-Foundation
+/tet-agent-sdk/package.json         @Nexus-Network-Foundation
+/tet-agent-sdk/package-lock.json    @Nexus-Network-Foundation
+/.github/                           @Nexus-Network-Foundation

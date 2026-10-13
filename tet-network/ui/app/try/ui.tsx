@@ -162,7 +162,7 @@ export function Toggle(props: { on: boolean; onChange: (on: boolean) => void; ch
 }
 
 /**
- * The honest limits, as the pinned rules post `0 · notice`. The first rule always shows; the rest
+ * The honest limits, as a pinned notice. The first rule always shows; the rest
  * open with one tap, so a phone screen is not all notice.
  */
 export function PinnedNotice(props: { lines: ReactNode[] }) {
@@ -171,7 +171,7 @@ export function PinnedNotice(props: { lines: ReactNode[] }) {
   const [first, ...rest] = props.lines;
   return (
     <div className="my-3 border-l-[3px] border-[#c9a227] bg-[#fffbea] px-3 py-2 text-[14.5px] leading-relaxed text-[#1c1f23]">
-      <div className={cx(MONO, "text-[13px] font-semibold text-[#6b4e00]")}>0 · {t("notice")}</div>
+      <div className={cx(MONO, "text-[13px] font-semibold text-[#6b4e00]")}>{t("notice")}</div>
       <p className="mt-0.5">{first}</p>
       {open
         ? rest.map((l, i) => (
@@ -209,10 +209,10 @@ export function KeysBanner(props: { what: string; onPublish: () => void; busy: b
   return (
     <div className="mx-4 my-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md border border-[#c5cbef] bg-[#f3f4fd] px-3 py-2 text-[14.5px] md:mx-5">
       <span>
-        {props.what} {t("Publishing them is public: it shows this wallet can receive.")}
+        {props.what} {t("Turning it on is public: it shows this ID can receive messages.")}
       </span>
       <Button className="min-h-9 px-3 text-[14px]" disabled={props.busy} onClick={props.onPublish}>
-        {props.busy ? t("Publishing…") : t("Publish keys")}
+        {props.busy ? t("Publishing…") : t("Turn on inbox")}
       </Button>
       {props.error ? (
         <span role="alert" className={INK.bad}>
@@ -260,5 +260,26 @@ export function FilePick({
       {children}
       <input ref={ref} type="file" accept={accept} className="sr-only" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
     </label>
+  );
+}
+
+/**
+ * "Verify without TET": the standalone verifier (public/verify/, scripts/build_offline_verifier.mjs).
+ * One file that checks a record on the visitor's own device with no server at all.
+ */
+export function OfflineVerifier() {
+  const { t } = useLang();
+  const link = cx(FOCUS, "rounded-sm underline underline-offset-2");
+  return (
+    <p className="text-[13.5px] text-[#5d646d]">
+      {t("Even if TET disappears, this still works:")}{" "}
+      <a href="/verify/tet-verify.html" download className={link}>
+        {t("the offline verifier")}
+      </a>{" "}
+      {t("(one file: it checks a record on your device, with the network off)")} ·{" "}
+      <a href="/verify/SHA256SUMS" className={link}>
+        SHA-256
+      </a>
+    </p>
   );
 }

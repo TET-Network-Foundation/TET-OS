@@ -76,7 +76,7 @@ jobs:
     outputs:
       code: ${{ steps.classify.outputs.code }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Needed to diff against the pushed-from commit; a shallow clone cannot.
           fetch-depth: 0
@@ -156,12 +156,13 @@ jobs:
           echo "Reporting success so the required check 'rust (build, test, guards)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           components: clippy
 
       # `ubuntu-latest` ships ~14 GB free, and this workspace does not fit: the
@@ -177,7 +178,7 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: rust-${{ hashFiles('**/Cargo.lock') }}
 
@@ -214,7 +215,7 @@ jobs:
       # job. No new job, so the five required check names stay exactly as the ruleset lists them.
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
@@ -228,7 +229,7 @@ jobs:
         name: agent identity — GET /chain discovery, end to end
         run: |
           set -euo pipefail
-          (cd tet-agent-sdk && npm ci --silent && npm run build --silent)
+          (cd tet-agent-sdk && npm ci --ignore-scripts --silent && npm run build --silent)
           cargo build -p tet-core --bin TET-Core
           tet-cli/scripts/agent_chain_discovery.sh target/debug/TET-Core target/debug/tet-cli
 
@@ -281,6 +282,9 @@ jobs:
             anonymous_post_names_no_poster_to_the_node
             anonymous_mail_from_six_members_is_all_retained
             anonymous_mail_is_capped_per_receiver
+            shelter_reads_are_members_only
+            shelter_board_takes_members_posts_only_and_never_gossips
+            shelter_anonymous_posts_need_shelters_own_root
             key_registrations_need_a_v2_signature_by_the_wallet
             ui_signed_key_registration_v2_verifies_in_rust
             stalled_block_plane_exits_the_process_past_the_hard_threshold
@@ -385,21 +389,36 @@ jobs:
           echo "Reporting success so the required check 'ui (next build)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: tet-network/ui/package-lock.json
 
       - if: needs.gate.outputs.code == 'true'
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - if: needs.gate.outputs.code == 'true'
         run: npm run build
+
+      # Every page in Japanese and Hong Kong Chinese, rendered in a headless browser, has no English
+      # prose left (allowlist: TET, proof codes, IDs, algorithm names, URLs). The node isn't running,
+      # so the error and empty states are what gets checked. Control: an injected English sentence.
+      - if: needs.gate.outputs.code == 'true'
+        name: every page in ja and zh-HK — no English left
+        run: |
+          TET_CORE_ORIGIN=http://127.0.0.1:5999 npx next start -p 3400 > /tmp/next.log 2>&1 &
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:3400/try && break; sleep 1; done
+          CHROME="$(command -v google-chrome || command -v chromium)" TET_UI=http://127.0.0.1:3400 node scripts/lang_render_guard.mjs
+
+      # First visit picks the browser's language; a choice is remembered (English too); ?lang= wins.
+      - if: needs.gate.outputs.code == 'true'
+        name: the page opens in the visitor's language
+        run: node --experimental-strip-types scripts/lang_pick_guard.mjs
 
       # The poster's half of the anonymous-send privacy guard: every request the real
       # anon_poster.mjs makes is recorded, and none may name the poster. Plain Node, no build step.
@@ -438,6 +457,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — every string is translated, placeholders intact
         run: node --experimental-strip-types scripts/try_i18n_guard.mjs
+      # Japanese terms (founder, 2026-10-11): vouch is 推薦 (not 保証), the 12 words are パスフレーズ (not
+      # 合言葉), the anonymity set is 匿名グループ (not 匿名セット). Control included.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the Japanese terms stay 推薦, パスフレーズ, 匿名グループ
+        run: node scripts/ja_terms_guard.mjs
 
       # Try TET "Sign anything": what the page signs is what Verify accepts; a stamp counts only for
       # this .sig.json's file fee in a canonical block. Controls.
@@ -449,6 +473,49 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — keys and senders are checked in the browser, not trusted from the node
         run: node --experimental-strip-types scripts/key_trust_guard.mjs
+      # The signed build manifest (THREAT_MODEL rule 6): covers what the demo serves, deterministic,
+      # and only the publisher's signature over this manifest counts. Controls included.
+      - if: needs.gate.outputs.code == 'true'
+        name: build manifest — what the demo serves, signed by the publisher
+        run: node --experimental-strip-types scripts/build_manifest_guard.mjs
+      # Verify without TET, Level 2: a stamp in a chain export, checked offline; each tampering caught.
+      - if: needs.gate.outputs.code == 'true'
+        name: verify without TET, Level 2 — a stamp in a chain copy, offline
+        run: node --experimental-strip-types scripts/chain_verify_guard.mjs
+      # TetSearch v1: ranking (one voice per member), only verified chains searched, wording. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: TetSearch — ranking, verified sites only, wording
+        run: node --experimental-strip-types scripts/tetsearch_guard.mjs
+      # Threat model rule 8: the three fixed sentences where the 12 words are entered, saved or remembered.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the three safety sentences are where they must be
+        run: node --experimental-strip-types scripts/try_safety_lines_guard.mjs
+      # Threat model rule 11: security.txt names SECURITY.md's contacts and hasn't expired.
+      - if: needs.gate.outputs.code == 'true'
+        name: security.txt — same contacts as SECURITY.md, not expired
+        run: node scripts/security_txt_guard.mjs
+      # Threat model rule 9: Actions pinned by SHA, installs with --ignore-scripts, lockfiles, CODEOWNERS.
+      - if: needs.gate.outputs.code == 'true'
+        name: supply chain — pinned Actions, no install scripts, lockfiles, code owners
+        run: node scripts/supply_chain_guard.mjs
+      # Threat model rule 7: weak device passwords refused; a remembered ID auto-locks after 15 minutes.
+      - if: needs.gate.outputs.code == 'true'
+        name: device keys — password strength and auto-lock
+        run: node --experimental-strip-types scripts/device_keys_guard.mjs
+      # Threat model rule 6: the public pages' CSP admits no other origin; SRI on; no third-party code.
+      - if: needs.gate.outputs.code == 'true'
+        name: page integrity — CSP, SRI, no third-party scripts
+        run: node --experimental-strip-types scripts/page_integrity_guard.mjs
+      # Shelter: the board key is sealed only to keys the member's wallet signed, and opened only from
+      # a verified, allowed sender.
+      - if: needs.gate.outputs.code == 'true'
+        name: Shelter — the board key travels only between the right people
+        run: node --experimental-strip-types scripts/shelter_guard.mjs
+      # Verify without TET: the offline verifier agrees with the page's, its files are what the build
+      # makes now, they can't reach the network, and the CLI verifies with networking disabled.
+      - if: needs.gate.outputs.code == 'true'
+        name: verify without TET — offline, deterministic, no network
+        run: node --experimental-strip-types scripts/offline_verify_guard.mjs
       # The node's clock refusals ("your device clock is off", the UTC day changed) are shown plainly
       # and translated word for word.
       - if: needs.gate.outputs.code == 'true'
@@ -478,6 +545,107 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — the node proxy never forwards operator routes
         run: node --experimental-strip-types scripts/try_proxy_guard.mjs
+
+      # What /try remembers on a device (lib/device_store.ts): only listed UI keys in plain storage;
+      # the key only as passphrase ciphertext (PBKDF2-SHA-256 ≥ 600k, AES-GCM); a wrong passphrase
+      # opens nothing; the KDF can't be weakened; no other /try lib touches storage. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the device store keeps only UI state and an encrypted key
+        run: node --experimental-strip-types scripts/try_storage_guard.mjs
+
+      # The home view's search over public threads: every word must match, case- and
+      # width-insensitive; an empty query finds nothing. Control.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the home search matches every word, and nothing for an empty query
+        run: node --experimental-strip-types scripts/try_search_guard.mjs
+
+      # Signature badge and proof codes: a hash-only signature matches only a file with that SHA-256;
+      # record-only checks only for hash records; a code lookup lists every match, verifies each,
+      # and fetches only its own file; a proof code is never called a key. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — proof codes find; signatures prove
+        run: node --experimental-strip-types scripts/try_badge_guard.mjs
+
+      # "Mark as genuine": a copy matches only byte for byte; no jargon on the mark and check pages;
+      # the honest lines stay; marking sends the fingerprint, never the file. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — mark as genuine is exact, plain and sends no file
+        run: node --experimental-strip-types scripts/try_genuine_guard.mjs
+
+      # Sealed predictions: the seal is exact (text, date, salt); a fresh salt each time; the card,
+      # share link and X post carry no hidden text; a reveal counts only a verified fingerprint
+      # match; the honest lines and the 1–30 day limit stay. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a sealed prediction is exact and hides its text until revealed
+        run: node --experimental-strip-types scripts/try_seal_guard.mjs
+
+      # Plain words for non-technical people: the everyday pages say ID, passphrase (12 words),
+      # inbox, proof file — never wallet, .sig.json, nullifier or "your key"; "nullifier" only on
+      # How it works. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — plain words on everyday pages
+        run: node scripts/try_plain_guard.mjs
+
+      # Tmail's KEM is Kyber-768 Round 3, not FIPS 203 ML-KEM: no unqualified "ML-KEM" claim in the
+      # UI, tet-core or docs. Control.
+      - if: needs.gate.outputs.code == 'true'
+        name: wording — Tmail KEM is Kyber Round 3, never called ML-KEM
+        run: node scripts/kem_wording_guard.mjs
+
+      # Founder's rule: nothing next to "Steve"/"founder" says student, age, school, town or country.
+      - if: needs.gate.outputs.code == 'true'
+        name: wording — no personal details about the founder
+        run: node scripts/founder_privacy_guard.mjs
+
+      # AI access policy: robots.txt and Caddy's 403 come from deploy/ai-crawlers.txt; never "AI
+      # cannot access TET" / "AI-free guaranteed"; the FAQ says the honest limits. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: AI access policy — crawler list in sync
+        run: node scripts/ai_crawlers_guard.mjs
+      - if: needs.gate.outputs.code == 'true'
+        name: wording — no absolute "AI can't access" claims
+        run: node scripts/try_ai_wording_guard.mjs
+
+      # The technical paper: cited files exist, the built HTML is the text, the marks match the files,
+      # and the wording rules hold (no "first", money, "untraceable", authorship, AI absolutes,
+      # unqualified ML-KEM; quantum resistance incomplete until wallet_id_v2). Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: technical paper — sources, build and wording
+        run: node --experimental-strip-types scripts/paper_guard.mjs
+
+      # Boards: an invisible flood guard (5 instant, then a few seconds apart), no visible per-minute
+      # limit; normal conversation never waits. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: boards — invisible flood guard
+        run: node scripts/try_flood_guard.mjs
+
+      # The "Inside" page: retention shown only from the node's settings (the Rust test checks those
+      # against the config), counts with the time they were read. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — Inside shows real retention and counts
+        run: node scripts/try_inside_guard.mjs
+
+      # Anonymous polls: the page signs tet-core's poll pre-image field for field; a members-only
+      # poll sends wallet ids only (the node builds the root from its own registry); a voter proves
+      # against the node's root, not the post's; the tally counts only verified ballots. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — polls count only real members' verified ballots
+        run: node --experimental-strip-types scripts/try_poll_guard.mjs
+
+      # Signed sites: rendering is deterministic; author text can't make a page run anything (only
+      # the renderer's tags and attributes, a script-forbidding CSP); the proves line is on every
+      # page; a reader's chain check refuses tampered, dropped, reordered, replayed or foreign edits;
+      # the page signs tet-core's pre-image field for field. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a site is exactly what its key signed, and runs nothing
+        run: node --experimental-strip-types scripts/try_site_guard.mjs
+
+      # "What is TET": no "first" claims in any language (QRL and others already use post-quantum
+      # signatures: TET claims the combination); no dates beyond Phase 1; the honest lines stay
+      # (weaker today, demo is partial, volunteer project); every string translated. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — What is TET claims no firsts and no dates past Phase 1
+        run: node --experimental-strip-types scripts/try_what_guard.mjs
 
       # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
       # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
@@ -518,7 +686,7 @@ jobs:
         run: |
           set -euo pipefail
           committed=$(shasum -a 256 src/wallet_client_bundled.js | cut -d' ' -f1)
-          npm ci --silent
+          npm ci --ignore-scripts --silent
           npm run build-wallet-client --silent
           rebuilt=$(shasum -a 256 src/wallet_client_bundled.js | cut -d' ' -f1)
           echo "committed: $committed"
@@ -543,7 +711,7 @@ jobs:
         working-directory: tet-agent-sdk
         run: |
           set -euo pipefail
-          npm ci --silent
+          npm ci --ignore-scripts --silent
           npm run build --silent
           out=$(npm test --silent 2>&1)
           echo "$out"
@@ -580,7 +748,7 @@ jobs:
           echo "Reporting success so the required check 'shell (shellcheck deploy scripts)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # deploy/ was untested by anything until 2026-09-29, and it is the code with the most
       # authority in the repository: it provisions the seed, deploys to it, and deletes its
@@ -710,23 +878,24 @@ jobs:
           echo "Reporting success so the required check 'wasm (tet-pqc-wasm → ui/public/pqc)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Rust (wasm32 target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           targets: wasm32-unknown-unknown
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
 
       - if: needs.gate.outputs.code == 'true'
         name: Cache cargo + target
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: wasm-${{ hashFiles('**/Cargo.lock') }}
 
@@ -826,7 +995,7 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         name: Upload pqc artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: tet-pqc-wasm
           path: ${{ runner.temp }}/pqc/
@@ -857,7 +1026,7 @@ jobs:
           echo "Reporting success so the required check 'docker (images build)' is satisfied."
 
       - if: needs.gate.outputs.code == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # docker.io images through Google's public mirror (Docker Hub rate-limits anonymous pulls from
       # shared CI addresses); BuildKit falls back to docker.io when the mirror lacks an image. The
@@ -872,7 +1041,7 @@ jobs:
           docker tag "mirror.gcr.io/$img" "$img"
 
       - if: needs.gate.outputs.code == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
         with:
           buildkitd-config-inline: |
             [registry."docker.io"]
@@ -888,7 +1057,7 @@ jobs:
       # this. Compose still defaults to the full zk build for deployments.
       - if: needs.gate.outputs.code == 'true'
         name: Build tet-core image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: Dockerfile
@@ -903,7 +1072,7 @@ jobs:
       # tet-pqc-wasm from the Rust workspace and bakes it into public/pqc.
       - if: needs.gate.outputs.code == 'true'
         name: Build ui image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: tet-network/ui/Dockerfile

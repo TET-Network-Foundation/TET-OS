@@ -63,6 +63,23 @@ node reports it in `GET /status/live` (the try page's **Live** channel) and the 
 page" names it. An archive has no `.git`, so the build can't find it on its own; left out, both say
 the build doesn't name its commit.
 
+## 4b. Sign the build (after each UI deploy)
+
+The UI build writes `/build-manifest.json` (every file the site serves, with its SHA-256). On your
+own machine, with the publisher key. Build the deployed commit yourself first (the same Docker image
+the demo builds, then `node scripts/build_manifest.mjs --out mine.json`): the script signs only if
+the served manifest is byte-identical to yours.
+
+```bash
+cd tet-network/ui
+TET_PAPER_CHAIN_ID=tet-local-dev TET_PAPER_GENESIS_HASH=<genesis> \
+  node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org --local mine.json --publish
+node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org --commit <deployed sha>   # VERIFIED
+```
+
+`--commit` is required (or `--any-commit`): a signature only proves a build was signed once, so the
+check must also know which build should be live, or an older signed build would pass (a rollback).
+
 ## 5. Check from outside
 
 ```bash
@@ -166,3 +183,34 @@ then hide each printed `msg_id`. The invite stays on your machine; the node only
 Hiding a wallet also hides everything it sent (its directory listing included) and refuses new
 posts and files to or from it. Copies other nodes already hold stay on those nodes. Reports go to
 abuse@stevenexus.org and are reviewed within 48 hours.
+
+## Before going public (checklist)
+
+1. **No test boards in the public directory.** List them, then hide each test one (this keeps the
+   chain and everyone's copies; it only stops this node serving them):
+   ```sh
+   # on any machine, in tet-network/ui
+   TET_TRY_ORIGIN=https://<this host> NEXT_PUBLIC_TET_DIRECTORY_INVITE=<directory invite> \
+     node --experimental-strip-types scripts/list_public_boards.mjs
+   # on the host, for each test board
+   deploy/operator-hide.sh hide wallet <board wallet> "test board before launch"
+   ```
+2. **The sample is marked** on this node and `TET_SAMPLE_CODE` is set (§11).
+3. **Every page in ja and en** looks right (the i18n guard checks the strings; look at the pages).
+
+## 11. Proof codes (the public signature registry)
+
+Nothing to set up. Proof codes (Sign → **Get a proof code**, and the home search) live in the
+node's public signature registry (`tet-core/src/sigs.rs`, `POST /sigs/publish`, `GET /sigs/search`).
+
+- A record is stored only with its signer's consent for exactly its bytes, so nobody can publish a
+  `.sig.json` they were given. Search by proof code, file SHA-256, signer and date.
+- Limits: 16 KB per record, 1,000 per signer, a node-wide total (`TET_SIGS_MAX_TOTAL_BYTES`,
+  default 256 MiB); each publish is charged to the client's daily upload budget. Records don't
+  expire.
+- Takedown: hiding a signer's wallet (§10) stops their records being listed.
+- **The home page's "try it: verify this sample"**: once the node is up, run
+  `TET_TRY_ORIGIN=https://<this host> node --experimental-strip-types scripts/make_sample.mjs`
+  (in `tet-network/ui`). It marks `public/sample/tet-sample.txt` with a throwaway ID and prints
+  `NEXT_PUBLIC_TET_SAMPLE_CODE=…`; put that code in `.env` as `TET_SAMPLE_CODE=…` and rebuild the UI.
+  Without it the home page simply has no sample link.

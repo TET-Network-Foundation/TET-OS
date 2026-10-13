@@ -54,3 +54,57 @@ button,
   }
 }
 
+
+/* /try dark mode: the same hard-coded colours, mapped to a dark palette when the system asks for it.
+   One block, no component changes; :root[data-theme="light"] (a later switch) turns it off. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) body:has(.try-root) { background-color: #15171a; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#1c1f23\] { color: #e6e8eb; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#3d434a\] { color: #c4c9cf; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#5d646d\] { color: #9aa1a9; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#6b4e00\] { color: #e0c46a; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#a07800\] { color: #d9b44a; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#8a1f1f\] { color: #f19a9a; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#1f5132\] { color: #8fd3a8; }
+  :root:not([data-theme="light"]) .try-root .text-\[\#1a237e\] { color: #aab4ff; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#fafbfc\] { background-color: #1b1e22; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#f6f7f8\] { background-color: #1d2024; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#f3f4fd\] { background-color: #1e2133; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#f1f2f4\] { background-color: #22262b; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#f1f3f6\] { background-color: #22262b; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#f0f1f3\] { background-color: #23272c; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#eceefb\] { background-color: #262a40; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#e8eaed\] { background-color: #2a2e34; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#e2e5e9\] { background-color: #2d3238; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#f3f7fc\] { background-color: #1b2230; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#fffbea\] { background-color: #2a2513; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#fff6dc\] { background-color: #2d2612; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#1c1f23\] { background-color: #e6e8eb; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#1a237e\] { background-color: #aab4ff; }
+  :root:not([data-theme="light"]) .try-root .bg-\[\#33383e\] { background-color: #cfd3d8; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#eceef1\] { border-color: #2a2e33; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#e3e5e8\] { border-color: #30353b; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#dcdfe3\] { border-color: #343a40; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#c9ced4\] { border-color: #474e56; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#8b9198\] { border-color: #6c737b; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#c9d6e6\] { border-color: #34445a; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#c9a227\] { border-color: #a8862a; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#c5cbef\] { border-color: #3c4470; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#1c1f23\] { border-color: #e6e8eb; }
+  :root:not([data-theme="light"]) .try-root .border-\[\#1a237e\] { border-color: #aab4ff; }
+  :root:not([data-theme="light"]) .try-root .hover\:border-\[\#8b9198\]:hover { border-color: #6c737b; }
+  :root:not([data-theme="light"]) .try-root .hover\:text-\[\#1c1f23\]:hover { color: #e6e8eb; }
+  :root:not([data-theme="light"]) .try-root .hover\:bg-\[\#fafbfc\]:hover { background-color: #1b1e22; }
+  :root:not([data-theme="light"]) .try-root .hover\:bg-\[\#e8eaed\]:hover { background-color: #2a2e34; }
+  :root:not([data-theme="light"]) .try-root .hover\:bg-\[\#33383e\]:hover { background-color: #cfd3d8; }
+  :root:not([data-theme="light"]) .try-root .disabled\:bg-\[\#f6f7f8\]:disabled { background-color: #1d2024; }
+  :root:not([data-theme="light"]) .try-root, .try-root .bg-white { background-color: #15171a; }
+  :root:not([data-theme="light"]) .try-root { color: #e6e8eb; }
+  /* The primary button inverts: light face, dark label. */
+  :root:not([data-theme="light"]) .try-root .bg-\[\#1c1f23\].text-white, .try-root .bg-\[\#1a237e\].text-white, .try-root .hover\:bg-\[\#33383e\]:hover.text-white { color: #15171a; }
+  :root:not([data-theme="light"]) .try-root .focus-within\:ring-\[\#1a237e\]:focus-within, .try-root .focus-visible\:ring-\[\#1a237e\]:focus-visible { --tw-ring-color: #aab4ff; }
+  :root:not([data-theme="light"]) .try-root input, .try-root textarea, .try-root select { background-color: #1b1e22; color: #e6e8eb; }
+  :root:not([data-theme="light"]) .try-root ::placeholder { color: #6c737b; }
+  /* The logo keeps the original's grey rim on dark, so the disc has an edge. */
+  :root:not([data-theme="light"]) .try-root img.tet-logo { border-radius: 50%; box-shadow: 0 0 0 1px #929292; }
+}

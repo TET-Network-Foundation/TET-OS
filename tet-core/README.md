@@ -191,7 +191,7 @@ Secondary discovery: `p2p.rs` enables **mDNS** on the same host/LAN (useful in D
 
 ## Documentation
 
-- Whitepaper: [`../WHITEPAPER.md`](../WHITEPAPER.md)
+- Whitepaper: [technical paper v2](https://tetnet.org/whitepaper)
 - Litepaper: [`../LITEPAPER.md`](../LITEPAPER.md)
 - Architecture notes: `src/vision/`, [`BRIDGE_INTERFACES.md`](./BRIDGE_INTERFACES.md)
 - API reference: [`openapi.yaml`](./openapi.yaml)
@@ -230,7 +230,7 @@ Demand-side AI payments via `settle_ai_utility_payment()` in `ledger.rs`:
 - **15%** → `dex:treasury`
 - **5%** → burned
 
-Units: **micro-TET** on-chain — `1 TET = 1_000_000` micro units (`STEVEMON` constant in code; aligns with [`WHITEPAPER.md`](../WHITEPAPER.md) §5–§6). PoC/PoR thermodynamic rewards per §5.2 are separate from this AI settlement split.
+Units: **micro-TET** on-chain — `1 TET = 1_000_000` micro units (`STEVEMON` constant in code; aligns with [`WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) §5–§6). PoC/PoR thermodynamic rewards per §5.2 are separate from this AI settlement split.
 
 ### Enterprise API
 

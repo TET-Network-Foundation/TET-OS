@@ -1,3 +1,5 @@
+> **Superseded (2026-10-09).** The current paper is the technical paper at `/whitepaper` (source `tet-network/ui/app/whitepaper/paper.ts`, PDF `tet-network/ui/public/paper/tet-technical-paper.pdf`, built by `tet-network/ui/scripts/paper_build.mjs`). This document is kept for history; where it differs from the code, the technical paper is right.
+
 # Whitepaper build — Phrack-style HTML + PDF
 
 **The PDF is a build artifact and is no longer tracked in git.** Regenerate it on demand with the
@@ -101,6 +103,6 @@ is a dead domain, not personal, so it stays spelled out — there is nothing to 
 | Document | Relation |
 |----------|----------|
 | [`WHITEPAPER_v1.1_DRAFT.md`](./WHITEPAPER_v1.1_DRAFT.md) | Source of truth for the render |
-| [`../WHITEPAPER.md`](../WHITEPAPER.md) | Canonical whitepaper (kept in sync with the draft) |
+| [`archive/WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) | Canonical whitepaper (kept in sync with the draft) |
 | [`scripts/render_phrack_wp_pdf.py`](./scripts/render_phrack_wp_pdf.py) | The renderer |
 | [`styles/phrack_wp.css`](./styles/phrack_wp.css) | Print stylesheet |

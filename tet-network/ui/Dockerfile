@@ -54,6 +54,8 @@ ARG NEXT_PUBLIC_TET_QUESTIONS_INVITE=""
 ARG NEXT_PUBLIC_TET_DIRECTORY_INVITE=""
 # The commit "verify this page" names (empty: the page says the build doesn't name it).
 ARG NEXT_PUBLIC_TET_BUILD_SHA=""
+# The home page's "try it: verify this sample" proof code (scripts/make_sample.mjs; empty: no link).
+ARG NEXT_PUBLIC_TET_SAMPLE_CODE=""
 ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_TET_TREASURY_ADDRESS=${NEXT_PUBLIC_TET_TREASURY_ADDRESS} \
     NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID=${NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID} \
@@ -61,13 +63,16 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     NEXT_PUBLIC_TET_DEMO_CONTACT=${NEXT_PUBLIC_TET_DEMO_CONTACT} \
     NEXT_PUBLIC_TET_QUESTIONS_INVITE=${NEXT_PUBLIC_TET_QUESTIONS_INVITE} \
     NEXT_PUBLIC_TET_DIRECTORY_INVITE=${NEXT_PUBLIC_TET_DIRECTORY_INVITE} \
-    NEXT_PUBLIC_TET_BUILD_SHA=${NEXT_PUBLIC_TET_BUILD_SHA}
+    NEXT_PUBLIC_TET_BUILD_SHA=${NEXT_PUBLIC_TET_BUILD_SHA} \
+    NEXT_PUBLIC_TET_SAMPLE_CODE=${NEXT_PUBLIC_TET_SAMPLE_CODE}
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY tet-network/ui/ ./
 COPY --from=pqc /pqc/ ./public/pqc/
 
 RUN npm run build \
+ && node scripts/build_manifest.mjs \
+ && test -s public/build-manifest.json \
  && test -s .next/standalone/server.js \
  && test -s public/pqc/tet_pqc_wasm_bg.wasm
 

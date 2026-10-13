@@ -25,7 +25,7 @@ import {
   shownOnBoard,
 } from "./board.mjs";
 import { generateDisposableWords } from "./disposable_wallet.mjs";
-import { fetchAnonLeaves, makeHelperProver, runAnonPost } from "./anon_poster.mjs";
+import { fetchAnonLeaves, makeHelperProver, prewarmAnonProof, runAnonPost, type AnonProof } from "./anon_poster.mjs";
 import { anonCommitment, toHex } from "./anon_tree.mjs";
 import { expectedChainBinding } from "./chain_binding";
 import { mnemonicToTetEd25519Keypair, signTetEd25519 } from "./ed25519_tet";
@@ -133,8 +133,14 @@ export async function openBoard(baseUrl: string, inviteText: string): Promise<Op
 export const HIDDEN_BOARD = "This node no longer serves this board: its operator hid it. Hiding is local to this node; see Terms.";
 
 /** The board's posts, newest first, decrypted with the invite's keys. */
-export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100): Promise<BoardPost[]> {
-  const r = await getTmailInbox(baseUrl, board.boardWalletId, limit);
+export async function readBoard(
+  baseUrl: string,
+  board: OpenBoard,
+  limit = 100,
+  /** Where the rows come from (default: the board's public inbox; Shelter reads its members-only one). */
+  rows: () => Promise<Awaited<ReturnType<typeof getTmailInbox>>> = () => getTmailInbox(baseUrl, board.boardWalletId, limit),
+): Promise<BoardPost[]> {
+  const r = await rows();
   if (r.status === 410) throw new Error(HIDDEN_BOARD);
   if (!r.ok) throw new Error(r.text || `could not read the board (HTTP ${r.status})`);
   const out: BoardPost[] = [];
@@ -167,7 +173,7 @@ export async function readBoard(baseUrl: string, board: OpenBoard, limit = 100):
 /** Where a Tmail goes: a wallet id and its messaging public keys. */
 export type Recipient = { walletId: string; x25519Pub: Uint8Array; mlkemPub: Uint8Array };
 
-const boardRecipient = (board: OpenBoard): Recipient => ({
+export const boardRecipient = (board: OpenBoard): Recipient => ({
   walletId: board.boardWalletId,
   x25519Pub: board.keys.x25519_pub,
   mlkemPub: board.keys.mlkem_pub,
@@ -237,17 +243,56 @@ export async function postAnonymous(
   board: OpenBoard,
   text: string,
   onState: (s: AnonSendState) => void,
+  knownMember = false,
 ): Promise<AnonSendState> {
-  return postAnonymousTo(baseUrl, proverUrl, boardRecipient(board), text, onState);
+  const out = await postAnonymousTo(baseUrl, proverUrl, boardRecipient(board), text, onState, undefined, knownMember);
+  if (out.state === "sent") noteRegisteredToday(board.boardWalletId);
+  return out;
 }
 
 /** An anonymous Tmail to `to`, through the native prover. Nothing sent to the node names the sender. */
+/** Today's proofs started in the background, by `board:bucket` (fast anonymous posting). */
+const PROOF_CACHE = new Map<string, Promise<AnonProof>>();
+
+/**
+ * When a member opens a board: start today's proof for it in the background, unless this node
+ * already has today's posting key registered. The first anonymous post then needn't wait the whole
+ * ~30 s; every later one that day is instant (docs/plans/FAST_ANON_POSTING.md).
+ */
+export async function prewarmBoardProof(baseUrl: string, proverUrl: string, board: OpenBoard): Promise<string> {
+  const ks = getTmailKeySession();
+  if (!ks) return "no wallet";
+  return prewarmAnonProof(
+    { node: anonNodeAdapter(baseUrl), prove: makeHelperProver({ url: proverUrl }), ephemeralWalletId: ephemeralWalletIdFromSeed, now: () => Date.now(), proofCache: PROOF_CACHE },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: board.boardWalletId, registeredToday: registeredToday(board.boardWalletId) },
+  );
+}
+
+/**
+ * This page's memory that today's posting key for a board is registered (after a post here). In
+ * memory only, never in browser storage: a stored note would leave a trace, on the device, that it
+ * posted anonymously on that board today. After a reload the tab just proves again in the
+ * background; the node is asked at posting time anyway.
+ */
+const REGISTERED_TODAY = new Set<string>();
+const fastNoteKey = (board: string) => `${board}:${Math.floor(Date.now() / 86_400_000)}`;
+export function registeredToday(board: string): boolean {
+  return REGISTERED_TODAY.has(fastNoteKey(board));
+}
+export function noteRegisteredToday(board: string): void {
+  REGISTERED_TODAY.add(fastNoteKey(board));
+}
+
 export async function postAnonymousTo(
   baseUrl: string,
   proverUrl: string,
   to: Recipient,
   text: string,
   onState: (s: AnonSendState) => void,
+  memberTree?: { leaves: Uint8Array[]; rootHex: string },
+  knownMember = false,
+  /** A members-only space with its own tree that still allows fast posts (Shelter; never a poll). */
+  allowFast = false,
 ): Promise<AnonSendState> {
   const ks = getTmailKeySession();
   if (!ks) return { state: "failed", reason: "Create a disposable wallet first." };
@@ -255,6 +300,7 @@ export async function postAnonymousTo(
     {
       node: anonNodeAdapter(baseUrl),
       prove: makeHelperProver({ url: proverUrl }),
+      proofCache: PROOF_CACHE,
       ephemeralWalletId: ephemeralWalletIdFromSeed,
       buildEnvelope: (a: {
         ephemeralSeed: Uint8Array;
@@ -262,7 +308,7 @@ export async function postAnonymousTo(
         receiverWalletId: string;
         plaintext: string;
         sentAtMs: number;
-        proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string };
+        proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string } | null;
       }) =>
         buildAnonymousTmailEnvelopeV1({
           ephemeralSeed: a.ephemeralSeed,
@@ -278,7 +324,7 @@ export async function postAnonymousTo(
       now: () => Date.now(),
       onState,
     },
-    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text },
+    { memberSecret: ks.anonMemberSecret, receiverWalletId: to.walletId, plaintext: text, memberTree, knownMember, allowFast },
   )) as AnonSendState;
 }
 

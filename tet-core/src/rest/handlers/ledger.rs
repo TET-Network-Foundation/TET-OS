@@ -9,7 +9,6 @@ use serde::Serialize;
 use std::net::SocketAddr;
 
 use crate::{
-    attestation::AttestationReport,
     ledger::{
         BlockSummary, MAX_SUPPLY_MICRO,
         MIN_WORKER_STAKE_MICRO, STEVEMON, TxIndexRecordV1,
@@ -422,55 +421,6 @@ async fn post_transfer_enveloped_impl(
         .into_response()
 }
 
-async fn post_genesis_bridge_enveloped_impl(
-    State(state): State<RestState>,
-    _headers: HeaderMap,
-    Json(env): Json<SignedTxEnvelopeV1>,
-) -> impl IntoResponse {
-    let _tx_bytes = match verify_envelope_v1(&env) {
-        Ok(b) => b,
-        Err(e) => return (StatusCode::UNAUTHORIZED, e).into_response(),
-    };
-    let founder = state.ledger.founder_wallet_public().unwrap_or_default();
-    let TxV1::GenesisBridge {
-        founder_wallet,
-        to_wallet,
-        amount_micro,
-    } = env.tx.clone()
-    else {
-        return (StatusCode::BAD_REQUEST, "expected genesis_bridge tx").into_response();
-    };
-    if founder_wallet != founder {
-        return (StatusCode::UNAUTHORIZED, "founder wallet required").into_response();
-    }
-    if amount_micro == 0 || amount_micro > MAX_SUPPLY_MICRO {
-        return (StatusCode::BAD_REQUEST, "amount exceeds hard cap").into_response();
-    }
-    let att = AttestationReport {
-        v: 1,
-        platform: env.attestation.platform.clone(),
-        report_b64: env.attestation.report_b64.clone(),
-    };
-    // FEE_SPEC §3.1: the genesis bridge moves founder allocation inside the protocol.
-    // It is not a user-to-user transfer and is not a taxable event.
-    let _ = &att;
-    match state
-        .ledger
-        .transfer_no_fee(&founder_wallet, &to_wallet, amount_micro)
-        .map(|net| (net, 0u64))
-    {
-        Ok((net, fee)) => {
-            // No gossip announcement: peers refuse balance events that are not in a block.
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({"net_micro": net, "fee_micro": fee})),
-            )
-                .into_response()
-        }
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()).into_response(),
-    }
-}
-
 async fn post_tx_submit_impl(
     State(state): State<RestState>,
     headers: HeaderMap,
@@ -491,11 +441,13 @@ async fn post_tx_submit_impl(
         TxV1::InitialAirdrop { .. } => post_initial_airdrop_claim_impl(State(state), Json(env))
             .await
             .into_response(),
-        TxV1::GenesisBridge { .. } => {
-            post_genesis_bridge_enveloped_impl(State(state), headers, Json(env))
-                .await
-                .into_response()
-        }
+        // Removed (SECURITY.md): it wrote balances directly, outside any block, so the node that
+        // served it diverged from every other node's state. Blocks don't apply this variant either.
+        TxV1::GenesisBridge { .. } => (
+            StatusCode::BAD_REQUEST,
+            "genesis_bridge is not accepted: it would change balances outside a block",
+        )
+            .into_response(),
         TxV1::EnterpriseInference { .. } => {
             crate::rest::handlers::enterprise::post_enterprise_inference_submit(
                 State(state),
@@ -696,6 +648,50 @@ pub async fn get_explorer_tx(
         .into_response()
 }
 
+/// `GET /explorer/block/:height` — the canonical block at `height`, as an offline checker needs it
+/// ("Verify without TET" Level 2): the header fields its id is computed from, and each
+/// transaction's canonical JSON as a **string** (the exact bytes its hash and signatures cover;
+/// re-serialising elsewhere could reorder keys or lose large numbers) with its signatures.
+pub async fn get_explorer_block(State(state): State<RestState>, Path(height): Path<String>) -> axum::response::Response {
+    let Ok(height) = height.trim().parse::<u64>() else {
+        return (StatusCode::BAD_REQUEST, "height must be a number").into_response();
+    };
+    let id = match state.ledger.canonical_block_id_at_height(height) {
+        Ok(Some(id)) => id,
+        Ok(None) => return (StatusCode::NOT_FOUND, "no canonical block at that height").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let b = match state.ledger.block_record_by_id(&id) {
+        Ok(Some(b)) => b,
+        Ok(None) => return (StatusCode::NOT_FOUND, "block record missing").into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let txs: Vec<serde_json::Value> = b
+        .txs
+        .iter()
+        .map(|env| {
+            serde_json::json!({
+                "tx_json": serde_json::to_string(&env.tx).unwrap_or_default(),
+                "ed25519_pubkey_hex": env.sig.ed25519_pubkey_hex,
+                "ed25519_sig_b64": env.sig.ed25519_sig_b64,
+                "mldsa_pubkey_b64": env.sig.mldsa_pubkey_b64,
+                "mldsa_sig_b64": env.sig.mldsa_sig_b64,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({
+        "v": 1,
+        "height": b.height,
+        "block_id": b.block_id,
+        "parent_block_id": b.parent_block_id.unwrap_or_default(),
+        "state_root": b.state_root,
+        "producer_id": b.producer_id,
+        "tx_hashes": b.tx_hashes,
+        "txs": txs,
+    }))
+    .into_response()
+}
+
 pub async fn get_ledger_balance(
     State(state): State<RestState>,
     Path(wallet): Path<String>,
@@ -852,14 +848,6 @@ pub async fn get_proof_by_id(
     get_proof_by_id_impl(State(state), Path(id)).await
 }
 
-pub async fn post_genesis_bridge_enveloped(
-    State(state): State<RestState>,
-    headers: HeaderMap,
-    Json(env): Json<SignedTxEnvelopeV1>,
-) -> impl IntoResponse {
-    post_genesis_bridge_enveloped_impl(State(state), headers, Json(env)).await
-}
-
 pub async fn post_tx_submit(
     State(state): State<RestState>,
     headers: HeaderMap,
@@ -1012,4 +1000,92 @@ pub async fn post_ledger_unstake(
     Json(req): Json<LedgerWorkerBondUnstakeReq>,
 ) -> axum::response::Response {
     post_ledger_worker_bond_unstake_impl(State(state), Json(req)).await
+}
+
+/// Most blocks `GET /explorer/blocks/recent` returns.
+pub const RECENT_BLOCKS_MAX: usize = 6;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RecentBlocksQuery {
+    pub n: Option<usize>,
+}
+
+/// `GET /explorer/blocks/recent?n=…` — the newest canonical blocks, newest first, walked from the
+/// chain tip by parent link: public header fields, and for each transaction only its hash, kind and
+/// its signer's two signatures (shortened). No amounts, wallets, payloads or post content. Blocks
+/// carry no producer signature yet (the Phase 1 header change); `producer_signed: false` says so.
+pub async fn get_explorer_recent_blocks(State(state): State<RestState>, Query(q): Query<RecentBlocksQuery>) -> axum::response::Response {
+    let n = q.n.unwrap_or(RECENT_BLOCKS_MAX).clamp(1, RECENT_BLOCKS_MAX);
+    let tip = match state.ledger.chain_tip() {
+        Ok(t) => t,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let short = |s: &str| s.chars().take(16).collect::<String>();
+    let mut out = Vec::new();
+    let mut cur = tip.map(|t| t.block_id);
+    while let Some(id) = cur.take() {
+        if out.len() >= n {
+            break;
+        }
+        let Ok(Some(b)) = state.ledger.block_record_by_id(&id) else { break };
+        let txs: Vec<serde_json::Value> = b
+            .txs
+            .iter()
+            .zip(b.tx_hashes.iter())
+            .map(|(env, hash)| {
+                let kind = serde_json::to_value(&env.tx).ok().and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_string)).unwrap_or_default();
+                serde_json::json!({
+                    "hash": hash,
+                    "kind": kind,
+                    "ed25519_sig": short(&env.sig.ed25519_sig_b64),
+                    "mldsa44_sig": short(&env.sig.mldsa_sig_b64),
+                })
+            })
+            .collect();
+        out.push(serde_json::json!({
+            "height": b.height,
+            "block_id": b.block_id,
+            "parent_block_id": b.parent_block_id,
+            "state_root": b.state_root,
+            "tx_count": b.txs.len(),
+            "ts_ms": b.ts_ms as u64,
+            "producer_id": b.producer_id,
+            "producer_signed": false,
+            "txs": txs,
+        }));
+        cur = b.parent_block_id.clone();
+    }
+    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "blocks": out }))).into_response()
+}
+
+/// `GET /stats/inside` — what this node holds right now, and for how long it keeps each kind, read
+/// from the same settings the stores apply (so the "Inside" page can't drift from the config).
+/// Counts only: never names, content or who.
+pub async fn get_stats_inside(State(state): State<RestState>) -> axum::response::Response {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let height = state.ledger.block_height().unwrap_or(0);
+    let (posts_default, posts_max) = crate::tmail::store::retention_ms();
+    let (files_default, files_max) = crate::files::storage::retention_ms();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "ok": true,
+            "at_ms": now,
+            "counts": {
+                "blocks": height,
+                "messages_and_posts": state.tmail.message_count(),
+                "files": state.files.len(),
+                "signatures": state.sigs.record_count(),
+                "sites": state.sites.site_count(),
+            },
+            "retention": {
+                "blocks": "on_chain_forever",
+                "messages_and_posts_ms": { "default": posts_default, "max": posts_max },
+                "files_ms": { "default": files_default, "max": files_max },
+                "sites_after_last_edit_ms": crate::sites::ttl_ms(),
+                "signatures": "kept_until_hidden",
+            },
+        })),
+    )
+        .into_response()
 }

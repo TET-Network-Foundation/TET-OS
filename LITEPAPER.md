@@ -6,7 +6,7 @@
 > `archive/LITEPAPER_v0.md` carries the same banner.
 >
 > **Canonical documents:**
-> - [`WHITEPAPER.md`](./WHITEPAPER.md) — Whitepaper v1.1 (current)
+> - [technical paper v2](https://tetnet.org/whitepaper) — the current paper (Whitepaper v1.1 is archived: [`archive/WHITEPAPER_v1.1.md`](./archive/WHITEPAPER_v1.1.md))
 > - [`docs/FEE_SPEC.md`](./docs/FEE_SPEC.md) — normative fee model
 >
 > Specific claims below that are **no longer true**: the CHF peg; "ML-DSA/Dilithium2" (Phase 0

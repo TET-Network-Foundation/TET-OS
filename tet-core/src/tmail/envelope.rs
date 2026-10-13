@@ -139,7 +139,12 @@ pub struct TmailAnchorProof {
 pub struct TmailAnonymous {
     /// 64-hex Ed25519 key that signs this envelope. The anchor is nowhere in it.
     pub ephemeral_wallet_id: String,
-    pub anchor_proof: TmailAnchorProof,
+    /// The membership proof. `None` marks a **fast post** (docs/plans/FAST_ANON_POSTING.md): no
+    /// proof of its own; it is accepted only if this ephemeral (the member's posting key for this
+    /// board and UTC day) was registered by an earlier post whose proof verified. A post that
+    /// carries a proof is judged by that proof alone and never falls back to the fast path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor_proof: Option<TmailAnchorProof>,
 }
 
 /// Time-lock block (spec §A.1.2 `time_lock`).
@@ -334,7 +339,11 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
         if signer != ephemeral {
             return Err(TmailEnvelopeError::EphemeralSignerMismatch);
         }
-        verify_anchor_proof_consistency(env, anon, &ephemeral, &receiver)?;
+        // A post with a proof must be consistent with it. A fast post (no proof) is structurally
+        // just a signed anonymous envelope here; the store accepts it only for a registered key.
+        if let Some(proof) = anon.anchor_proof.as_ref() {
+            verify_anchor_proof_consistency(env, proof, &ephemeral, &receiver)?;
+        }
     } else {
         // Named: the signer is the sender.
         if !is_wallet_id_64hex(&sender) {
@@ -365,9 +374,10 @@ pub fn verify_tmail_envelope_v1(env: &TmailEnvelopeV1) -> Result<(), TmailEnvelo
 /// [`crate::tmail::anon::verify_anonymous_proof`]. The store uses it only to group mail, which a
 /// forged value cannot abuse beyond the per-receiver anonymous cap.
 pub fn anonymous_nullifier_hex(env: &TmailEnvelopeV1) -> Option<String> {
-    let anon = env.anonymous.as_ref()?;
+    // A fast post carries no journal: its nullifier is its posting key's registration's.
+    let proof = env.anonymous.as_ref()?.anchor_proof.as_ref()?;
     let bytes = base64::engine::general_purpose::STANDARD
-        .decode(anon.anchor_proof.journal_b64.trim().as_bytes())
+        .decode(proof.journal_b64.trim().as_bytes())
         .ok()?;
     let journal: nexus_protocol::TmailAnonMembershipV1 =
         risc0_zkvm::serde::from_slice(&bytes).ok()?;
@@ -386,12 +396,12 @@ pub fn anonymous_nullifier_hex(env: &TmailEnvelopeV1) -> Option<String> {
 /// verified.
 fn verify_anchor_proof_consistency(
     env: &TmailEnvelopeV1,
-    anon: &TmailAnonymous,
+    proof: &TmailAnchorProof,
     ephemeral: &str,
     receiver: &str,
 ) -> Result<(), TmailEnvelopeError> {
     let journal_bytes = base64::engine::general_purpose::STANDARD
-        .decode(anon.anchor_proof.journal_b64.trim().as_bytes())
+        .decode(proof.journal_b64.trim().as_bytes())
         .map_err(|_| TmailEnvelopeError::Encoding {
             field: "anonymous.anchor_proof.journal_b64",
         })?;
@@ -427,7 +437,7 @@ fn verify_anchor_proof_consistency(
             "journal bucket does not match sent_at_ms",
         ));
     }
-    if hex::decode(anon.anchor_proof.receipt_sha256_hex.trim())
+    if hex::decode(proof.receipt_sha256_hex.trim())
         .map(|b| b.len() != 32)
         .unwrap_or(true)
     {

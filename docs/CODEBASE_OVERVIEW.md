@@ -3,7 +3,7 @@
 **Version:** v2 (post–Sprint 1)  
 **作成日:** 2026-05-19  
 **前版:** [`archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md`](archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md)（2026-05-18、Sprint 1 開始前）  
-**対象リポジトリ:** `/Users/sengokukazuma/Nexus_Network`  
+**対象リポジトリ:** `~/Nexus_Network`  
 **Sprint 1 参照コミット（報告値）:** `7264191`（catch-up driver）、`499bb00`（sync gate + startup）、`183fd14`（Phase C 統合テスト）— **未検証: ローカルで `git log` 未実行**
 
 **読者:** Founder-Architect / シニアエンジニア向けオンボーディング  
@@ -13,7 +13,7 @@
 
 ## 0. ホワイトペーパー正本
 
-**正本:** [`WHITEPAPER.md`](../WHITEPAPER.md) / [`GENESIS_V1.md`](../GENESIS_V1.md) — **Genesis Draft v1.0**（2026-04-28、§1–§17）。
+**正本:** [`WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) / [`GENESIS_V1.md`](../GENESIS_V1.md) — **Genesis Draft v1.0**（2026-04-28、§1–§17）。
 
 | 章 | 内容 |
 |----|------|
@@ -382,10 +382,10 @@ cargo test --workspace --no-run
 ## 13. 関連ドキュメント
 
 - [`archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md`](archive/CODEBASE_OVERVIEW_v1_pre_sprint1.md)
-- [`STATUS.md`](./STATUS.md)
+- [technical paper v2](https://tetnet.org/whitepaper)
 - [`SYNC_ISSUE.md`](./SYNC_ISSUE.md) — **要 Sprint 2 更新**
 - [`SPRINT_PLAN.md`](./SPRINT_PLAN.md)
-- [`../WHITEPAPER.md`](../WHITEPAPER.md)
+- [technical paper v2](https://tetnet.org/whitepaper)
 
 ---
 

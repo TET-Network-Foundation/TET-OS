@@ -23,6 +23,7 @@ export default function TermsPanel() {
           <li>{t("The operator may hide any board, thread, post or file from this node's public API. Hiding never deletes chain data, and copies other nodes already hold stay on those nodes.")}</li>
           <li>{t("Every hide is written to the operator's own log.")}</li>
           <li>{t("Posts, messages and files expire: after 7 days by default, 30 at most. The chain itself holds fees and hashes, not what you wrote.")}</li>
+          <li>{t("Marks (proof codes) and sealed predictions hold only a fingerprint and your ID, never the content. They're kept on this node, and the operator can hide them like anything else.")}</li>
         </ol>
         <div>
           <h3 className="mb-1 text-[15px] font-semibold">{t("Report content")}</h3>

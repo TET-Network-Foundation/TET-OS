@@ -1,7 +1,7 @@
 # Whitepaper v1.1 — Gap 分析（議論用ドラフト）
 
 **目的:** Steve × Claude (informal CTO) が **Genesis Draft v1.0** を v1.1 に引き上げる際の論点整理。  
-**正本:** [`WHITEPAPER.md`](../WHITEPAPER.md) / [`GENESIS_V1.md`](../GENESIS_V1.md)（§1–§17、2026-04-28）  
+**正本:** [`WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) / [`GENESIS_V1.md`](../GENESIS_V1.md)（§1–§17、2026-04-28）  
 **更新:** 2026-05-18 — 本文引用・行番号を Genesis v1.0 英語版に差し替え済み。
 
 **凡例:** 各 Gap に「v1.1 で書くべき方向性」のみ（確定解答ではない）。
