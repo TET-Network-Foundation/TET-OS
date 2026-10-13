@@ -3367,7 +3367,10 @@ fn genesis_1k_worker_pool_reward_is_110_percent_of_standard_gross() {
     let _g = env_lock();
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_WORKER_VEST_MS", "80");
+        // An hour, not 80 ms: the test reads the lock right after minting, and on a slow CI runner
+        // 80 ms passed in between, so the lock had expired and `locked` read 0 (a flake, 2026-10-13).
+        // The test never needs the lock to expire. Control (run by hand): "0" → FAILS (locked 0).
+        std::env::set_var("TET_WORKER_VEST_MS", "3600000");
     }
     let _vest_env = EnvVarRemoveOnDrop {
         key: "TET_WORKER_VEST_MS",
