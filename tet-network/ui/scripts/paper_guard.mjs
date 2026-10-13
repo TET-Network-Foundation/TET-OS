@@ -252,5 +252,57 @@ function imageProblems(images, manifest, paperText, sha) {
   });
 }
 
+// ---- 8. the Hong Kong Chinese translation (app/whitepaper/paper_zh_hk.ts) -----------------------------
+// The same checks as the Japanese: structure, sources and code spans; the translation note and the English
+// commit; the wording rules, in Chinese. English is authoritative.
+const paperZh = await import("../app/whitepaper/paper_zh_hk.ts");
+check("the zh-HK paper has the English structure, sources and code spans", () => {
+  const bad = structureProblems(paper, paperZh);
+  assert.deepEqual(bad, [], bad.join("\n     "));
+});
+check("control: a dropped zh-HK table row is caught", () => {
+  const broken = structuredClone({ SECTIONS: paperZh.SECTIONS, TRANSLATION_NOTE: paperZh.TRANSLATION_NOTE });
+  broken.SECTIONS.find((s) => s.id === "threats").body[2].table.rows.pop();
+  assert.ok(structureProblems(paper, broken).some((p) => p.includes("table shape")));
+});
+check("the zh-HK paper names the English commit it translates, and says English is authoritative", () => {
+  assert.match(paperZh.TRANSLATION_OF, /^[0-9a-f]{40}$/);
+  assert.ok(paperZh.TRANSLATION_NOTE.includes(paperZh.TRANSLATION_OF.slice(0, 7)), "the note names the commit");
+  assert.match(paperZh.TRANSLATION_NOTE, /英文版的翻譯/);
+  assert.match(paperZh.TRANSLATION_NOTE, /英文版為正本/);
+  assert.equal(paperZh.WRITTEN_AGAINST, paper.WRITTEN_AGAINST);
+});
+const ZH_RULES = [
+  ["a \"first\" claim", /世界首|史上首|首個|首家|首創|第一個(?:區塊鏈|網絡|系統|平台)|\bfirst\b/i],
+  ["money wording", MONEY],
+  ["\"untraceable\"", /無法追蹤|不可追蹤|追蹤不到|untraceable/i],
+  ["an authorship claim", /證明(?:是)?(?:你|自己|本人)(?:製作|創作|撰寫|寫)|(?:你|自己|本人)(?:製作|創作|撰寫)(?:了)?(?:它|此|這)?的證明/],
+  ["an absolute AI claim", /AI\s*(?:無法|不能|不可以)\s*(?:進入|存取|使用|訪問)/],
+  ["an unqualified ML-KEM claim", /^(?![\s\S]*(?:並不是|並非|不是|轉到|不相容|\bnot\b))[\s\S]*ML-KEM/i],
+];
+function wordingZh(texts) {
+  const bad = [];
+  for (const t of texts) for (const [what, re] of ZH_RULES) if (re.test(t)) bad.push(`${what}: ${t.slice(0, 60)}`);
+  return bad;
+}
+check("the zh-HK paper keeps the wording rules", () => {
+  const bad = wordingZh(allText(paperZh));
+  assert.deepEqual(bad, [], bad.join("\n     "));
+});
+check("controls: each zh-HK rule catches its phrase", () => {
+  for (const x of ["這是世界首個這樣的網絡。", "運行節點就能賺取 TET。", "訊息無法追蹤。", "標記證明是你製作的。", "AI 無法進入 TET。", "Tmail 使用 ML-KEM-768。"]) {
+    assert.equal(wordingZh([x]).length, 1, x);
+  }
+});
+const zhQuantum = (t) => /`wallet_id_v2`[^。]*抗量子保護並不完整/.test(t) && /同時破解 Ed25519 及 ML-DSA-44/.test(t);
+check("the zh-HK paper states quantum resistance as incomplete until wallet_id_v2", () => {
+  const t = allText(paperZh).join("\n");
+  assert.ok(zhQuantum(t), "the two quantum sentences");
+  assert.doesNotMatch(t, /完全抗量子|完全的抗量子|量子電腦也無法破解/);
+});
+check("control: without the incompleteness sentence the quantum check fails", () => {
+  assert.equal(zhQuantum(allText(paperZh).join("\n").replaceAll("抗量子保護並不完整", "抗量子保護完整")), false);
+});
+
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

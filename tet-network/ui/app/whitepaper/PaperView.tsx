@@ -3,12 +3,13 @@
 /**
  * The technical paper's page body, in the visitor's language (the same pick as /try: `?lang=`, the
  * earlier choice, the browser). English is authoritative; the Japanese text is a translation of a
- * named English commit (paper_ja.ts) and says so. Hong Kong Chinese shows the English text under a
- * note until its translation exists.
+ * named English commit (paper_ja.ts) and says so; so is the Hong Kong Chinese text (paper_zh_hk.ts).
+ * A language without a translation would show the English text under a note.
  */
 import { useEffect } from "react";
 import * as EN from "./paper";
 import * as JA from "./paper_ja";
+import * as ZH from "./paper_zh_hk";
 import type { Block, Section } from "./paper";
 import marksJson from "./marks.json";
 import { LangSwitch, useLang } from "../try/i18n";
@@ -77,12 +78,13 @@ function Body({ block }: { block: Block }) {
 
 export function PaperView() {
   const { lang, t } = useLang();
-  const P: { TITLE: string; SUBTITLE: string; DATE: string; ABSTRACT: string; SECTIONS: Section[] } = lang === "ja" ? JA : EN;
-  const translated = lang === "ja";
-  // zh-HK: the English text until the translation exists (lang_render_guard lists it, by name).
+  const TR = lang === "ja" ? JA : lang === "zh-HK" ? ZH : null;
+  const P: { TITLE: string; SUBTITLE: string; DATE: string; ABSTRACT: string; SECTIONS: Section[] } = TR ?? EN;
+  const translated = TR !== null;
+  // A language without a translation shows the English text, marked (lang_render_guard allows none today).
   const pending = lang !== "en" && !translated;
   // The tab title in the visitor's language (Next's static metadata is English).
-  const title = `${translated ? JA.TITLE : t("TET technical paper")} · TET`;
+  const title = `${TR ? TR.TITLE : t("TET technical paper")} · TET`;
   useEffect(() => {
     document.title = title;
     const id = setTimeout(() => (document.title = title), 300);
@@ -98,14 +100,14 @@ export function PaperView() {
       </div>
       {translated ? (
         <p className="mb-4 rounded-md border border-[#e3c66b] bg-[#fff8e1] p-3 text-[14px]">
-          {t("Draft translation of the English version at commit {commit}; the English version is authoritative. This translation isn't marked yet: the proof codes below are for the English files.", { commit: JA.TRANSLATION_OF.slice(0, 7) })}
+          {t("Draft translation of the English version at commit {commit}; the English version is authoritative. This translation isn't marked yet: the proof codes below are for the English files.", { commit: (TR ?? JA).TRANSLATION_OF.slice(0, 7) })}
         </p>
       ) : lang !== "en" ? (
         <p className="mb-4 rounded-md border border-[#e3c66b] bg-[#fff8e1] p-3 text-[14px]">
           {t("This paper isn't translated into this language yet. Below is the English version, which is authoritative.")}
         </p>
       ) : null}
-      <div data-pending-translation={pending ? "zh-HK" : undefined} lang={pending ? "en" : undefined}>
+      <div data-pending-translation={pending ? lang : undefined} lang={pending ? "en" : undefined}>
       <h1 className="text-[30px] font-bold">{P.TITLE}</h1>
       <p className="text-[17px] text-[#3d434a]">{P.SUBTITLE}</p>
       <p className="mt-2 text-[14px] text-[#5d646d]">
