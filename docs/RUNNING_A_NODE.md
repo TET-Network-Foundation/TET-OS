@@ -884,7 +884,7 @@ Specifications that **may change before mainnet** (v1.1 whitepaper):
 ## Related docs
 
 - [`CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md) — repository structure and module map (post Sprint 1)  
-- [`STATUS.md`](./STATUS.md) — whitepaper vs implementation matrix  
+- [technical paper v2](https://tetnet.org/whitepaper) — whitepaper vs implementation matrix  
 - [`SPRINT1_DESIGN.md`](./SPRINT1_DESIGN.md) — block sync MVP design  
 - [`SYNC_ISSUE.md`](./SYNC_ISSUE.md) — historical sync root-cause notes  
 - [`tet-core/README.md`](../tet-core/README.md) — Docker quick start

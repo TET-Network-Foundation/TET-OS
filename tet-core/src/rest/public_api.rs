@@ -34,6 +34,37 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("GET", "/ledger/balance/:wallet"),
     // A mined transaction by hash (public chain data): checks a "stamp" receipt on the try page.
     ("GET", "/explorer/tx/:hash"),
+    // A canonical block by height, with each transaction's canonical bytes: the input to
+    // "Verify without TET" Level 2 (checking a stamp's block and the chain above it offline).
+    ("GET", "/explorer/block/:height"),
+    // The home page's live strip: the newest canonical block headers and tx hash/kind/signatures.
+    ("GET", "/explorer/blocks/recent"),
+    // The "Inside" page: counts and how long each kind is kept (no names, no content).
+    ("GET", "/stats/inside"),
+    // Fast anonymous posting: is this posting key registered for this board today?
+    ("GET", "/tmail/anon/fast/:receiver/:posting_key"),
+    // Shelter (tmail/shelter.rs): whether it's open; signed records; signed reads (members only,
+    // except `/shelter/me`, which tells a non-member only that).
+    // Testnet practice grants (grants.rs): the welcome grant's count; a claim.
+    ("GET", "/grants/status"),
+    ("POST", "/grants/welcome"),
+    ("GET", "/shelter/status"),
+    ("POST", "/shelter/record"),
+    ("POST", "/shelter/key"),
+    ("GET", "/shelter/me"),
+    ("GET", "/shelter/members"),
+    ("GET", "/shelter/log"),
+    ("GET", "/shelter/inbox"),
+    ("GET", "/shelter/anon/leaves"),
+    // The public signature registry (sigs.rs): publish a hash-only record; search records.
+    ("POST", "/sigs/publish"),
+    ("GET", "/sigs/search"),
+    // Signed sites (sites.rs): append a signed edit; read a site's chain.
+    ("POST", "/sites/edit"),
+    // TetSearch v1: a member lists their site (signed by both keys); members read the listings.
+    ("POST", "/search/list"),
+    ("GET", "/search/listings"),
+    ("GET", "/sites/:site_id"),
     // The try page's Live channel: height, peers, apply-queue depth, recent gossip kinds, commit.
     ("GET", "/status/live"),
     // Tmail
@@ -45,6 +76,11 @@ pub const PUBLIC_ALLOWLIST: &[(&str, &str)] = &[
     ("POST", "/tmail/read-receipt"),
     // Anonymous mode: registration and the poster's path (never the wallet-keyed /anon/path).
     ("POST", "/tmail/anon/register"),
+    // Members-only polls (tmail/poll.rs): register a poll's member root; read it; read a member's
+    // public commitment to build a poll's tree.
+    ("POST", "/tmail/poll/root"),
+    ("GET", "/tmail/poll/root/:wallet_id"),
+    ("GET", "/tmail/anon/commitment/:wallet_id"),
     ("GET", "/tmail/anon/root"),
     ("GET", "/tmail/anon/leaves"),
     ("PUT", "/tmail/anon/receipt"),
@@ -340,7 +376,8 @@ pub async fn public_api_gate(
     }
     // Uploads are charged by their declared length, before the body is read. A refusal answers at
     // once and closes the connection: nothing is buffered or read for a request that won't be served.
-    if req.method() == Method::POST && req.uri().path() == "/files/upload" {
+    // Site edits are charged to the same daily budget: a site holds bytes as lastingly as a file.
+    if req.method() == Method::POST && (req.uri().path() == "/files/upload" || req.uri().path() == "/sites/edit" || req.uri().path() == "/sigs/publish") {
         let refuse = |status: StatusCode, msg: &'static str| {
             (status, [(GATE_HEADER, "upload-refused"), ("connection", "close")], msg).into_response()
         };

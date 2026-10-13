@@ -6,7 +6,7 @@
  * first); a thread shows its posts numbered from 1, with `>>n` jumping within the thread. Anyone
  * who can read the board can open a thread. Threads are a convention inside the post text
  * (`lib/board_threads.mjs`): the node never sees them. The honest limits are the pinned
- * `0 · notice`.
+ * notice.
  *
  * Once in the anonymity set, one tap posts and the post shows at once with its progress. Joining the
  * set is a separate tap that never posts (see `wallet.tsx`: a post fired the moment a join takes
@@ -15,17 +15,21 @@
  * A named post's short id opens a DM with its wallet; an anonymous post has no author, so no DM.
  * #18 (follows, profiles, notifications) is later: `Author` is where a profile link would attach.
  */
+import { delayBeforeNext, WINDOW_MS as FLOOD_WINDOW_MS } from "../lib/flood_guard.mjs";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { anonAllowance, boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
-import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
+import { boardPostPlan, inviteUrl, PROVER_DOCS_URL } from "../lib/board.mjs";
+import { checkThreadTitle, encodeThreadPost, groupThreads, isKiriban, looksLikeAA, NAME_MAX, newThreadId, THREAD_TITLE_MAX } from "../lib/board_threads.mjs";
 import { TMAIL_ANON_DISCLOSURE, secondsUntil } from "../lib/tmail_anon";
 import { TMAIL_MAX_PLAINTEXT_CHARS } from "../lib/tmail";
-import { anonNullifier, fromHex, tmailBucketIndex, toHex } from "../lib/anon_tree.mjs";
-import { getTmailKeySession } from "../lib/tmail_session";
-import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, readBoard, type BoardPost, type OpenBoard } from "../lib/try_board";
+import { announceBoard, HIDDEN_BOARD, postAnonymous, postNamed, prewarmBoardProof, readBoard, registeredToday, type BoardPost, type OpenBoard } from "../lib/try_board";
 import { Badge, Button, FOCUS, INK, Input, MONO, PanelHead, PinnedNotice, TextArea, Toggle, cx, fmtSeconds, fmtWhen, type Tone } from "./ui";
 import { BASE, PROVER_URL, useTryWallet } from "./wallet";
+import { getUi, setUi } from "../lib/device_store";
 import { useLang, type T } from "./i18n";
+import { PollBox, PollMaker } from "./PollBox";
+import { parsePoll } from "../lib/poll";
+import { dmTargetFor } from "../lib/dm_target";
+import { IdCard } from "./IdCard";
 
 const FEED_POLL_MS = 8_000;
 /** Room for the thread header inside one Tmail message. */
@@ -44,7 +48,7 @@ type Outgoing = {
 };
 
 type Label = BoardPost["label"];
-type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string; sage?: boolean };
+type ThreadPost = { msgId: string; sentAtMs: number; label: Label; body: string; sage?: boolean; name?: string; verifiedSigner?: string };
 type Thread = { threadId: string; title: string | null; posts: ThreadPost[]; count: number; lastAtMs: number };
 
 function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
@@ -55,31 +59,60 @@ function badgeFor(label: Label, t: T): { tone: Tone; text: string } {
 }
 
 /**
- * Who wrote a post. A named post's short id opens a DM with that wallet; an anonymous post has no
- * author (`postLabel` never gives one), so there is nothing to message. #18 hook: a profile or
- * follow control attaches here.
+ * The name shown on a post. An anonymous post is always "Anonymous" (a name on one would be the
+ * poster's own choice and could link their posts, so it is ignored). A named post shows its name,
+ * or "No name" — never "Anonymous", since its ID is shown.
  */
-function Author(props: { walletId: string | null; onDm?: (walletId: string) => void }) {
+export function shownName(p: { name?: string; label: Label }, t: (s: string) => string): string {
+  if (!p.label.author) return t("Anonymous");
+  return p.name || t("No name");
+}
+
+/**
+ * Who wrote a post. A named post shows its short ID; tapping it opens an ID card (full ID, copy,
+ * QR, "Send DM"). The card and the DM use only the post's **verified signer key**
+ * (`dmTargetFor`), never the short ID on screen: short IDs can be imitated. An anonymous post has
+ * no author, so tapping its name only says it can't receive DMs. #18 hook: a profile or follow
+ * control attaches to the card.
+ */
+function Author(props: { post: ThreadPost; onDm?: (walletId: string) => void }) {
   const { t } = useLang();
-  // The default name for an anonymous post (2ch's 名無しさん).
-  if (!props.walletId) return <span title={t("No DM: an anonymous post doesn't say who wrote it.")}>{t("Anonymous")}</span>;
-  const id = props.walletId;
-  return props.onDm ? (
-    <button
-      type="button"
-      translate="no"
-      data-author={id}
-      title={t("DM {id}", { id })}
-      aria-label={t("Send a DM to {id}", { id: id.slice(0, 8) })}
-      onClick={() => props.onDm?.(id)}
-      className={cx(FOCUS, "rounded-sm underline decoration-dotted underline-offset-2", INK.named)}
-    >
-      {id.slice(0, 8)}
-    </button>
-  ) : (
-    <span translate="no" className={INK.named} data-author={id}>
-      {id.slice(0, 8)}
-    </span>
+  const [open, setOpen] = useState(false);
+  const shown = props.post.label.author;
+  if (!shown) {
+    return (
+      <>
+        <button type="button" onClick={() => setOpen((o) => !o)} className={cx(FOCUS, "rounded-sm text-[#5d646d] underline decoration-dotted underline-offset-2")} aria-expanded={open}>
+          {t("no ID")}
+        </button>
+        {open ? <span role="note" className="text-[#5d646d]">{t("Anonymous posts can't receive DMs.")}</span> : null}
+      </>
+    );
+  }
+  const target = dmTargetFor(props.post);
+  return (
+    <>
+      <button
+        type="button"
+        translate="no"
+        data-author={shown}
+        aria-expanded={open}
+        aria-label={t("ID card for {id}", { id: shown.slice(0, 8) })}
+        onClick={() => setOpen((o) => !o)}
+        className={cx(FOCUS, "rounded-sm underline decoration-dotted underline-offset-2", INK.named)}
+      >
+        {shown.slice(0, 8)}
+      </button>
+      {open ? (
+        <span className="block w-full">
+          {target ? (
+            <IdCard walletId={target} onDm={props.onDm} onClose={() => setOpen(false)} />
+          ) : (
+            <span role="note" className="text-[#5d646d]">{t("This post's signature couldn't be checked here, so there's no ID card or DM for it.")}</span>
+          )}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -133,13 +166,13 @@ function Meta(props: { n: number; children: React.ReactNode }) {
 export const BOARD_NOTICE = (members: number | null, t: T) => [
   t("Posts are anonymous by default: a zero-knowledge proof shows you are a member, not which one. That needs the native prover on your computer; without it you post named, and the post says so."),
   t("You are anonymous among the registered members only ({members} on this node). Joining the set is public, and it is a separate step: posting right after you join makes the post easier to link to your join.", { members: members ?? "?" }),
-  t("Posting anonymously unlinks the post from your key: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."),
-  t("One anonymous post per board per UTC day (up to 3 around 00:00 UTC)."),
+  t("Posting anonymously unlinks the post from your ID: the proof shows a member wrote it, not which one. It doesn't hide your IP address from the node; for that, use Tor or your own node."),
+  t("Your anonymous posts on a board share one ID for the UTC day. The first carries a proof (about 30 s); the rest that day are instant."),
   t("The node keeps each named poster's newest 5 posts on a board and the board's newest 100 anonymous posts, for 7 days. Older posts drop out of their threads; a thread whose first post has dropped out loses its title."),
   t("Anyone who can read the board can post in any thread and start threads. A thread's title comes from the earliest post the node still has, and the sender sets a post's time."),
   t("The node and the first relaying peer see your IP. Posts are not on the chain."),
-  t("An anonymous post's ID (ID:ab12) is the first 4 hex digits of its proof's nullifier: one per member, board and UTC day, so it changes tomorrow. It comes out of the proof, not from whoever runs the node, and the node shows it only after checking the proof. A member can post anonymously once per board per day, so an ID marks one post; two members can share an ID by chance."),
-  t("Tap a named post's id to DM its wallet. Anonymous posts have no DM: nothing in them says who wrote them."),
+  t("An anonymous post's ID (ID:ab12) comes from its proof: the same for one member on one board for one UTC day, and different tomorrow or on another board. Nobody running the node chooses it, and it appears only after the proof is checked. All of one member's anonymous posts on a board that day carry it, so they can be read as one person's; two members can share an ID by chance."),
+  t("Tap a named post's ID to send it a message. Anonymous posts can't be messaged: nothing in them says who wrote them."),
   t("Anyone with the invite link can read every post. An invite cannot be revoked: start a new board."),
   t(TMAIL_ANON_DISCLOSURE),
 ];
@@ -160,7 +193,7 @@ export default function BoardPanel(props: {
   const [relist, setRelist] = useState<"closed" | "open" | "busy" | "done">("closed");
   const [relistWords, setRelistWords] = useState("");
   const [relistErr, setRelistErr] = useState("");
-  const { wallet, anon, refreshAnon, joinAnon, ensureWallet, prover } = useTryWallet();
+  const { wallet, anon, refreshAnon, joinAnon, noteNamedPost, ensureWallet, prover } = useTryWallet();
   const [joining, setJoining] = useState(false);
   const [posts, setPosts] = useState<BoardPost[]>([]);
   const [outgoing, setOutgoing] = useState<Outgoing[]>([]);
@@ -168,11 +201,57 @@ export default function BoardPanel(props: {
   const [err, setErr] = useState("");
   const [named, setNamed] = useState(false);
   const [sage, setSage] = useState(false);
-  const [text, setText] = useState("");
+  const sentTimes = useRef<number[]>([]);
+  // Fast anonymous posting: is today's posting key for this board registered on this node?
+  const [fastReady, setFastReady] = useState(() => registeredToday(board.boardWalletId));
+  // A display name for this tab's posts (blank: Anonymous / 名無しさん). Not stored, not checked.
+  const [name, setName] = useState("");
+  const [makingPoll, setMakingPoll] = useState(false);
+  const [text, setTextState] = useState("");
+  // The composer's draft, kept on this device only for a PUBLIC board (device_store: plain UI
+  // state). An invite-only board's draft stays in this tab: a stored draft would leave a lasting
+  // record on the device of a private board and of what was written there (possibly anonymously).
+  // Commit security review of #70; try_storage_guard checks this gate.
+  const persistDrafts = props.isPublic;
+  const setText = useCallback(
+    (v: string) => {
+      setTextState(v);
+      if (!persistDrafts) return;
+      try {
+        const all = JSON.parse(getUi("tet.ui.v1.drafts") ?? "{}") as Record<string, string>;
+        if (v.trim()) all[board.boardWalletId] = v.slice(0, 4000);
+        else delete all[board.boardWalletId];
+        setUi("tet.ui.v1.drafts", Object.keys(all).length ? JSON.stringify(all) : null);
+      } catch {
+        /* a broken drafts record is dropped */
+        setUi("tet.ui.v1.drafts", null);
+      }
+    },
+    [board.boardWalletId, persistDrafts],
+  );
+  useEffect(() => {
+    const t0 = setTimeout(() => {
+      try {
+        const all = JSON.parse(getUi("tet.ui.v1.drafts") ?? "{}") as Record<string, string>;
+        if (!persistDrafts) {
+          // Never keep an invite-only board's draft; drop one left by an earlier version.
+          if (board.boardWalletId in all) {
+            delete all[board.boardWalletId];
+            setUi("tet.ui.v1.drafts", Object.keys(all).length ? JSON.stringify(all) : null);
+          }
+          return;
+        }
+        const d = all[board.boardWalletId];
+        if (d) setTextState(d);
+      } catch {
+        /* no draft */
+      }
+    }, 0);
+    return () => clearTimeout(t0);
+  }, [board.boardWalletId, persistDrafts]);
   const [newTitle, setNewTitle] = useState("");
   /** null = the thread list; "new" = the new-thread form; otherwise a thread id ("" = no thread). */
   const [open, setOpen] = useState<string | null>(null);
-  const [postedBuckets, setPostedBuckets] = useState<number[]>([]);
   const [highlight, setHighlight] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -254,12 +333,21 @@ export default function BoardPanel(props: {
     mounted.current && setOutgoing((o) => o.map((x) => (x.id === id ? { ...x, ...p, stepAtMs: p.step ? Date.now() : x.stepAtMs } : x)));
 
   // This member's daily ID on this board today, and the verified daily IDs already posted today.
-  const bucketNow = tmailBucketIndex(now);
-  const myDailyId = anon?.member && getTmailKeySession() ? toHex(anonNullifier(getTmailKeySession()!.anonMemberSecret, fromHex(board.boardWalletId), bucketNow)).slice(0, 4) : null;
-  const dailyIdsToday = posts.filter((p) => p.label.dailyId && tmailBucketIndex(p.sentAtMs) === bucketNow).map((p) => p.label.dailyId as string);
-  const allowance = anonAllowance({ nowMs: now, postedBuckets, myDailyId, dailyIdsToday });
   // Anonymous by default. Named only when chosen, or when no prover is here (and the button says so).
   const anonymous = prover !== "missing" && !named;
+  // A member opening a board in anonymous mode: start today's proof in the background (or learn that
+  // today's posting key is registered here already, so every post is instant).
+  const isMember = !!anon?.member;
+  useEffect(() => {
+    if (!anonymous || !isMember || prover !== "found") return;
+    let on = true;
+    void prewarmBoardProof(BASE, PROVER_URL, board)
+      .then((r) => on && setFastReady(r === "registered"))
+      .catch(() => {});
+    return () => {
+      on = false;
+    };
+  }, [anonymous, isMember, prover, board]);
   // Anonymous posting needs membership; until then the one button is the (separate) join.
   const needsJoin = anonymous && prover === "found" && !anon?.member;
 
@@ -296,11 +384,8 @@ export default function BoardPanel(props: {
       setErr(t("Join the anonymity set first."));
       return;
     }
-    if (plan.action === "anonymous" && allowance.remaining === 0) {
-      setErr(t("Today's anonymous post on this board is used. Post named, or wait until 00:00 UTC."));
-      return;
-    }
-    const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage });
+    // An anonymous post never carries a name: the same name on two posts would link them.
+    const plaintext = encodeThreadPost({ threadId, title, body, sage: !starting && sage, name: anonymous ? "" : name });
     const id = `${Date.now()}-${Math.random()}`;
     const t0 = Date.now();
     setOutgoing((o) => [...o, { id, threadId, text: body, mode: plan.action === "anonymous" ? "anonymous" : "named", step: "sending", stepAtMs: t0 }]);
@@ -309,17 +394,28 @@ export default function BoardPanel(props: {
     if (starting) setOpen(threadId);
     try {
       if (plan.action === "named") {
+        // Invisible flood guard: after a burst of 5, posts are spaced a few seconds apart; the post
+        // just shows as sending meanwhile. Normal conversation never waits.
+        const wait = delayBeforeNext(sentTimes.current, Date.now());
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const msgId = await postNamed(BASE, board, plaintext);
+        void noteNamedPost();
+        sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
         patch(id, { step: "sent", msgId });
       } else {
-        // Only members get here: joining is a separate, earlier tap (see the header).
+        // Only members get here: joining is a separate, earlier tap (see the header). The first post
+        // of the day here carries the proof; after it, posts are instant (fast anonymous posting),
+        // paced by the same invisible flood guard.
+        const wait = delayBeforeNext(sentTimes.current, Date.now());
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const out = await postAnonymous(BASE, PROVER_URL, board, plaintext, (s) => {
           if (s.state === "proving") patch(id, { step: "proving" });
           else if (s.state === "depositing") patch(id, { step: "depositing" });
           else if (s.state === "sending") patch(id, { step: "sending" });
-        });
+        }, isMember);
         if (out.state === "sent") {
-          setPostedBuckets((b) => [...b, tmailBucketIndex(t0)]);
+          sentTimes.current = [...sentTimes.current.filter((x) => Date.now() - x < FLOOD_WINDOW_MS), Date.now()];
+          setFastReady(true);
           patch(id, { step: "sent", msgId: out.msgId });
         } else {
           patch(id, { step: "failed", reason: out.state === "failed" ? out.reason : "not in the anonymity set yet" });
@@ -335,6 +431,11 @@ export default function BoardPanel(props: {
   const link = typeof window !== "undefined" ? inviteUrl(window.location.origin, board.invite) : "";
   const titleOf = (th: Thread | undefined) => (th ? (th.threadId === "" ? t("Posts without a thread") : (th.title ?? t("Untitled (its first post has dropped out)"))) : "");
   const mine = outgoing.filter((o) => o.threadId === open);
+  // A poll counts only as a named post by the thread's own (named) author.
+  const starter = thread?.posts[0]?.label;
+  const pollOf = (p: { label: Label; body: string }) =>
+    starter?.kind === "named" && p.label.kind === "named" && p.label.author === starter.author ? parsePoll(p.body) : null;
+  const iStarted = !!wallet && starter?.kind === "named" && starter.author === wallet.walletId;
 
   const copyInvite = (
     <Button
@@ -358,6 +459,32 @@ export default function BoardPanel(props: {
             <Input label={t("Thread title")} value={newTitle} onChange={setNewTitle} placeholder={t("One line, up to {n} characters…", { n: THREAD_TITLE_MAX })} />
           </div>
         ) : null}
+        {makingPoll && open && open !== "new" ? (
+          <div className="mb-2">
+            <PollMaker
+              post={async (body) => {
+                await postNamed(BASE, board, encodeThreadPost({ threadId: open, body, sage: false }));
+                void noteNamedPost();
+                void refresh();
+              }}
+              onDone={() => setMakingPoll(false)}
+            />
+          </div>
+        ) : null}
+        {anonymous ? null : (
+          <div className="mb-2 max-w-[18rem]">
+            <Input label={t("Name (optional)")} value={name} onChange={(v) => setName(v.slice(0, NAME_MAX))} placeholder={t("No name")} />
+          </div>
+        )}
+        <div
+          onKeyDown={(e) => {
+            // Cmd/Ctrl+Enter posts.
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !needsJoin) {
+              e.preventDefault();
+              void onPost();
+            }
+          }}
+        >
         <TextArea
           label={open === "new" ? t("First post") : t("Your post")}
           value={text}
@@ -366,6 +493,7 @@ export default function BoardPanel(props: {
           maxLength={BODY_MAX}
           placeholder={open === "new" ? t("The first post of the thread…") : t("Write a post (>>2 replies to post 2)…")}
         />
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-x-3.5 gap-y-1.5 text-[14px] text-[#5d646d]">
           {needsJoin ? (
             <Button
@@ -382,20 +510,17 @@ export default function BoardPanel(props: {
             </Button>
           ) : (
             <Button disabled={!text.trim() || (open === "new" && !newTitle.trim()) || prover === "unknown"} onClick={() => void onPost()}>
-              {prover === "unknown"
-                ? t("Checking for the prover…")
-                : open === "new"
-                  ? anonymous
-                    ? t("Start the thread anonymously")
-                    : t("Start the thread named")
-                  : anonymous
-                    ? t("Post anonymously")
-                    : t("Post named")}
+              {prover === "unknown" ? t("Checking for the prover…") : open === "new" ? t("Start the thread") : t("Post")}
             </Button>
           )}
           {prover === "found" ? (
             <Button kind="quiet" onClick={() => setNamed(!named)}>
               {named ? t("post anonymously instead") : t("post named instead")}
+            </Button>
+          ) : null}
+          {iStarted && open !== "new" && !makingPoll ? (
+            <Button kind="quiet" onClick={() => setMakingPoll(true)}>
+              {t("Add a poll")}
             </Button>
           ) : null}
           {open !== "new" ? (
@@ -406,7 +531,7 @@ export default function BoardPanel(props: {
           <span>
             {prover === "missing" ? (
               <>
-                {t("No prover here, so posts show your wallet id.")}{" "}
+                {t("No prover here, so posts show your ID.")}{" "}
                 <a className="underline" href={PROVER_DOCS_URL} target="_blank" rel="noreferrer">
                   {t("How to run the prover to post anonymously")}
                 </a>
@@ -416,9 +541,9 @@ export default function BoardPanel(props: {
             ) : needsJoin ? (
               <>{t("To post anonymously, join the set first: a separate, public step that posts nothing.")}</>
             ) : anonymous ? (
-              <span className="tabular-nums">{t("{n} anonymous post left today · about 30 s to prove", { n: allowance.remaining })}</span>
+              <span>{fastReady ? t("Anonymous posts here are instant for the rest of today.") : t("The first anonymous post here today takes about 30 s to prove; the rest are instant.")}</span>
             ) : (
-              <>{t("shows your wallet id")}</>
+              <>{t("shows your ID")}</>
             )}
           </span>
         </div>
@@ -454,13 +579,13 @@ export default function BoardPanel(props: {
                   <span className={INK.ok}>{t("Listed again for 7 days.")}</span>
                 ) : relist === "closed" ? (
                   <Button kind="quiet" onClick={() => (props.boardWords ? void relistNow(props.boardWords) : setRelist("open"))}>
-                    {t("list this board again (needs the board's 12 words)")}
+                    {t("list this board again (needs the board's passphrase)")}
                   </Button>
                 ) : (
                   <div className="flex flex-wrap items-end gap-2">
                     {props.boardWords ? null : (
                       <div className="min-w-[16rem] flex-1">
-                        <Input ariaLabel={t("The board's 12 words")} value={relistWords} onChange={setRelistWords} mono placeholder={t("The board's 12 words…")} />
+                        <Input ariaLabel={t("The board's passphrase (12 words)")} value={relistWords} onChange={setRelistWords} mono placeholder={t("The board's passphrase (12 words)…")} />
                       </div>
                     )}
                     <Button className="min-h-9 px-3 text-[14px]" disabled={relist === "busy"} onClick={() => void relistNow(props.boardWords ?? relistWords)}>
@@ -542,7 +667,13 @@ export default function BoardPanel(props: {
                     className={cx("-mx-2 border-b border-[#eceef1] px-2 py-2.5 transition-colors", highlight === n && "bg-[#fff6dc]")}
                   >
                     <Meta n={n}>
-                      <Author walletId={p.label.author} onDm={props.onDm} />
+                      <span
+                        className="font-semibold text-[#1f5132]"
+                        title={p.label.author ? t("Chosen by the poster, not checked. The ID beside it is what counts.") : t("No DM: an anonymous post doesn't say who wrote it.")}
+                      >
+                        {shownName(p, t)}
+                      </span>
+                      <Author post={p} onDm={props.onDm} />
                       {p.label.dailyId ? (
                         <span translate="no" title={t("Daily ID: from this post's proof. Same member, same board, same UTC day: same ID.")}>
                           ID:{p.label.dailyId}
@@ -554,7 +685,10 @@ export default function BoardPanel(props: {
                         {b.text}
                       </Badge>
                     </Meta>
-                    <Body text={p.body} onRef={onRef} />
+                    {(() => {
+                      const def = pollOf(p);
+                      return def ? <PollBox def={def} now={now} /> : <Body text={p.body} onRef={onRef} />;
+                    })()}
                   </li>
                 );
               })}

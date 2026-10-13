@@ -1,25 +1,19 @@
-"use client";
+/**
+ * The TET technical paper (paper.ts), for engineers. One page, one source: the standalone HTML and
+ * the PDF are built from the same text (scripts/paper_build.mjs), and paper_guard checks the cited
+ * files and the wording. The page follows the visitor's language (PaperView).
+ */
+import type { Metadata } from "next";
+import { ABSTRACT, TITLE } from "./paper";
+import { LangProvider } from "../try/i18n";
+import { PaperView } from "./PaperView";
 
-import {
-  TET_WHITEPAPER_DATE,
-  TET_WHITEPAPER_FULL_TEXT,
-  TET_WHITEPAPER_TITLE,
-  TET_WHITEPAPER_VERSION,
-} from "../lib/tetWhitepaper";
+export const metadata: Metadata = { title: `${TITLE} · TET`, description: ABSTRACT };
 
 export default function Whitepaper() {
   return (
-    <main className="max-w-3xl mx-auto px-6 py-16 bg-white text-black">
-      <header className="mb-12">
-        <h1 className="text-4xl font-bold tracking-tight mb-4 font-mono">{TET_WHITEPAPER_TITLE}</h1>
-        <p className="text-gray-700 text-sm font-mono">
-          In-app summary — {TET_WHITEPAPER_VERSION} · {TET_WHITEPAPER_DATE} · §12.5–12.7 marked Future Work in canonical WP
-        </p>
-      </header>
-
-      <article className="font-mono text-sm whitespace-pre-wrap leading-relaxed text-black">
-        {TET_WHITEPAPER_FULL_TEXT}
-      </article>
-    </main>
+    <LangProvider>
+      <PaperView />
+    </LangProvider>
   );
 }

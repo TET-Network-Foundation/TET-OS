@@ -83,6 +83,11 @@ fn is_wallet_id_64hex(s: &str) -> bool {
     s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
+/// How long files are kept: (default, longest), as the store applies them.
+pub fn retention_ms() -> (u64, u64) {
+    (effective_ttl_ms(0), effective_ttl_ms(u64::MAX))
+}
+
 /// Effective TTL after clamping: `0` (unset) → default; otherwise capped at the max.
 fn effective_ttl_ms(ttl_ms: u64) -> u64 {
     let max = env_u64("TET_FILES_MAX_TTL_MS", MAX_TTL_MS);

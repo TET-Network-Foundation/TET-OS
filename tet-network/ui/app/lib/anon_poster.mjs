@@ -161,11 +161,46 @@ export async function fetchAnonLeaves(node) {
  * @typedef {{ secret_hex: string, index: number, siblings_hex: string[], ephemeral_hex: string,
  *             receiver_hex: string, bucket: number }} AnonProveParams
  * @typedef {{ ephemeralSeed: Uint8Array, ephemeralWalletId: string, receiverWalletId: string,
- *             plaintext: string, sentAtMs: number, proof: AnonProof }} AnonEnvelopeArgs
+ *             plaintext: string, sentAtMs: number, proof: AnonProof | null }} AnonEnvelopeArgs
  * @typedef {{ state: "loading_set" } | { state: "not_in_set", nextEpochAtMs: number }
  *         | { state: "proving", startedAtMs: number } | { state: "depositing" } | { state: "sending" }
- *         | { state: "sent", msgId: string } | { state: "failed", reason: string }} AnonPostState
+ *         | { state: "sent", msgId: string, fast?: boolean } | { state: "failed", reason: string }} AnonPostState
  */
+
+/**
+ * Start today's proof for a board in the background (fast anonymous posting): when the member opens
+ * a board, the first anonymous post of the day needn't wait the whole ~30 s. Does nothing if the
+ * tab knows today's key is registered (`registeredToday`), or a proof for this board and day is
+ * already cached. It never asks the node about the posting key. The proof is bound to the posting key, board and day, not to a message, so it can be made
+ * before the post is written. Never for polls.
+ *
+ * @param {{ node: (path: string, init?: { method?: string, body?: string }) => Promise<{ status: number, json: any }>,
+ *   prove: (params: AnonProveParams) => Promise<AnonProof>, ephemeralWalletId: (seed: Uint8Array) => Promise<string>,
+ *   now: () => number, proofCache: Map<string, Promise<AnonProof>> }} deps
+ * @param {{ memberSecret: Uint8Array, receiverWalletId: string, registeredToday?: boolean }} input
+ * @returns {Promise<"registered" | "cached" | "started" | "not_in_set">}
+ */
+export async function prewarmAnonProof(deps, input) {
+  const receiver = input.receiverWalletId.trim().toLowerCase();
+  const bucket = tmailBucketIndex(deps.now());
+  const key = `${receiver}:${bucket}`;
+  if (deps.proofCache.has(key)) return "cached";
+  // The tab remembers that today's key is registered (after a post); otherwise prove. The node is
+  // not asked about the posting key here: opening a board must not show it a key the member may
+  // never use. It sees the key only when a post is sent.
+  if (input.registeredToday) return "registered";
+  const ephemeralSeed = tmailEphemeralSeed(input.memberSecret, fromHex(receiver), bucket);
+  const ephemeral = (await deps.ephemeralWalletId(ephemeralSeed)).trim().toLowerCase();
+  const set = await fetchAnonLeaves(deps.node);
+  const mine = toHex(anonCommitment(input.memberSecret));
+  const index = set.leaves.findIndex((l) => toHex(l) === mine);
+  const { root, siblings } = anonRootAndPath(set.leaves, index);
+  if (index < 0 || !siblings || toHex(root) !== String(set.rootHex).toLowerCase()) return "not_in_set";
+  const p = deps.prove({ secret_hex: toHex(input.memberSecret), index, siblings_hex: siblings.map(toHex), ephemeral_hex: ephemeral, receiver_hex: receiver, bucket });
+  p.catch(() => deps.proofCache.delete(key));
+  deps.proofCache.set(key, p);
+  return "started";
+}
 
 /**
  * Run one anonymous send to a terminal state.
@@ -178,8 +213,9 @@ export async function fetchAnonLeaves(node) {
  *   now: () => number,
  *   onState?: (s: AnonPostState) => void,
  *   proveBudgetMs?: number,
+ *   proofCache?: Map<string, Promise<AnonProof>>,
  * }} deps
- * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string }} input
+ * @param {{ memberSecret: Uint8Array, receiverWalletId: string, plaintext: string, memberTree?: { leaves: Uint8Array[], rootHex: string }, knownMember?: boolean, allowFast?: boolean }} input
  * @returns {Promise<AnonPostState>}
  */
 export async function runAnonPost(deps, input) {
@@ -194,25 +230,66 @@ export async function runAnonPost(deps, input) {
     const receiver = input.receiverWalletId.trim().toLowerCase();
     if (!/^[0-9a-f]{64}$/.test(receiver)) return fail("recipient wallet id must be 64 hex chars");
 
+    // Today's posting key for this board: one per member, board and UTC day, derived from the member
+    // secret (never stored). Fast anonymous posting (docs/plans/FAST_ANON_POSTING.md): if a post
+    // whose proof verified has registered it on this node, this post needs no proof of its own.
+    // Never for polls: one proof, one ballot.
+    const sentAtMs = deps.now();
+    const bucket = tmailBucketIndex(sentAtMs);
+    const ephemeralSeed = tmailEphemeralSeed(input.memberSecret, fromHex(receiver), bucket);
+    const ephemeral = (await deps.ephemeralWalletId(ephemeralSeed)).trim().toLowerCase();
+    // Ask only for a caller that already knows this is a member: a non-member's request shows the
+    // node nothing but the registry download (anon_poster_guard), not a would-be posting key.
+    if ((!input.memberTree || input.allowFast === true) && input.knownMember) {
+      const q = await deps.node(`/tmail/anon/fast/${receiver}/${ephemeral}`, { method: "GET" });
+      if (q.status === 200 && q.json?.registered === true) {
+        emit({ state: "sending" });
+        const env = await deps.buildEnvelope({ ephemeralSeed, ephemeralWalletId: ephemeral, receiverWalletId: receiver, plaintext: input.plaintext, sentAtMs, proof: null });
+        let sent = await deps.node("/tmail/send", { method: "POST", body: JSON.stringify(env) });
+        // The node's flood guard is a last resort (the page paces posts): retry once, quietly.
+        if (sent.status === 429 && /try again in a moment/.test(sent.text ?? "")) {
+          await new Promise((r) => setTimeout(r, 3_000));
+          sent = await deps.node("/tmail/send", { method: "POST", body: JSON.stringify(env) });
+        }
+        if (sent.status < 200 || sent.status >= 300) return fail(sent.text || `send failed (HTTP ${sent.status})`);
+        return emit({ state: "sent", msgId: sent.json?.msg_id ?? env.msg_id, fast: true });
+      }
+    }
+
+    // The first anonymous post of the day here: it carries the proof that registers the key.
+    // A cached proof is against the node's anonymity set; a members-only tree (a poll, Shelter)
+    // needs a proof against that tree, so it never takes one from the cache.
+    const cached = input.memberTree ? undefined : deps.proofCache?.get(`${receiver}:${bucket}`);
+    let proof;
+    if (cached) {
+      emit({ state: "proving", startedAtMs: sentAtMs });
+      try {
+        proof = await withinBudget(cached, deps.proveBudgetMs ?? ANON_PROVE_BUDGET_MS);
+      } catch {
+        deps.proofCache?.delete(`${receiver}:${bucket}`);
+        proof = undefined; // fall through to a fresh proof
+      }
+    }
+    if (proof) return await depositAndSend(proof);
+
     emit({ state: "loading_set" });
-    const set = await fetchAnonLeaves(deps.node);
+    // A members-only poll proves against its own member tree (the root its wallet registered with
+    // the node, tet-core tmail/poll.rs); everything else against this node's anonymity set. Either
+    // way the leaves must reproduce that exact root before anything is proven.
+    const set = input.memberTree
+      ? { leaves: input.memberTree.leaves, rootHex: input.memberTree.rootHex, nextEpochAtMs: 0 }
+      : await fetchAnonLeaves(deps.node);
     const mine = toHex(anonCommitment(input.memberSecret));
     const index = set.leaves.findIndex((l) => toHex(l) === mine);
     const { root, siblings } = anonRootAndPath(set.leaves, index);
     if (toHex(root) !== String(set.rootHex).toLowerCase()) {
-      return fail("the downloaded registry does not reproduce this node's root");
+      return fail(input.memberTree ? "the member list does not reproduce its registered root (it changed: try again)" : "the downloaded registry does not reproduce this node's root");
     }
     if (index < 0 || !siblings) {
       return emit({ state: "not_in_set", nextEpochAtMs: set.nextEpochAtMs });
     }
 
-    const sentAtMs = deps.now();
-    const bucket = tmailBucketIndex(sentAtMs);
-    const ephemeralSeed = tmailEphemeralSeed(input.memberSecret, fromHex(receiver), bucket);
-    const ephemeral = (await deps.ephemeralWalletId(ephemeralSeed)).trim().toLowerCase();
-
     emit({ state: "proving", startedAtMs: sentAtMs });
-    let proof;
     try {
       proof = await withinBudget(deps.prove({
         secret_hex: toHex(input.memberSecret),
@@ -227,6 +304,10 @@ export async function runAnonPost(deps, input) {
       return fail(`prover: ${e instanceof Error ? e.message : String(e)}`);
     }
 
+    return await depositAndSend(proof);
+
+    /** @param {any} proof */
+    async function depositAndSend(proof) {
     emit({ state: "depositing" });
     const put = await deps.node("/tmail/anon/receipt", {
       method: "PUT",
@@ -250,7 +331,9 @@ export async function runAnonPost(deps, input) {
     if (sent.status < 200 || sent.status >= 300) {
       return fail(plainNodeError(sent.text) || `send failed (HTTP ${sent.status})`);
     }
+    deps.proofCache?.delete(`${receiver}:${bucket}`);
     return emit({ state: "sent", msgId: sent.json?.msg_id ?? env.msg_id });
+    }
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }

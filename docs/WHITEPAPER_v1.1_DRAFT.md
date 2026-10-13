@@ -1,3 +1,5 @@
+> **Superseded (2026-10-09).** The current paper is the technical paper at `/whitepaper` (source `tet-network/ui/app/whitepaper/paper.ts`, PDF `tet-network/ui/public/paper/tet-technical-paper.pdf`, built by `tet-network/ui/scripts/paper_build.mjs`). This document is kept for history; where it differs from the code, the technical paper is right.
+
 # TET NETWORK
 ## Fluid P2P Compute–Energy Resource Protocol
 ## AI-Native Sovereign Layer 1
@@ -8,8 +10,8 @@
 **Title:** Founder-Architect, TET Network Project  
 **Contact:** tetsteve@proton.me  
 
-**Status:** Draft for review. Does **not** supersede [`WHITEPAPER.md`](../WHITEPAPER.md) (Genesis v1.0, 2026-04-28) until merged by explicit commit.  
-**Implementation references:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md), [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md), [`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md), [`docs/STATUS.md`](./STATUS.md)  
+**Status:** Draft for review. Does **not** supersede [`archive/WHITEPAPER_v1.0.md`](../archive/WHITEPAPER_v1.0.md) (archived) (Genesis v1.0, 2026-04-28) until merged by explicit commit.  
+**Implementation references:** [`docs/WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md), [`docs/SOVEREIGN_OS_PHASE0_SPEC.md`](./SOVEREIGN_OS_PHASE0_SPEC.md), [`docs/CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md), [technical paper v2](https://tetnet.org/whitepaper)  
 **Canonical code:** `tet-core/` (Rust), `tet-network/ui/` (Sovereign OS)
 
 ---

@@ -76,7 +76,8 @@ export type TmailEnvelopeV1 = {
   /** Present only on anonymous envelopes (spec §A.1.2 `anonymous`). */
   anonymous?: {
     ephemeral_wallet_id: string;
-    anchor_proof: { image_id_hex: string; journal_b64: string; receipt_sha256_hex: string };
+    /** Absent on a fast post (no proof of its own; its posting key was registered by an earlier one). */
+    anchor_proof?: { image_id_hex: string; journal_b64: string; receipt_sha256_hex: string };
   };
 };
 
@@ -260,6 +261,17 @@ function ephemeralMnemonic(ephemeralSeed: Uint8Array): string {
   return entropyToMnemonic(ephemeralSeed.slice(0, 16), wordlist);
 }
 
+/**
+ * The one-time key pair a membership proof commits to, from its seed: Ed25519 (the id) and
+ * ML-DSA-44. Used to sign something other than an envelope with it (a grant claim).
+ */
+export async function ephemeralKeysFromSeed(ephemeralSeed: Uint8Array) {
+  const words = ephemeralMnemonic(ephemeralSeed);
+  const ed = mnemonicToTetEd25519Keypair(words);
+  const pqc = await mldsa44KeypairFromMnemonic(words);
+  return { walletId: ed.walletIdHex, secretKey: ed.secretKey, mldsaKeypairB64: pqc.keypair_b64, mldsaPubB64: pqc.pubkey_b64 };
+}
+
 /** The ephemeral's wallet id (its Ed25519 public key), which the membership proof commits to. */
 export async function ephemeralWalletIdFromSeed(ephemeralSeed: Uint8Array): Promise<string> {
   return mnemonicToTetEd25519Keypair(ephemeralMnemonic(ephemeralSeed)).walletIdHex;
@@ -280,7 +292,8 @@ export async function buildAnonymousTmailEnvelopeV1(opts: {
   receiverX25519Pub: Uint8Array;
   receiverMlkemPub: Uint8Array;
   sentAtMs: number;
-  proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string };
+  /** `null` for a fast post: no proof of its own (docs/plans/FAST_ANON_POSTING.md). */
+  proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string } | null;
   baseUrl?: string;
 }): Promise<TmailEnvelopeV1> {
   const receiver = opts.receiverWalletId.trim().toLowerCase();
@@ -290,7 +303,7 @@ export async function buildAnonymousTmailEnvelopeV1(opts: {
   const words = ephemeralMnemonic(opts.ephemeralSeed);
   const ed = mnemonicToTetEd25519Keypair(words);
   if (ed.walletIdHex !== opts.ephemeralWalletId.trim().toLowerCase()) {
-    throw new Error("ephemeral key does not match the one the proof commits to");
+    throw new Error("ephemeral key does not match the posting key");
   }
   const pqc = await mldsa44KeypairFromMnemonic(words);
 
@@ -344,13 +357,15 @@ export async function buildAnonymousTmailEnvelopeV1(opts: {
       mldsa_pubkey_b64: pqc.pubkey_b64,
       mldsa_sig_b64: mldsaSig,
     },
-    anonymous: {
-      ephemeral_wallet_id: ed.walletIdHex,
-      anchor_proof: {
-        image_id_hex: opts.proof.image_id_hex,
-        journal_b64: opts.proof.journal_b64,
-        receipt_sha256_hex: opts.proof.receipt_sha256_hex,
-      },
-    },
+    anonymous: opts.proof
+      ? {
+          ephemeral_wallet_id: ed.walletIdHex,
+          anchor_proof: {
+            image_id_hex: opts.proof.image_id_hex,
+            journal_b64: opts.proof.journal_b64,
+            receipt_sha256_hex: opts.proof.receipt_sha256_hex,
+          },
+        }
+      : { ephemeral_wallet_id: ed.walletIdHex },
   };
 }

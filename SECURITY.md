@@ -109,10 +109,10 @@ seeds on 2026-10-09, a node takes them only from trusted peers: a follower from 
 and the sole producer from no peer unless its operator names one. Transaction signatures were checked
 throughout, so no balance could move without its wallet's signature.
 
-**Fixed: pages trusted the messaging keys a node served.** Until 2026-10-11, the page encrypted
+**Fixed: pages trusted the messaging keys a node served.** Until 2026-10-10, the page encrypted
 direct messages and files to whatever messaging keys the node returned for a wallet, without
 checking that wallet had signed them, so a dishonest or compromised node could have substituted its
-own keys and read what was sent after that. Since bea1e45, deployed on both seeds on 2026-10-11,
+own keys and read what was sent after that. Since bea1e45, deployed on both seeds on 2026-10-10,
 keys are registered only with a v2 signature by the wallet (Ed25519 + ML-DSA-44, PAE
 domain-separated), and the browser checks that signature before encrypting and checks each
 sender's signature before showing who sent something; older registrations are refused until their
@@ -120,10 +120,10 @@ owner opens TET once. Each conversation shows a safety number: the guarantee tha
 people can read their messages holds when they have compared it. The page's own code still has to
 be trusted (see the threat model).
 
-**Fixed: unverified anonymous posts could push a verified one out of a board.** Until 2026-10-10,
+**Fixed: unverified anonymous posts could push a verified one out of a board.** Until 2026-10-09,
 anonymous posts were grouped for message retention by a value they announce before their proof is
 checked, so posts whose proofs would later fail could share a verified post's group and cause it
-to be deleted. Since 39036cf, deployed on both seeds on 2026-10-10, only a value from a verified
+to be deleted. Since 39036cf, deployed on both seeds on 2026-10-09, only a value from a verified
 proof groups posts; an unverified post stands alone. No post could be forged or deanonymised this
 way.
 
@@ -137,6 +137,23 @@ when they arrive; a block is built without any transaction that would break it, 
 dropped. No balance could change without its wallet's signature. This issue's class was named by
 mistake in a public branch a few hours before the fix was deployed; working logs are now kept out of
 the repository.
+
+**Fixed: a message's time was not checked against the node's clock.** Until 2026-10-11, the time a
+sender put on a message or post was stored as given, so a post could be dated anywhere: backdated
+to the top of a board thread, dated in the future to be kept past the retention limit, or (for an
+anonymous post) dated on another day. Since 404bd86, deployed on both seeds and the demo node on
+2026-10-11, a node refuses a message whose time is more than 5 minutes from its own clock, saying
+"your device clock is off", and an anonymous post must be dated on the node's current UTC day. The
+nodes keep their clocks in sync, and their health check fails if they don't. No message could be
+read or forged this way.
+
+**Fixed: a founder-signed route moved funds outside the block pipeline.** One of the paths below: a
+request to a node's own local API, signed by the founder wallet, moved founder funds by writing
+balances directly instead of through a block, so the node that served it would no longer agree with
+the others on state. It could not be reached from the internet (not on the demo's public API) and
+needed the founder's key; it did not bypass the founder lock. Since the review stack's deploy
+(commit and date added at deploy), the route is gone and the transaction endpoint refuses that kind
+of transaction; blocks never accepted it.
 
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature

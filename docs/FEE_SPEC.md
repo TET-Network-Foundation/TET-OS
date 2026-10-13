@@ -145,7 +145,7 @@ Deleting schedule 1 leaves callers that move value *within* the protocol rather 
 | Caller | Now |
 |---|---|
 | `p2p_dex.rs` — 6 escrow hops | `transfer_internal_no_fee` |
-| `/ledger/genesis_bridge` | `transfer_internal_no_fee` |
+| `/ledger/genesis_bridge` | removed (it wrote balances outside a block; SECURITY.md) |
 | `/ai/proxy` payment | `FeeKind::Transfer` at the default rate |
 
 This fixes a live bug. All six DEX hops passed `fee_bps: None`, and schedule 1 charged 1% anyway —
@@ -190,5 +190,5 @@ All fee constants live in `fees.rs`. Nothing else may define one.
 | Document | Relation |
 |---|---|
 | [`FEE_AUDIT.md`](./FEE_AUDIT.md) | The pre-unification inventory this spec replaces |
-| [`WHITEPAPER.md`](../WHITEPAPER.md) §5.6, §11.5–11.7, §17.7 | §17.7 reconciliation is closed by this spec for schedules 2, 5, 6, 7 |
+| [`WHITEPAPER_v1.1.md`](../archive/WHITEPAPER_v1.1.md) (archived) §5.6, §11.5–11.7, §17.7 | §17.7 reconciliation is closed by this spec for schedules 2, 5, 6, 7 |
 | [`SPRINT_PLAN.md`](./SPRINT_PLAN.md) | Strategy C — why a hard fork is affordable now |

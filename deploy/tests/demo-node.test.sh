@@ -98,7 +98,7 @@ else flunk "Caddy's allow-list equals tet-core's PUBLIC_ALLOWLIST"; fi
 
 # Ambiguous paths are refused first, inside the single ordered route block.
 if awk '/^\troute \{/{r=1; next} r && NF{print; exit}' deploy/demo/Caddyfile | grep -q 'respond @ambiguous_path 400' \
-   && ! grep -E '^\s*handle' deploy/demo/Caddyfile >/dev/null; then
+   && ! grep -E '^\s*handle(_path)?(\s|\{|$)' deploy/demo/Caddyfile >/dev/null; then
   pass "the Caddyfile refuses ambiguous paths before any other rule"
 else flunk "the Caddyfile refuses ambiguous paths before any other rule"; fi
 
@@ -142,6 +142,9 @@ if docker info >/dev/null 2>&1; then
   expect POST   /api/tet/infer_signed 404
   expect GET    /os 404
   expect GET    /try 200
+  expect GET    /whitepaper 200
+  expect GET    /paper/tet-technical-paper.pdf 200
+  expect GET    /paper/tet-technical-paper.html 200
   expect GET    /_next/static/chunk.js 200
   expect GET    /brand/tet-logo.svg 200
   expect GET    /apple-icon.png 200
@@ -155,6 +158,23 @@ if docker info >/dev/null 2>&1; then
   expect GET    "//tet-node-api/status" 400
   expect GET    "/tet-node-api/files/fetch/%252e%252e" 400
   expect GET    /try/anything 404
+  # Rule 6: AI training crawlers (deploy/ai-crawlers.txt) get 403; robots.txt stays readable to
+  # them; search crawlers and browsers pass. Control: a browser user agent is served.
+  ua() {  # USER-AGENT PATH WANT
+    local got; got=$(curl -s -o /dev/null -w "%{http_code}" -A "$1" "http://127.0.0.1:18080$2")
+    if [ "$got" = "$3" ]; then pass "caddy: UA '$1' $2 → $3"; else flunk "caddy: UA '$1' $2 → $3" "got $got"; fi
+  }
+  ua "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" /try 403
+  ua "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)" /tet-node-api/status 403
+  ua "CCBot/2.0 (https://commoncrawl.org/faq/)" /try 403
+  ua "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" /robots.txt 200
+  ua "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)" /try 200
+  ua "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15" /try 200
+  # The main name sends preload-ready HSTS. Checked while the page is up: an upstream error (502)
+  # carries no header Caddy set, so this must run before the logging check stops the page.
+  hsts=$(curl -s -D - -o /dev/null http://127.0.0.1:18080/try | tr -d '\r' | grep -i '^strict-transport-security:')
+  if grep -q 'includeSubDomains; preload' <<<"$hsts"; then pass "caddy: HSTS includeSubDomains; preload"
+  else flunk "caddy: HSTS includeSubDomains; preload" "got: $hsts"; fi
   # Rule 5: no client address in any log. A failed upstream makes Caddy log the whole request as an
   # error; the entry must exist and hold no address, no forwarding header and not the marker.
   # Control: the same request through the Caddyfile without its log filter does show the client,
@@ -168,11 +188,23 @@ if docker info >/dev/null 2>&1; then
     elif grep -qE 'remote_ip|client_ip|203\.0\.113\.77|X-Forwarded-For' <<<"$log"; then echo yes
     else echo no; fi
   }
+  # The real Caddyfile answers an upstream failure with handle_errors, which Caddy logs below error
+  # level: nothing names the client either way ("no" or "no-error"). To exercise the log filter
+  # itself, a copy without handle_errors must log the error, without the address.
   got=$(client_logged "edge-$$" 18080)
-  if [ "$got" = no ]; then pass "caddy logs an upstream failure without the client's address"
-  else flunk "caddy logs an upstream failure without the client's address" "got: $got"; fi
+  if [ "$got" = no ] || [ "$got" = no-error ]; then pass "caddy logs no client address when the upstream fails"
+  else flunk "caddy logs no client address when the upstream fails" "got: $got"; fi
+  noerr=$(mktemp)
+  sed '/^\thandle_errors /,/^\t}/d' deploy/demo/Caddyfile > "$noerr"
+  docker run -d --rm --name "edgef-$$" --network "$net" -p 127.0.0.1:18084:8080 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
+    -v "$noerr:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18084/ && break; sleep 1; done
+  got=$(client_logged "edgef-$$" 18084)
+  if [ "$got" = no ]; then pass "caddy logs an upstream failure without the client's address (log filter)"
+  else flunk "caddy logs an upstream failure without the client's address (log filter)" "got: $got"; fi
   unfiltered=$(mktemp)
-  sed '/^\tlog default {/,/^\t}/d' deploy/demo/Caddyfile > "$unfiltered"
+  sed '/^\tlog default {/,/^\t}/d' "$noerr" > "$unfiltered"
   docker run -d --rm --name "edge0-$$" --network "$net" -p 127.0.0.1:18082:8080 \
     -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
     -v "$unfiltered:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
@@ -180,8 +212,41 @@ if docker info >/dev/null 2>&1; then
   got=$(client_logged "edge0-$$" 18082)
   if [ "$got" = yes ]; then pass "control: without the log filter the client's address is logged"
   else flunk "control: without the log filter the client's address is logged" "got: $got"; fi
-  rm -f "$unfiltered"
-  docker rm -f "edge-$$" "edge0-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
+  rm -f "$unfiltered" "$noerr"
+  # Another name (TET_DEMO_REDIRECTS) redirects permanently to the main one with the same path, so
+  # old links keep working. (The edge above ran with it unset: the placeholder default parses and
+  # serves nothing.)
+  docker run -d --rm --name "edge2-$$" --network "$net" -p 127.0.0.1:18085:8081 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" -e TET_DEMO_REDIRECTS=":8081" \
+    -v "$PWD/deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18085/ && break; sleep 1; done
+  red=$(curl -s -D - -o /dev/null "http://127.0.0.1:18085/try?code=TET-ABCD-EFGH" | tr -d '\r')
+  if grep -qE '^HTTP/[0-9.]+ 30[18]' <<<"$red" && grep -qiE '^location: https://[^ ]*/try\?code=TET-ABCD-EFGH$' <<<"$red"; then
+    pass "caddy: another name redirects permanently, keeping the path"
+  else flunk "caddy: another name redirects permanently, keeping the path" "got: $(head -3 <<<"$red" | tr '\n' ' ')"; fi
+  docker rm -f "edge2-$$" >/dev/null 2>&1
+
+  # The upstream down: the maintenance page (503, trilingual) for pages, JSON 503 for the node API,
+  # and the path rules still first. `handle_errors` runs only after a proxy error, so it can't
+  # serve anything the route block refused.
+  docker rm -f "ui-$$" >/dev/null 2>&1
+  docker run -d --rm --name "edgem-$$" --network "$net" -p 127.0.0.1:18083:8080 \
+    -e TET_DEMO_DOMAIN=":8080" -e TET_DEMO_ACME_EMAIL="ops@example.org" \
+    -v "$PWD/deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro" -v "$PWD/deploy/demo/maintenance:/srv/maintenance:ro" caddy:2.8 >/dev/null
+  for _ in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:18083/robots.txt && break; sleep 1; done
+  page=$(curl -s -w "\n%{http_code}" http://127.0.0.1:18083/try)
+  if [ "$(tail -1 <<<"$page")" = 503 ] && grep -q "TET は更新中です" <<<"$page" && grep -q "TET 正在更新" <<<"$page"; then
+    pass "upstream down: pages get the trilingual maintenance page with 503"
+  else flunk "upstream down: pages get the trilingual maintenance page with 503" "got: $(tail -1 <<<"$page")"; fi
+  api=$(curl -s -w "\n%{http_code}" http://127.0.0.1:18083/tet-node-api/status)
+  if [ "$(tail -1 <<<"$api")" = 503 ] && grep -q '"error":"unavailable"' <<<"$api"; then
+    pass "upstream down: the node API answers JSON 503"
+  else flunk "upstream down: the node API answers JSON 503" "got: $(head -c 120 <<<"$api")"; fi
+  if [ "$(curl --path-as-is -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:18083/try/..%2Fapi")" = 400 ] \
+     && [ "$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:18083/tet-node-api/ledger/mine)" = 404 ]; then
+    pass "upstream down: ambiguous paths are still 400 and off-list routes 404"
+  else flunk "upstream down: ambiguous paths are still 400 and off-list routes 404"; fi
+  docker rm -f "edge-$$" "edge0-$$" "edgef-$$" "edgem-$$" "edge2-$$" "ui-$$" >/dev/null 2>&1; docker network rm "$net" >/dev/null 2>&1
 elif [ -n "${CI:-}" ]; then
   flunk "caddy behaviour" "no Docker daemon in CI"
 else

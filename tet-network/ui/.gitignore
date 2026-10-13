@@ -41,3 +41,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# The build manifest is a build output (scripts/build_manifest.mjs).
+/public/build-manifest.json

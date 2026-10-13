@@ -1,4 +1,4 @@
-// Guard: the page checks keys and senders itself (app/lib/key_trust.ts; SECURITY.md 2026-10-11).
+// Guard: the page checks keys and senders itself (app/lib/key_trust.ts; SECURITY.md 2026-10-10).
 //
 //   node --experimental-strip-types scripts/key_trust_guard.mjs
 //

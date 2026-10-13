@@ -455,7 +455,7 @@ export default function MessagesPanel(props: {
             receiverWalletId: string;
             plaintext: string;
             sentAtMs: number;
-            proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string };
+            proof: { journal_b64: string; image_id_hex: string; receipt_sha256_hex: string } | null;
           }) =>
             buildAnonymousTmailEnvelopeV1({
               ephemeralSeed: a.ephemeralSeed,

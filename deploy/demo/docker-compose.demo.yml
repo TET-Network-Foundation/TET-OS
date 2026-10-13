@@ -42,6 +42,7 @@ services:
         NEXT_PUBLIC_TET_QUESTIONS_INVITE: "${TET_QUESTIONS_INVITE:-}"
         # The public-board directory's invite (public by design): the try page's "Public boards".
         NEXT_PUBLIC_TET_DIRECTORY_INVITE: "${TET_DIRECTORY_INVITE:-}"
+        NEXT_PUBLIC_TET_SAMPLE_CODE: "${TET_SAMPLE_CODE:-}"
 
   caddy:
     image: caddy:2.8
@@ -53,8 +54,11 @@ services:
     environment:
       TET_DEMO_DOMAIN: "${TET_DEMO_DOMAIN:?set TET_DEMO_DOMAIN in .env}"
       TET_DEMO_ACME_EMAIL: "${TET_DEMO_ACME_EMAIL:?set TET_DEMO_ACME_EMAIL in .env (Caddy refuses an empty email)}"
+      # Optional: other names that redirect to TET_DEMO_DOMAIN (e.g. "www.tetnet.org, try.stevenexus.org").
+      TET_DEMO_REDIRECTS: "${TET_DEMO_REDIRECTS:-http://redirects.invalid}"
     volumes:
       - ./deploy/demo/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/demo/maintenance:/srv/maintenance:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:

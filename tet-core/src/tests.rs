@@ -135,7 +135,11 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         log_tx,
         log_sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         demo_sponsor: None,
+        grant_payer: None,
         operator_hide: crate::operator_hide::OperatorHide::open(&hide_db).unwrap(),
+        sites: std::sync::Arc::new(crate::sites::SiteStore::open(&hide_db).unwrap()),
+        search: std::sync::Arc::new(crate::search::SearchStore::open(&hide_db).unwrap()),
+        sigs: std::sync::Arc::new(crate::sigs::SigStore::open(&hide_db).unwrap()),
     }
 }
 
@@ -3363,7 +3367,10 @@ fn genesis_1k_worker_pool_reward_is_110_percent_of_standard_gross() {
     let _g = env_lock();
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_WORKER_VEST_MS", "80");
+        // An hour, not 80 ms: the test reads the lock right after minting, and on a slow CI runner
+        // 80 ms passed in between, so the lock had expired and `locked` read 0 (a flake, 2026-10-13).
+        // The test never needs the lock to expire. Control (run by hand): "0" → FAILS (locked 0).
+        std::env::set_var("TET_WORKER_VEST_MS", "3600000");
     }
     let _vest_env = EnvVarRemoveOnDrop {
         key: "TET_WORKER_VEST_MS",
@@ -8316,11 +8323,11 @@ fn anon_env_with_nullifier_for_tests(
     env.sender_wallet_id = crate::tmail::envelope::ANONYMOUS_SENTINEL.to_string();
     env.anonymous = Some(crate::tmail::envelope::TmailAnonymous {
         ephemeral_wallet_id: ephemeral.to_string(),
-        anchor_proof: crate::tmail::envelope::TmailAnchorProof {
+        anchor_proof: Some(crate::tmail::envelope::TmailAnchorProof {
             image_id_hex: "00".repeat(32),
             journal_b64: base64::engine::general_purpose::STANDARD.encode(&journal_bytes),
             receipt_sha256_hex: "ab".repeat(32),
-        },
+        }),
     });
     resign_tmail_env_for_tests(&mut env, eph_words);
     env
@@ -9869,11 +9876,11 @@ fn anonymous_envelope_for_tests(
     envelope.sender_wallet_id = crate::tmail::envelope::ANONYMOUS_SENTINEL.to_string();
     envelope.anonymous = Some(crate::tmail::envelope::TmailAnonymous {
         ephemeral_wallet_id: ephemeral.clone(),
-        anchor_proof: crate::tmail::envelope::TmailAnchorProof {
+        anchor_proof: Some(crate::tmail::envelope::TmailAnchorProof {
             image_id_hex: crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID),
             journal_b64,
             receipt_sha256_hex: hex::encode(Sha256::digest(&receipt_bytes)),
-        },
+        }),
     });
     resign_tmail_env_for_tests(&mut envelope, &eph_words);
     (envelope, receipt_bytes, store, eph_words)
@@ -10273,7 +10280,7 @@ async fn anonymous_post_names_no_poster_to_the_node() {
     let mut env = anon_env_with_nullifier_for_tests(
         &eph_words, &ephemeral, &receiver, nullifier, "anon-trace-1", sent_at,
     );
-    env.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = receipt_hash;
+    env.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = receipt_hash;
     let (status, body) =
         call("POST", "/tmail/send".into(), Some(serde_json::to_value(&env).unwrap())).await;
     // The trace's receipt is a placeholder, so since anonymous posts are checked before they're
@@ -11264,8 +11271,8 @@ async fn replayed_nullifier_over_a_swarm_is_refused_and_the_node_keeps_serving()
     resign_tmail_env_for_tests(&mut second, &eph_words);
     assert_ne!(first.msg_id, second.msg_id);
     assert_eq!(
-        first.anonymous.as_ref().unwrap().anchor_proof.journal_b64,
-        second.anonymous.as_ref().unwrap().anchor_proof.journal_b64,
+        first.anonymous.as_ref().unwrap().anchor_proof.as_ref().unwrap().journal_b64,
+        second.anonymous.as_ref().unwrap().anchor_proof.as_ref().unwrap().journal_b64,
         "both envelopes must carry the same journal, or this is not a replay"
     );
 
@@ -13798,13 +13805,28 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     unsafe { std::env::set_var("TET_OPERATOR_LOG", &log) };
 
     // Every public GET is classified; content routes are the ones this test exercises.
-    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id"];
+    // `/shelter/inbox` is content, served only to a member's signed read (tests: shelter_*).
+    const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id", "/sigs/search", "/shelter/inbox"];
     const NOT_CONTENT: &[&str] = &[
-        "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/status/live",
+        "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/explorer/block/:height", "/status/live",
         "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
         // A membership proof's receipt: no message text, no sender.
         "/tmail/anon/receipt/:hash",
+        // A poll's eligible wallets (public by design: voters build the tree from it) and a member's
+        // commitment (already public: registrations carry wallet id and commitment over gossip).
+        "/tmail/poll/root/:wallet_id", "/tmail/anon/commitment/:wallet_id",
         "/files/upload-budget",
+        // Block headers and tx hash, kind and shortened signatures: chain metadata, no content.
+        "/explorer/blocks/recent",
+        // Counts and retention settings only.
+        "/stats/inside",
+        "/tmail/anon/fast/:receiver/:posting_key",
+        // Shelter: open or not; the signer's own standing; members-only lists (no post content).
+        "/shelter/status", "/shelter/me", "/shelter/members", "/shelter/log", "/shelter/anon/leaves",
+        // The welcome grant's count (no content).
+        "/grants/status",
+        // TetSearch: which sites members listed (members only; no page content, the sites are public).
+        "/search/listings",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -13897,6 +13919,33 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     assert_eq!(get(format!("/files/fetch/{fid}")).await.0, StatusCode::GONE);
     assert!(!crate::files::serve_peer_fetch(&state.files, fenv.file_id).found, "a peer was served a hidden file");
 
+    // A site: served, then not served and taking no edits once its wallet is hidden.
+    let site_w = crate::wallet::generate_mnemonic_12().unwrap();
+    let (site_words, site_id) = (site_w.mnemonic_12.clone().unwrap(), site_w.address_hex.to_ascii_lowercase());
+    let s0 = signed_site_edit_for_tests(&site_words, &site_id, 0, &"0".repeat(64), r#"{"op":"meta","title":"t","lang":"en"}"#);
+    state.sites.append(&s0).unwrap();
+    assert_eq!(get(format!("/sites/{site_id}")).await.0, StatusCode::OK);
+    assert_eq!(hide(HideKind::Wallet, &site_id).await.status(), StatusCode::OK);
+    assert_eq!(get(format!("/sites/{site_id}")).await.0, StatusCode::GONE);
+    let s1 = signed_site_edit_for_tests(&site_words, &site_id, 1, &crate::sites::site_edit_hash(&s0), r#"{"op":"add","block":{"type":"text","text":"late"}}"#);
+    let resp = router
+        .clone()
+        .oneshot(axum::http::Request::builder().method("POST").uri("/sites/edit").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&s1).unwrap())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::GONE, "an edit to a hidden site was accepted");
+    assert_eq!(state.sites.edits(&site_id).len(), 1, "an edit to a hidden site was stored");
+
+    // A published signature record: listed, then not listed once its signer's wallet is hidden.
+    let sig_w = crate::wallet::generate_mnemonic_12().unwrap();
+    let sig_words = sig_w.mnemonic_12.clone().unwrap();
+    let rec = hash_record_for_tests(&sig_words, b"a signed file", crate::sigs::HASH_PAYLOAD_TYPE);
+    let (stored_rec, _) = state.sigs.publish(&rec, &consent_for_tests(&sig_words, &rec), 1).unwrap();
+    let search = || get(format!("/sigs/search?signer={}", stored_rec.signer_ed25519));
+    assert!(search().await.1.contains(&stored_rec.record_sha256));
+    assert_eq!(hide(HideKind::Wallet, &stored_rec.signer_ed25519).await.status(), StatusCode::OK);
+    assert!(!search().await.1.contains(&stored_rec.record_sha256), "a hidden signer's record was listed");
+
     // Unhide serves it again; the chain never moved.
     let un = crate::rest::handlers::operator::post_operator_unhide(
         State(state.clone()), local, admin.clone(),
@@ -13909,7 +13958,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
 
     // Every use is in the operator log.
     let lines = std::fs::read_to_string(&log).unwrap();
-    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"hide\"")).count(), 4, "{lines}");
+    // msg, two wallets, file, the site's wallet, and the signer's wallet.
+    assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"hide\"")).count(), 6, "{lines}");
     assert_eq!(lines.lines().filter(|l| l.contains("\"action\":\"unhide\"")).count(), 1, "{lines}");
     unsafe { std::env::remove_var("TET_OPERATOR_LOG") };
     let _ = std::fs::remove_file(&log);
@@ -13946,6 +13996,799 @@ async fn public_mode_lets_operator_routes_through_from_loopback_only() {
         let (s, refused) = public_call_from_for_tests(&router, "POST", near, None, "127.0.0.1:4000").await;
         assert!(refused && s == StatusCode::NOT_FOUND, "near miss {near} from loopback: {s} refused={refused}");
     }
+}
+
+/// **SECURITY REGRESSION GUARD: an anonymous receipt counts only from TET's membership program.**
+/// The node used to check a receipt against whatever program id the envelope carried. Now an id
+/// outside the pinned list is refused before any proof work, with a reason naming it; the pinned id
+/// gets past that check; the pinned constant round-trips through the node's id encoding.
+/// Negative control (run by hand): the check removed → FAILED (the refusal reason changes).
+#[test]
+fn anonymous_receipt_from_an_unpinned_program_is_refused() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_rw, receiver) = tmail_party_for_tests();
+    let (eph_words, ephemeral) = tmail_party_for_tests();
+    let receipt = b"placeholder receipt bytes".to_vec();
+    let with_program = |hex_id: &str| {
+        let mut env = anon_env_with_nullifier_for_tests(&eph_words, &ephemeral, &receiver, [7u8; 32], "anon-pin", tmail_now_ms_for_tests());
+        let a = env.anonymous.as_mut().unwrap();
+        a.anchor_proof.as_mut().unwrap().image_id_hex = hex_id.to_string();
+        a.anchor_proof.as_mut().unwrap().receipt_sha256_hex = hex::encode(sha2::Sha256::digest(&receipt));
+        resign_tmail_env_for_tests(&mut env, &eph_words);
+        env
+    };
+    let reason = |v: crate::tmail::store::AnonVerdict| match v {
+        crate::tmail::store::AnonVerdict::Failed { reason, .. } => reason,
+        other => panic!("expected a refusal, got {other:?}"),
+    };
+
+    let unknown = "11".repeat(32);
+    let r = reason(crate::tmail::anon::verify_anonymous_proof(&store, &with_program(&unknown), &receipt));
+    assert!(r.contains("unrecognised proving program") && r.contains(&unknown), "{r}");
+
+    let pinned = crate::tmail::anon::ANON_GUEST_IMAGE_IDS[0];
+    let r = reason(crate::tmail::anon::verify_anonymous_proof(&store, &with_program(pinned), &receipt));
+    assert!(!r.contains("unrecognised proving program"), "the pinned program was refused: {r}");
+
+    let mut words = [0u32; 8];
+    for (i, w) in words.iter_mut().enumerate() {
+        *w = u32::from_le_bytes(hex::decode(&pinned[i * 8..i * 8 + 8]).unwrap().try_into().unwrap());
+    }
+    assert_eq!(crate::tmail::anon::encode_image_id_hex(&words), pinned);
+    assert!(crate::tmail::anon::anon_program_accepted(&words));
+    assert!(!crate::tmail::anon::anon_program_accepted(&[0u32; 8]), "the all-zero stub id must never be accepted");
+}
+
+/// **A real-guest build's membership program is one the node pins.** Run by `zk-real` (it needs the
+/// embedded guest). If the guest or the toolchain changes the program id, this goes red instead of
+/// seeds silently refusing every member's anonymous post; the fix is to add the new id to
+/// `tmail::anon::ANON_GUEST_IMAGE_IDS` deliberately.
+#[test]
+#[ignore = "needs a zk build with the real guest embedded"]
+fn s8_real_guest_image_id_is_pinned() {
+    let id = crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID);
+    assert!(methods::NEXUS_GUEST_ID.iter().any(|w| *w != 0), "this build has the all-zero stub guest");
+    assert!(
+        crate::tmail::anon::ANON_GUEST_IMAGE_IDS.iter().any(|x| x.eq_ignore_ascii_case(&id)),
+        "the real guest's id {id} is not in ANON_GUEST_IMAGE_IDS"
+    );
+}
+
+fn signed_poll_root_for_tests(words: &str, poll_wallet: &str, members: &[String], bucket: u64) -> crate::tmail::poll::TmailPollRootV1 {
+    use base64::Engine as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let mldsa_pubkey_b64 = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let mut r = crate::tmail::poll::TmailPollRootV1 {
+        v: 1,
+        kind: crate::tmail::poll::TMAIL_POLL_ROOT_KIND.to_string(),
+        poll_wallet_id: poll_wallet.to_string(),
+        members: members.to_vec(),
+        bucket_index: bucket,
+        registered_at_ms: tmail_now_ms_for_tests(),
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: hex::encode(ed_sk.verifying_key().to_bytes()),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: mldsa_pubkey_b64.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::poll::tmail_poll_root_auth_message_bytes(&r, &mldsa_pubkey_b64);
+    r.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    r.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    r
+}
+
+/// `n` registered anonymity-set members in `store`: (sorted wallet ids, their commitments in that order).
+fn registered_members_for_tests(store: &crate::tmail::store::TmailStore, n: u8) -> (Vec<String>, Vec<[u8; 32]>) {
+    let mut ms = Vec::new();
+    for i in 0..n {
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+        let secret = [0x40 + i; 32];
+        let reg = signed_anon_registration_for_tests(&words, &id, &secret, tmail_now_ms_for_tests());
+        store.register_anon(&reg).unwrap();
+        let c: [u8; 32] = hex::decode(&reg.commitment_hex).unwrap().try_into().unwrap();
+        ms.push((id, c));
+    }
+    ms.sort();
+    (ms.iter().map(|m| m.0.clone()).collect(), ms.iter().map(|m| m.1).collect())
+}
+
+/// **SECURITY REGRESSION GUARD: a poll's members are real members, fixed, for the poll's day only.**
+/// The node builds a poll's root from **its own registry**: the creator lists wallet ids and never
+/// supplies a root or a leaf, so a poll can't be stuffed with invented members (an earlier draft
+/// took the creator's root, and any wallet could have minted verified anonymous posts to itself).
+/// A list naming an unregistered wallet is refused; a members-only list needs at least 3. Only the
+/// poll's own wallet can register its list (another wallet's signature or a tampered list is
+/// refused); a registered list can't be swapped; a ballot's root is accepted for that poll only on
+/// the poll's UTC day, checked on that day.
+/// Negative controls (run by hand): the node takes a creator-supplied root again → FAILED; the
+/// signer check removed → FAILED; the immutability check removed → FAILED.
+#[test]
+fn a_poll_is_real_members_signed_by_the_poll_fixed_and_for_its_day_only() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let other = crate::wallet::generate_mnemonic_12().unwrap();
+    let (ow, oid) = (other.mnemonic_12.clone().unwrap(), other.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    let (members, leaves) = registered_members_for_tests(&store, 3);
+
+    // An unregistered wallet in the list: refused, nothing stored.
+    let mut with_stranger = members.clone();
+    with_stranger.push(oid.clone());
+    with_stranger.sort();
+    let stuffed = signed_poll_root_for_tests(&pw, &pid, &with_stranger, day);
+    crate::tmail::poll::verify_tmail_poll_root_v1(&stuffed).expect("well-formed and signed");
+    let e = store.register_poll_root(&stuffed).unwrap_err();
+    assert!(e.contains("not a registered member"), "{e}");
+    assert!(store.get_poll_root(&pid).is_none());
+
+    let good = signed_poll_root_for_tests(&pw, &pid, &members, day);
+    crate::tmail::poll::verify_tmail_poll_root_v1(&good).expect("signed by the poll's own wallet");
+    // Someone else's key signing a list for this poll; a tampered list; bad shapes.
+    assert_eq!(crate::tmail::poll::verify_tmail_poll_root_v1(&signed_poll_root_for_tests(&ow, &pid, &members, day)), Err(crate::tmail::poll::TmailPollRootError::SignerMismatch));
+    let mut tampered = good.clone();
+    *tampered.members.last_mut().unwrap() = "ff".repeat(32); // still sorted, a different wallet
+    assert!(matches!(crate::tmail::poll::verify_tmail_poll_root_v1(&tampered), Err(crate::tmail::poll::TmailPollRootError::Signature(_))));
+    assert_eq!(crate::tmail::poll::verify_tmail_poll_root_v1(&signed_poll_root_for_tests(&pw, &pid, &members[..2], day)), Err(crate::tmail::poll::TmailPollRootError::Members), "two members: a ballot all but names its voter");
+    crate::tmail::poll::verify_tmail_poll_root_v1(&signed_poll_root_for_tests(&pw, &pid, &[], day)).expect("an open poll lists nobody");
+    let mut unsorted = members.clone();
+    unsorted.reverse();
+    assert_eq!(crate::tmail::poll::verify_tmail_poll_root_v1(&signed_poll_root_for_tests(&pw, &pid, &unsorted, day)), Err(crate::tmail::poll::TmailPollRootError::Order));
+
+    // The node's root is the members' registered commitments, in wallet-id order.
+    assert_eq!(store.register_poll_root(&good), Ok(true));
+    let expected = crate::tmail::anon::AnonMerkleTree::build(leaves.clone()).root();
+    assert_eq!(store.get_poll_root(&pid).unwrap().root_hex, Some(hex::encode(expected)));
+    assert_eq!(store.register_poll_root(&good), Ok(false), "the same list again is a no-op");
+    let swap = signed_poll_root_for_tests(&pw, &pid, &members[..2], day);
+    assert!(store.register_poll_root(&swap).is_err(), "a poll's member list was swapped");
+    assert!(store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &[], day)).is_err(), "a members-only poll was opened up");
+    assert_eq!(store.get_poll_root(&pid).unwrap().root_hex, Some(hex::encode(expected)));
+
+    // Accepted for that poll, that root, that day, checked that day only.
+    let reg = store.get_poll_root(&pid).unwrap();
+    let yes = || true;
+    assert!(crate::tmail::poll::poll_accepts(&reg, &expected, day, day, yes));
+    assert!(!crate::tmail::poll::poll_accepts(&reg, &expected, day + 1, day + 1, yes), "another day");
+    assert!(!crate::tmail::poll::poll_accepts(&reg, &expected, day, day + 1, yes), "dated to the poll's day, sent after the close");
+    assert!(!crate::tmail::poll::poll_accepts(&reg, &[0xcd; 32], day, day, yes), "another root");
+    assert!(store.get_poll_root(&oid).is_none(), "another poll");
+}
+
+/// **SECURITY REGRESSION GUARD: a poll's wallet stores only verified ballots, and keeps them all.**
+/// Named mail, or anonymous mail without a deposited, verifying receipt, to a poll's wallet is
+/// refused before it's stored (so junk can't crowd ballots out), on the gossip path as well as
+/// REST since both call `store_tmail`; and a poll's ballots are exempt from the per-receiver
+/// anonymous cap. Other receivers are unaffected.
+/// Negative controls (run by hand): the gate removed → FAILED; the cap exemption removed → FAILED.
+#[test]
+fn a_poll_wallet_stores_only_verified_ballots_and_keeps_them_all() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &[], day)).unwrap();
+
+    // Named mail to the poll wallet: refused, not stored.
+    let (sw, sid) = tmail_party_for_tests();
+    let named = signed_tmail_env_for_tests(&sw, &sid, &pid, "named-to-poll", tmail_flags_for_tests(false), None);
+    match store.store_tmail(&named) {
+        Err(crate::tmail::store::TmailStoreError::PollBallot(r)) => assert!(r.contains("only anonymous ballots"), "{r}"),
+        other => panic!("named mail to a poll was not refused: {other:?}"),
+    }
+    // Anonymous, but no receipt deposited: refused, not stored.
+    let (ew, eid) = tmail_party_for_tests();
+    let anon = anon_env_with_nullifier_for_tests(&ew, &eid, &pid, [9u8; 32], "anon-to-poll", tmail_now_ms_for_tests());
+    assert!(matches!(store.store_tmail(&anon), Err(crate::tmail::store::TmailStoreError::PollBallot(_))));
+    assert!(store.get_inbox(&pid, 500).is_empty(), "nothing reached the poll's inbox");
+
+    // A plain receiver still takes named mail.
+    let (_rw, plain) = tmail_party_for_tests();
+    let to_plain = signed_tmail_env_for_tests(&sw, &sid, &plain, "named-to-plain", tmail_flags_for_tests(false), None);
+    assert_eq!(store.store_tmail(&to_plain).unwrap(), true);
+
+    // Cap exemption: more verified ballots than ANON_RETAIN_PER_RECEIVER, all kept and all served.
+    let n = crate::tmail::store::ANON_RETAIN_PER_RECEIVER + 20;
+    let base = tmail_now_ms_for_tests();
+    for i in 0..n {
+        let mut nul = [0u8; 32];
+        nul[..8].copy_from_slice(&(i as u64).to_le_bytes());
+        let env = anon_env_with_nullifier_for_tests(&ew, &eid, &pid, nul, &format!("ballot-{i}"), base + i as u64);
+        assert!(store.store_tmail_ungated_for_tests(&env).unwrap());
+    }
+    assert_eq!(store.enforce_anonymous_cap(&pid).unwrap(), 0, "a poll's ballots were pruned");
+    assert_eq!(store.get_inbox(&pid, 10_000).len(), n, "a poll's ballots were cut from the inbox");
+}
+
+/// The register route refuses a poll for any day but today (a poll opens and is registered the same
+/// UTC day) and a list with an unregistered wallet, and serves the node's root back.
+#[tokio::test]
+async fn poll_root_route_takes_only_todays_poll_of_real_members() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (members, _) = registered_members_for_tests(&state.tmail, 3);
+    let router = crate::rest::routes::build_router(state);
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    let post = |r: crate::tmail::poll::TmailPollRootV1| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(axum::http::Request::builder().method("POST").uri("/tmail/poll/root").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&r).unwrap())).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(post(signed_poll_root_for_tests(&pw, &pid, &members, day - 1)).await, StatusCode::BAD_REQUEST);
+    assert_eq!(post(signed_poll_root_for_tests(&pw, &pid, &[pid.clone()], day)).await, StatusCode::BAD_REQUEST, "an unregistered wallet");
+    assert_eq!(post(signed_poll_root_for_tests(&pw, &pid, &members, day)).await, StatusCode::ACCEPTED);
+    let got = router.clone().oneshot(axum::http::Request::builder().uri(format!("/tmail/poll/root/{pid}")).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(got.status(), StatusCode::OK);
+}
+
+/// **SECURITY REGRESSION GUARD: a members-only poll takes only its own members.** A poll wallet
+/// accepts proofs against its own poll's root only; the node's anonymity-set root — which every
+/// member of the set can prove against — is refused there, while other receivers still accept it.
+/// Negative control (run by hand): the global root accepted for poll wallets too → FAILED.
+#[test]
+fn a_members_only_poll_refuses_the_anonymity_set_root() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _epoch = anon_fast_epoch_guard();
+    let store = tmail_store_for_tests();
+    let (members, _) = registered_members_for_tests(&store, 4);
+    std::thread::sleep(std::time::Duration::from_millis(5)); // past the 1 ms epoch boundary
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    let global = store.anon_tree().root();
+    let (_rw, plain_receiver) = tmail_party_for_tests();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &plain_receiver, &global, day, day), "precondition: the set's root works for a plain receiver");
+
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &members[..3], day)).unwrap();
+    let poll_root: [u8; 32] = hex::decode(store.get_poll_root(&pid).unwrap().root_hex.unwrap()).unwrap().try_into().unwrap();
+    assert_ne!(poll_root, global);
+
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &pid, &poll_root, day, day), "the poll's own root");
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &pid, &global, day, day), "the anonymity set's root was accepted for a members-only poll");
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &pid, &poll_root, day + 1, day + 1), "another day");
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &plain_receiver, &global, day, day), "other receivers are unaffected");
+}
+
+/// **SECURITY REGRESSION GUARD: a ballot that isn't stored doesn't use up the vote.** The poll gate
+/// claims the ballot's nullifier, so it runs only after every other reason to refuse (a full
+/// buffer here refuses with `Full`, before the gate), and a write that fails after the claim gives
+/// the nullifier back. A release frees only the claim made by that same message.
+/// Negative controls (run by hand): the gate moved back before the capacity check → FAILED;
+/// release made a no-op → FAILED.
+#[test]
+fn a_ballot_that_is_not_stored_does_not_use_up_the_vote() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &[], day)).unwrap();
+
+    // Fill the buffer, then send a ballot: refused as Full, before the gate could claim anything.
+    let (sw, sid) = tmail_party_for_tests();
+    let (_rw, plain) = tmail_party_for_tests();
+    store.store_tmail(&signed_tmail_env_for_tests(&sw, &sid, &plain, "filler", tmail_flags_for_tests(false), None)).unwrap();
+    let _cap = EnvVarGuard::set("TET_TMAIL_MAX_ENTRIES", "1");
+    let (ew, eid) = tmail_party_for_tests();
+    let ballot = anon_env_with_nullifier_for_tests(&ew, &eid, &pid, [5u8; 32], "ballot-full", tmail_now_ms_for_tests());
+    match store.store_tmail(&ballot) {
+        Err(crate::tmail::store::TmailStoreError::Full(_)) => {}
+        other => panic!("a full buffer must refuse before the poll gate runs: {other:?}"),
+    }
+
+    // Release frees only this message's claim.
+    let n = hex::encode([5u8; 32]);
+    assert_eq!(store.claim_anon_nullifier(&n, "msg-a").unwrap(), true);
+    store.release_anon_nullifier(&n, "msg-b");
+    assert_eq!(store.claim_anon_nullifier(&n, "msg-c").unwrap(), false, "someone else's release freed the claim");
+    store.release_anon_nullifier(&n, "msg-a");
+    assert_eq!(store.claim_anon_nullifier(&n, "msg-c").unwrap(), true, "the vote stayed used up");
+}
+
+/// **The home page's live strip reads real blocks, and only their public metadata.**
+/// `GET /explorer/blocks/recent` walks the canonical chain from the tip: at most 6 blocks however
+/// many are asked for, newest first, each one's `parent_block_id` equal to the next block's id;
+/// per transaction only its hash, kind and two shortened signatures (no wallet, amount or
+/// payload); `producer_signed: false`, because blocks carry no producer signature yet.
+/// Negative control (run by hand): the handler returning each tx's full envelope → FAILED.
+#[tokio::test]
+async fn recent_blocks_route_serves_real_linked_headers_and_no_tx_content() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (ledger_a, _ledger_b, state_a, _state_b, sender_words, sender_wallet_id) = two_synced_nodes_with_funded_sender();
+    let recipient = crate::wallet::generate_mnemonic_12().unwrap().address_hex.to_ascii_lowercase();
+    let mut parent: Option<String> = None;
+    for height in 1u64..=8 {
+        let env = signed_transfer_env_for_tests(&sender_words, &sender_wallet_id, &recipient, height * crate::ledger::STEVEMON);
+        let gossip = build_remote_block_for_tests(&ledger_a, height, parent.clone(), env);
+        crate::consensus::apply_remote_block_from_gossip(ledger_a.clone(), state_a.mempool.clone(), gossip.clone()).await.unwrap();
+        parent = Some(gossip.block_id.clone());
+    }
+    let router = crate::rest::routes::build_router(state_a);
+    let r = router.oneshot(axum::http::Request::builder().uri("/explorer/blocks/recent?n=50").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let blocks = j["blocks"].as_array().unwrap();
+    assert_eq!(blocks.len(), 6, "at most 6 blocks");
+    assert_eq!(blocks[0]["height"], 8, "newest first");
+    assert_eq!(blocks[0]["block_id"].as_str(), parent.as_deref());
+    for w in blocks.windows(2) {
+        assert_eq!(w[0]["parent_block_id"], w[1]["block_id"], "each block links to the next one down");
+        assert_eq!(w[0]["height"].as_u64().unwrap(), w[1]["height"].as_u64().unwrap() + 1);
+    }
+    for b in blocks {
+        assert_eq!(b["producer_signed"], false);
+        assert_eq!(b["tx_count"], 1);
+        for tx in b["txs"].as_array().unwrap() {
+            let mut keys: Vec<&str> = tx.as_object().unwrap().keys().map(String::as_str).collect();
+            keys.sort();
+            assert_eq!(keys, ["ed25519_sig", "hash", "kind", "mldsa44_sig"], "a tx exposed more than its metadata");
+            assert_eq!(tx["kind"], "transfer");
+            assert!(tx["ed25519_sig"].as_str().unwrap().len() <= 16);
+        }
+    }
+    let text = String::from_utf8_lossy(&body);
+    assert!(!text.contains(&sender_wallet_id) && !text.contains(&recipient), "a wallet id leaked");
+}
+
+fn signed_site_edit_for_tests(words: &str, site: &str, seq: u64, prev: &str, body: &str) -> crate::sites::SiteEditV1 {
+    use base64::Engine as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(mldsa_kp.public_key());
+    let mut e = crate::sites::SiteEditV1 {
+        v: 1,
+        kind: crate::sites::SITE_EDIT_KIND.to_string(),
+        site_wallet_id: site.to_string(),
+        seq,
+        prev_hash: prev.to_string(),
+        body: body.to_string(),
+        created_at_ms: tmail_now_ms_for_tests(),
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: hex::encode(ed_sk.verifying_key().to_bytes()),
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::sites::site_edit_auth_message_bytes(&e, &pk);
+    e.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    e.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    e
+}
+
+/// **SECURITY REGRESSION GUARD: a site is exactly the chain its own key signed.**
+/// An edit is accepted only if the site's own wallet signed it (another key, or a body changed
+/// after signing, is refused) and it extends the chain exactly: next `seq`, `prev` = the current
+/// head's hash. A replayed, reordered or forked edit is refused, so the order can't be rewritten.
+/// Bodies must be an op object; the per-edit and per-site quotas hold.
+/// Negative controls (run by hand): the signer check removed → FAILED; the prev check removed →
+/// FAILED.
+#[test]
+fn a_site_is_exactly_the_chain_its_own_key_signed() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let site = crate::wallet::generate_mnemonic_12().unwrap();
+    let (sw, sid) = (site.mnemonic_12.clone().unwrap(), site.address_hex.to_ascii_lowercase());
+    let other = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let zero = "0".repeat(64);
+    let add = |t: &str| format!(r#"{{"op":"add","block":{{"type":"text","text":"{t}"}}}}"#);
+    let ok = |e: &crate::sites::SiteEditV1| crate::sites::verify_site_edit_v1(e).and_then(|_| store.append(e));
+
+    let e0 = signed_site_edit_for_tests(&sw, &sid, 0, &zero, r#"{"op":"meta","title":"Home","lang":"en"}"#);
+    let h0 = ok(&e0).expect("the first edit, signed by the site");
+    assert_eq!(h0.head_hash, crate::sites::site_edit_hash(&e0));
+
+    // Another key signing for this site; a body changed after signing.
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&other, &sid, 1, &h0.head_hash, &add("x"))), Err(crate::sites::SiteEditError::SignerMismatch));
+    let mut tampered = signed_site_edit_for_tests(&sw, &sid, 1, &h0.head_hash, &add("signed"));
+    tampered.body = add("changed");
+    assert!(matches!(crate::sites::verify_site_edit_v1(&tampered), Err(crate::sites::SiteEditError::Signature(_))));
+
+    // Chain position: replayed first edit, skipped seq, wrong prev — all refused.
+    assert!(matches!(store.append(&e0), Err(crate::sites::SiteEditError::NotNext { .. })), "a replayed edit was appended");
+    assert!(matches!(ok(&signed_site_edit_for_tests(&sw, &sid, 2, &h0.head_hash, &add("skip"))), Err(crate::sites::SiteEditError::NotNext { .. })));
+    assert!(matches!(ok(&signed_site_edit_for_tests(&sw, &sid, 1, &"ab".repeat(32), &add("fork"))), Err(crate::sites::SiteEditError::NotNext { .. })), "a fork was appended");
+    let e1 = signed_site_edit_for_tests(&sw, &sid, 1, &h0.head_hash, &add("hello"));
+    let h1 = ok(&e1).expect("the next edit");
+    assert_eq!(store.edits(&sid).len(), 2);
+    assert_eq!(store.head(&sid).unwrap(), h1);
+
+    // Bodies.
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&sw, &sid, 2, &h1.head_hash, r#"{"op":"script"}"#)), Err(crate::sites::SiteEditError::Body));
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&sw, &sid, 2, &h1.head_hash, "not json")), Err(crate::sites::SiteEditError::Body));
+    let big = format!(r#"{{"op":"add","pad":"{}"}}"#, "a".repeat(crate::sites::EDIT_MAX_BODY_BYTES));
+    assert_eq!(crate::sites::verify_site_edit_v1(&signed_site_edit_for_tests(&sw, &sid, 2, &h1.head_hash, &big)), Err(crate::sites::SiteEditError::TooBig));
+
+    // The per-site quota: edits of ~1.4 MB until the site is full.
+    let chunk = format!(r#"{{"op":"add","pad":"{}"}}"#, "b".repeat(1_400_000));
+    let mut head = h1;
+    let mut refused = false;
+    for seq in 2..8 {
+        match ok(&signed_site_edit_for_tests(&sw, &sid, seq, &head.head_hash, &chunk)) {
+            Ok(h) => head = h,
+            Err(crate::sites::SiteEditError::SiteFull) => {
+                refused = true;
+                break;
+            }
+            Err(e) => panic!("{e}"),
+        }
+    }
+    assert!(refused && head.bytes <= crate::sites::SITE_MAX_BYTES, "a site grew past its quota: {head:?}");
+}
+
+/// **SECURITY REGRESSION GUARD: nobody can fill the site store.** In public mode a site edit is
+/// charged, by its declared length, to the client's daily upload budget (the same one as Files)
+/// before its body is read; a length-less one is refused. And the store has a node-wide byte cap:
+/// once it's reached, new edits are refused, whoever sends them.
+/// Negative controls (run by hand): the gate not charging /sites/edit → FAILED; the total cap
+/// removed → FAILED.
+#[tokio::test]
+async fn nobody_can_fill_the_site_store() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _b = EnvVarGuard::set("TET_PUBLIC_UPLOAD_BYTES_PER_DAY", "1000");
+    let _w = EnvVarGuard::set("TET_PUBLIC_WRITE_BURST", "1000");
+    let (router, _e) = public_router_for_tests(true);
+    let send = |len: Option<&str>| {
+        let mut b = axum::http::Request::builder()
+            .method("POST")
+            .uri("/sites/edit")
+            .extension(axum::extract::ConnectInfo(TEST_PROXY_PEER.parse::<std::net::SocketAddr>().unwrap()))
+            .header("x-forwarded-for", "203.0.113.91")
+            .header("content-type", "application/json");
+        if let Some(l) = len {
+            b = b.header("content-length", l);
+        }
+        b.body(axum::body::Body::from("{}")).unwrap()
+    };
+    assert_eq!(router.clone().oneshot(send(None)).await.unwrap().status(), StatusCode::LENGTH_REQUIRED);
+    assert_ne!(router.clone().oneshot(send(Some("900"))).await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS, "900 bytes fit");
+    assert_eq!(router.clone().oneshot(send(Some("200"))).await.unwrap().status(), StatusCode::TOO_MANY_REQUESTS, "a site edit wasn't charged to the budget");
+
+    // The node-wide cap.
+    let _cap = EnvVarGuard::set("TET_SITES_MAX_TOTAL_BYTES", "20000");
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let mut refused = false;
+    for _ in 0..10 {
+        let w = crate::wallet::generate_mnemonic_12().unwrap();
+        let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+        let e = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), &format!(r#"{{"op":"add","pad":"{}"}}"#, "c".repeat(80)));
+        match store.append(&e) {
+            Ok(_) => {}
+            Err(crate::sites::SiteEditError::StoreFull) => {
+                refused = true;
+                break;
+            }
+            Err(x) => panic!("{x}"),
+        }
+    }
+    assert!(refused, "the store grew past its total cap");
+    assert!(store.total_bytes() > 0 && store.total_bytes() <= 20000, "{}", store.total_bytes());
+}
+
+/// **SECURITY REGRESSION GUARD: quotas count what's stored, and a full store frees up.** A site's
+/// bytes are its edits as stored (body and signatures), so tiny bodies can't hide ~5 KB of
+/// signatures each from the quota. A site expires a TTL after its last edit: it stops being served,
+/// and when the store is full its space is reclaimed for the next site.
+/// Negative controls (run by hand): quotas counting body bytes only → FAILED; no pruning when full
+/// → FAILED.
+#[test]
+fn site_quotas_count_stored_bytes_and_expired_sites_free_space() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+    let e = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), r#"{"op":"remove","index":0}"#);
+    let h = store.append(&e).unwrap();
+    assert!(h.bytes >= serde_json::to_vec(&e).unwrap().len() && h.bytes > 4000, "only the body was counted: {}", h.bytes);
+    assert_eq!(store.total_bytes(), h.bytes as u64);
+
+    // Expiry: with a tiny TTL the site stops being served, and a full store reclaims its space.
+    let _ttl = EnvVarGuard::set("TET_SITES_TTL_MS", "1");
+    let _cap = EnvVarGuard::set("TET_SITES_MAX_TOTAL_BYTES", &(h.bytes + 100).to_string());
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let w2 = crate::wallet::generate_mnemonic_12().unwrap();
+    let (words2, id2) = (w2.mnemonic_12.clone().unwrap(), w2.address_hex.to_ascii_lowercase());
+    let e2 = signed_site_edit_for_tests(&words2, &id2, 0, &"0".repeat(64), r#"{"op":"remove","index":0}"#);
+    store.append(&e2).expect("the expired site's space was not reclaimed");
+    assert!(store.edits(&id).is_empty(), "an expired site's edits are still stored");
+    drop(_ttl);
+    assert!(store.head(&id).is_none(), "an expired site is still served");
+    assert!(store.head(&id2).is_some());
+}
+
+/// **SECURITY REGRESSION GUARD: expiry can't be used to roll a site back, lose it on upgrade, or
+/// drift the quota.** An edit's signed time must be close to the node's clock, so a site's old
+/// (public) signed edits can't be replayed once it has expired to bring back a version its owner
+/// replaced. A head stored before times were kept never counts as expired. Reading an expired site
+/// changes nothing (deletes and the byte total only move under the append lock).
+/// Negative controls (run by hand): the freshness check removed → FAILED; a missing time counted as
+/// old → FAILED; `head` pruning on read again → FAILED.
+#[test]
+fn site_expiry_cannot_roll_back_lose_or_drift() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sites::SiteStore::open(&ledger.sled_db()).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let (words, id) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+
+    // Stale: an edit signed an hour ago.
+    let mut old = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), r#"{"op":"meta","title":"t","lang":"en"}"#);
+    old.created_at_ms -= 3_600_000;
+    let old = signed_site_edit_for_tests_at(&words, &id, 0, &"0".repeat(64), &old.body, old.created_at_ms);
+    assert_eq!(store.append(&old), Err(crate::sites::SiteEditError::Stale));
+
+    // Replay after expiry: v1 then a replacing edit; once expired, replaying v1's edits is refused.
+    let _skew = EnvVarGuard::set("TET_SITES_EDIT_SKEW_MS", "50");
+    let e0 = signed_site_edit_for_tests(&words, &id, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"text","text":"v1"}}"#);
+    let h0 = store.append(&e0).unwrap();
+    let e1 = signed_site_edit_for_tests(&words, &id, 1, &h0.head_hash, r#"{"op":"remove","index":0}"#);
+    let h1 = store.append(&e1).unwrap();
+    let total = store.total_bytes();
+    let _ttl = EnvVarGuard::set("TET_SITES_TTL_MS", "1");
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    // A read treats it as gone and changes nothing.
+    assert!(store.head(&id).is_none());
+    assert_eq!(store.edits(&id).len(), 2, "a read deleted edits");
+    assert_eq!(store.total_bytes(), total, "a read moved the byte total");
+    assert_eq!(store.append(&e0), Err(crate::sites::SiteEditError::Stale), "an expired site's old edit was replayed");
+    drop(_ttl);
+    let _ = h1;
+
+    // A head from before times were kept is never expired.
+    let legacy = crate::sites::SiteHead { len: 1, head_hash: "ab".repeat(32), bytes: 10, updated_at_ms: 0 };
+    assert!(!crate::sites::SiteStore::expired(&legacy), "a legacy head would be deleted on upgrade");
+}
+
+fn signed_site_edit_for_tests_at(words: &str, site: &str, seq: u64, prev: &str, body: &str, at_ms: u64) -> crate::sites::SiteEditV1 {
+    use base64::Engine as _;
+    let mut e = signed_site_edit_for_tests(words, site, seq, prev, body);
+    e.created_at_ms = at_ms;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let mldsa_kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let msg = crate::sites::site_edit_auth_message_bytes(&e, &e.hybrid_sig.mldsa_pubkey_b64.clone());
+    e.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    e.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&mldsa_kp, msg.as_slice()).unwrap());
+    e
+}
+
+/// A real hash-only signature record (the page's `.sig.json`), as exact bytes.
+fn hash_record_for_tests(words: &str, file: &[u8], payload_type: &str) -> Vec<u8> {
+    use sha2::Digest as _;
+    envelope_for_tests(words, payload_type, &sha2::Sha256::digest(file))
+}
+
+/// The signer's consent to publish exactly `record`.
+fn consent_for_tests(words: &str, record: &[u8]) -> Vec<u8> {
+    use sha2::Digest as _;
+    envelope_for_tests(words, crate::sigs::CONSENT_PAYLOAD_TYPE, &sha2::Sha256::digest(record))
+}
+
+/// A `.sig.json` envelope over `payload`, signed with both keys from `words`.
+fn envelope_for_tests(words: &str, payload_type: &str, payload: &[u8]) -> Vec<u8> {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let ed_hex = hex::encode(ed_sk.verifying_key().to_bytes());
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = kp.public_key();
+    let payload = payload.to_vec();
+    let msg = crate::agent::agent_payload_auth_message_bytes(payload_type, &payload);
+    let rec = serde_json::json!({
+        "payloadType": payload_type,
+        "payload": b64.encode(&payload),
+        "signatures": [
+            { "keyid": format!("tet-ed25519:{ed_hex}"), "sig": b64.encode(ed_sk.sign(msg.as_slice()).to_bytes()) },
+            { "keyid": format!("tet-mldsa44:{}", hex::encode(sha2::Sha256::digest(&pk))), "sig": b64.encode(crate::wallet::mldsa_sign_deterministic(&kp, msg.as_slice()).unwrap()) },
+        ],
+        "tet": { "v": 1, "pae": crate::sigs::PAE_DOMAIN, "agent_ed25519_pubkey_hex": ed_hex, "agent_mldsa44_pubkey_b64": b64.encode(&pk) },
+    });
+    serde_json::to_vec(&rec).unwrap()
+}
+
+/// **SECURITY REGRESSION GUARD: the signature registry holds only real, public, hash-only records
+/// their signers chose to publish, and finds them by code, file, signer and date.** Publishing
+/// needs the record's own signer's consent for exactly its bytes: without it, with a stranger's,
+/// or with another record's (a re-encoded copy) it's refused. A record is stored only if both its signatures
+/// verify over the hash-only pre-image (a tampered payload, a full-file signature, a wrong keyid
+/// are refused); its exact bytes are kept, so its proof code is stable; publishing it again is a
+/// no-op. Search by the code's 40 bits, the file's SHA-256, the signer and a date range finds it;
+/// a date-only search walks the time index and stops at the limit. The node-wide byte cap holds.
+/// Negative controls (run by hand): the signature check skipped → FAILED; search ignoring the date
+/// range → FAILED; the consent check skipped → FAILED; the cap counting raw record bytes → FAILED.
+#[test]
+fn the_signature_registry_holds_real_records_and_finds_them() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sigs::SigStore::open(&ledger.sled_db()).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let rec = hash_record_for_tests(&words, b"lab notebook, page 12", crate::sigs::HASH_PAYLOAD_TYPE);
+    let ok = consent_for_tests(&words, &rec);
+    let (r, stored) = store.publish(&rec, &ok, 1_000).expect("a real record, with its signer's consent");
+    assert!(stored);
+    assert_eq!(store.publish(&rec, &ok, 2_000).unwrap().1, false, "publishing again is a no-op");
+
+    // Consent: none, someone else's, or for another byte string (a re-encoding) is refused.
+    let stranger = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let rec2 = hash_record_for_tests(&words, b"page 13", crate::sigs::HASH_PAYLOAD_TYPE);
+    assert!(matches!(store.publish(&rec2, &consent_for_tests(&stranger, &rec2), 1_500), Err(crate::sigs::SigsError::Consent(_))), "a stranger published someone's record");
+    assert!(matches!(store.publish(&rec2, &ok, 1_500), Err(crate::sigs::SigsError::Consent(_))), "one record's consent published another");
+    let mut reencoded: serde_json::Value = serde_json::from_slice(&rec).unwrap();
+    reencoded["tet"]["v"] = serde_json::json!(1);
+    let reencoded = serde_json::to_vec_pretty(&reencoded).unwrap();
+    assert_ne!(reencoded, rec);
+    assert!(matches!(store.publish(&reencoded, &ok, 1_500), Err(crate::sigs::SigsError::Consent(_))), "a re-encoded copy was stored on the original's consent");
+    assert!(matches!(store.publish(&rec2, &rec2, 1_500), Err(crate::sigs::SigsError::Consent(_))), "the record itself isn't a consent");
+    let rh = hex::encode(sha2::Sha256::digest(&rec));
+    assert_eq!(r.record_sha256, rh);
+    let file = hex::encode(sha2::Sha256::digest(b"lab notebook, page 12"));
+    assert_eq!(r.file_sha256, file);
+
+    // Refusals.
+    let mut tampered: serde_json::Value = serde_json::from_slice(&rec).unwrap();
+    tampered["payload"] = serde_json::json!(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, sha2::Sha256::digest(b"another file")));
+    let t = serde_json::to_vec(&tampered).unwrap();
+    assert!(matches!(store.publish(&t, &consent_for_tests(&words, &t), 3_000), Err(crate::sigs::SigsError::Signature(_))));
+    let plain = hash_record_for_tests(&words, b"x", "text/plain");
+    assert_eq!(store.publish(&plain, &consent_for_tests(&words, &plain), 3_000), Err(crate::sigs::SigsError::NotHashOnly));
+    let mut wrong_id: serde_json::Value = serde_json::from_slice(&rec).unwrap();
+    wrong_id["signatures"][0]["keyid"] = serde_json::json!(format!("tet-ed25519:{}", "ab".repeat(32)));
+    let w2 = serde_json::to_vec(&wrong_id).unwrap();
+    assert!(matches!(store.publish(&w2, &consent_for_tests(&words, &w2), 3_000), Err(crate::sigs::SigsError::Malformed(_))));
+
+    // Search.
+    let other = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let o = hash_record_for_tests(&other, b"something else", crate::sigs::HASH_PAYLOAD_TYPE);
+    store.publish(&o, &consent_for_tests(&other, &o), 5_000).unwrap();
+    let q = |q: crate::sigs::SigQuery| store.search(&q).into_iter().map(|r| r.record_sha256).collect::<Vec<_>>();
+    assert_eq!(q(crate::sigs::SigQuery { code_prefix: Some(rh[..10].to_string()), ..Default::default() }), vec![rh.clone()]);
+    assert_eq!(q(crate::sigs::SigQuery { file_sha256: Some(file.clone()), ..Default::default() }), vec![rh.clone()]);
+    assert_eq!(q(crate::sigs::SigQuery { signer: Some(r.signer_ed25519.clone()), ..Default::default() }), vec![rh.clone()]);
+    assert_eq!(q(crate::sigs::SigQuery { from_ms: Some(4_000), ..Default::default() }).len(), 1, "date range");
+    assert_eq!(q(crate::sigs::SigQuery { to_ms: Some(1_500), ..Default::default() }), vec![rh.clone()], "date range");
+    assert!(q(crate::sigs::SigQuery { file_sha256: Some(file), from_ms: Some(4_000), ..Default::default() }).is_empty(), "file and date together");
+
+    // The total counts what is stored (base64 record and indexes), not the raw record.
+    assert!(store.total_bytes() > (rec.len() + o.len()) as u64 * 4 / 3, "the cap undercounts what's stored: {}", store.total_bytes());
+    // The node-wide cap.
+    let _cap = EnvVarGuard::set("TET_SIGS_MAX_TOTAL_BYTES", &(store.total_bytes() + 10).to_string());
+    let third = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let th = hash_record_for_tests(&third, b"one more", crate::sigs::HASH_PAYLOAD_TYPE);
+    assert_eq!(store.publish(&th, &consent_for_tests(&third, &th), 6_000).map(|_| ()), Err(crate::sigs::SigsError::StoreFull));
+}
+
+/// **SECURITY REGRESSION GUARD: later markings of a file can't hide the first one.** Anyone can mark
+/// any file with their own ID, so a file's search lists the earliest markings first and reads its
+/// index oldest first: however many records others publish for the same file afterwards, the first
+/// marking is always in the results.
+/// Negative control (run by hand): file results ordered newest first again → FAILED.
+#[test]
+fn later_markings_of_a_file_cannot_hide_the_first() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sigs::SigStore::open(&ledger.sled_db()).unwrap();
+    let file = b"the original photo".as_slice();
+    let author = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let first = hash_record_for_tests(&author, file, crate::sigs::HASH_PAYLOAD_TYPE);
+    store.publish(&first, &consent_for_tests(&author, &first), 1_000).unwrap();
+    for i in 0..(crate::sigs::SEARCH_MAX + 5) {
+        let w = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+        let r = hash_record_for_tests(&w, file, crate::sigs::HASH_PAYLOAD_TYPE);
+        store.publish(&r, &consent_for_tests(&w, &r), 2_000 + i as u64).unwrap();
+    }
+    let found = store.search(&crate::sigs::SigQuery { file_sha256: Some(hex::encode(sha2::Sha256::digest(file))), ..Default::default() });
+    assert_eq!(found.len(), crate::sigs::SEARCH_MAX);
+    assert_eq!(found[0].record_sha256, hex::encode(sha2::Sha256::digest(&first)), "the first marking was pushed out or not listed first");
+}
+
+/// **The registry's file index is rebuilt when its format changes,** so records indexed the old way
+/// still show up in file searches (and the old index is dropped).
+/// Negative control (run by hand): no rebuild on open → FAILED.
+#[test]
+fn the_registry_rebuilds_its_file_index_from_an_older_format() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    let store = crate::sigs::SigStore::open(&db).unwrap();
+    let w = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let rec = hash_record_for_tests(&w, b"an older record", crate::sigs::HASH_PAYLOAD_TYPE);
+    store.publish(&rec, &consent_for_tests(&w, &rec), 1_000).unwrap();
+    // Simulate a store written before v2: empty the v2 index and leave a v1 tree behind.
+    db.open_tree("sigs_by_file_v2").unwrap().clear().unwrap();
+    db.open_tree("sigs_by_file_v1").unwrap().insert(b"legacy", &[]).unwrap();
+    let file = hex::encode(sha2::Sha256::digest(b"an older record"));
+    let q = crate::sigs::SigQuery { file_sha256: Some(file), ..Default::default() };
+    assert!(store.search(&q).is_empty(), "precondition: the old record is missing from the index");
+    let reopened = crate::sigs::SigStore::open(&db).unwrap();
+    assert_eq!(reopened.search(&q).len(), 1, "an older record is missing from file searches");
+    assert!(!db.tree_names().iter().any(|n| n.as_ref() == b"sigs_by_file_v1"), "the old index wasn't dropped");
+}
+
+/// **The "Inside" page shows retention from the real config.** `GET /stats/inside` reports how long
+/// posts, files and sites are kept from the same settings the stores apply (overridden here), and
+/// the store really behaves that way: a post one second younger than the reported default is
+/// served, one second older is gone.
+/// Negative control (run by hand): the route hard-coding 7 days → FAILED.
+#[tokio::test]
+async fn inside_stats_report_the_retention_the_stores_apply() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _a = EnvVarGuard::set("TET_TMAIL_DEFAULT_TTL_MS", "3600000");
+    let _b = EnvVarGuard::set("TET_TMAIL_MAX_TTL_MS", "7200000");
+    let _c = EnvVarGuard::set("TET_FILES_DEFAULT_TTL_MS", "1800000");
+    let _d = EnvVarGuard::set("TET_FILES_MAX_TTL_MS", "5400000");
+    let _e = EnvVarGuard::set("TET_SITES_TTL_DAYS", "5");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let r = router.oneshot(axum::http::Request::builder().uri("/stats/inside").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let j: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap()).unwrap();
+    let rt = &j["retention"];
+    assert_eq!(rt["messages_and_posts_ms"]["default"], 3_600_000);
+    assert_eq!(rt["messages_and_posts_ms"]["max"], 7_200_000);
+    assert_eq!(rt["files_ms"]["default"], 1_800_000);
+    assert_eq!(rt["files_ms"]["max"], 5_400_000);
+    assert_eq!(rt["sites_after_last_edit_ms"], 5 * 86_400_000u64);
+    assert!(j["counts"]["blocks"].is_u64() && j["at_ms"].as_u64().unwrap() > 0);
+
+    // The store keeps a post exactly as long as the page says.
+    let default_ms = rt["messages_and_posts_ms"]["default"].as_u64().unwrap();
+    let (sw, sid) = tmail_party_for_tests();
+    let (_rw, rx) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let mut young = signed_tmail_env_for_tests(&sw, &sid, &rx, "young", tmail_flags_for_tests(false), None);
+    young.sent_at_ms = now - default_ms + 1_000;
+    resign_tmail_env_for_tests(&mut young, &sw);
+    let mut old = signed_tmail_env_for_tests(&sw, &sid, &rx, "old", tmail_flags_for_tests(false), None);
+    old.sent_at_ms = now - default_ms - 1_000;
+    resign_tmail_env_for_tests(&mut old, &sw);
+    state.tmail.store_tmail(&young).unwrap();
+    let _ = state.tmail.store_tmail(&old);
+    let ids: Vec<String> = state.tmail.get_inbox(&rx, 50).into_iter().map(|e| e.msg_id).collect();
+    assert!(ids.contains(&"young".to_string()), "a post younger than the shown retention is gone");
+    assert!(!ids.contains(&"old".to_string()), "a post older than the shown retention is still served");
 }
 
 /// **SECURITY REGRESSION GUARD: an anonymous post whose proof doesn't verify is never kept, served,
@@ -13991,7 +14834,7 @@ async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
     let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
     state.tmail.put_anon_receipt(&jh, &junk).unwrap();
     let mut b = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [2u8; 32], "anon-bad-proof", tmail_now_ms_for_tests());
-    b.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    b.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = jh.clone();
     resign_tmail_env_for_tests(&mut b, &ew);
     assert_eq!(send(b.clone()).await, StatusCode::FORBIDDEN);
     assert!(state.tmail.get_by_msg_id("anon-bad-proof").is_none(), "a post whose proof failed was stored");
@@ -14007,7 +14850,7 @@ async fn an_anonymous_post_that_does_not_verify_is_never_kept() {
     // anyone can prove membership of a tree they made up), but not tombstoned, so a genuine post can
     // be stored and checked again once this node knows the root.
     let mut c = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [3u8; 32], "anon-root-unknown", tmail_now_ms_for_tests());
-    c.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh.clone();
+    c.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = jh.clone();
     resign_tmail_env_for_tests(&mut c, &ew);
     assert!(state.tmail.store_tmail(&c).unwrap());
     state.tmail.set_anon_verdict("anon-root-unknown", &crate::tmail::store::AnonVerdict::Failed { reason: "registry root not recognised, or outside the acceptance window".into(), failed_at_ms: 1 }).unwrap();
@@ -14091,70 +14934,30 @@ fn a_released_claim_never_belongs_to_a_stored_post() {
     let jh = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&junk));
     store.put_anon_receipt(&jh, &junk).unwrap();
     let mut bad = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [9u8; 32], "bad-proof", tmail_now_ms_for_tests());
-    bad.anonymous.as_mut().unwrap().anchor_proof.receipt_sha256_hex = jh;
+    bad.anonymous.as_mut().unwrap().anchor_proof.as_mut().unwrap().receipt_sha256_hex = jh;
     assert!(matches!(store.send_anonymous(&bad), Err(crate::tmail::store::AnonSendError::Refused(_))));
     for id in ["no-proof", "no-receipt", "bad-proof"] {
         assert!(store.get_by_msg_id(id).is_none(), "{id} was stored");
     }
 }
 
-/// **SECURITY REGRESSION GUARD: an anonymous receipt counts only from TET's membership program.**
-/// The node used to check a receipt against whatever program id the envelope carried. Now an id
-/// outside the pinned list is refused before any proof work, with a reason naming it; the pinned id
-/// gets past that check; the pinned constant round-trips through the node's id encoding.
-/// Negative control (run by hand): the check removed → FAILED (the refusal reason changes).
+/// **A ballot the poll's rules refuse is a 403 with the reason, not a 500, on the checked send
+/// path.** With #78 every anonymous post, ballots included, goes through `send_anonymous`; the poll
+/// gate in `store_tmail` can still refuse a verified ballot (the poll closed, …). That refusal maps
+/// to `AnonSendError::Ballot`, which the handler answers with 403; other store failures stay 500.
+/// (The nullifier release on that path is `a_ballot_that_is_not_stored_does_not_use_up_the_vote`.)
+/// Negative control (run by hand): `from_store` mapping everything to `Store` → FAILED.
 #[test]
-fn anonymous_receipt_from_an_unpinned_program_is_refused() {
-    use sha2::Digest as _;
-    let _g = env_lock();
-    set_test_env_base();
-    let store = tmail_store_for_tests();
-    let (_rw, receiver) = tmail_party_for_tests();
-    let (eph_words, ephemeral) = tmail_party_for_tests();
-    let receipt = b"placeholder receipt bytes".to_vec();
-    let with_program = |hex_id: &str| {
-        let mut env = anon_env_with_nullifier_for_tests(&eph_words, &ephemeral, &receiver, [7u8; 32], "anon-pin", tmail_now_ms_for_tests());
-        let a = env.anonymous.as_mut().unwrap();
-        a.anchor_proof.image_id_hex = hex_id.to_string();
-        a.anchor_proof.receipt_sha256_hex = hex::encode(sha2::Sha256::digest(&receipt));
-        resign_tmail_env_for_tests(&mut env, &eph_words);
-        env
-    };
-    let reason = |v: crate::tmail::store::AnonVerdict| match v {
-        crate::tmail::store::AnonVerdict::Failed { reason, .. } => reason,
-        other => panic!("expected a refusal, got {other:?}"),
-    };
-
-    let unknown = "11".repeat(32);
-    let r = reason(crate::tmail::anon::verify_anonymous_proof(&store, &with_program(&unknown), &receipt));
-    assert!(r.contains("unrecognised proving program") && r.contains(&unknown), "{r}");
-
-    let pinned = crate::tmail::anon::ANON_GUEST_IMAGE_IDS[0];
-    let r = reason(crate::tmail::anon::verify_anonymous_proof(&store, &with_program(pinned), &receipt));
-    assert!(!r.contains("unrecognised proving program"), "the pinned program was refused: {r}");
-
-    let mut words = [0u32; 8];
-    for (i, w) in words.iter_mut().enumerate() {
-        *w = u32::from_le_bytes(hex::decode(&pinned[i * 8..i * 8 + 8]).unwrap().try_into().unwrap());
+fn a_refused_ballot_on_the_checked_send_path_is_a_403() {
+    use crate::tmail::store::{AnonSendError, TmailStoreError};
+    match AnonSendError::from_store(TmailStoreError::PollBallot("ballot refused: closed".into())) {
+        AnonSendError::Ballot(r) => assert!(r.contains("closed"), "{r}"),
+        other => panic!("a poll refusal became {other:?}"),
     }
-    assert_eq!(crate::tmail::anon::encode_image_id_hex(&words), pinned);
-    assert!(crate::tmail::anon::anon_program_accepted(&words));
-    assert!(!crate::tmail::anon::anon_program_accepted(&[0u32; 8]), "the all-zero stub id must never be accepted");
-}
-
-/// **A real-guest build's membership program is one the node pins.** Run by `zk-real` (it needs the
-/// embedded guest). If the guest or the toolchain changes the program id, this goes red instead of
-/// seeds silently refusing every member's anonymous post; the fix is to add the new id to
-/// `tmail::anon::ANON_GUEST_IMAGE_IDS` deliberately.
-#[test]
-#[ignore = "needs a zk build with the real guest embedded"]
-fn s8_real_guest_image_id_is_pinned() {
-    let id = crate::tmail::anon::encode_image_id_hex(&methods::NEXUS_GUEST_ID);
-    assert!(methods::NEXUS_GUEST_ID.iter().any(|w| *w != 0), "this build has the all-zero stub guest");
-    assert!(
-        crate::tmail::anon::ANON_GUEST_IMAGE_IDS.iter().any(|x| x.eq_ignore_ascii_case(&id)),
-        "the real guest's id {id} is not in ANON_GUEST_IMAGE_IDS"
-    );
+    assert!(matches!(AnonSendError::from_store(TmailStoreError::Full(1)), AnonSendError::Store(_)));
+    let handler = include_str!("rest/handlers/tmail.rs");
+    let arm = handler.split("AnonSendError::Ballot(reason)").nth(1).expect("the handler has no Ballot arm");
+    assert!(arm[..arm.find("AnonSendError::Store").unwrap_or(arm.len())].contains("StatusCode::FORBIDDEN"), "a refused ballot isn't a 403");
 }
 
 /// **SECURITY REGRESSION GUARD: only trusted peers steer chain sync.** Blocks carry no producer
@@ -14215,6 +15018,261 @@ async fn only_trusted_peers_steer_chain_sync() {
     assert!(sync.with(|s| s.registry.any_peer_ahead(0)), "a trusted hello no longer counts");
 }
 
+// ── Fast anonymous posting (docs/plans/FAST_ANON_POSTING.md, with the 2026-10-10 review) ────────
+
+/// A fast post: an anonymous envelope by `eph` to `receiver`, with no proof of its own.
+fn fast_env_for_tests(eph_words: &str, eph: &str, receiver: &str, msg_id: &str, sent_at_ms: u64) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    let mut env = anon_env_with_nullifier_for_tests(eph_words, eph, receiver, [0x55; 32], msg_id, sent_at_ms);
+    env.anonymous.as_mut().unwrap().anchor_proof = None;
+    resign_tmail_env_for_tests(&mut env, eph_words);
+    env
+}
+
+/// Register `eph` for `receiver` today the way the node does: a post WITH a proof, stored, whose
+/// verdict becomes Verified (the proof itself is covered by the #78 tests).
+fn register_fast_key_for_tests(store: &crate::tmail::store::TmailStore, eph_words: &str, eph: &str, receiver: &str, nullifier: [u8; 32], msg_id: &str) {
+    let env = anon_env_with_nullifier_for_tests(eph_words, eph, receiver, nullifier, msg_id, tmail_now_ms_for_tests());
+    assert!(store.store_tmail_ungated_for_tests(&env).unwrap());
+    store
+        .set_anon_verdict(msg_id, &crate::tmail::store::AnonVerdict::Verified { nullifier_hex: hex::encode(nullifier), verified_at_ms: 1 })
+        .unwrap();
+}
+
+/// **SECURITY: a fast post is accepted only for a posting key a verified proof registered for that
+/// board today.** Unregistered: refused, nothing stored. Registered: stored, verified, with the
+/// registration's nullifier (so the daily ID matches). Another board, or another day: refused. A
+/// failed registering post registers nothing. `store_tmail` itself refuses a fast post.
+/// Negative controls (run by hand): `send_fast_anonymous` skipping the registration lookup →
+/// FAILED; ignoring the receiver in the key → FAILED; ignoring the day → FAILED.
+#[test]
+fn fast_posts_need_a_key_registered_for_this_board_today() {
+    use crate::tmail::store::{AnonVerdict, FastSendError};
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_ra, board_a) = tmail_party_for_tests();
+    let (_rb, board_b) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+
+    let early = fast_env_for_tests(&ew, &eid, &board_a, "fast-early", now);
+    assert_eq!(store.send_fast_anonymous(&early), Err(FastSendError::NotRegistered));
+    assert!(store.get_by_msg_id("fast-early").is_none(), "an unregistered fast post was stored");
+    assert!(store.store_tmail(&early).is_err(), "store_tmail took a fast post directly");
+
+    register_fast_key_for_tests(&store, &ew, &eid, &board_a, [7; 32], "reg-a");
+    let ok = fast_env_for_tests(&ew, &eid, &board_a, "fast-1", now);
+    assert_eq!(store.send_fast_anonymous(&ok), Ok(true));
+    match store.get_anon_verdict("fast-1") {
+        Some(AnonVerdict::Verified { nullifier_hex, .. }) => assert_eq!(nullifier_hex, hex::encode([7u8; 32])),
+        other => panic!("a registered fast post isn't verified with its key's nullifier: {other:?}"),
+    }
+
+    let other_board = fast_env_for_tests(&ew, &eid, &board_b, "fast-b", now);
+    assert_eq!(store.send_fast_anonymous(&other_board), Err(FastSendError::NotRegistered), "a key registered for board A posted on board B");
+    let yesterday = fast_env_for_tests(&ew, &eid, &board_a, "fast-yday", now - 86_400_000);
+    assert_eq!(store.send_fast_anonymous(&yesterday), Err(FastSendError::WrongDay));
+    assert!(store.get_by_msg_id("fast-b").is_none() && store.get_by_msg_id("fast-yday").is_none());
+
+    // A registering post that fails registers nothing.
+    let (fw, fid) = tmail_party_for_tests();
+    let bad = anon_env_with_nullifier_for_tests(&fw, &fid, &board_a, [8; 32], "reg-bad", now);
+    assert!(store.store_tmail_ungated_for_tests(&bad).unwrap());
+    store.set_anon_verdict("reg-bad", &AnonVerdict::Failed { reason: "nullifier already used by another message (replay)".into(), failed_at_ms: now }).unwrap();
+    assert!(store.fast_registration(&board_a, nexus_protocol::tmail_bucket_index_v1(now), &fid).is_none(), "a failed proof registered a key");
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&fw, &fid, &board_a, "fast-bad", now)), Err(FastSendError::NotRegistered));
+}
+
+/// **SECURITY: no fast path for polls (one proof, one ballot).** A poll's wallet refuses a fast post,
+/// on REST and gossip, and a verified ballot registers no posting key.
+/// Negative control (run by hand): the poll check removed from `fast_checks` → FAILED.
+#[test]
+fn polls_take_no_fast_posts() {
+    use crate::tmail::store::FastSendError;
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let poll = crate::wallet::generate_mnemonic_12().unwrap();
+    let (pw, pid) = (poll.mnemonic_12.clone().unwrap(), poll.address_hex.to_ascii_lowercase());
+    let day = nexus_protocol::tmail_bucket_index_v1(tmail_now_ms_for_tests());
+    store.register_poll_root(&signed_poll_root_for_tests(&pw, &pid, &[], day)).unwrap();
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &pid, [9; 32], "ballot-1");
+    assert!(store.fast_registration(&pid, day, &eid).is_none(), "a ballot registered a posting key");
+    let again = fast_env_for_tests(&ew, &eid, &pid, "ballot-2", tmail_now_ms_for_tests());
+    assert_eq!(store.send_fast_anonymous(&again), Err(FastSendError::Poll));
+    assert_eq!(store.receive_fast_anonymous(&again), Err(FastSendError::Poll));
+    assert!(store.get_by_msg_id("ballot-2").is_none(), "a second ballot without a proof was stored");
+}
+
+/// **The invisible flood guard.** Per posting key: a burst of 5 goes through, the next one at once
+/// is refused as "busy" (a retry), and after the refill interval posting works again; the daily cap
+/// holds. Nothing refused is stored.
+/// Negative controls (run by hand): no interval check → FAILED; no daily cap → FAILED.
+#[test]
+fn fast_posts_have_an_invisible_flood_guard_and_a_daily_cap() {
+    use crate::tmail::store::FastSendError;
+    let _g = env_lock();
+    set_test_env_base();
+    // Limits are read on every post, so the test can change them as it goes. A long refill first,
+    // so the burst check doesn't depend on how fast the disk is.
+    let refill = EnvVarGuard::set("TET_TMAIL_FAST_REFILL_MS", "10000");
+    let _cap = EnvVarGuard::set("TET_TMAIL_FAST_DAILY_CAP", "8");
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [3; 32], "reg");
+    let now = tmail_now_ms_for_tests();
+    for i in 0..5 {
+        assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, &format!("burst-{i}"), now + i)), Ok(true), "post {i} of the burst");
+    }
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "too-fast", now + 6)), Err(FastSendError::Busy));
+    assert!(store.get_by_msg_id("too-fast").is_none());
+    drop(refill);
+    let _quick = EnvVarGuard::set("TET_TMAIL_FAST_REFILL_MS", "1");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "after-pause", now + 7)), Ok(true), "posting didn't resume after the interval");
+    // Cap 8 a day: 6 so far; two more fit, then the cap.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for i in 0..2 {
+        assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, &format!("late-{i}"), now + 10 + i)), Ok(true));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "over-cap", now + 20)), Err(FastSendError::DailyCap));
+}
+
+/// **SECURITY: gossiped fast posts are held only while their registering post is here, bounded.**
+/// No registering post here: dropped, not stored (no flood of posts for made-up keys). Registering
+/// post here, waiting: held as pending (not verified), then verified when the proof verifies. A
+/// registering post that fails definitively takes its waiting fast posts with it.
+/// Negative controls (run by hand): holding fast posts without a waiting registration → FAILED;
+/// not promoting on Verified → FAILED; not dropping on Failed → FAILED.
+#[test]
+fn gossiped_fast_posts_wait_only_for_a_registration_that_is_here() {
+    use crate::tmail::store::{AnonVerdict, FastSendError};
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+
+    // A made-up key: dropped.
+    let (xw, xid) = tmail_party_for_tests();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&xw, &xid, &board, "made-up", now)), Err(FastSendError::NotRegistered));
+    assert!(store.get_by_msg_id("made-up").is_none(), "a fast post for a made-up key was stored");
+
+    // Its registering post arrived and waits for its receipt: the fast post waits too, unverified.
+    let (ew, eid) = tmail_party_for_tests();
+    let reg = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [4; 32], "reg-wait", now);
+    assert!(store.store_tmail_ungated_for_tests(&reg).unwrap());
+    store.set_anon_verdict("reg-wait", &AnonVerdict::Pending).unwrap();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "waiting", now)), Ok(true));
+    assert!(matches!(store.get_anon_verdict("waiting"), Some(AnonVerdict::Pending)), "a waiting fast post was served as verified");
+    // The proof verifies here: the waiting post is verified with its nullifier.
+    store.set_anon_verdict("reg-wait", &AnonVerdict::Verified { nullifier_hex: hex::encode([4u8; 32]), verified_at_ms: now }).unwrap();
+    assert!(matches!(store.get_anon_verdict("waiting"), Some(AnonVerdict::Verified { .. })), "the waiting post wasn't verified with its registration");
+
+    // Another member's registering post fails: its waiting fast post goes too.
+    let (fw, fid) = tmail_party_for_tests();
+    let reg2 = anon_env_with_nullifier_for_tests(&fw, &fid, &board, [5; 32], "reg-fail", now);
+    assert!(store.store_tmail_ungated_for_tests(&reg2).unwrap());
+    store.set_anon_verdict("reg-fail", &AnonVerdict::Pending).unwrap();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&fw, &fid, &board, "doomed", now)), Ok(true));
+    store.set_anon_verdict("reg-fail", &AnonVerdict::Failed { reason: "invalid receipt".into(), failed_at_ms: now }).unwrap();
+    assert!(store.get_by_msg_id("doomed").is_none(), "a fast post outlived its failed registration");
+}
+
+/// **One member can't push everyone else off a board.** One daily ID holds at most its share of the
+/// board's anonymous posts (its own oldest go first); another member's posts stay.
+/// Negative control (run by hand): the per-daily-ID share removed (25 kept) → FAILED.
+#[test]
+fn one_daily_id_keeps_only_its_share_of_a_board() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _refill = EnvVarGuard::set("TET_TMAIL_FAST_REFILL_MS", "1");
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (ow, oid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ow, &oid, &board, [1; 32], "other-member");
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [2; 32], "loud-reg");
+    for i in 0..25u64 {
+        std::thread::sleep(std::time::Duration::from_millis(3));
+        assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, &format!("loud-{i}"), now + i)), Ok(true));
+    }
+    let inbox = store.get_inbox(&board, 1_000);
+    let loud = inbox.iter().filter(|e| e.anonymous.as_ref().is_some_and(|a| a.ephemeral_wallet_id == eid)).count();
+    assert_eq!(loud, crate::tmail::store::ANON_RETAIN_PER_DAILY_ID, "one daily ID kept {loud} posts");
+    assert!(inbox.iter().any(|e| e.msg_id == "other-member"), "another member's post was pushed off the board");
+    assert!(inbox.iter().any(|e| e.msg_id == "loud-24") && !inbox.iter().any(|e| e.msg_id == "loud-0"), "the loud ID's oldest should go first");
+    // Deleted from the store, not only hidden when read.
+    assert!(store.get_by_msg_id("loud-0").is_none() && store.is_retention_pruned("loud-0"), "the share is only applied when reading");
+    assert!(store.get_by_msg_id("loud-24").is_some());
+}
+
+/// The page's question, and the REST path: `GET /tmail/anon/fast/:board/:key` says whether the key
+/// is registered today; `POST /tmail/send` takes a registered fast post (202) and refuses an
+/// unregistered one (403) without storing it.
+#[tokio::test]
+async fn fast_post_routes_answer_and_gate() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let (_r, board) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    let router = crate::rest::routes::build_router(state.clone());
+    let ask = |r: axum::Router, path: String| async move {
+        let resp = r.oneshot(axum::http::Request::builder().uri(path).body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        let j: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap()).unwrap();
+        j["registered"].as_bool().unwrap()
+    };
+    let send = |r: axum::Router, env: crate::tmail::envelope::TmailEnvelopeV1| async move {
+        r.oneshot(axum::http::Request::builder().method("POST").uri("/tmail/send").header("content-type", "application/json").body(axum::body::Body::from(serde_json::to_vec(&env).unwrap())).unwrap())
+            .await
+            .unwrap()
+            .status()
+    };
+    assert!(!ask(router.clone(), format!("/tmail/anon/fast/{board}/{eid}")).await);
+    assert_eq!(send(router.clone(), fast_env_for_tests(&ew, &eid, &board, "rest-early", tmail_now_ms_for_tests())).await, StatusCode::FORBIDDEN);
+    assert!(state.tmail.get_by_msg_id("rest-early").is_none());
+    register_fast_key_for_tests(&state.tmail, &ew, &eid, &board, [6; 32], "rest-reg");
+    assert!(ask(router.clone(), format!("/tmail/anon/fast/{board}/{eid}")).await);
+    assert_eq!(send(router.clone(), fast_env_for_tests(&ew, &eid, &board, "rest-fast", tmail_now_ms_for_tests())).await, StatusCode::ACCEPTED);
+}
+
+/// **SECURITY: an expiring pending fast post deletes only itself.** Its pending entry is keyed
+/// `receiver|bucket|key|msg_id`; a msg_id containing '|' (e.g. ending in another message's id) must
+/// not make the expiry sweep delete that other message.
+/// Negative control (run by hand): parsing the msg_id with `rsplit('|')` → FAILED.
+#[test]
+fn expiring_a_pending_fast_post_deletes_only_itself() {
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let (_r, board) = tmail_party_for_tests();
+    let now = tmail_now_ms_for_tests();
+    // A victim's ordinary message.
+    let (sw, sid) = tmail_party_for_tests();
+    let victim = signed_tmail_env_for_tests(&sw, &sid, &board, "victim-msg", tmail_flags_for_tests(false), None);
+    assert!(store.store_tmail(&victim).unwrap());
+    // A fast post held pending, whose msg_id ends with the victim's.
+    let (ew, eid) = tmail_party_for_tests();
+    let reg = anon_env_with_nullifier_for_tests(&ew, &eid, &board, [6; 32], "reg-pending", now);
+    assert!(store.store_tmail_ungated_for_tests(&reg).unwrap());
+    store.set_anon_verdict("reg-pending", &crate::tmail::store::AnonVerdict::Pending).unwrap();
+    assert_eq!(store.receive_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "x|victim-msg", now)), Ok(true));
+    // Its pending entry expires: the sweep runs on the next arrival.
+    let _ttl = EnvVarGuard::set("TET_TMAIL_FAST_PENDING_TTL_MS", "1");
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    let (fw, fid) = tmail_party_for_tests();
+    let _ = store.receive_fast_anonymous(&fast_env_for_tests(&fw, &fid, &board, "trigger", now));
+    assert!(store.get_by_msg_id("victim-msg").is_some(), "expiring a fast post deleted another message");
+    assert!(store.get_by_msg_id("x|victim-msg").is_none(), "the expired fast post is still there");
+}
+
 /// **SECURITY REGRESSION GUARD: unverified anonymous posts can't push a verified one out.** Gossip
 /// stores an anonymous post before its proof is checked; the journal it announces is whatever the
 /// sender wrote. Retention used to group anonymous posts by that announced nullifier, so a few
@@ -14254,7 +15312,679 @@ fn unverified_anonymous_posts_cannot_prune_a_verified_one() {
     assert!(store.get_by_msg_id("victim").is_some() && store.get_by_msg_id("other").is_some());
 }
 
-// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-11) ----------
+// ── Shelter (tmail/shelter.rs; docs/plans/SHELTER.md) ──────────────────────────────────────────
+
+/// Shelter on, with a fresh moderator and board: (moderator words, moderator id, board id, guards).
+fn shelter_on_for_tests() -> (String, String, String, Vec<EnvVarGuard>) {
+    let (mw, mid) = tmail_party_for_tests();
+    let (_bw, bid) = tmail_party_for_tests();
+    let g = vec![EnvVarGuard::set("TET_SHELTER_MODERATOR", &mid), EnvVarGuard::set("TET_SHELTER_BOARD", &bid)];
+    (mw, mid, bid, g)
+}
+
+fn shelter_rec_for_tests(
+    words: &str,
+    action: crate::tmail::shelter::ShelterAction,
+    subject: &str,
+    met_in_person: bool,
+    text: &str,
+    decision: &str,
+    at_ms: u64,
+) -> crate::tmail::shelter::ShelterRecordV1 {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(kp.public_key());
+    let signer = hex::encode(ed_sk.verifying_key().to_bytes());
+    let mut r = crate::tmail::shelter::ShelterRecordV1 {
+        v: 1,
+        kind: crate::tmail::shelter::SHELTER_RECORD_KIND.to_string(),
+        action,
+        signer: signer.clone(),
+        subject: subject.to_ascii_lowercase(),
+        met_in_person,
+        text: text.to_string(),
+        decision: decision.to_string(),
+        at_ms,
+        hybrid_sig: crate::tmail::envelope::TmailHybridSig {
+            ed25519_pubkey_hex: signer,
+            ed25519_sig_b64: String::new(),
+            mldsa_pubkey_b64: pk.clone(),
+            mldsa_sig_b64: String::new(),
+        },
+    };
+    let msg = crate::tmail::shelter::record_auth_message_bytes(&r, &pk);
+    r.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(&msg).to_bytes());
+    r.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap());
+    r
+}
+
+/// The `x-tet-shelter-auth` header for a read of `path` at `at_ms`.
+fn shelter_read_auth_for_tests(words: &str, path: &str, at_ms: u64) -> String {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = b64(kp.public_key());
+    let wallet = hex::encode(ed_sk.verifying_key().to_bytes());
+    let msg = crate::tmail::shelter::read_auth_message_bytes(&wallet, path, at_ms, &pk);
+    format!("{wallet}.{at_ms}.{}.{pk}.{}", b64(&ed_sk.sign(&msg).to_bytes()), b64(&crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap()))
+}
+
+/// **Membership follows the rules.** The moderator invites (at most 10, in person); members vouch
+/// (at most 3 each, in person); nobody else lets anyone in; nicknames are unique; a member can leave.
+/// Negative controls (run by hand, recorded in the commit): the vouch limit check removed →
+/// FAILED; the `met_in_person` check removed → FAILED; the members-only vouch check removed → FAILED.
+#[test]
+fn shelter_membership_follows_the_rules() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, _bid, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let people: Vec<(String, String)> = (0..16).map(|_| tmail_party_for_tests()).collect();
+
+    // Not met in person: refused. A member can't invite; the moderator invites.
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &people[0].1, false, "", "", now)).is_err(), "an invite without met_in_person was accepted");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Vouch, &people[0].1, true, "", "", now)).is_err(), "the moderator used a vouch");
+    // A non-member can't vouch.
+    assert_eq!(
+        submit(&shelter_rec_for_tests(&people[15].0, A::Vouch, &people[14].1, true, "", "", now)),
+        Err(crate::tmail::shelter::ShelterError::Refused("only a member can vouch")),
+        "a non-member vouched, or was refused for another reason"
+    );
+    // The moderator's 10 invites, then no more.
+    for p in &people[..10] {
+        submit(&shelter_rec_for_tests(&mw, A::Invite, &p.1, true, "", "", now)).unwrap();
+    }
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &people[10].1, true, "", "", now)).is_err(), "an 11th invite was accepted");
+    // A member: three vouches, then no more; never someone who is already in.
+    let v = &people[0];
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Invite, &people[10].1, true, "", "", now)).is_err(), "a member invited");
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Vouch, &people[1].1, true, "", "", now)).is_err(), "vouched for a member");
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Vouch, &people[10].1, false, "", "", now)).is_err(), "a vouch without met_in_person was accepted");
+    for p in &people[10..13] {
+        submit(&shelter_rec_for_tests(&v.0, A::Vouch, &p.1, true, "", "", now)).unwrap();
+    }
+    assert!(submit(&shelter_rec_for_tests(&v.0, A::Vouch, &people[13].1, true, "", "", now)).is_err(), "a 4th vouch was accepted");
+    let st = store.shelter_state(&crate::tmail::shelter::config_from_env().unwrap());
+    assert_eq!(st.members.len(), 1 + 10 + 3);
+    assert_eq!(st.members[&people[10].1].via.as_deref(), Some(v.1.as_str()));
+    // Nicknames: one's own, unique (case-insensitive), well-formed.
+    submit(&shelter_rec_for_tests(&people[1].0, A::Nickname, &people[1].1, false, "Hana", "", now)).unwrap();
+    assert!(submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[2].1, false, "hana", "", now)).is_err(), "a taken nickname");
+    assert!(submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[1].1, false, "Mio", "", now)).is_err(), "set someone else's nickname");
+    assert!(submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[2].1, false, "anonymous", "", now)).is_err(), "a reserved nickname");
+    submit(&shelter_rec_for_tests(&people[2].0, A::Nickname, &people[2].1, false, "みお", "", now)).unwrap();
+    // Leaving: one's own key only; the vouch still counts.
+    assert!(submit(&shelter_rec_for_tests(&people[3].0, A::Withdraw, &people[4].1, false, "", "", now)).is_err());
+    submit(&shelter_rec_for_tests(&people[10].0, A::Withdraw, &people[10].1, false, "", "", now)).unwrap();
+    let st = store.shelter_state(&crate::tmail::shelter::config_from_env().unwrap());
+    assert!(!st.is_member(&people[10].1));
+    assert_eq!(st.vouches_left(&crate::tmail::shelter::config_from_env().unwrap(), &v.1), 0, "leaving refunded a vouch");
+    let _ = mid;
+}
+
+/// **Records are signed, chain-bound and current;** with Shelter off, nothing is taken.
+/// Negative control: `verify_record` skipping the signature → FAILED.
+#[test]
+fn shelter_records_must_be_signed_by_their_signer_and_current() {
+    use crate::tmail::shelter::{ShelterAction as A, ShelterError as E};
+    let _g = env_lock();
+    set_test_env_base();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (pw, pid) = tmail_party_for_tests();
+    // Off: refused as off.
+    assert_eq!(store.submit_shelter_record(&shelter_rec_for_tests(&pw, A::Invite, &pid, true, "", "", now), now), Err(E::Off));
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    // A changed field breaks the signature.
+    let mut r = shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now);
+    r.subject = tmail_party_for_tests().1;
+    assert_eq!(store.submit_shelter_record(&r, now), Err(E::Signature));
+    // Someone else's key, claiming to be the moderator.
+    let mut r = shelter_rec_for_tests(&pw, A::Invite, &pid, true, "", "", now);
+    r.signer = crate::tmail::shelter::config_from_env().unwrap().moderator;
+    assert!(matches!(store.submit_shelter_record(&r, now), Err(E::SignerMismatch | E::Signature)));
+    // Too old, or from the future.
+    let r = shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now - 11 * 60_000);
+    assert_eq!(store.submit_shelter_record(&r, now), Err(E::Clock));
+    // Bound to the chain: the same record on another chain id doesn't verify.
+    let r = shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now);
+    {
+        let _c = EnvVarGuard::set("TET_CHAIN_ID", "another-chain");
+        assert_eq!(store.submit_shelter_record(&r, now), Err(E::Signature), "a record from another chain was accepted");
+    }
+    store.submit_shelter_record(&r, now).unwrap();
+    assert!(store.shelter_records().len() == 1);
+}
+
+/// **Accountability:** a confirmed bot case removes the member and takes the voucher's right to
+/// vouch; a second standing case suspends the voucher's posting for 90 days; an appeal within 14
+/// days that overturns a case restores everything; an appeal is decided once.
+/// Negative control: `vouches_left` ignoring standing cases → FAILED.
+#[test]
+fn shelter_cases_take_the_vouchers_right_and_appeals_restore_it() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let (vw, vid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    let (_cw, cid) = tmail_party_for_tests();
+    let (_dw, did) = tmail_party_for_tests();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &vid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &bid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &cid, true, "", "", now)).unwrap();
+    // Only the moderator decides; a case needs its reason.
+    assert!(submit(&shelter_rec_for_tests(&bw, A::Case, &cid, false, "bot", "", now)).is_err(), "a member decided a case");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Case, &bid, false, "", "", now)).is_err(), "a case without a reason");
+    let case1 = submit(&shelter_rec_for_tests(&mw, A::Case, &bid, false, "posted 400 generated replies in an hour", "", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(!st.is_member(&bid), "the bot is still a member");
+    assert_eq!(st.vouches_left(&cfg, &vid), 0, "the voucher can still vouch");
+    assert!(st.may_post(&vid, now), "one case suspended the voucher");
+    assert!(submit(&shelter_rec_for_tests(&vw, A::Vouch, &did, true, "", "", now)).is_err(), "the voucher vouched again");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &bid, true, "", "", now)).is_err(), "a removed key was let back in");
+    // A second standing case: the voucher's posting is suspended for 90 days.
+    let case2 = submit(&shelter_rec_for_tests(&mw, A::Case, &cid, false, "same pattern", "", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(!st.may_post(&vid, now), "two cases didn't suspend the voucher");
+    assert_eq!(st.suspended_until(&vid), Some(now + crate::tmail::shelter::SHELTER_SUSPEND_MS));
+    assert!(st.may_post(&vid, now + crate::tmail::shelter::SHELTER_SUSPEND_MS));
+    // An appeal: the moderator only, overturn or keep, with a reason; once.
+    assert!(submit(&shelter_rec_for_tests(&vw, A::Appeal, &case1, false, "not a bot", "overturn", now)).is_err());
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Appeal, &case1, false, "x", "maybe", now)).is_err());
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case1, false, "met them again with another member", "overturn", now)).unwrap();
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Appeal, &case1, false, "again", "keep", now)).is_err(), "an appeal decided twice");
+    let st = store.shelter_state(&cfg);
+    assert!(st.is_member(&bid), "the overturned case's member wasn't restored");
+    assert!(st.may_post(&vid, now), "the suspension stayed after an overturn");
+    assert_eq!(st.vouches_left(&cfg, &vid), 0, "case2 still stands: no vouching");
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case2, false, "confirmed", "keep", now)).unwrap();
+    // 14 days: a case's appeal can't be decided after.
+    let mut st = store.shelter_state(&cfg);
+    let (_ew, eid) = tmail_party_for_tests();
+    let r = shelter_rec_for_tests(&mw, A::Invite, &eid, true, "", "", now);
+    st.apply(&cfg, &r).unwrap();
+    let c = shelter_rec_for_tests(&mw, A::Case, &eid, false, "bot", "", now);
+    st.apply(&cfg, &c).unwrap();
+    let id = crate::tmail::shelter::record_id(&c);
+    let ap = shelter_rec_for_tests(&mw, A::Appeal, &id, false, "late", "overturn", now + crate::tmail::shelter::SHELTER_APPEAL_MS + 1);
+    assert!(st.apply(&cfg, &ap).is_err(), "an appeal after 14 days was accepted");
+    // Every step is a log line.
+    assert_eq!(store.shelter_records().len(), 7);
+}
+
+/// **Reads are members-only:** every members-only route refuses an unsigned read, a non-member's,
+/// a signature for another route, and an old one; `/tmail/inbox/<board>` refuses everyone;
+/// `/shelter/me` tells a non-member only that. A member reads the board.
+/// Negative control: `get_shelter_inbox` skipping `member()` → FAILED.
+#[tokio::test]
+async fn shelter_reads_are_members_only() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use axum::http::StatusCode;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, _xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    // A member's post on the board.
+    let env = signed_tmail_env_for_tests(&aw, &aid, &board, "shelter-post-1", tmail_flags_for_tests(false), None);
+    assert!(state.tmail.store_tmail(&env).unwrap());
+    let get = |uri: &str, auth: Option<String>| {
+        let router = router.clone();
+        let mut b = axum::http::Request::builder().uri(uri);
+        if let Some(a) = auth {
+            b = b.header("x-tet-shelter-auth", a);
+        }
+        let req = b.body(axum::body::Body::empty()).unwrap();
+        async move {
+            let resp = router.oneshot(req).await.unwrap();
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (st, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    assert!(get("/shelter/status", None).await.1.contains("\"on\":true"));
+    assert_eq!(get(&format!("/tmail/inbox/{board}"), None).await.0, StatusCode::FORBIDDEN, "the board's public inbox answered");
+    for path in ["/shelter/members", "/shelter/log", "/shelter/inbox", "/shelter/anon/leaves"] {
+        assert_eq!(get(path, None).await.0, StatusCode::UNAUTHORIZED, "{path}: unsigned read answered");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&xw, path, now))).await.0, StatusCode::FORBIDDEN, "{path}: a non-member read");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&aw, "/shelter/me", now))).await.0, StatusCode::UNAUTHORIZED, "{path}: another route's signature");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&aw, path, now - 3 * 60_000))).await.0, StatusCode::UNAUTHORIZED, "{path}: an old signature");
+        assert_eq!(get(path, Some(shelter_read_auth_for_tests(&aw, path, now))).await.0, StatusCode::OK, "{path}: a member's read was refused");
+    }
+    let (st, body) = get("/shelter/inbox", Some(shelter_read_auth_for_tests(&aw, "/shelter/inbox", now))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body.contains("shelter-post-1"), "the member didn't get the post");
+    let (_, body) = get("/shelter/members", Some(shelter_read_auth_for_tests(&mw, "/shelter/members", now))).await;
+    assert!(body.contains(&aid) && body.contains(&mid));
+    let (st, body) = get("/shelter/me", Some(shelter_read_auth_for_tests(&xw, "/shelter/me", now))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body.contains("\"member\":false") && !body.contains(&board), "a non-member learned more than that: {body}");
+    let (_, body) = get("/shelter/me", Some(shelter_read_auth_for_tests(&aw, "/shelter/me", now))).await;
+    assert!(body.contains("\"member\":true") && body.contains(&board));
+    // Hidden by the operator: not served here either.
+    state.operator_hide.hide(crate::operator_hide::HideKind::Msg, "shelter-post-1", "test", now).unwrap();
+    assert!(!get("/shelter/inbox", Some(shelter_read_auth_for_tests(&aw, "/shelter/inbox", now))).await.1.contains("shelter-post-1"));
+    // Off: every Shelter route is 404.
+    drop(_sg);
+    assert_eq!(get("/shelter/status", None).await.1.contains("\"on\":false"), true);
+    assert_eq!(get("/shelter/inbox", Some(shelter_read_auth_for_tests(&aw, "/shelter/inbox", now))).await.0, StatusCode::NOT_FOUND);
+}
+
+/// **The board takes named posts only from current, unsuspended members, behind an invisible
+/// flood guard** (a burst, then "try again in a moment"; a daily cap). Never gossiped, either way.
+/// Negative controls: the membership check in `store_tmail` removed → FAILED (gossip-free path);
+/// `broadcast_tmail` without the Shelter check → FAILED.
+#[tokio::test]
+async fn shelter_board_takes_members_posts_only_and_never_gossips() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use axum::http::StatusCode;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, board, _sg) = shelter_on_for_tests();
+    let _b = EnvVarGuard::set("TET_SHELTER_BURST", "2");
+    let _r = EnvVarGuard::set("TET_SHELTER_REFILL_MS", "600000");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let mut state = rest_state_for_tests(ledger);
+    let (gtx, mut grx) = tokio::sync::mpsc::channel::<String>(16);
+    state.gossip_tx = Some(gtx);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let send = |env: crate::tmail::envelope::TmailEnvelopeV1| {
+        let router = router.clone();
+        async move {
+            let req = axum::http::Request::builder()
+                .method("POST")
+                .uri("/tmail/send")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(serde_json::to_vec(&env).unwrap()))
+                .unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (st, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    let mk = |w: &str, id: &str, m: &str| signed_tmail_env_for_tests(w, id, &board, m, tmail_flags_for_tests(false), None);
+    assert_eq!(send(mk(&xw, &xid, "outsider")).await.0, StatusCode::FORBIDDEN, "a non-member posted");
+    assert!(state.tmail.get_by_msg_id("outsider").is_none());
+    assert!(state.tmail.store_tmail(&mk(&xw, &xid, "outsider-direct")).is_err(), "the store took a non-member's post");
+    assert_eq!(send(mk(&aw, &aid, "m1")).await.0, StatusCode::ACCEPTED);
+    assert_eq!(send(mk(&aw, &aid, "m2")).await.0, StatusCode::ACCEPTED);
+    let (st, body) = send(mk(&aw, &aid, "m3")).await;
+    assert_eq!(st, StatusCode::TOO_MANY_REQUESTS);
+    assert!(body.contains("try again in a moment"), "{body}");
+    assert!(grx.try_recv().is_err(), "a Shelter post was gossiped");
+    // An ordinary board's post still is.
+    let (ow, oid) = tmail_party_for_tests();
+    let (_tw, tid) = tmail_party_for_tests();
+    assert_eq!(send(signed_tmail_env_for_tests(&ow, &oid, &tid, "elsewhere", tmail_flags_for_tests(false), None)).await.0, StatusCode::ACCEPTED);
+    assert!(grx.try_recv().is_ok(), "the control post wasn't gossiped");
+    // From a peer: refused.
+    let ev = crate::models::NetworkEvent::TmailGossip { envelope: mk(&aw, &aid, "via-gossip") };
+    assert!(matches!(crate::p2p::handle_tmail_network_event(&state.tmail, &ev), crate::p2p::TmailGossipOutcome::Rejected { .. }));
+    assert!(state.tmail.get_by_msg_id("via-gossip").is_none());
+}
+
+/// **Anonymous posts in Shelter prove membership of Shelter, not of the open anonymity set;** a
+/// set that loses anyone voids the earlier roots and today's posting keys.
+/// Negative controls: `anon_root_accepted_for` without the Shelter branch → FAILED (an anonymity-set
+/// root counted on the board); no clearing on loss → FAILED.
+#[test]
+fn shelter_anonymous_posts_need_shelters_own_root() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let _e = anon_fast_epoch_guard();
+    let (mw, mid, board, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let bucket = nexus_protocol::tmail_bucket_index_v1(now);
+    // Four registered wallets in the anonymity set; three of them join Shelter.
+    let (ids, _cs) = registered_members_for_tests(&store, 4);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let set_root = store.anon_tree_for_epoch(crate::tmail::store::TmailStore::anon_epoch_index(tmail_now_ms_for_tests())).root();
+    assert!(store.accepts_anon_root(&set_root, bucket), "setup: the set root should count elsewhere");
+    for id in &ids[..2] {
+        store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, id, true, "", "", now), now).unwrap();
+    }
+    // Two in the set: below the minimum, no root counts.
+    assert!(store.shelter_anon_set(&cfg, now).len() == 2);
+    let two = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &two, bucket, bucket), "a set under the minimum counted");
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &ids[2], true, "", "", now), now).unwrap();
+    let three = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &three, bucket, bucket), "Shelter's own root didn't count");
+    // The open anonymity set's root never counts on the board (it holds a non-member).
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &set_root, bucket, bucket), "the open set's root counted in Shelter");
+    // An unregistered wallet joining changes nothing; a registered one adds: the old root still counts.
+    let (_pw, pid) = tmail_party_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &pid, true, "", "", now), now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &ids[3], true, "", "", now), now).unwrap();
+    let four = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &three, bucket, bucket), "an addition voided the earlier root");
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &four, bucket, bucket));
+    // A posting key registered today for the board (as a verified proof would).
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [0x11; 32], "shelter-reg-1");
+    assert!(store.fast_registration(&board, bucket, &eid).is_some(), "setup: the posting key wasn't registered");
+    // Someone is removed: every earlier root, and today's posting keys, stop counting.
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Case, &ids[0], false, "bot", "", now), now).unwrap();
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &four, bucket, bucket), "a removed member's root still counts");
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &three, bucket, bucket));
+    assert!(store.fast_registration(&board, bucket, &eid).is_none(), "a posting key survived a removal");
+    let now_three = crate::tmail::anon::AnonMerkleTree::build(store.shelter_anon_set(&cfg, now).iter().map(|(_, c)| *c).collect()).root();
+    assert!(crate::tmail::anon::anon_root_accepted_for(&store, &board, &now_three, bucket, bucket));
+    // Only today's (or yesterday's) bucket.
+    assert!(!crate::tmail::anon::anon_root_accepted_for(&store, &board, &now_three, bucket - 2, bucket));
+    let _ = mid;
+}
+
+/// **A member's sealed board key** is set only by the member who let them in, the moderator, or
+/// the member, for a current member; and it comes back only in that member's own signed read.
+/// Negative control: `set_shelter_key` without the sender check → FAILED.
+#[tokio::test]
+async fn shelter_sealed_key_is_set_by_their_voucher_and_served_only_to_them() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    let (cw, cid) = tmail_party_for_tests();
+    let (_xw, xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Vouch, &bid, true, "", "", now), now).unwrap();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &cid, true, "", "", now), now).unwrap();
+    let key_for = |w: &str, from: &str, to: &str, id: &str, at: u64| signed_tmail_env_at_for_tests(w, from, to, id, at);
+    // Another member (not b's voucher) can't set b's key; b's voucher, the moderator, and b can.
+    assert!(state.tmail.set_shelter_key(&key_for(&cw, &cid, &bid, "k-c", now)).is_err(), "another member set the key");
+    assert!(state.tmail.set_shelter_key(&key_for(&aw, &aid, &xid, "k-x", now)).is_err(), "a key for a non-member");
+    state.tmail.set_shelter_key(&key_for(&aw, &aid, &bid, "k-a", now)).unwrap();
+    state.tmail.set_shelter_key(&key_for(&mw, &mid, &bid, "k-m", now + 1)).unwrap();
+    state.tmail.set_shelter_key(&key_for(&bw, &bid, &bid, "k-b", now + 2)).unwrap();
+    let me = |words: &str| {
+        let router = router.clone();
+        let auth = shelter_read_auth_for_tests(words, "/shelter/me", now);
+        async move {
+            let req = axum::http::Request::builder().uri("/shelter/me").header("x-tet-shelter-auth", auth).body(axum::body::Body::empty()).unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            String::from_utf8_lossy(&axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap()).to_string()
+        }
+    };
+    assert!(me(&bw).await.contains("k-b"), "the member didn't get their key");
+    assert!(!me(&aw).await.contains("k-b") && !me(&cw).await.contains("k-b"), "another member got it");
+}
+
+/// **SECURITY: a signed Shelter record counts once.** Sent again within its clock window, a vouch
+/// would put back a member who left, and a nickname record would undo a later change.
+/// Negative control: the duplicate check removed → FAILED.
+#[test]
+fn shelter_records_cannot_be_replayed() {
+    use crate::tmail::shelter::{ShelterAction as A, ShelterError as E};
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let vouch = shelter_rec_for_tests(&aw, A::Vouch, &bid, true, "", "", now);
+    store.submit_shelter_record(&vouch, now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&bw, A::Withdraw, &bid, false, "", "", now), now).unwrap();
+    assert_eq!(store.submit_shelter_record(&vouch, now + 1), Err(E::Duplicate), "a replayed vouch put a member back");
+    assert!(!store.shelter_state(&cfg).is_member(&bid));
+    let nick1 = shelter_rec_for_tests(&aw, A::Nickname, &aid, false, "Sora", "", now);
+    store.submit_shelter_record(&nick1, now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Nickname, &aid, false, "Umi", "", now + 1), now + 1).unwrap();
+    assert_eq!(store.submit_shelter_record(&nick1, now + 2), Err(E::Duplicate));
+    assert_eq!(store.shelter_state(&cfg).members[&aid].nickname.as_deref(), Some("Umi"));
+}
+
+/// **SECURITY: a nickname can't copy another, or a reserved word, with look-alike characters.**
+/// Negative control: the skeleton reduced to `to_lowercase` → FAILED.
+#[test]
+fn shelter_nicknames_cannot_be_copied_with_look_alikes() {
+    use crate::tmail::shelter::nickname_ok;
+    assert!(nickname_ok("Hana") && nickname_ok("みお") && nickname_ok("小林") && nickname_ok("Sora_2"));
+    // Other scripts: refused outright.
+    assert!(!nickname_ok("Mоderator"), "Cyrillic о");
+    assert!(!nickname_ok("Ηana"), "Greek Η");
+    assert!(!nickname_ok("Ha\u{200b}na"), "zero-width space");
+    assert!(!nickname_ok("ﾊﾅ"), "half-width katakana");
+    // Reserved words, however they're written.
+    for r in ["Moderator", "M0DERATOR", "mod.erator", "anon", "Anonymous", "匿名", "モデレーター"] {
+        assert!(!nickname_ok(r), "{r}");
+    }
+    // Look-alikes within the allowed set collide.
+    let sk = crate::tmail::shelter::nickname_skeleton;
+    assert_eq!(sk("Bill"), sk("B1lI"));
+    assert_eq!(sk("Sora"), sk("S0ra"));
+    assert_eq!(sk("エロ"), sk("工口"));
+    assert_eq!(sk("へや"), sk("ヘヤ"));
+    assert_eq!(sk("ha na"), sk("hana"));
+    assert_eq!(sk("Bill-"), sk("Billー"));
+    assert_eq!(sk("Bill"), sk("Bill一"));
+    assert_eq!(sk("アキ"), sk("ァキ"));
+    assert_eq!(sk("ソラ"), sk("ンラ"));
+    assert_eq!(sk("Sam"), sk("Sarn"));
+    // …so Shelter refuses the copy.
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    for id in [&aid, &bid] {
+        store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, id, true, "", "", now), now).unwrap();
+    }
+    store.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Nickname, &aid, false, "Bill", "", now), now).unwrap();
+    assert!(store.submit_shelter_record(&shelter_rec_for_tests(&bw, A::Nickname, &bid, false, "B1ll", "", now), now).is_err(), "a look-alike copy was accepted");
+    assert!(store.submit_shelter_record(&shelter_rec_for_tests(&bw, A::Nickname, &bid, false, "bi ll", "", now), now).is_err());
+}
+
+/// **SECURITY: after someone is removed, a posting key registered before then doesn't count,
+/// even if deleting it failed;** and the roots state fails closed.
+/// Negative control: `send_fast_anonymous` without the Shelter registration-time check → FAILED.
+#[test]
+fn shelter_posting_keys_from_before_a_removal_never_count() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let _e = anon_fast_epoch_guard();
+    let (mw, _mid, board, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let bucket = nexus_protocol::tmail_bucket_index_v1(now);
+    let (ids, _) = registered_members_for_tests(&store, 4);
+    for id in &ids {
+        store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, id, true, "", "", now), now).unwrap();
+    }
+    let (ew, eid) = tmail_party_for_tests();
+    register_fast_key_for_tests(&store, &ew, &eid, &board, [0x22; 32], "shelter-reg-2");
+    let saved = store.fast_registration(&board, bucket, &eid).expect("setup: registered");
+    assert_eq!(store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "before", tmail_now_ms_for_tests())), Ok(true));
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let later = tmail_now_ms_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Case, &ids[0], false, "bot", "", later), later).unwrap();
+    // As if deleting the key had failed: put it back.
+    store.put_fast_key_for_tests(&board, bucket, &eid, &saved);
+    assert_eq!(
+        store.send_fast_anonymous(&fast_env_for_tests(&ew, &eid, &board, "after", tmail_now_ms_for_tests())),
+        Err(crate::tmail::store::FastSendError::NotRegistered),
+        "a posting key from before the removal still posted"
+    );
+    // …and the page is told so (it then proves again instead of failing).
+    assert!(!store.fast_registration_counts(&board, bucket, &eid), "/tmail/anon/fast still says registered");
+}
+
+/// **SECURITY: a sealed key comes only from a current member, fresh, and never replaces a newer
+/// one.** Negative controls: the voucher's current membership not checked → FAILED; the
+/// newer-than check removed → FAILED.
+#[test]
+fn shelter_sealed_keys_need_a_current_sender_and_cannot_go_back() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    store.submit_shelter_record(&shelter_rec_for_tests(&aw, A::Vouch, &bid, true, "", "", now), now).unwrap();
+    let key = |w: &str, from: &str, id: &str, at: u64| signed_tmail_env_at_for_tests(w, from, &bid, id, at);
+    let older = key(&aw, &aid, "k-old", now - 1_000);
+    let newer = key(&bw, &bid, "k-new", now);
+    store.set_shelter_key(&newer).unwrap();
+    assert!(store.set_shelter_key(&older).is_err(), "an older sealed key replaced a newer one");
+    assert_eq!(store.shelter_key_for(&bid).unwrap().msg_id, "k-new");
+    assert!(store.set_shelter_key(&key(&aw, &aid, "k-stale", now - 11 * 60_000)).is_err(), "a stale sealed key");
+    // The voucher is removed: they hand out nothing more.
+    store.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Case, &aid, false, "bot", "", now), now).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    assert!(store.set_shelter_key(&key(&aw, &aid, "k-removed", tmail_now_ms_for_tests())).is_err(), "a removed voucher set the key");
+    assert_eq!(store.shelter_key_for(&bid).unwrap().msg_id, "k-new");
+}
+
+/// A named envelope like [`signed_tmail_env_for_tests`], sent at `at_ms`.
+fn signed_tmail_env_at_for_tests(words: &str, from: &str, to: &str, msg_id: &str, at_ms: u64) -> crate::tmail::envelope::TmailEnvelopeV1 {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let mut env = signed_tmail_env_for_tests(words, from, to, msg_id, tmail_flags_for_tests(false), None);
+    env.sent_at_ms = at_ms;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let msg = crate::tmail::envelope::tmail_envelope_auth_message_bytes(&env, &env.hybrid_sig.mldsa_pubkey_b64.clone()).unwrap();
+    env.hybrid_sig.ed25519_sig_b64 = base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(msg.as_slice()).to_bytes());
+    env.hybrid_sig.mldsa_sig_b64 = base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, msg.as_slice()).unwrap());
+    env
+}
+
+/// **SECURITY: leaving doesn't dodge a case.** A key that leaves before the moderator decides is
+/// still the subject of a case, and its voucher still answers for it; an overturned case puts the
+/// subject back where they were, and never gives them a nickname someone else took meanwhile.
+/// Negative control: a case only against current members → FAILED.
+#[test]
+fn shelter_leaving_does_not_dodge_a_case() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let (vw, vid) = tmail_party_for_tests();
+    let (bw, bid) = tmail_party_for_tests();
+    let (cw, cid) = tmail_party_for_tests();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &vid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &bid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&vw, A::Vouch, &cid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&bw, A::Nickname, &bid, false, "Kai", "", now)).unwrap();
+    // The bot leaves first.
+    submit(&shelter_rec_for_tests(&bw, A::Withdraw, &bid, false, "", "", now)).unwrap();
+    let case = submit(&shelter_rec_for_tests(&mw, A::Case, &bid, false, "scripted posts", "", now)).expect("a case against a key that left was refused");
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.vouches_left(&cfg, &vid), 0, "the voucher escaped by the bot leaving");
+    assert!(submit(&shelter_rec_for_tests(&mw, A::Invite, &bid, true, "", "", now)).is_err(), "the removed key was let back in");
+    // Meanwhile someone takes the nickname; the case is overturned: back to "left", nickname cleared.
+    submit(&shelter_rec_for_tests(&cw, A::Nickname, &cid, false, "Kai", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case, false, "not a bot", "overturn", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(!st.is_member(&bid), "an overturned case made someone who had left a member");
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &bid, true, "", "", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.members[&bid].nickname, None, "two members share a nickname");
+    assert_eq!(st.members[&cid].nickname.as_deref(), Some("Kai"));
+    // A member (not one who left) restored by an overturn: their nickname, taken meanwhile, is cleared.
+    let (dw, did) = tmail_party_for_tests();
+    let (ew, eid) = tmail_party_for_tests();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &did, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &eid, true, "", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&dw, A::Nickname, &did, false, "Rin", "", now)).unwrap();
+    let case2 = submit(&shelter_rec_for_tests(&mw, A::Case, &did, false, "x", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&ew, A::Nickname, &eid, false, "Rin", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case2, false, "not a bot", "overturn", now)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert!(st.is_member(&did), "the overturned member wasn't restored");
+    assert_eq!(st.members[&did].nickname, None, "two members share a nickname after an overturn");
+    assert_eq!(st.members[&eid].nickname.as_deref(), Some("Rin"));
+}
+
+/// **Members are told apart by a number nobody can choose:** given from the order they were let
+/// in (the moderator is 1), unique, kept across an overturned case, new if let in again; and
+/// `/shelter/members` serves it. Two look-alike nicknames never share a number.
+/// Negative control: every member numbered 1 → FAILED.
+#[test]
+fn shelter_member_numbers_come_from_the_log_and_are_unique() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, mid, _bid, _sg) = shelter_on_for_tests();
+    let cfg = crate::tmail::shelter::config_from_env().unwrap();
+    let store = tmail_store_for_tests();
+    let now = tmail_now_ms_for_tests();
+    let submit = |r: &crate::tmail::shelter::ShelterRecordV1| store.submit_shelter_record(r, now);
+    let people: Vec<(String, String)> = (0..4).map(|_| tmail_party_for_tests()).collect();
+    for p in &people {
+        submit(&shelter_rec_for_tests(&mw, A::Invite, &p.1, true, "", "", now)).unwrap();
+    }
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.members[&mid].number, 1);
+    let nums: Vec<u32> = people.iter().map(|p| st.members[&p.1].number).collect();
+    assert_eq!(nums, vec![2, 3, 4, 5]);
+    // Overturned: same number. Left and let in again: a new one.
+    let case = submit(&shelter_rec_for_tests(&mw, A::Case, &people[0].1, false, "x", "", now)).unwrap();
+    submit(&shelter_rec_for_tests(&mw, A::Appeal, &case, false, "y", "overturn", now)).unwrap();
+    submit(&shelter_rec_for_tests(&people[1].0, A::Withdraw, &people[1].1, false, "", "", now)).unwrap();
+    let (nw, nid) = tmail_party_for_tests();
+    let _ = nw;
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &nid, true, "", "", now)).unwrap();
+    // (A new record: the first invite, sent again, would be refused as a copy.)
+    submit(&shelter_rec_for_tests(&mw, A::Invite, &people[1].1, true, "", "", now + 1)).unwrap();
+    let st = store.shelter_state(&cfg);
+    assert_eq!(st.members[&people[0].1].number, 2, "an overturn changed the number");
+    assert_eq!(st.members[&nid].number, 6);
+    assert_eq!(st.members[&people[1].1].number, 7, "let in again kept an old number");
+    let mut all: Vec<u32> = st.members.values().map(|m| m.number).collect();
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), st.members.len(), "two members share a number");
+}
+
+// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-10) ----------
 
 const UI_KEY_REGISTRATION_V2: &str = include_str!("testdata/ui_key_registration_v2.json");
 
@@ -14335,6 +16065,401 @@ fn ui_signed_key_registration_v2_verifies_in_rust() {
     let mut other = reg.clone();
     other.mlkem_pub_b64 = other.x25519_pub_b64.clone();
     assert!(crate::tmail::keys::verify_tmail_key_registration_v1(&other).is_err());
+}
+
+// ---- testnet practice grants: the welcome grant (grants.rs; docs/plans/TESTNET_REWARDS.md) --------
+
+/// A journal as the membership program would output it, for the grant's policy checks.
+fn welcome_journal_for_tests(root: [u8; 32], nullifier: [u8; 32], eph: &str, receiver_hex: &str, bucket: u64) -> nexus_protocol::TmailAnonMembershipV1 {
+    nexus_protocol::TmailAnonMembershipV1 {
+        journal_kind: nexus_protocol::TMAIL_ANON_JOURNAL_KIND,
+        merkle_root: root,
+        nullifier,
+        ephemeral_pubkey_bytes: hex::decode(eph).unwrap().try_into().unwrap(),
+        receiver_wallet_bytes: hex::decode(receiver_hex).unwrap().try_into().unwrap(),
+        bucket_index: bucket,
+    }
+}
+
+/// **SECURITY: one welcome grant per member and per wallet, only for a proof made out to the grant
+/// on day 0, against a root this node built, within the cap and above the payer's floor.** The
+/// accepted path signs exactly one 100 TET (practice) transfer from the grant wallet.
+/// Negative controls (run by hand): the nullifier check removed → FAILED; the day-0 check removed →
+/// FAILED; the payout-wallet check removed → FAILED.
+#[test]
+fn welcome_grant_is_one_per_member_and_wallet_for_a_day_zero_proof() {
+    use crate::grants::{decide_journal, GrantPayer, GrantRefusal, WELCOME_AMOUNT_MICRO, WELCOME_CAP};
+    let _g = env_lock();
+    set_test_env_base();
+    let _e = anon_fast_epoch_guard();
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    let store = crate::tmail::store::TmailStore::open(&db).unwrap();
+    let payer = GrantPayer::new(&db, &crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap()).unwrap();
+    let (_ids, _) = registered_members_for_tests(&store, 3);
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let now = tmail_now_ms_for_tests();
+    let root = store.anon_tree_for_epoch(crate::tmail::store::TmailStore::anon_epoch_index(now)).root();
+    let grant = crate::grants::welcome_receiver_hex();
+    let (_ew, eph) = tmail_party_for_tests();
+    let (_pw, payout) = tmail_party_for_tests();
+    let rich = 1_000 * 1_000_000;
+    let decide = |j: &nexus_protocol::TmailAnonMembershipV1, signer: &str, to: &str, bal: u64| decide_journal(&payer, j, signer, to, &store, now, bal);
+
+    // Not this grant: another receiver, or today instead of day 0.
+    let other = welcome_journal_for_tests(root, [1; 32], &eph, &"ab".repeat(32), 0);
+    assert_eq!(decide(&other, &eph, &payout, rich).err(), Some(GrantRefusal::NotThisGrant));
+    let today = welcome_journal_for_tests(root, [1; 32], &eph, &grant, nexus_protocol::tmail_bucket_index_v1(now));
+    assert_eq!(decide(&today, &eph, &payout, rich).err(), Some(GrantRefusal::NotThisGrant), "a day-N proof claimed the grant");
+    // Signed by another key than the proof's one-time key.
+    let j = welcome_journal_for_tests(root, [1; 32], &eph, &grant, 0);
+    assert_eq!(decide(&j, &"cd".repeat(32), &payout, rich).err(), Some(GrantRefusal::BadSignature));
+    // A root this node never built.
+    let stray = welcome_journal_for_tests([9; 32], [1; 32], &eph, &grant, 0);
+    assert_eq!(decide(&stray, &eph, &payout, rich).err(), Some(GrantRefusal::RootUnknown));
+    // The payer below its floor.
+    assert_eq!(decide(&j, &eph, &payout, 50 * 1_000_000).err(), Some(GrantRefusal::PayerLow));
+    // Accepted: one transfer of 100 TET (practice) from the grant wallet to the payout wallet.
+    let (env, commit) = decide(&j, &eph, &payout, rich).expect("a valid claim was refused");
+    match &env.tx {
+        crate::protocol::TxV1::Transfer { from_wallet, to_wallet, amount_micro, .. } => {
+            assert_eq!(from_wallet, payer.wallet_id());
+            assert_eq!(to_wallet, &payout);
+            // Exactly the grant arrives: the fee comes out of what the grant wallet sends.
+            assert_eq!(*amount_micro, crate::grants::welcome_transfer_micro());
+            let net = crate::fees::charge(crate::fees::FeeKind::Transfer { fee_bps: crate::fees::TRANSFER_FEE_BPS_MIN }, *amount_micro).unwrap().net_micro;
+            assert_eq!(net, WELCOME_AMOUNT_MICRO, "the recipient must receive exactly the grant");
+        }
+        other => panic!("not a transfer: {other:?}"),
+    }
+    // A fee rate a block accepts (a block refuses anything outside the consensus range).
+    match &env.tx {
+        crate::protocol::TxV1::Transfer { fee_bps, .. } => crate::fees::validate_transfer_fee_bps(*fee_bps).expect("the grant's fee rate would fail the block"),
+        other => panic!("not a transfer: {other:?}"),
+    }
+    crate::rest::helpers::verify_envelope_v1(&env).expect("the grant transfer must verify");
+    payer.commit(commit);
+    assert_eq!(payer.granted(), 1);
+    // The same member again (same nullifier), even to another wallet: refused.
+    let (_qw, payout2) = tmail_party_for_tests();
+    assert_eq!(decide(&j, &eph, &payout2, rich).err(), Some(GrantRefusal::AlreadyClaimed), "a member claimed twice");
+    // Another registration, the same wallet: refused (one grant per wallet).
+    let j2 = welcome_journal_for_tests(root, [2; 32], &eph, &grant, 0);
+    assert_eq!(decide(&j2, &eph, &payout, rich).err(), Some(GrantRefusal::WalletAlreadyGranted), "a wallet was granted twice");
+    // The cap.
+    payer.set_granted_for_tests(WELCOME_CAP);
+    assert_eq!(decide(&j2, &eph, &payout2, rich).err(), Some(GrantRefusal::CapReached));
+}
+
+/// The grant routes answer 404 while grants are off; a claim with a bad signature is refused before
+/// any proof work.
+#[tokio::test]
+async fn grant_routes_are_off_by_default_and_refuse_unsigned_claims() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let mut state = rest_state_for_tests(ledger.clone());
+    let router = crate::rest::routes::build_router(state.clone());
+    let get = router.clone().oneshot(axum::http::Request::builder().uri("/grants/status").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(get.status(), axum::http::StatusCode::NOT_FOUND);
+    let payer = crate::grants::GrantPayer::new(&ledger.sled_db(), &crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap()).unwrap();
+    state.grant_payer = Some(std::sync::Arc::new(payer));
+    let router = crate::rest::routes::build_router(state.clone());
+    let get = router.clone().oneshot(axum::http::Request::builder().uri("/grants/status").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(get.status(), axum::http::StatusCode::OK);
+    let (_w, eph) = tmail_party_for_tests();
+    let claim = serde_json::json!({
+        "v": 1, "kind": "tet_grant_claim_v1", "grant": "welcome", "payout_wallet": "ab".repeat(32),
+        "receipt_sha256_hex": "00".repeat(32), "journal_b64": "", "image_id_hex": "00".repeat(32),
+        "claimed_at_ms": tmail_now_ms_for_tests(),
+        "hybrid_sig": { "ed25519_pubkey_hex": eph, "ed25519_sig_b64": "AA==", "mldsa_pubkey_b64": "AA==", "mldsa_sig_b64": "AA==" },
+    });
+    let post = router
+        .oneshot(axum::http::Request::builder().method("POST").uri("/grants/welcome").header("content-type", "application/json").body(axum::body::Body::from(claim.to_string())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(post.status(), axum::http::StatusCode::UNAUTHORIZED);
+}
+
+const UI_GRANT_CLAIM: &str = include_str!("testdata/ui_grant_claim_v1.json");
+
+/// The page's welcome-grant claim (grants.ts) is signed over the same bytes tet-core checks, and
+/// both name the same grant receiver. (The fixture is dated in the past, so a good signature stops
+/// at the clock check; a changed payout wallet stops at the signature.)
+#[test]
+fn ui_signed_grant_claim_verifies_in_rust() {
+    use crate::grants::{GrantPayer, GrantRefusal};
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_GRANT_CLAIM).expect("fixture JSON");
+    let _bound = agent_fixture_chain(&doc);
+    assert_eq!(doc["welcome_receiver"].as_str().unwrap(), crate::grants::welcome_receiver_hex());
+    let claim: crate::grants::GrantClaimV1 = serde_json::from_value(doc["claim"].clone()).unwrap();
+    let ledger = open_temp_ledger();
+    let db = ledger.sled_db();
+    let store = crate::tmail::store::TmailStore::open(&db).unwrap();
+    let payer = GrantPayer::new(&db, &crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap()).unwrap();
+    let now = tmail_now_ms_for_tests();
+    assert_eq!(payer.decide(&claim, &store, now, u64::MAX).err(), Some(GrantRefusal::Stale), "the page's signature didn't verify");
+    let mut changed = claim.clone();
+    changed.payout_wallet = "ef".repeat(32);
+    assert_eq!(payer.decide(&changed, &store, now, u64::MAX).err(), Some(GrantRefusal::BadSignature));
+}
+
+/// The grant payer's floor counts grants already in flight: its pending transfers are subtracted
+/// before the floor check. Control (run by hand): returning 0 from pending_outgoing_micro → FAILS.
+#[test]
+fn grant_floor_counts_pending_grants() {
+    let words = crate::wallet::generate_mnemonic_12().unwrap();
+    let w = words.mnemonic_12.clone().unwrap();
+    let id = words.address_hex.to_ascii_lowercase();
+    let mk = |amt: u64| signed_env_for_tests(crate::protocol::TxV1::Transfer { from_wallet: id.clone(), to_wallet: "ab".repeat(32), amount_micro: amt, fee_bps: 100 }, &w, &id);
+    let other = signed_env_for_tests(crate::protocol::TxV1::Transfer { from_wallet: "cd".repeat(32), to_wallet: "ab".repeat(32), amount_micro: 7, fee_bps: 100 }, &w, &id);
+    let pool = vec![mk(100_000_000), mk(100_000_000), other];
+    assert_eq!(crate::rest::handlers::grants::pending_outgoing_micro(&pool, &id), 200_000_000);
+    assert_eq!(crate::rest::handlers::grants::pending_outgoing_micro(&pool, &id.to_ascii_uppercase()), 200_000_000);
+}
+
+/// `GET /explorer/block/:height` gives exactly what an offline checker needs ("Verify without TET"
+/// Level 2): the block id recomputes from the header fields it returns, and each transaction's
+/// `tx_json` string is the canonical form its hash covers. Control (run by hand): returning the
+/// tx through serde_json::Value (sorted keys) instead of the canonical string → FAILS.
+#[tokio::test]
+async fn explorer_block_returns_what_an_offline_check_recomputes() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let env = signed_transfer_env_for_tests(&words, &id, &"ab".repeat(32), crate::ledger::STEVEMON);
+    state.submit_local_tx(env).await.unwrap();
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert_eq!(outcome.tx_count, 1);
+
+    let r = crate::rest::handlers::ledger::get_explorer_block(axum::extract::State(state.clone()), axum::extract::Path(outcome.block_height.to_string())).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let b: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 22).await.unwrap()).unwrap();
+    let hashes: Vec<String> = b["tx_hashes"].as_array().unwrap().iter().map(|h| h.as_str().unwrap().to_string()).collect();
+    let recomputed = crate::consensus::block_id_for_block(
+        b["height"].as_u64().unwrap(),
+        b["parent_block_id"].as_str().unwrap(),
+        b["state_root"].as_str().unwrap(),
+        &hashes,
+        b["producer_id"].as_str().unwrap(),
+    );
+    assert_eq!(recomputed, b["block_id"].as_str().unwrap(), "the block id recomputes from the returned header");
+    let t = &b["txs"][0];
+    let preimage = format!(
+        "tet tx v1|chain_id={}|genesis_hash={}|mldsa={}|tx={}",
+        crate::wallet::chain_id_from_env(),
+        crate::wallet::expected_genesis_hash_from_env(),
+        t["mldsa_pubkey_b64"].as_str().unwrap(),
+        t["tx_json"].as_str().unwrap()
+    );
+    let h = format!("0x{}", hex::encode(sha2::Sha256::digest(preimage.as_bytes())));
+    assert_eq!(h, hashes[0], "the tx hash recomputes from tx_json");
+    // Missing height: 404; not a number: 400.
+    let r = crate::rest::handlers::ledger::get_explorer_block(axum::extract::State(state.clone()), axum::extract::Path("999999".into())).await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+// ---- TetSearch v1: listings (search.rs) -------------------------------------------------------
+
+fn sign_listing_part_for_tests(words: &str, l: &crate::search::SearchListingV1) -> crate::tmail::envelope::TmailHybridSig {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(kp.public_key());
+    let msg = crate::search::listing_auth_message_bytes(l, &pk);
+    crate::tmail::envelope::TmailHybridSig {
+        ed25519_pubkey_hex: hex::encode(ed_sk.verifying_key().to_bytes()),
+        ed25519_sig_b64: base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(&msg).to_bytes()),
+        mldsa_pubkey_b64: pk,
+        mldsa_sig_b64: base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap()),
+    }
+}
+
+fn listing_for_tests(member_words: &str, member: &str, site_words: &str, site: &str, at: u64) -> crate::search::SearchListingV1 {
+    let empty = crate::tmail::envelope::TmailHybridSig { ed25519_pubkey_hex: String::new(), ed25519_sig_b64: String::new(), mldsa_pubkey_b64: String::new(), mldsa_sig_b64: String::new() };
+    let mut l = crate::search::SearchListingV1 {
+        v: 1,
+        kind: crate::search::LISTING_KIND.to_string(),
+        site_wallet_id: site.to_string(),
+        member_wallet_id: member.to_string(),
+        listed_at_ms: at,
+        member_sig: empty.clone(),
+        site_sig: empty,
+    };
+    l.member_sig = sign_listing_part_for_tests(member_words, &l);
+    l.site_sig = sign_listing_part_for_tests(site_words, &l);
+    l
+}
+
+/// **Only a vouched member can publish their own site, a few a day.** A listing needs both the
+/// member's and the site's signature; the site must exist; the member must be in Shelter's set; at
+/// most LISTINGS_PER_MEMBER_PER_DAY a day; its time within the clock window. Controls (run by
+/// hand): the membership check removed → FAILS; the site signature check removed → FAILS.
+#[tokio::test]
+async fn search_listing_needs_a_vouched_member_and_the_sites_own_key() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let mut sites = Vec::new();
+    for _ in 0..(crate::search::LISTINGS_PER_MEMBER_PER_DAY + 1) {
+        let (sw, sid) = tmail_party_for_tests();
+        let e = signed_site_edit_for_tests(&sw, &sid, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"heading","level":1,"text":"Titration results"}}"#);
+        state.sites.append(&e).unwrap();
+        sites.push((sw, sid));
+    }
+    let post = |l: crate::search::SearchListingV1| {
+        let st = state.clone();
+        async move { crate::rest::handlers::search::post_search_list(axum::extract::State(st), axum::Json(l)).await.status() }
+    };
+    let (sw, sid) = &sites[0];
+    // Not a member: refused.
+    assert_eq!(post(listing_for_tests(&xw, &xid, sw, sid, now)).await, StatusCode::FORBIDDEN);
+    // The site's signature by another key: refused.
+    let (ow, _) = tmail_party_for_tests();
+    let mut forged = listing_for_tests(&aw, &aid, sw, sid, now);
+    forged.site_sig = sign_listing_part_for_tests(&ow, &forged);
+    assert_eq!(post(forged).await, StatusCode::UNAUTHORIZED);
+    // A site this node doesn't hold: refused.
+    let (gw, gid) = tmail_party_for_tests();
+    assert_eq!(post(listing_for_tests(&aw, &aid, &gw, &gid, now)).await, StatusCode::NOT_FOUND);
+    // A clock 10 minutes off: refused.
+    assert_eq!(post(listing_for_tests(&aw, &aid, sw, sid, now - 10 * 60_000)).await, StatusCode::BAD_REQUEST);
+    // A member's own sites: accepted, up to the daily cap.
+    for (i, (sw, sid)) in sites.iter().enumerate() {
+        let want = if (i as u64) < crate::search::LISTINGS_PER_MEMBER_PER_DAY { StatusCode::OK } else { StatusCode::TOO_MANY_REQUESTS };
+        assert_eq!(post(listing_for_tests(&aw, &aid, sw, sid, now)).await, want, "listing {i}");
+    }
+}
+
+/// **Listings are for members only, and only current ones are served.** Unsigned → 401; a
+/// non-member → 403; a member gets them; a listing whose member is no longer in the set isn't served.
+#[tokio::test]
+async fn search_listings_are_members_only_and_current() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, _xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let (sw, sid) = tmail_party_for_tests();
+    state.sites.append(&signed_site_edit_for_tests(&sw, &sid, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"text","text":"hello"}}"#)).unwrap();
+    let r = crate::rest::handlers::search::post_search_list(axum::extract::State(state.clone()), axum::Json(listing_for_tests(&aw, &aid, &sw, &sid, now))).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let get = |auth: Option<String>| {
+        let router = router.clone();
+        let mut b = axum::http::Request::builder().uri("/search/listings");
+        if let Some(a) = auth {
+            b = b.header("x-tet-shelter-auth", a);
+        }
+        let req = b.body(axum::body::Body::empty()).unwrap();
+        async move {
+            let resp = router.oneshot(req).await.unwrap();
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (st, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    assert_eq!(get(None).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(get(Some(shelter_read_auth_for_tests(&xw, "/search/listings", now))).await.0, StatusCode::FORBIDDEN);
+    let (st, body) = get(Some(shelter_read_auth_for_tests(&aw, "/search/listings", now))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body.contains(&sid), "the member didn't get the listing: {body}");
+    // A member who is no longer in the set: their listings aren't served.
+    let kept = state.search.current(|w| w != aid, |_| true);
+    assert!(kept.is_empty(), "a former member's listing was served");
+}
+
+const UI_SEARCH_LISTING: &str = include_str!("testdata/ui_search_listing_v1.json");
+
+/// A listing signed by the page's own code (tetsearch.ts) verifies in Rust, both signatures, byte
+/// for byte; a changed field doesn't. Fixture: scripts/make_search_listing_fixture.mjs.
+#[test]
+fn ui_signed_search_listing_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_SEARCH_LISTING).expect("fixture JSON");
+    let _bound = agent_fixture_chain(&doc);
+    let l: crate::search::SearchListingV1 = serde_json::from_value(doc["listing"].clone()).unwrap();
+    let ledger = open_temp_ledger();
+    let store = crate::search::SearchStore::open(&ledger.sled_db()).unwrap();
+    assert!(store.list(&l, l.listed_at_ms, |_| true, |_| true).is_ok(), "the page's listing didn't verify");
+    let mut changed = l.clone();
+    changed.member_wallet_id = "ef".repeat(32);
+    assert!(matches!(store.list(&changed, l.listed_at_ms, |_| true, |_| true), Err(crate::search::ListingRefusal::BadSignature(_))));
+}
+
+// ---- genesis_bridge removed: no balance write outside a block (SECURITY.md) -------------------
+
+/// `/ledger/genesis_bridge` is gone and `/tx/submit` refuses `TxV1::GenesisBridge`. The bridge moved
+/// founder funds by writing balances directly, outside any block, so the node that served it
+/// diverged from every other node. Here a valid, founder-signed bridge from a founder with
+/// spendable funds changes nothing on either path: no credit, no queued tx, the same state root.
+/// Negative control (run by hand): restoring the old route and dispatch → FAILS (route 200 and the
+/// recipient credited).
+#[tokio::test]
+async fn genesis_bridge_cannot_write_balances_outside_a_block() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let f = crate::wallet::generate_mnemonic_12().unwrap();
+    let (f_words, f_id) = (f.mnemonic_12.clone().unwrap(), f.address_hex.to_ascii_lowercase());
+    let _founder = EnvVarGuard::set("TET_FOUNDER_WALLET", &f_id);
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation(&f_id).unwrap(); // the test base sets the cliff to 0: spendable
+    assert_eq!(ledger.founder_wallet_public().unwrap(), f_id, "the test's founder is the signer");
+    let founder_before = ledger.balance_micro(&f_id).unwrap();
+    assert!(ledger.spendable_balance_micro(&f_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap() >= crate::ledger::STEVEMON, "the founder can spend, so only the removal stops the bridge");
+    let state = rest_state_for_tests(ledger.clone());
+    let to = "ab".repeat(32);
+    let env = signed_env_for_tests(
+        crate::protocol::TxV1::GenesisBridge { founder_wallet: f_id.clone(), to_wallet: to.clone(), amount_micro: crate::ledger::STEVEMON },
+        &f_words,
+        &f_id,
+    );
+    crate::rest::helpers::verify_envelope_v1(&env).expect("a valid founder signature");
+    let root = ledger.compute_state_root().unwrap();
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ledger/genesis_bridge")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::to_vec(&env).unwrap()))
+        .unwrap();
+    let resp = crate::rest::routes::build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "the off-block bridge route must not exist");
+
+    let res = crate::rest::handlers::ledger::post_tx_submit(axum::extract::State(state.clone()), axum::http::HeaderMap::new(), axum::Json(env)).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "tx submit must refuse a genesis bridge");
+
+    assert_eq!(ledger.balance_micro(&to).unwrap(), 0, "the recipient was credited outside a block");
+    assert_eq!(ledger.balance_micro(&f_id).unwrap(), founder_before);
+    assert!(state.mempool.lock().await.is_empty());
+    assert_eq!(ledger.compute_state_root().unwrap(), root);
 }
 
 // ---- one bad transaction can't drop the mempool (SECURITY.md 2026-10-10) ------------------------

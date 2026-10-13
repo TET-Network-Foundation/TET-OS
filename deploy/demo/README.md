@@ -14,8 +14,23 @@ Design: [`docs/DEMO_NODE.md`](../../docs/DEMO_NODE.md). Needs tet-core with publ
   - `22/tcp`, restricted to your own IP if you can. **The seeds use SSH on 443; here 443 belongs to
     Caddy.**
   - `80/tcp` (ACME and the redirect), `443/tcp` (the page), `8002/tcp` (P2P, like any node).
-- **DNS:** create `A` and `AAAA` records for the demo name (e.g. `try.<your domain>`) pointing at the
-  server, **before** provisioning, so Caddy can get its certificate.
+- **DNS:** create `A` and `AAAA` records for the demo name pointing at the server, **before**
+  provisioning, so Caddy can get its certificate. Today: `tetnet.org` (the main name), plus
+  `www.tetnet.org` and `try.stevenexus.org`, which redirect to it (`TET_DEMO_REDIRECTS`). Point them
+  at the demo server's own addresses, as the Hetzner console shows them for `ubuntu-4gb-fsn1-demo`.
+- **SSH on 8443 too** (some networks block outbound 22): add `8443/tcp` to the Hetzner firewall, and
+  once, from a network that allows 22:
+  ```bash
+  ssh root@<demo-ip> 'mkdir -p /etc/systemd/system/ssh.socket.d && printf "[Socket]\nListenStream=\nListenStream=0.0.0.0:22\nListenStream=[::]:22\nListenStream=0.0.0.0:8443\nListenStream=[::]:8443\n" > /etc/systemd/system/ssh.socket.d/ports.conf && systemctl daemon-reload && systemctl restart ssh.socket && ss -ltn | grep -E ":(22|8443) "'
+  ```
+  The empty `ListenStream=` clears Ubuntu's default before listing both ports. Afterwards every
+  command below works with `ssh -p 8443`.
+
+- **Cloud config (optional):** `deploy/demo/cloud-config.yaml` enables `ssh.socket` on 22 and
+  8443 and adds **no** firewall rules. Don't put nftables/iptables reject rules in a cloud-config:
+  a reject answers with a reset, which looks from outside like sshd isn't listening.
+  `provision-seed.sh` also sets the SSH ports (`TET_SSH_EXTRA_PORTS`, 8443 by default on the demo),
+  checks they listen, and warns about reject rules outside ufw.
 
 ## 2. healthchecks.io
 
@@ -32,7 +47,8 @@ COPYFILE_DISABLE=1 git archive --format=tar <commit> \
   | ssh root@<demo-ip> 'mkdir -p /opt/TET-OS && tar -x -C /opt/TET-OS'
 ssh root@<demo-ip> 'cd /opt/TET-OS && \
   TET_NODE_ROLE=demo \
-  TET_DEMO_DOMAIN=try.<your domain> TET_DEMO_ACME_EMAIL=<you@…> \
+  TET_DEMO_DOMAIN=tetnet.org TET_DEMO_ACME_EMAIL=<you@…> \
+  TET_DEMO_REDIRECTS="www.tetnet.org, try.stevenexus.org" \
   TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM \
   TET_HC_URL=<ping url> \
   bash deploy/provision-seed.sh'
@@ -56,6 +72,23 @@ ssh root@<demo-ip> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0
 node reports it in `GET /status/live` (the try page's **Live** channel) and the page's "verify this
 page" names it. An archive has no `.git`, so the build can't find it on its own; left out, both say
 the build doesn't name its commit.
+
+## 4b. Sign the build (after each UI deploy)
+
+The UI build writes `/build-manifest.json` (every file the site serves, with its SHA-256). On your
+own machine, with the publisher key. Build the deployed commit yourself first (the same Docker image
+the demo builds, then `node scripts/build_manifest.mjs --out mine.json`): the script signs only if
+the served manifest is byte-identical to yours.
+
+```bash
+cd tet-network/ui
+TET_PAPER_CHAIN_ID=tet-local-dev TET_PAPER_GENESIS_HASH=<genesis> \
+  node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org --local mine.json --publish
+node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org --commit <deployed sha>   # VERIFIED
+```
+
+`--commit` is required (or `--any-commit`): a signature only proves a build was signed once, so the
+check must also know which build should be live, or an older signed build would pass (a rollback).
 
 ## 5. Check from outside
 
@@ -159,4 +192,35 @@ then hide each printed `msg_id`. The invite stays on your machine; the node only
 
 Hiding a wallet also hides everything it sent (its directory listing included) and refuses new
 posts and files to or from it. Copies other nodes already hold stay on those nodes. Reports go to
-abuse@stevenexus.org and are reviewed within 48 hours.
+abuse@tetnet.org and are reviewed within 48 hours.
+
+## Before going public (checklist)
+
+1. **No test boards in the public directory.** List them, then hide each test one (this keeps the
+   chain and everyone's copies; it only stops this node serving them):
+   ```sh
+   # on any machine, in tet-network/ui
+   TET_TRY_ORIGIN=https://<this host> NEXT_PUBLIC_TET_DIRECTORY_INVITE=<directory invite> \
+     node --experimental-strip-types scripts/list_public_boards.mjs
+   # on the host, for each test board
+   deploy/operator-hide.sh hide wallet <board wallet> "test board before launch"
+   ```
+2. **The sample is marked** on this node and `TET_SAMPLE_CODE` is set (§11).
+3. **Every page in ja and en** looks right (the i18n guard checks the strings; look at the pages).
+
+## 11. Proof codes (the public signature registry)
+
+Nothing to set up. Proof codes (Sign → **Get a proof code**, and the home search) live in the
+node's public signature registry (`tet-core/src/sigs.rs`, `POST /sigs/publish`, `GET /sigs/search`).
+
+- A record is stored only with its signer's consent for exactly its bytes, so nobody can publish a
+  `.sig.json` they were given. Search by proof code, file SHA-256, signer and date.
+- Limits: 16 KB per record, 1,000 per signer, a node-wide total (`TET_SIGS_MAX_TOTAL_BYTES`,
+  default 256 MiB); each publish is charged to the client's daily upload budget. Records don't
+  expire.
+- Takedown: hiding a signer's wallet (§10) stops their records being listed.
+- **The home page's "try it: verify this sample"**: once the node is up, run
+  `TET_TRY_ORIGIN=https://<this host> node --experimental-strip-types scripts/make_sample.mjs`
+  (in `tet-network/ui`). It marks `public/sample/tet-sample.txt` with a throwaway ID and prints
+  `NEXT_PUBLIC_TET_SAMPLE_CODE=…`; put that code in `.env` as `TET_SAMPLE_CODE=…` and rebuild the UI.
+  Without it the home page simply has no sample link.

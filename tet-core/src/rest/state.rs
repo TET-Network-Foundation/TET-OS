@@ -78,8 +78,16 @@ pub struct RestState {
     pub log_sse_connections: Arc<AtomicUsize>,
     /// The demo node's file-fee sponsor (`None` everywhere else). See [`crate::demo_sponsor`].
     pub demo_sponsor: Option<Arc<crate::demo_sponsor::DemoSponsor>>,
+    /// The testnet practice grants payer (`None` unless TET_GRANT_MNEMONIC_FILE exists). See [`crate::grants`].
+    pub grant_payer: Option<Arc<crate::grants::GrantPayer>>,
     /// What the operator has stopped serving on public routes (`operator_hide.rs`). Node-local.
     pub operator_hide: crate::operator_hide::OperatorHide,
+    /// Signed sites: node-local edit chains (`sites.rs`).
+    pub sites: Arc<crate::sites::SiteStore>,
+    /// TetSearch v1 listings (`search.rs`).
+    pub search: Arc<crate::search::SearchStore>,
+    /// The public signature registry (`sigs.rs`).
+    pub sigs: Arc<crate::sigs::SigStore>,
 }
 
 #[derive(Debug, Clone)]
@@ -411,6 +419,10 @@ impl RestState {
     /// Same wiring as [`broadcast_mempool_tx`]: serialize a [`crate::models::NetworkEvent`] and push
     /// it onto the gossip channel. Tmail is off-ledger — this never touches the mempool or ledger.
     pub async fn broadcast_tmail(&self, env: &crate::tmail::envelope::TmailEnvelopeV1) {
+        // Shelter's posts stay on this node: never gossiped (tmail/shelter.rs).
+        if crate::tmail::shelter::is_shelter_board(&env.receiver_wallet_id) {
+            return;
+        }
         let Some(tx) = self.gossip_tx.as_ref() else {
             return;
         };

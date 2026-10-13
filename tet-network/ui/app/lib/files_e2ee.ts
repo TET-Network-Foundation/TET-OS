@@ -4,7 +4,7 @@
  *
  * Suite:
  *   - X25519 key agreement (sender ephemeral SK ✕ receiver static PK)
- *   - ML-KEM-768 / Kyber768 (round-3) encapsulation against the receiver PK
+ *   - Kyber-768 (round 3, not FIPS 203 ML-KEM) encapsulation against the receiver PK
  *   - HKDF-SHA256(ikm = x25519_shared ‖ mlkem_shared, salt = 32 zero bytes, info = "tet-file-v1")
  *     → one 32-byte key (NOTE: distinct info from Tmail's "tet-e2ee-hybrid-v1")
  *   - ChaCha20-Poly1305 AEAD, 12-byte nonce, no AAD
@@ -63,7 +63,7 @@ export type FileCiphertextBundle = {
 
 /**
  * Encrypt a file's body + filename + MIME for a receiver, given their registered static X25519 +
- * ML-KEM-768 public keys. One fresh ephemeral X25519 keypair + one Kyber768 encapsulation per call;
+ * Kyber-768 (round 3) public keys. One fresh ephemeral X25519 keypair + one Kyber768 encapsulation per call;
  * three distinct nonces (filename / MIME / body) under the single derived key.
  */
 export async function encryptFileForReceiver(opts: {
@@ -77,7 +77,7 @@ export async function encryptFileForReceiver(opts: {
     throw new Error(`receiver x25519 pub must be ${X25519_PUB_LEN} bytes`);
   }
   if (opts.receiver_mlkem_pub.length !== MLKEM768_PUB_LEN) {
-    throw new Error(`receiver ML-KEM-768 pub must be ${MLKEM768_PUB_LEN} bytes`);
+    throw new Error(`receiver Kyber-768 pub must be ${MLKEM768_PUB_LEN} bytes`);
   }
 
   const ephemeralSk = randomBytes(X25519_SK_LEN);
@@ -164,7 +164,7 @@ export type DecryptedFile = {
 };
 
 /**
- * Decrypt a {@link FileCiphertextForDecrypt} with the receiver's static X25519 + ML-KEM-768 secret
+ * Decrypt a {@link FileCiphertextForDecrypt} with the receiver's static X25519 + Kyber-768 (round 3) secret
  * keys. Throws if any Poly1305 tag fails (wrong recipient or tampered ciphertext).
  */
 export async function decryptFileForReceiver(

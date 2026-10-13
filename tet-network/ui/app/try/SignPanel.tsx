@@ -15,6 +15,8 @@ import { Button, FilePick, INK, KeysBanner, MONO, PanelHead, PinnedNotice, TextA
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 import { SigQr } from "./QrPanel";
+import { ProofCodeBox } from "./ProofCode";
+import { publishRecord, signFileHash } from "../lib/proof_code";
 import { sigSha256 } from "../lib/tet_qr";
 
 function ownKeys() {
@@ -43,13 +45,14 @@ export async function fetchExplorerTx(hash: string) {
   return r.json();
 }
 
-export default function SignPanel() {
+export default function SignPanel(props: { hint?: string } = {}) {
   const { t } = useLang();
   const { wallet, ensureWallet, ensureMessagingKeys, keys, checkKeys } = useTryWallet();
   const [file, setFile] = useState<File | null>(null);
   const [text, setText] = useState("");
   const [signed, setSigned] = useState<{ name: string; env: SigEnvelope; bytes: Uint8Array; chain: { chainId: string; genesisHash: string } } | null>(null);
   const [showQr, setShowQr] = useState(false);
+  const [proof, setProof] = useState<{ code: string; bytes: Uint8Array } | null>(null);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
   const [stamp, setStamp] = useState<StampReceipt | null>(null);
@@ -82,8 +85,26 @@ export default function SignPanel() {
       const name = `${file?.name ?? "text.txt"}.sig.json`;
       setSigned({ name, env, bytes, chain });
       setShowQr(false);
+      setProof(null);
       download(name, bytes, "application/json");
       void checkKeys();
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  /** Sign the file's SHA-256 (not the file) and publish that record: its proof code finds it. */
+  async function onProofCode() {
+    if (!signed) return;
+    setErr("");
+    setBusy(t("Publishing the record…"));
+    try {
+      const content = Uint8Array.from(atob(signed.env.payload), (c) => c.charCodeAt(0));
+      const rec = await signFileHash(content, signed.chain);
+      const code = await publishRecord(BASE, rec.bytes, signed.chain);
+      setProof({ code, bytes: rec.bytes });
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -162,6 +183,7 @@ export default function SignPanel() {
         />
       ) : null}
       <div className="max-w-[46rem] space-y-3 px-4 pb-6 md:px-5">
+        {props.hint ? <p className="border-l-2 border-[#c9ced4] pl-3 text-[15px]">{props.hint}</p> : null}
         <PinnedNotice
           lines={[
             t("A signature proves that this wallet's two keys (Ed25519 and ML-DSA-44) signed these exact bytes. Not who holds the wallet, and not when."),
@@ -202,6 +224,11 @@ export default function SignPanel() {
               <Button kind="secondary" onClick={() => setShowQr((v) => !v)}>
                 {showQr ? t("Hide the QR") : t("Show as a QR")}
               </Button>
+              {!proof ? (
+                <Button disabled={!!busy} onClick={() => void onProofCode()}>
+                  {busy || t("Get a proof code")}
+                </Button>
+              ) : null}
               {stamp ? null : (
                 <Button disabled={!!busy} onClick={() => void onStamp()}>
                   {busy || t("Stamp it on chain (optional)")}
@@ -213,6 +240,7 @@ export default function SignPanel() {
                 {t("Stamped at block {height}. The receipt (.stamp.json) is downloaded; keep it with the .sig.json.", { height: stamp.block_height.toLocaleString() })}
               </p>
             ) : null}
+            {proof ? <ProofCodeBox code={proof.code} recordBytes={proof.bytes} name={signed.name.replace(/\.sig\.json$/, "")} /> : null}
             {showQr ? (
               <SigQr
                 name={signed.name.replace(/\.sig\.json$/, "")}

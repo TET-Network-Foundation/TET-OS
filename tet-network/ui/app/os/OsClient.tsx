@@ -541,7 +541,7 @@ export default function NexusOS() {
         if (cancelled) return;
         const r = await putTmailKeys(baseUrl, wid, reg);
         if (!cancelled && r.ok) {
-          appendLedger(["[Tmail] Messaging keys registered (X25519 + ML-KEM-768)."]);
+          appendLedger(["[Tmail] Messaging keys registered (X25519 + Kyber-768 round 3)."]);
         }
       } catch {
         // ignore (offline / CORS) — Status section offers a manual Register button.
@@ -2270,8 +2270,8 @@ TET-OS is a desktop operator shell for the Thermodynamic Execution Tree.`}
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
             <a
-              href="/tet-network-whitepaper.pdf"
-              download="tet-network-whitepaper.pdf"
+              href="/paper/tet-technical-paper.pdf"
+              download="tet-technical-paper.pdf"
               className={`${winBtn} inline-flex items-center gap-1 bg-[#c0c0c0] px-3 py-1 text-sm text-black no-underline`}
             >
               Download Full PDF

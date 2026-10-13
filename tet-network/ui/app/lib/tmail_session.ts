@@ -1,5 +1,5 @@
 /**
- * In-memory Tmail KEM key session — the X25519 + ML-KEM-768 secret/public keypairs derived from the
+ * In-memory Tmail KEM key session — the X25519 + Kyber-768 (round 3) secret/public keypairs derived from the
  * unlocked wallet's mnemonic (see {@link deriveTmailKeysFromMnemonic}). Mirrors the
  * `hybrid_signer_session` pattern: secret material lives only for the current tab session and is
  * cleared on lock. Never persist this.

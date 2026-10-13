@@ -3,8 +3,9 @@
 /**
  * The tab's disposable wallet, shared by every panel. Made on the first action that needs it, so
  * posting, sending or answering is one tap; the page then shows a "save your words" bar. Messaging
- * keys are published only from the explicit banner in Mail and Files: publishing is public, so the
- * visitor chooses it. Nothing is stored: forget the tab and the wallet is gone unless the words were saved.
+ * keys (the inbox) are published with the membership join, right after a named post, or from the
+ * banner in Mail and Files; never as a public moment of their own (see `publishInbox`). Nothing is
+ * stored: forget the tab and the wallet is gone unless the words were saved.
  *
  * Joining the anonymity set is its own step, never folded into a post: a join is public, and a post
  * sent automatically the moment the join takes effect would point straight back at it. So `joinAnon`
@@ -24,6 +25,17 @@ export const PROVER_URL = process.env.NEXT_PUBLIC_TET_PROVER_URL || DEFAULT_PROV
 
 export const BASE = "/tet-node-api";
 
+/** A remembered ID is locked (forgotten in this tab) after this long without any input. */
+export const AUTO_LOCK_MS = 15 * 60_000;
+
+/**
+ * Lock now? Only an ID this device remembers (it can be reopened with the device password), and
+ * only after `AUTO_LOCK_MS` without input: locking an unsaved ID would lose it for good.
+ */
+export function shouldAutoLock(o: { lockable: boolean; idleMs: number }): boolean {
+  return o.lockable && o.idleMs >= AUTO_LOCK_MS;
+}
+
 type Wallet = { words: string; walletId: string };
 
 /** This tab's place in the anonymity set (null until checked). */
@@ -36,8 +48,12 @@ type Ctx = {
   refreshAnon: () => Promise<void>;
   /** Join the anonymity set (public). Makes the wallet first if needed. Never posts anything. */
   joinAnon: () => Promise<void>;
+  /** Call right after a named post went out: turns the inbox on in the same public moment. */
+  noteNamedPost: () => Promise<void>;
   /** The wallet id, making the wallet first if there is none. */
   ensureWallet: () => Promise<string>;
+  /** Open the wallet from 12 words this device remembered (encrypted; see lib/device_store.ts). */
+  openWithWords: (words: string) => Promise<string>;
   /** Publish this wallet's messaging keys once (needed to receive Tmail and files). */
   ensureMessagingKeys: () => Promise<void>;
   /** Whether this wallet's messaging keys are published ("unknown" until checked or with no wallet). */
@@ -46,6 +62,8 @@ type Ctx = {
   /** Whether the native prover answers on this computer (checked once per tab). */
   prover: "unknown" | "found" | "missing";
   forget: () => void;
+  /** The open ID is the one this device remembers (opened from it, or just remembered): it auto-locks. */
+  noteRemembered: () => void;
 };
 
 const WalletCtx = createContext<Ctx | null>(null);
@@ -58,6 +76,29 @@ export function WalletProvider(props: { children: ReactNode }) {
   const current = useRef<Promise<Wallet> | null>(null);
   const keysFor = useRef<string | null>(null);
 
+  // The inbox (signed v2 registration, #101) is never published as an event of its own: a public
+  // registration at a moment of its own could be lined up, by time, with a first anonymous post.
+  // It goes out together with the membership join (`joinAnon`), or right after the first named
+  // post (`noteNamedPost`), which already shows this ID publicly. So every named poster can be
+  // messaged, and the inbox adds no public moment. Best effort: the banner offers it again.
+  const publishInbox = useCallback(async (id: string) => {
+    try {
+      const have = await getTmailKeys(BASE, id);
+      if (!have.ok) return;
+      if (!have.registration || have.registration.v !== 2) {
+        const ks = getTmailKeySession();
+        if (!ks || ks.walletIdHex64 !== id) return;
+        const reg = await buildTmailKeyRegistrationV1({ x25519_pub: ks.x25519_pub, mlkem_pub: ks.mlkem_pub, baseUrl: BASE });
+        const r = await putTmailKeys(BASE, id, reg);
+        if (!r.ok) return setKeys("none");
+      }
+      keysFor.current = id;
+      setKeys("published");
+    } catch {
+      /* the banner offers it again */
+    }
+  }, []);
+
   const ensureWallet = useCallback(async () => {
     current.current ??= (async () => {
       const words = generateDisposableWords();
@@ -68,6 +109,21 @@ export function WalletProvider(props: { children: ReactNode }) {
       current.current = null;
       throw e;
     });
+    return (await current.current).walletId;
+  }, []);
+
+  /** Open the tab's wallet from existing words (a key remembered on this device). */
+  const openWithWords = useCallback(async (words: string) => {
+    current.current = (async () => {
+      const w = { words, walletId: await activateTryWallet(words) };
+      setWallet(w);
+      return w;
+    })().catch((e: unknown) => {
+      current.current = null;
+      throw e;
+    });
+    keysFor.current = null;
+    setKeys("unknown");
     return (await current.current).walletId;
   }, []);
 
@@ -122,11 +178,20 @@ export function WalletProvider(props: { children: ReactNode }) {
   }, []);
 
   const joinAnon = useCallback(async () => {
-    await ensureWallet();
-    await registerForAnon(BASE);
+    const id = await ensureWallet();
+    // One public moment: the join and the inbox together.
+    await Promise.all([registerForAnon(BASE), publishInbox(id)]);
     joined.current = true;
     await refreshAnon();
-  }, [ensureWallet, refreshAnon]);
+  }, [ensureWallet, refreshAnon, publishInbox]);
+
+  /** After a named post went out: turn the inbox on (the post already shows this ID publicly). */
+  const noteNamedPost = useCallback(async () => {
+    if (!current.current) return;
+    const id = (await current.current).walletId;
+    if (keysFor.current === id) return;
+    await publishInbox(id);
+  }, [publishInbox]);
 
   // While joined but not yet a member, re-check until the next epoch admits us.
   useEffect(() => {
@@ -136,7 +201,12 @@ export function WalletProvider(props: { children: ReactNode }) {
     return () => clearTimeout(t);
   }, [anon, refreshAnon]);
 
+  const lockable = useRef(false);
+  const noteRemembered = useCallback(() => {
+    lockable.current = true;
+  }, []);
   const forget = useCallback(() => {
+    lockable.current = false;
     joined.current = false;
     setAnon(null);
     setKeys("unknown");
@@ -146,9 +216,28 @@ export function WalletProvider(props: { children: ReactNode }) {
     setWallet(null);
   }, []);
 
+  // Auto-lock (docs/THREAT_MODEL.md rule 7): a remembered ID is forgotten in this tab after
+  // AUTO_LOCK_MS without input; it reopens with the device password.
+  useEffect(() => {
+    if (!wallet) return;
+    let last = Date.now();
+    const seen = () => {
+      last = Date.now();
+    };
+    const events = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    for (const e of events) window.addEventListener(e, seen, { passive: true });
+    const tick = setInterval(() => {
+      if (shouldAutoLock({ lockable: lockable.current, idleMs: Date.now() - last })) forget();
+    }, 30_000);
+    return () => {
+      clearInterval(tick);
+      for (const e of events) window.removeEventListener(e, seen);
+    };
+  }, [wallet, forget]);
+
   const value = useMemo(
-    () => ({ wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, keys, checkKeys, prover, forget }),
-    [wallet, anon, refreshAnon, joinAnon, ensureWallet, ensureMessagingKeys, keys, checkKeys, prover, forget],
+    () => ({ wallet, anon, refreshAnon, joinAnon, noteNamedPost, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered }),
+    [wallet, anon, refreshAnon, joinAnon, noteNamedPost, ensureWallet, openWithWords, ensureMessagingKeys, keys, checkKeys, prover, forget, noteRemembered],
   );
   return <WalletCtx.Provider value={value}>{props.children}</WalletCtx.Provider>;
 }

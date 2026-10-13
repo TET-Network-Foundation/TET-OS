@@ -252,15 +252,20 @@ pub fn verify_anonymous_proof(
     let Some(anon) = env.anonymous.as_ref() else {
         return fail("not an anonymous envelope");
     };
+    // A fast post has no proof to verify: it is judged by its posting key's registration
+    // (`TmailStore::send_fast_anonymous`), never here.
+    let Some(proof) = anon.anchor_proof.as_ref() else {
+        return fail("no membership proof (a fast post is checked against its posting key's registration)");
+    };
 
     // 1. content address
     let actual = hex::encode(Sha256::digest(receipt_bytes));
-    if !actual.eq_ignore_ascii_case(anon.anchor_proof.receipt_sha256_hex.trim()) {
+    if !actual.eq_ignore_ascii_case(proof.receipt_sha256_hex.trim()) {
         return fail("receipt hash does not match the announced receipt_sha256_hex");
     }
 
     // 2. the proof itself
-    let Ok(image_id) = decode_image_id_hex(&anon.anchor_proof.image_id_hex) else {
+    let Ok(image_id) = decode_image_id_hex(&proof.image_id_hex) else {
         return fail("malformed image_id_hex");
     };
     // The receipt must come from TET's own membership program: a valid receipt from any other
@@ -274,7 +279,7 @@ pub fn verify_anonymous_proof(
     let receipt_b64 = base64::engine::general_purpose::STANDARD.encode(receipt_bytes);
     let verified = match crate::zk_verifier::verify_tx_receipt_and_journal(
         image_id,
-        anon.anchor_proof.journal_b64.trim(),
+        proof.journal_b64.trim(),
         &receipt_b64,
     ) {
         Ok(v) => v,
@@ -285,9 +290,13 @@ pub fn verify_anonymous_proof(
         _ => return fail("receipt proves a different claim than anonymous membership"),
     };
 
-    // 3. is the root one we accept?
+    // 3. is the root one we accept? The node's own anonymity-set roots, or, for a members-only
+    // poll, the root its own wallet registered for exactly this receiver and day (tmail/poll.rs).
     let bucket = nexus_protocol::tmail_bucket_index_v1(env.sent_at_ms);
-    if !store.accepts_anon_root(&journal.merkle_root, bucket) {
+    let now_bucket = nexus_protocol::tmail_bucket_index_v1(
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0),
+    );
+    if !anon_root_accepted_for(store, &env.receiver_wallet_id, &journal.merkle_root, bucket, now_bucket) {
         return fail("registry root not recognised, or outside the acceptance window");
     }
 
@@ -303,6 +312,11 @@ pub fn verify_anonymous_proof(
         nullifier_hex,
         verified_at_ms: now,
     }
+}
+
+/// [`decode_image_id_hex`] for other modules (the grants claim).
+pub fn decode_image_id_hex_pub(s: &str) -> Result<[u32; 8], ()> {
+    decode_image_id_hex(s)
 }
 
 /// `image_id_hex` is 8 little-endian `u32` words, 64 hex chars.
@@ -371,5 +385,30 @@ pub fn anon_program_accepted(id: &[u32; 8]) -> bool {
     std::env::var("TET_ANON_ACCEPTED_IMAGE_IDS")
         .map(|v| v.split(',').any(|x| x.trim().eq_ignore_ascii_case(&h)))
         .unwrap_or(false)
+}
+
+/// Is `root` an acceptable membership root for a proof to `receiver` in `bucket`?
+///
+/// A poll's wallet follows the poll's rules (`tmail::poll::poll_accepts`): its day only, checked
+/// on that day; a members-only poll's own root only (the node's anonymity-set roots don't count
+/// there, or anyone in the set could vote). Shelter's board accepts Shelter's own roots only
+/// (`TmailStore::shelter_accepts_root`). Every other receiver accepts the node's anonymity-set
+/// roots, as before.
+pub fn anon_root_accepted_for(
+    store: &crate::tmail::store::TmailStore,
+    receiver: &str,
+    root: &[u8; 32],
+    bucket: u64,
+    now_bucket: u64,
+) -> bool {
+    // Shelter's board: Shelter's own member roots only. The open anonymity set must not count
+    // there, or anyone in it could post in Shelter.
+    if crate::tmail::shelter::is_shelter_board(receiver) {
+        return store.shelter_accepts_root(root, bucket, now_bucket);
+    }
+    match store.get_poll_root(receiver) {
+        Some(p) => crate::tmail::poll::poll_accepts(&p, root, bucket, now_bucket, || store.accepts_anon_root(root, bucket)),
+        None => store.accepts_anon_root(root, bucket),
+    }
 }
 

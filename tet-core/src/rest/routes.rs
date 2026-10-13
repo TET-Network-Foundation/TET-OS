@@ -184,10 +184,6 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::ledger::get_proof_by_id),
         )
         .route(
-            "/ledger/genesis_bridge",
-            axum::routing::post(super::handlers::ledger::post_genesis_bridge_enveloped),
-        )
-        .route(
             "/tx/submit",
             axum::routing::post(super::handlers::ledger::post_tx_submit),
         )
@@ -224,6 +220,9 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/tmail/send",
             axum::routing::post(super::handlers::tmail::post_tmail_send),
         )
+        .route("/tmail/poll/root", axum::routing::post(super::handlers::tmail::post_tmail_poll_root))
+        .route("/tmail/poll/root/:wallet_id", axum::routing::get(super::handlers::tmail::get_tmail_poll_root))
+        .route("/tmail/anon/commitment/:wallet_id", axum::routing::get(super::handlers::tmail::get_tmail_anon_commitment))
         .route(
             "/tmail/anon/register",
             axum::routing::post(super::handlers::tmail::post_tmail_anon_register),
@@ -313,6 +312,34 @@ pub fn build_router(state: RestState) -> axum::Router {
         .route(
             "/explorer/tx/:hash",
             axum::routing::get(super::handlers::ledger::get_explorer_tx),
+        )
+        .route(
+            "/explorer/block/:height",
+            axum::routing::get(super::handlers::ledger::get_explorer_block),
+        )
+        .route("/tmail/anon/fast/:receiver/:posting_key", axum::routing::get(super::handlers::tmail::get_tmail_anon_fast))
+        // Shelter (tmail/shelter.rs): 404 while off; reads are signed, most members-only.
+        // Testnet practice grants (grants.rs): 404 while the payer is off.
+        .route("/grants/status", axum::routing::get(super::handlers::grants::get_grants_status))
+        .route("/grants/welcome", axum::routing::post(super::handlers::grants::post_grants_welcome))
+        .route("/shelter/status", axum::routing::get(super::handlers::shelter::get_shelter_status))
+        .route("/shelter/record", axum::routing::post(super::handlers::shelter::post_shelter_record))
+        .route("/shelter/key", axum::routing::post(super::handlers::shelter::post_shelter_key))
+        .route("/shelter/me", axum::routing::get(super::handlers::shelter::get_shelter_me))
+        .route("/shelter/members", axum::routing::get(super::handlers::shelter::get_shelter_members))
+        .route("/shelter/log", axum::routing::get(super::handlers::shelter::get_shelter_log))
+        .route("/shelter/inbox", axum::routing::get(super::handlers::shelter::get_shelter_inbox))
+        .route("/shelter/anon/leaves", axum::routing::get(super::handlers::shelter::get_shelter_anon_leaves))
+        .route("/stats/inside", axum::routing::get(super::handlers::ledger::get_stats_inside))
+        .route("/sigs/publish", axum::routing::post(super::handlers::sigs::post_sigs_publish))
+        .route("/sigs/search", axum::routing::get(super::handlers::sigs::get_sigs_search))
+        .route("/sites/edit", axum::routing::post(super::handlers::sites::post_site_edit))
+        .route("/search/list", axum::routing::post(super::handlers::search::post_search_list))
+        .route("/search/listings", axum::routing::get(super::handlers::search::get_search_listings))
+        .route("/sites/:site_id", axum::routing::get(super::handlers::sites::get_site))
+        .route(
+            "/explorer/blocks/recent",
+            axum::routing::get(super::handlers::ledger::get_explorer_recent_blocks),
         )
         .route(
             "/vault/history",
