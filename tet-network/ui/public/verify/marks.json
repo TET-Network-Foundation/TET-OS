@@ -1,11 +1,11 @@
 {
   "tet-verify.html": {
-    "code": "TET-PC94-EC1K",
-    "sha256": "570f5b4b186ed5f7e78ee6fa9c99c6f673cd5550807de7ad8053538c177553c2"
+    "code": "TET-STT3-2ZCW",
+    "sha256": "0f56f6193f421a56bb230f6999c705b789f5f466ad5fcf9fda2cb20afd053127"
   },
   "tet-verify.mjs": {
-    "code": "TET-MXEQ-X7T9",
-    "sha256": "fc0936a56317f49e139bcd10c60c22bb6b4f2ea915ef2b79d6ca50aea699a07c"
+    "code": "TET-S5WQ-6SV4",
+    "sha256": "5edf1784083e7a80595291f45b0190e1f1572478319fa2e208b84a269a4b848a"
   },
   "signer": "e93a3597f03a8ee4621d8c7340d37fe871875f8dedbc5ec9e139293d0af847bd",
   "chain": {

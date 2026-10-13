@@ -1,3 +1,8 @@
+> **Superseded. Historical, not the current design.** Kept for the record. The current description of
+> TET is the technical paper v2: <https://tetnet.org/whitepaper> (source
+> `tet-network/ui/app/whitepaper/paper.ts`, files in `tet-network/ui/public/paper/`). Where this
+> document and the paper differ, the paper is right.
+
 > **Superseded (2026-10-09).** The current paper is the technical paper at `/whitepaper` (source `tet-network/ui/app/whitepaper/paper.ts`, PDF `tet-network/ui/public/paper/tet-technical-paper.pdf`, built by `tet-network/ui/scripts/paper_build.mjs`). This document is kept for history; where it differs from the code, the technical paper is right.
 
 # TET NETWORK

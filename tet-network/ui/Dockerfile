@@ -71,6 +71,8 @@ COPY tet-network/ui/ ./
 COPY --from=pqc /pqc/ ./public/pqc/
 
 RUN npm run build \
+ && node scripts/build_manifest.mjs \
+ && test -s public/build-manifest.json \
  && test -s .next/standalone/server.js \
  && test -s public/pqc/tet_pqc_wasm_bg.wasm
 

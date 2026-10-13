@@ -355,8 +355,9 @@ export const SECTIONS: Section[] = [
         "Not a smart-contract platform.",
         "Not IP privacy: nodes see addresses and timing; use Tor or your own node.",
         "Not a company, and not yet decentralized: one operator and one block producer today.",
+        "Not a mainnet: the testnet's genesis contains a founder wallet, locked by a one-year cliff (`TET_FOUNDER_CLIFF_MS`), and a treasury address that collects test fees (`TET_TREASURY_ADDRESS`). This chain can never become mainnet; mainnet supply and allocation are undecided.",
       ] },
     ],
-    sources: ["SECURITY.md", "tet-network/ui/app/try/WhatPanel.tsx"],
+    sources: ["SECURITY.md", "tet-network/ui/app/try/WhatPanel.tsx", "tet-core/src/genesis.rs", "tet-core/src/ledger.rs"],
   },
 ];

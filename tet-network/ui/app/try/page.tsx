@@ -15,6 +15,7 @@ import { wordsFileText } from "../lib/disposable_wallet.mjs";
 import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
 import DirectoryPanel from "./DirectoryPanel";
 import AboutPanel from "./AboutPanel";
+import { IdCard } from "./IdCard";
 import TermsPanel from "./TermsPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
@@ -28,6 +29,7 @@ import MailPanel from "./MailPanel";
 import NewBoardPanel from "./NewBoardPanel";
 import QuestionsPanel from "./QuestionsPanel";
 import VerifyPanel from "./VerifyPanel";
+import { VerifyThisPage } from "./VerifyThisPage";
 import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
 import { LangProvider, LangSwitch, useLang } from "./i18n";
@@ -39,6 +41,7 @@ import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
 import ShelterPanel from "./ShelterPanel";
 import GrantsBox from "./GrantsBox";
+import SearchPanel from "./SearchPanel";
 import { shelterOpen } from "../lib/shelter";
 import { formatTet } from "../lib/format_tet";
 
@@ -56,6 +59,7 @@ const TOOLS = [
   { id: "directory", label: "Public boards", group: "boards" },
   { id: "questions", label: "Questions for humans", group: "boards" },
   { id: "shelter", label: "Shelter", group: "boards" },
+  { id: "search", label: "TetSearch", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
   { id: "sign", label: "sign", group: "tools" },
   { id: "genuine", label: "mark as genuine", group: "tools" },
@@ -186,7 +190,9 @@ function NodeFacts(props: { node: ReturnType<typeof useNode> }) {
     <>
       <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This node")}</h2>
       <dl className="mb-5 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-        {row(t("chain"), chain?.chainId ?? "…")}
+        {/* The live testnet's chain id is "tet-local-dev" (it's in every signature, so it changes only
+            with a new genesis); the page names it plainly and keeps the id visible. */}
+        {row(t("chain"), chain ? t("TET testnet ({id})", { id: chain.chainId }) : "…")}
         {row(t("genesis"), chain ? `${chain.genesis.slice(0, 14)}…` : "…")}
         {row(t("height"), down ? <span className={INK.bad}>{t("not answering")}</span> : <span className="tabular-nums">{height?.toLocaleString() ?? "…"}</span>)}
         {row(t("api"), BASE)}
@@ -207,14 +213,7 @@ function NodeFacts(props: { node: ReturnType<typeof useNode> }) {
         {row(t("prover"), prover === "found" ? t("found (this computer)") : prover === "missing" ? t("not found") : t("checking…"))}
       </dl>
       <h2 className="mb-2 text-[13px] font-semibold text-[#5d646d]">{t("This page")}</h2>
-      <p className="mb-2 text-[#3d434a]">
-        <a className="underline" href={BUILD_SHA ? `${REPO}/tree/${BUILD_SHA}/tet-network/ui` : `${REPO}/tree/main/tet-network/ui`} target="_blank" rel="noreferrer">
-          {t("verify this page")}
-        </a>
-        :{" "}
-        {BUILD_SHA ? t("built from {sha}; rebuild it and compare.", { sha: BUILD_SHA.slice(0, 10) }) : t("the source it was built from. This build doesn't name its commit.")}{" "}
-        {t("Builds are not signed yet.")}
-      </p>
+      <VerifyThisPage buildSha={BUILD_SHA} repo={REPO} />
       <p className="text-[#3d434a]">
         <a className="underline" href={`${REPO}/blob/main/docs/DEMO_NODE.md`} target="_blank" rel="noreferrer">
           {t("how this demo works")}
@@ -323,6 +322,12 @@ function CompactWallet() {
             {t("Keep this ID? Save your passphrase (12 words)")}
           </button>
           <span className="block">{t("Lose your passphrase (12 words) and nobody can recover it.")} {t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</span>
+          <div className="mt-2 flex justify-end text-left">
+            <div>
+              <p className="font-semibold text-[#1c1f23]">{t("my ID")}</p>
+              <IdCard walletId={wallet.walletId} />
+            </div>
+          </div>
           <GrantsBox />
         </div>
       ) : null}
@@ -342,7 +347,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
     [{ tool: "inside" }, t("Inside")],
     [{ tool: "directory" }, t("Public boards")],
     [{ tool: "questions" }, t("Questions for humans")],
-    ...(props.shelter ? ([[{ tool: "shelter" }, t("Shelter")]] as [View, string][]) : []),
+    ...(props.shelter ? ([[{ tool: "shelter" }, t("Shelter")], [{ tool: "search" }, "TetSearch"]] as [View, string][]) : []),
     [{ tool: "new" }, t("start or open a board")],
     [{ tool: "verify" }, t("verify")],
     [{ tool: "sign" }, t("sign")],
@@ -532,6 +537,7 @@ function TryApp() {
     directory: t("Public boards"),
     questions: t("Questions for humans"),
     shelter: t("Shelter"),
+    search: "TetSearch",
     verify: t("verify"),
     sign: t("sign"),
     genuine: t("Mark as genuine"),
@@ -623,6 +629,7 @@ function TryApp() {
           {panel({ tool: "new" }, <NewBoardPanel directory={directory} onOpen={addBoard} onListed={() => directory && void refreshDirectory(directory)} />)}
           {panel({ tool: "questions" }, <QuestionsPanel />)}
           {panel({ tool: "shelter" }, <ShelterPanel active={"tool" in view && view.tool === "shelter"} />)}
+          {panel({ tool: "search" }, <SearchPanel active={"tool" in view && view.tool === "search"} />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
           {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
           {panel({ tool: "genuine" }, <GenuinePanel />)}

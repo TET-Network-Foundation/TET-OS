@@ -55,6 +55,7 @@ the external audit planned for Phase 2, and reporting through `SECURITY.md`.
 | Replay | Defended | TET | Chain-bound pre-images (chain id, genesis hash) on every signature; per-kind nonces or time windows (Shelter records once, sealed keys newer-only, reads 2 minutes, anonymous nullifiers once per board and day). Sign-in challenges single-use with expiry *(design, rule 1)*. |
 | Cross-protocol reuse (a sign-in signature as a transaction or record) | Defended *(design)* | TET | Each signed thing has its own PAE domain; sign-in uses "tet signin v1", tested in both directions (rule 3). Key registrations are PAE "tet tmail key v2" (#101). |
 | Relay between sites | Defended *(design)* | TET | Origin binding and per-site keys (rules 1, 2). |
+| Timing: linking an anonymous post to a public registration | Partly | TET (page and protocol), the user | Public events carry an ID and a time: a membership join, an inbox registration, a named post. An anonymous post made just after one of them could be guessed to come from that ID. Mitigations: the inbox is never registered at a moment of its own; it goes out with the membership join or right after a named post, which are already public (#113). An anonymous post needs the membership to be in the set first, which happens at the next epoch, not at the moment of the join. Each post carries a one-time key and a per-board, per-day nullifier, so posts on different boards or days don't link to each other. **Not covered:** someone watching the network can still correlate timing (a join at noon, the first anonymous post in a quiet set at 12:05); a larger set and letting time pass between joining and posting are the user's defence. |
 | Weak randomness | Partly | Platform, TET | Keys and nonces come from the platform's CSPRNG (WebCrypto, OS); TET doesn't seed its own. A broken platform RNG is out of scope. |
 | Quantum: forging signatures | Partly | TET (Phase 1) | Every signature is hybrid (Ed25519 + ML-DSA-44), but the wallet id is the Ed25519 key and the ML-DSA key is not bound to it until `wallet_id_v2` (Phase 1). Until then quantum resistance is incomplete. |
 | Quantum: harvest now, decrypt later | Partly | TET | Messages use X25519 + Kyber-768 (Round 3, not the final ML-KEM standard, FIPS 203): both must be broken. Kyber Round 3 differs from FIPS 203; moving to ML-KEM is planned. |
@@ -100,9 +101,18 @@ with TET are specified now and tested when it is built.
    `'unsafe-inline'` remains for scripts because Next.js bootstraps with inline scripts on static
    pages. Zero third-party scripts, stylesheets or fonts. SRI is switched on, but Next.js adds
    integrity hashes to only part of its chunks today (about half on /try, with either bundler), so
-   "SRI on every script" is **not yet true**. The signed build manifest with "verify this page",
-   which would hash every file whatever SRI covers, is **not built yet**; it is the next step.
-   Guarded by `page_integrity_guard`.
+   "SRI on every script" is **not yet true**.
+   *Signed build manifest (as built, 2026-10-11):* every file the demo serves (the prerendered
+   pages, scripts, styles, public files) is listed with its SHA-256 in `/build-manifest.json`,
+   written by the build (`scripts/build_manifest.mjs`; the build id is the commit, so the same
+   commit gives the same bytes). The founder signs the manifest's SHA-256 with the publisher key on
+   their own machine (`scripts/sign_build_manifest.mjs`), only when the served manifest is
+   byte-identical to one they built themselves, and publishes the mark. Two checks:
+   `scripts/verify_site.mjs <origin> --commit <sha>`, run on your own computer, trusts nothing the
+   site serves; it checks the signature, that the build is the commit you expect (an older signed
+   build would otherwise pass: a rollback), and every file. "verify this page" runs the same check in the page on the
+   files it loaded, and says it can't protect against a site that serves a lying checker. Guarded
+   by `page_integrity_guard` and `build_manifest_guard`.
 7. **Keys:** in memory only while the tab is unlocked; the vault encrypted; auto-lock; a
    passphrase-strength check. Argon2id: evaluated (WebCrypto has no Argon2; it would need a WASM
    dependency reviewed by a human); PBKDF2 at 600,000 iterations until then.

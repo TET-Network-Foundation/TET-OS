@@ -138,6 +138,7 @@ fn rest_state_for_tests(ledger: std::sync::Arc<crate::ledger::Ledger>) -> crate:
         grant_payer: None,
         operator_hide: crate::operator_hide::OperatorHide::open(&hide_db).unwrap(),
         sites: std::sync::Arc::new(crate::sites::SiteStore::open(&hide_db).unwrap()),
+        search: std::sync::Arc::new(crate::search::SearchStore::open(&hide_db).unwrap()),
         sigs: std::sync::Arc::new(crate::sigs::SigStore::open(&hide_db).unwrap()),
     }
 }
@@ -2400,12 +2401,14 @@ async fn invalid_zk_receipt_is_rejected_by_consensus_mining() {
     let state = rest_state_for_tests(ledger.clone());
     state.mempool.lock().await.push(env);
 
-    let res = crate::consensus::mine_pending_block_as(state, "producer-zk".to_string()).await;
-    assert!(matches!(
-        res,
-        Err(crate::consensus::MineError::Unauthorized(_))
-    ));
-    assert_eq!(ledger.block_height().unwrap(), 0);
+    // Consensus refuses the receipt: the block is made without it (one bad transaction no longer
+    // fails the whole block, SECURITY.md 2026-10-10), it pays no compute reward, and it is dropped.
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-zk".to_string())
+        .await
+        .unwrap();
+    assert_eq!(outcome.tx_count, 0, "the invalid receipt is not in the block");
+    assert_eq!(outcome.reward.compute_reward_micro, 0, "no compute reward for an invalid receipt");
+    assert!(state.mempool.lock().await.is_empty(), "the invalid receipt is dropped");
 }
 
 #[tokio::test]
@@ -2604,12 +2607,17 @@ async fn zk_task_race_loser_is_rejected_after_winner_processed() {
     assert!(outcome.mined);
     assert!(ledger.ai_workload_is_processed(task_id).unwrap());
 
+    // The loser is refused: the next block is made without it, pays it nothing, and drops it
+    // (one bad transaction no longer fails the whole block, SECURITY.md 2026-10-10).
+    let loser_hash = crate::consensus::tx_hash_for_env(&loser).unwrap();
     state.mempool.lock().await.push(loser);
-    let res = crate::consensus::mine_pending_block_as(state, "producer-race".to_string()).await;
-    assert!(matches!(
-        res,
-        Err(crate::consensus::MineError::Unauthorized(_))
-    ));
+    let outcome2 = crate::consensus::mine_pending_block_as(state.clone(), "producer-race".to_string())
+        .await
+        .unwrap();
+    assert_eq!(outcome2.tx_count, 0, "the losing claim is not in the block");
+    assert_eq!(outcome2.reward.compute_reward_micro, 0);
+    assert!(!ledger.is_tx_applied(&loser_hash).unwrap_or(false));
+    assert!(state.mempool.lock().await.is_empty());
 }
 
 #[test]
@@ -3551,8 +3559,12 @@ async fn mempool_limit_evicts_lowest_fee_tx() {
         std::env::set_var("TET_MEMPOOL_MAX_BYTES", "1048576");
     }
     let ledger = std::sync::Arc::new(open_temp_ledger());
-    let state = rest_state_for_tests(ledger);
     let alice = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    // Admission refuses transfers the sender can't cover, so alice has funds.
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    ledger.admin_rest_faucet(alice, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let state = rest_state_for_tests(ledger);
     let bob = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let make_env = |fee_bps| crate::protocol::SignedTxEnvelopeV1 {
         v: 1,
@@ -3574,14 +3586,15 @@ async fn mempool_limit_evicts_lowest_fee_tx() {
         },
     };
 
-    assert!(!state.submit_local_tx(make_env(1)).await.unwrap());
-    assert!(state.submit_local_tx(make_env(100)).await.unwrap());
+    // Two rates inside the consensus range (an out-of-range one is refused at admission).
+    assert!(!state.submit_local_tx(make_env(100)).await.unwrap());
+    assert!(state.submit_local_tx(make_env(1000)).await.unwrap());
     let mp = state.mempool.lock().await;
     assert_eq!(mp.len(), 1);
     let crate::protocol::TxV1::Transfer { fee_bps, .. } = mp[0].tx else {
         panic!("expected transfer");
     };
-    assert_eq!(fee_bps, 100);
+    assert_eq!(fee_bps, 1000);
 
     unsafe {
         std::env::remove_var("TET_MEMPOOL_MAX_TXS");
@@ -13792,7 +13805,7 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
     // `/shelter/inbox` is content, served only to a member's signed read (tests: shelter_*).
     const CONTENT: &[&str] = &["/tmail/inbox/:wallet_id", "/files/inbox/:wallet_id", "/files/fetch/:file_id", "/sites/:site_id", "/sigs/search", "/shelter/inbox"];
     const NOT_CONTENT: &[&str] = &[
-        "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/status/live",
+        "/status", "/chain", "/ledger/state", "/ledger/balance/:wallet", "/explorer/tx/:hash", "/explorer/block/:height", "/status/live",
         "/tmail/keys/:wallet_id", "/tmail/anon/root", "/tmail/anon/leaves",
         // A membership proof's receipt: no message text, no sender.
         "/tmail/anon/receipt/:hash",
@@ -13809,6 +13822,8 @@ async fn operator_hidden_items_are_not_served_on_any_public_route() {
         "/shelter/status", "/shelter/me", "/shelter/members", "/shelter/log", "/shelter/anon/leaves",
         // The welcome grant's count (no content).
         "/grants/status",
+        // TetSearch: which sites members listed (members only; no page content, the sites are public).
+        "/search/listings",
     ];
     for (m, p) in crate::rest::public_api::PUBLIC_ALLOWLIST {
         if *m == "GET" {
@@ -15966,7 +15981,7 @@ fn shelter_member_numbers_come_from_the_log_and_are_unique() {
     assert_eq!(all.len(), st.members.len(), "two members share a number");
 }
 
-// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-11) ----------
+// ---- messaging-key registrations: v2, PAE, signed by the wallet (SECURITY.md 2026-10-10) ----------
 
 const UI_KEY_REGISTRATION_V2: &str = include_str!("testdata/ui_key_registration_v2.json");
 
@@ -16201,4 +16216,559 @@ fn grant_floor_counts_pending_grants() {
     let pool = vec![mk(100_000_000), mk(100_000_000), other];
     assert_eq!(crate::rest::handlers::grants::pending_outgoing_micro(&pool, &id), 200_000_000);
     assert_eq!(crate::rest::handlers::grants::pending_outgoing_micro(&pool, &id.to_ascii_uppercase()), 200_000_000);
+}
+
+/// `GET /explorer/block/:height` gives exactly what an offline checker needs ("Verify without TET"
+/// Level 2): the block id recomputes from the header fields it returns, and each transaction's
+/// `tx_json` string is the canonical form its hash covers. Control (run by hand): returning the
+/// tx through serde_json::Value (sorted keys) instead of the canonical string → FAILS.
+#[tokio::test]
+async fn explorer_block_returns_what_an_offline_check_recomputes() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let env = signed_transfer_env_for_tests(&words, &id, &"ab".repeat(32), crate::ledger::STEVEMON);
+    state.submit_local_tx(env).await.unwrap();
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert_eq!(outcome.tx_count, 1);
+
+    let r = crate::rest::handlers::ledger::get_explorer_block(axum::extract::State(state.clone()), axum::extract::Path(outcome.block_height.to_string())).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let b: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(r.into_body(), 1 << 22).await.unwrap()).unwrap();
+    let hashes: Vec<String> = b["tx_hashes"].as_array().unwrap().iter().map(|h| h.as_str().unwrap().to_string()).collect();
+    let recomputed = crate::consensus::block_id_for_block(
+        b["height"].as_u64().unwrap(),
+        b["parent_block_id"].as_str().unwrap(),
+        b["state_root"].as_str().unwrap(),
+        &hashes,
+        b["producer_id"].as_str().unwrap(),
+    );
+    assert_eq!(recomputed, b["block_id"].as_str().unwrap(), "the block id recomputes from the returned header");
+    let t = &b["txs"][0];
+    let preimage = format!(
+        "tet tx v1|chain_id={}|genesis_hash={}|mldsa={}|tx={}",
+        crate::wallet::chain_id_from_env(),
+        crate::wallet::expected_genesis_hash_from_env(),
+        t["mldsa_pubkey_b64"].as_str().unwrap(),
+        t["tx_json"].as_str().unwrap()
+    );
+    let h = format!("0x{}", hex::encode(sha2::Sha256::digest(preimage.as_bytes())));
+    assert_eq!(h, hashes[0], "the tx hash recomputes from tx_json");
+    // Missing height: 404; not a number: 400.
+    let r = crate::rest::handlers::ledger::get_explorer_block(axum::extract::State(state.clone()), axum::extract::Path("999999".into())).await;
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+}
+
+// ---- TetSearch v1: listings (search.rs) -------------------------------------------------------
+
+fn sign_listing_part_for_tests(words: &str, l: &crate::search::SearchListingV1) -> crate::tmail::envelope::TmailHybridSig {
+    use base64::Engine as _;
+    use ed25519_dalek::Signer as _;
+    let ed_sk = crate::wallet::ed25519_signing_key_from_mnemonic(words).unwrap();
+    let kp = crate::wallet::mldsa_keypair_from_mnemonic(words).unwrap();
+    let pk = base64::engine::general_purpose::STANDARD.encode(kp.public_key());
+    let msg = crate::search::listing_auth_message_bytes(l, &pk);
+    crate::tmail::envelope::TmailHybridSig {
+        ed25519_pubkey_hex: hex::encode(ed_sk.verifying_key().to_bytes()),
+        ed25519_sig_b64: base64::engine::general_purpose::STANDARD.encode(ed_sk.sign(&msg).to_bytes()),
+        mldsa_pubkey_b64: pk,
+        mldsa_sig_b64: base64::engine::general_purpose::STANDARD.encode(crate::wallet::mldsa_sign_deterministic(&kp, &msg).unwrap()),
+    }
+}
+
+fn listing_for_tests(member_words: &str, member: &str, site_words: &str, site: &str, at: u64) -> crate::search::SearchListingV1 {
+    let empty = crate::tmail::envelope::TmailHybridSig { ed25519_pubkey_hex: String::new(), ed25519_sig_b64: String::new(), mldsa_pubkey_b64: String::new(), mldsa_sig_b64: String::new() };
+    let mut l = crate::search::SearchListingV1 {
+        v: 1,
+        kind: crate::search::LISTING_KIND.to_string(),
+        site_wallet_id: site.to_string(),
+        member_wallet_id: member.to_string(),
+        listed_at_ms: at,
+        member_sig: empty.clone(),
+        site_sig: empty,
+    };
+    l.member_sig = sign_listing_part_for_tests(member_words, &l);
+    l.site_sig = sign_listing_part_for_tests(site_words, &l);
+    l
+}
+
+/// **Only a vouched member can publish their own site, a few a day.** A listing needs both the
+/// member's and the site's signature; the site must exist; the member must be in Shelter's set; at
+/// most LISTINGS_PER_MEMBER_PER_DAY a day; its time within the clock window. Controls (run by
+/// hand): the membership check removed → FAILS; the site signature check removed → FAILS.
+#[tokio::test]
+async fn search_listing_needs_a_vouched_member_and_the_sites_own_key() {
+    use crate::tmail::shelter::ShelterAction as A;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let mut sites = Vec::new();
+    for _ in 0..(crate::search::LISTINGS_PER_MEMBER_PER_DAY + 1) {
+        let (sw, sid) = tmail_party_for_tests();
+        let e = signed_site_edit_for_tests(&sw, &sid, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"heading","level":1,"text":"Titration results"}}"#);
+        state.sites.append(&e).unwrap();
+        sites.push((sw, sid));
+    }
+    let post = |l: crate::search::SearchListingV1| {
+        let st = state.clone();
+        async move { crate::rest::handlers::search::post_search_list(axum::extract::State(st), axum::Json(l)).await.status() }
+    };
+    let (sw, sid) = &sites[0];
+    // Not a member: refused.
+    assert_eq!(post(listing_for_tests(&xw, &xid, sw, sid, now)).await, StatusCode::FORBIDDEN);
+    // The site's signature by another key: refused.
+    let (ow, _) = tmail_party_for_tests();
+    let mut forged = listing_for_tests(&aw, &aid, sw, sid, now);
+    forged.site_sig = sign_listing_part_for_tests(&ow, &forged);
+    assert_eq!(post(forged).await, StatusCode::UNAUTHORIZED);
+    // A site this node doesn't hold: refused.
+    let (gw, gid) = tmail_party_for_tests();
+    assert_eq!(post(listing_for_tests(&aw, &aid, &gw, &gid, now)).await, StatusCode::NOT_FOUND);
+    // A clock 10 minutes off: refused.
+    assert_eq!(post(listing_for_tests(&aw, &aid, sw, sid, now - 10 * 60_000)).await, StatusCode::BAD_REQUEST);
+    // A member's own sites: accepted, up to the daily cap.
+    for (i, (sw, sid)) in sites.iter().enumerate() {
+        let want = if (i as u64) < crate::search::LISTINGS_PER_MEMBER_PER_DAY { StatusCode::OK } else { StatusCode::TOO_MANY_REQUESTS };
+        assert_eq!(post(listing_for_tests(&aw, &aid, sw, sid, now)).await, want, "listing {i}");
+    }
+}
+
+/// **Listings are for members only, and only current ones are served.** Unsigned → 401; a
+/// non-member → 403; a member gets them; a listing whose member is no longer in the set isn't served.
+#[tokio::test]
+async fn search_listings_are_members_only_and_current() {
+    use crate::tmail::shelter::ShelterAction as A;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let (mw, _mid, _board, _sg) = shelter_on_for_tests();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger);
+    let router = crate::rest::routes::build_router(state.clone());
+    let now = tmail_now_ms_for_tests();
+    let (aw, aid) = tmail_party_for_tests();
+    let (xw, _xid) = tmail_party_for_tests();
+    state.tmail.submit_shelter_record(&shelter_rec_for_tests(&mw, A::Invite, &aid, true, "", "", now), now).unwrap();
+    let (sw, sid) = tmail_party_for_tests();
+    state.sites.append(&signed_site_edit_for_tests(&sw, &sid, 0, &"0".repeat(64), r#"{"op":"add","block":{"type":"text","text":"hello"}}"#)).unwrap();
+    let r = crate::rest::handlers::search::post_search_list(axum::extract::State(state.clone()), axum::Json(listing_for_tests(&aw, &aid, &sw, &sid, now))).await;
+    assert_eq!(r.status(), StatusCode::OK);
+    let get = |auth: Option<String>| {
+        let router = router.clone();
+        let mut b = axum::http::Request::builder().uri("/search/listings");
+        if let Some(a) = auth {
+            b = b.header("x-tet-shelter-auth", a);
+        }
+        let req = b.body(axum::body::Body::empty()).unwrap();
+        async move {
+            let resp = router.oneshot(req).await.unwrap();
+            let st = resp.status();
+            let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            (st, String::from_utf8_lossy(&body).to_string())
+        }
+    };
+    assert_eq!(get(None).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(get(Some(shelter_read_auth_for_tests(&xw, "/search/listings", now))).await.0, StatusCode::FORBIDDEN);
+    let (st, body) = get(Some(shelter_read_auth_for_tests(&aw, "/search/listings", now))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(body.contains(&sid), "the member didn't get the listing: {body}");
+    // A member who is no longer in the set: their listings aren't served.
+    let kept = state.search.current(|w| w != aid, |_| true);
+    assert!(kept.is_empty(), "a former member's listing was served");
+}
+
+const UI_SEARCH_LISTING: &str = include_str!("testdata/ui_search_listing_v1.json");
+
+/// A listing signed by the page's own code (tetsearch.ts) verifies in Rust, both signatures, byte
+/// for byte; a changed field doesn't. Fixture: scripts/make_search_listing_fixture.mjs.
+#[test]
+fn ui_signed_search_listing_verifies_in_rust() {
+    let _g = env_lock();
+    set_test_env_base();
+    let doc: serde_json::Value = serde_json::from_str(UI_SEARCH_LISTING).expect("fixture JSON");
+    let _bound = agent_fixture_chain(&doc);
+    let l: crate::search::SearchListingV1 = serde_json::from_value(doc["listing"].clone()).unwrap();
+    let ledger = open_temp_ledger();
+    let store = crate::search::SearchStore::open(&ledger.sled_db()).unwrap();
+    assert!(store.list(&l, l.listed_at_ms, |_| true, |_| true).is_ok(), "the page's listing didn't verify");
+    let mut changed = l.clone();
+    changed.member_wallet_id = "ef".repeat(32);
+    assert!(matches!(store.list(&changed, l.listed_at_ms, |_| true, |_| true), Err(crate::search::ListingRefusal::BadSignature(_))));
+}
+
+// ---- genesis_bridge removed: no balance write outside a block (SECURITY.md) -------------------
+
+/// `/ledger/genesis_bridge` is gone and `/tx/submit` refuses `TxV1::GenesisBridge`. The bridge moved
+/// founder funds by writing balances directly, outside any block, so the node that served it
+/// diverged from every other node. Here a valid, founder-signed bridge from a founder with
+/// spendable funds changes nothing on either path: no credit, no queued tx, the same state root.
+/// Negative control (run by hand): restoring the old route and dispatch → FAILS (route 200 and the
+/// recipient credited).
+#[tokio::test]
+async fn genesis_bridge_cannot_write_balances_outside_a_block() {
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let f = crate::wallet::generate_mnemonic_12().unwrap();
+    let (f_words, f_id) = (f.mnemonic_12.clone().unwrap(), f.address_hex.to_ascii_lowercase());
+    let _founder = EnvVarGuard::set("TET_FOUNDER_WALLET", &f_id);
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation(&f_id).unwrap(); // the test base sets the cliff to 0: spendable
+    assert_eq!(ledger.founder_wallet_public().unwrap(), f_id, "the test's founder is the signer");
+    let founder_before = ledger.balance_micro(&f_id).unwrap();
+    assert!(ledger.spendable_balance_micro(&f_id, std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis()).unwrap() >= crate::ledger::STEVEMON, "the founder can spend, so only the removal stops the bridge");
+    let state = rest_state_for_tests(ledger.clone());
+    let to = "ab".repeat(32);
+    let env = signed_env_for_tests(
+        crate::protocol::TxV1::GenesisBridge { founder_wallet: f_id.clone(), to_wallet: to.clone(), amount_micro: crate::ledger::STEVEMON },
+        &f_words,
+        &f_id,
+    );
+    crate::rest::helpers::verify_envelope_v1(&env).expect("a valid founder signature");
+    let root = ledger.compute_state_root().unwrap();
+
+    let req = axum::http::Request::builder()
+        .method("POST")
+        .uri("/ledger/genesis_bridge")
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(serde_json::to_vec(&env).unwrap()))
+        .unwrap();
+    let resp = crate::rest::routes::build_router(state.clone()).oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND, "the off-block bridge route must not exist");
+
+    let res = crate::rest::handlers::ledger::post_tx_submit(axum::extract::State(state.clone()), axum::http::HeaderMap::new(), axum::Json(env)).await;
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST, "tx submit must refuse a genesis bridge");
+
+    assert_eq!(ledger.balance_micro(&to).unwrap(), 0, "the recipient was credited outside a block");
+    assert_eq!(ledger.balance_micro(&f_id).unwrap(), founder_before);
+    assert!(state.mempool.lock().await.is_empty());
+    assert_eq!(ledger.compute_state_root().unwrap(), root);
+}
+
+// ---- one bad transaction can't drop the mempool (SECURITY.md 2026-10-10) ------------------------
+
+fn transfer_with_fee_bps_for_tests(words: &str, from: &str, to: &str, amount_micro: u64, fee_bps: u64) -> crate::protocol::SignedTxEnvelopeV1 {
+    let tx = crate::protocol::TxV1::Transfer { from_wallet: from.to_string(), to_wallet: to.to_string(), amount_micro, fee_bps };
+    signed_env_for_tests(tx, words, from)
+}
+
+/// Gossip and local submission refuse a transfer no block could accept (a fee rate outside the
+/// consensus range), and still admit a valid one.
+#[tokio::test]
+async fn mempool_admission_refuses_a_transfer_no_block_accepts() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    let to = "ab".repeat(32);
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    ledger.admin_rest_faucet(&id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+
+    let bad = transfer_with_fee_bps_for_tests(&words, &id, &to, crate::ledger::STEVEMON, 0);
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, bad.clone()).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "gossip admitted fee_bps 0: {out:?}");
+    assert!(state.submit_local_tx(bad).await.is_err(), "local submission admitted fee_bps 0");
+    assert!(state.mempool.lock().await.is_empty());
+
+    // An overdraft (a wallet with nothing) is refused at admission too, on both paths.
+    let p = crate::wallet::generate_mnemonic_12().unwrap();
+    let p_words = p.mnemonic_12.clone().unwrap();
+    let p_id = p.address_hex.to_ascii_lowercase();
+    let overdraft = transfer_with_fee_bps_for_tests(&p_words, &p_id, &to, crate::ledger::STEVEMON, 100);
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, overdraft.clone()).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "gossip admitted an overdraft: {out:?}");
+    assert!(state.submit_local_tx(overdraft).await.is_err(), "local submission admitted an overdraft");
+
+    let good = transfer_with_fee_bps_for_tests(&words, &id, &to, crate::ledger::STEVEMON, 100);
+    assert!(state.submit_local_tx(good).await.is_ok());
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+/// A mempool holding transactions a block would refuse (forced past admission: an out-of-range
+/// fee rate, and an overdraft that admission can't see) still gives a block with every valid
+/// transaction, and drops only the bad ones. Negative control (run by hand): with
+/// `select_block_txs` returning its input unchanged, the block fails and the valid transfer is
+/// lost → this test FAILS.
+#[tokio::test]
+async fn one_bad_transaction_does_not_drop_the_others() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+
+    let a = crate::wallet::generate_mnemonic_12().unwrap();
+    let a_words = a.mnemonic_12.clone().unwrap();
+    let a_id = a.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&a_id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let poor = crate::wallet::generate_mnemonic_12().unwrap();
+    let poor_words = poor.mnemonic_12.clone().unwrap();
+    let poor_id = poor.address_hex.to_ascii_lowercase();
+    let to = "cd".repeat(32);
+
+    let bad_fee = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, crate::ledger::STEVEMON, 0);
+    let overdraft = transfer_with_fee_bps_for_tests(&poor_words, &poor_id, &to, crate::ledger::STEVEMON, 100);
+    let good = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, 2 * crate::ledger::STEVEMON, 100);
+    let good_hash = crate::consensus::tx_hash_for_env(&good).unwrap();
+    {
+        let mut mp = state.mempool.lock().await;
+        mp.push(bad_fee);
+        mp.push(overdraft);
+        mp.push(good);
+    }
+
+    let outcome = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string())
+        .await
+        .expect("the block must still be made");
+    assert!(outcome.mined);
+    assert_eq!(outcome.tx_hashes, vec![good_hash], "only the valid transfer is in the block");
+    assert!(ledger.balance_micro(&to).unwrap() > 0, "the valid transfer settled");
+    assert!(state.mempool.lock().await.is_empty(), "the bad ones are dropped, not kept forever");
+}
+
+/// Admission counts the sender's pending transfers: a second transfer that would only fit if the
+/// first didn't exist (a double-spend) is refused, on both paths.
+#[tokio::test]
+async fn mempool_admission_refuses_a_double_spend() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 3 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let first = transfer_with_fee_bps_for_tests(&words, &id, &"ab".repeat(32), 2 * crate::ledger::STEVEMON, 100);
+    let second = transfer_with_fee_bps_for_tests(&words, &id, &"cd".repeat(32), 2 * crate::ledger::STEVEMON, 100);
+    assert!(state.submit_local_tx(first).await.is_ok());
+    assert!(state.submit_local_tx(second.clone()).await.is_err(), "a double-spend was admitted locally");
+    let out = crate::p2p::handle_tx_broadcast(&ledger, &state.mempool, second).await;
+    assert!(matches!(out, crate::p2p::TxGossipOutcome::Rejected { .. }), "a double-spend was admitted by gossip: {out:?}");
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+/// Bad transactions filling the one-by-one budget can't keep a valid one out for good: it is
+/// deferred, and lands in a following block even as more bad ones arrive.
+#[tokio::test]
+async fn deferred_transactions_land_in_the_next_block() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let a = crate::wallet::generate_mnemonic_12().unwrap();
+    let a_words = a.mnemonic_12.clone().unwrap();
+    let a_id = a.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&a_id, 10 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let poor = crate::wallet::generate_mnemonic_12().unwrap();
+    let poor_words = poor.mnemonic_12.clone().unwrap();
+    let poor_id = poor.address_hex.to_ascii_lowercase();
+    let to = "ef".repeat(32);
+    let n = crate::consensus::SELECT_ONE_BY_ONE_MAX;
+    let bad = |i: u64| transfer_with_fee_bps_for_tests(&poor_words, &poor_id, &to, crate::ledger::STEVEMON + i, 100);
+    let good = transfer_with_fee_bps_for_tests(&a_words, &a_id, &to, crate::ledger::STEVEMON, 100);
+    let good_hash = crate::consensus::tx_hash_for_env(&good).unwrap();
+    {
+        let mut mp = state.mempool.lock().await;
+        for i in 0..n as u64 {
+            mp.push(bad(i));
+        }
+        mp.push(good);
+    }
+    let b1 = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert_eq!(b1.tx_count, 0, "the budget went to the bad ones");
+    // More bad ones arrive before the next block.
+    {
+        let mut mp = state.mempool.lock().await;
+        for i in n as u64..(2 * n) as u64 {
+            mp.push(bad(i));
+        }
+    }
+    let b2 = crate::consensus::mine_pending_block_as(state.clone(), "producer-x".to_string()).await.unwrap();
+    assert!(b2.tx_hashes.contains(&good_hash), "the deferred valid transfer must land next");
+}
+
+/// Deferred transactions go back AHEAD of whatever arrived while the block was being made, so a
+/// backlog always advances. Control (run by hand): appending them at the back → this test FAILS.
+#[tokio::test]
+async fn deferred_transactions_go_back_in_front_of_newcomers() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    let newcomer = transfer_with_fee_bps_for_tests(&words, &id, &"ab".repeat(32), 1, 100);
+    let deferred = transfer_with_fee_bps_for_tests(&words, &id, &"cd".repeat(32), 2, 100);
+    let deferred_hash = crate::consensus::tx_hash_for_env(&deferred).unwrap();
+    state.mempool.lock().await.push(newcomer);
+    crate::consensus::requeue_txs_front(&state, vec![deferred]).await;
+    let mp = state.mempool.lock().await;
+    assert_eq!(mp.len(), 2);
+    assert_eq!(crate::consensus::tx_hash_for_env(&mp[0]).unwrap(), deferred_hash, "the deferred one must be first");
+}
+
+/// A failed block's transactions go back when nothing was written; a batch of more than one is
+/// never dropped (blocks then carry one at a time, isolating the failing one), and a single
+/// transaction is dropped only after failing alone PRE_APPLY_REQUEUE_MAX times; a storage error
+/// that may have written part of a block never requeues. Controls (run by hand): dropping a
+/// multi-transaction batch after the limit, or requeueing after a partial write → FAILS.
+#[test]
+fn failed_blocks_isolate_the_failing_transaction() {
+    use crate::consensus::{after_failure, AfterFailure, PRE_APPLY_REQUEUE_MAX};
+    assert_eq!(after_failure(true, 1, 5), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX + 10, 5), AfterFailure::Requeue, "honest transactions in a failing batch are never dropped");
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX - 1, 1), AfterFailure::Requeue);
+    assert_eq!(after_failure(true, PRE_APPLY_REQUEUE_MAX, 1), AfterFailure::Drop, "the one that keeps failing alone is dropped");
+    assert_eq!(after_failure(false, 1, 5), AfterFailure::Drop, "a maybe-partial write never requeues");
+}
+
+/// Two transfers that together overdraw, submitted at the same moment, can't both be admitted:
+/// the balance check runs under the same mempool lock as the insert.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_double_spend_admits_at_most_one() {
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    ledger.init_genesis_founder_premine_from_env().unwrap();
+    ledger.apply_genesis_allocation("founder").unwrap();
+    let state = rest_state_for_tests(ledger.clone());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.to_ascii_lowercase();
+    ledger.admin_rest_faucet(&id, 3 * crate::ledger::STEVEMON, "ip", true, 1, 1).unwrap();
+    let mut envs = Vec::new();
+    for i in 0..8u8 {
+        envs.push(transfer_with_fee_bps_for_tests(&words, &id, &format!("{:02x}", i).repeat(32), 2 * crate::ledger::STEVEMON, 100));
+    }
+    let mut handles = Vec::new();
+    for (i, env) in envs.into_iter().enumerate() {
+        let st = state.clone();
+        let l = ledger.clone();
+        handles.push(tokio::spawn(async move {
+            if i % 2 == 0 { st.submit_local_tx(env).await.is_ok() } else {
+                matches!(crate::p2p::handle_tx_broadcast(&l, &st.mempool, env).await, crate::p2p::TxGossipOutcome::Enqueued { .. })
+            }
+        }));
+    }
+    let mut admitted = 0;
+    for h in handles {
+        if h.await.unwrap() { admitted += 1; }
+    }
+    assert_eq!(admitted, 1, "exactly one of the overdrawing transfers may be admitted");
+    assert_eq!(state.mempool.lock().await.len(), 1);
+}
+
+// ---- Tmail sent_at_ms is held to the node's clock (SECURITY.md 2026-10-11) ---------------------
+
+#[test]
+fn sent_at_window_is_five_minutes_and_anonymous_posts_stay_in_their_utc_day() {
+    use crate::tmail::envelope::{check_sent_at, SentAtRefusal, SENT_AT_SKEW_MS};
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    let mut named = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-1", tmail_flags_for_tests(false), None);
+    let now = 1_791_700_000_000u64;
+    named.sent_at_ms = now - SENT_AT_SKEW_MS;
+    assert_eq!(check_sent_at(&named, now), Ok(()), "exactly 5 minutes behind is accepted");
+    named.sent_at_ms = now + SENT_AT_SKEW_MS;
+    assert_eq!(check_sent_at(&named, now), Ok(()), "exactly 5 minutes ahead is accepted");
+    named.sent_at_ms = now - SENT_AT_SKEW_MS - 1;
+    assert_eq!(check_sent_at(&named, now), Err(SentAtRefusal::ClockOff));
+    named.sent_at_ms = now + SENT_AT_SKEW_MS + 1;
+    assert_eq!(check_sent_at(&named, now), Err(SentAtRefusal::ClockOff));
+
+    // The UTC day boundary: dated 2 s before midnight.
+    let midnight = (now / 86_400_000 + 1) * 86_400_000;
+    let mut anon = named.clone();
+    anon.flags.anonymous = true;
+    anon.sent_at_ms = midnight - 2_000;
+    assert_eq!(check_sent_at(&anon, midnight - 1_000), Ok(()), "arrives before midnight: accepted");
+    assert_eq!(check_sent_at(&anon, midnight + 1_000), Err(SentAtRefusal::AnonDayChanged), "arrives after midnight: refused");
+    // Dated just after midnight by a clock a little ahead, arriving just before: also another day.
+    anon.sent_at_ms = midnight + 2_000;
+    assert_eq!(check_sent_at(&anon, midnight - 1_000), Err(SentAtRefusal::AnonDayChanged));
+    // A named post across midnight is fine (no daily ID).
+    named.sent_at_ms = midnight - 2_000;
+    assert_eq!(check_sent_at(&named, midnight + 1_000), Ok(()));
+}
+
+/// Through the real send handler: a post with a clock 10 minutes off is refused with the plain
+/// message and not stored; an anonymous post dated before midnight arriving after it is refused
+/// cleanly and not stored, while the same post arriving before midnight is not refused for its
+/// time. Controls (run by hand): without the check in the handler → FAILS.
+#[tokio::test]
+async fn send_refuses_posts_dated_off_the_node_clock_and_stores_nothing() {
+    let _g = env_lock();
+    set_test_env_base();
+    let node = TmailNode::new();
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    let body = |r: axum::response::Response| async move {
+        let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        String::from_utf8_lossy(&b).to_string()
+    };
+
+    let mut env = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-2", tmail_flags_for_tests(false), None);
+    env.sent_at_ms -= 10 * 60_000;
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(env)).await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert!(body(r).await.contains("your device clock is off"));
+    assert_eq!(node.inbox_len(&receiver), 0, "nothing stored");
+
+    let midnight = (tmail_now_ms_for_tests() / 86_400_000 + 1) * 86_400_000;
+    let mut anon = signed_tmail_env_for_tests(&words, &sender, &receiver, "clock-3", tmail_flags_for_tests(false), None);
+    anon.flags.anonymous = true;
+    anon.sent_at_ms = midnight - 2_000;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(Some(midnight + 1_000));
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(anon.clone())).await;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(None);
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert!(body(r).await.contains("the UTC day changed"), "a clean refusal, with the reason");
+    assert_eq!(node.inbox_len(&receiver), 0, "not stored");
+
+    crate::tmail::envelope::set_sent_at_clock_for_tests(Some(midnight - 1_000));
+    let r = crate::rest::handlers::tmail::post_tmail_send(axum::extract::State(node.rest.clone()), axum::Json(anon)).await;
+    crate::tmail::envelope::set_sent_at_clock_for_tests(None);
+    let text = body(r).await;
+    assert!(!text.contains("clock") && !text.contains("UTC day"), "before midnight it is not refused for its time: {text}");
+}
+
+/// Gossip ingest applies the same rule: a peer can't plant a backdated or future-dated envelope.
+#[test]
+fn gossip_refuses_envelopes_dated_off_the_node_clock() {
+    let _g = env_lock();
+    set_test_env_base();
+    let node = TmailNode::new();
+    let (words, sender) = tmail_party_for_tests();
+    let (_, receiver) = tmail_party_for_tests();
+    for (id, shift) in [("clock-g1", -(10 * 60_000i64)), ("clock-g2", 10 * 60_000)] {
+        let mut env = signed_tmail_env_for_tests(&words, &sender, &receiver, id, tmail_flags_for_tests(false), None);
+        env.sent_at_ms = (env.sent_at_ms as i64 + shift) as u64;
+        let out = node.receive_gossip(&tmail_wire_envelope(&env));
+        assert!(matches!(out, crate::p2p::TmailGossipOutcome::Rejected { ref reason } if reason.starts_with("time:")), "{id}: {out:?}");
+    }
+    assert_eq!(node.inbox_len(&receiver), 0);
 }

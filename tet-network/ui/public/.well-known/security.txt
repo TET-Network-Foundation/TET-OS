@@ -1,8 +1,8 @@
 # TET (testnet). How to report a security problem: see the policy below.
 # Vulnerability reports go to the security contact; misuse and takedown requests to abuse@.
 Contact: mailto:tetsteve@proton.me
-Contact: mailto:abuse@stevenexus.org
-Contact: mailto:hello@stevenexus.org
+Contact: mailto:abuse@tetnet.org
+Contact: mailto:hello@tetnet.org
 Policy: https://github.com/TET-Network-Foundation/TET-OS/blob/main/SECURITY.md
 Preferred-Languages: en, ja
 Expires: 2027-10-10T00:00:00.000Z

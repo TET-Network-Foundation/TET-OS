@@ -53,6 +53,10 @@ pub async fn post_tmail_send(
     State(state): State<RestState>,
     Json(env): Json<TmailEnvelopeV1>,
 ) -> Response {
+    // The time first: refused before anything else is checked, stored or relayed.
+    if let Err(r) = crate::tmail::envelope::check_sent_at(&env, crate::tmail::envelope::sent_at_clock_now_ms()) {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({ "ok": false, "error": r.message(), "clock": true }))).into_response();
+    }
     if let Err(e) = verify_tmail_envelope_v1(&env) {
         return (envelope_error_status(&e), format!("{e}")).into_response();
     }

@@ -46,7 +46,7 @@ export async function sha256(bytes) {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
 }
 
-async function ed25519Verify(pubHex, sigB64, msg) {
+export async function ed25519Verify(pubHex, sigB64, msg) {
   try {
     const sig = b64ToBytes(sigB64);
     if (sig.length !== ED_SIG) return false;

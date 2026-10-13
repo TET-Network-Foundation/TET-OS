@@ -404,6 +404,7 @@ function Composer(props: {
 }) {
   const { t } = useLang();
   const { me } = props;
+  const { noteNamedPost } = useTryWallet();
   const [mode, setMode] = useState<"named" | "anonymous">("named");
   const [text, setText] = useState("");
   const [nick, setNick] = useState("");
@@ -426,6 +427,7 @@ function Composer(props: {
           await sleep(3_000);
           await postNamed(BASE, props.board, text);
         }
+        void noteNamedPost();
       } else {
         tree.current ??= await shelterAnonTree(BASE);
         if (!tree.current) throw new Error(t("Anonymous posting needs at least {n} members in the anonymity set.", { n: me.anon_min }));

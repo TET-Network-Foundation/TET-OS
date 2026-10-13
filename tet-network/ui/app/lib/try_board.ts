@@ -39,6 +39,7 @@ import { tmailKeyRegistrationAuthMessageBytes, type TmailKeyRegistrationV1 } fro
 import { getHybridSignerSession, setHybridSignerSession } from "./hybrid_signer_session";
 import { encodeAnnouncement, parseListings } from "./board_directory.mjs";
 import { getTmailKeySession } from "./tmail_session";
+import { verifyEnvelopeSender } from "./key_trust";
 import {
   anonNodeAdapter,
   getTmailAnonRoot,
@@ -63,6 +64,11 @@ export type BoardPost = {
   msgId: string;
   sentAtMs: number;
   label: ReturnType<typeof postLabel>;
+  /**
+   * A named post's signer, checked here: the Ed25519 key its signature verifies against (= its
+   * wallet id). The only thing a DM or ID card may use (lib/dm_target.ts); never a displayed prefix.
+   */
+  verifiedSigner?: string;
 } & ({ state: "open"; text: string } | { state: "unreadable" });
 
 /**
@@ -145,8 +151,15 @@ export async function readBoard(
   if (!r.ok) throw new Error(r.text || `could not read the board (HTTP ${r.status})`);
   const out: BoardPost[] = [];
   for (const row of r.messages) {
-    const base = { msgId: row.msg_id, sentAtMs: row.sent_at_ms, label: postLabel(row) };
+    const base: { msgId: string; sentAtMs: number; label: ReturnType<typeof postLabel>; verifiedSigner?: string } = { msgId: row.msg_id, sentAtMs: row.sent_at_ms, label: postLabel(row) };
     if (!shownOnBoard(base.label)) continue;
+    // A named post: who signed it, checked here (not taken from the node). A post whose signature
+    // isn't its claimed sender's isn't shown at all.
+    if (base.label.kind === "named" && row.e2ee) {
+      const v = await verifyEnvelopeSender(row as never, baseUrl);
+      if (v === "forged") continue;
+      if (v === "verified") base.verifiedSigner = String(row.hybrid_sig?.ed25519_pubkey_hex ?? "").trim().toLowerCase();
+    }
     if (!row.e2ee) {
       out.push({ ...base, state: "unreadable" });
       continue;

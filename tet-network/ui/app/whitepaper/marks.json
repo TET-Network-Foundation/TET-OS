@@ -1,12 +1,12 @@
 {
   "html": {
-    "code": "TET-ZSK3-VQ1J",
-    "sha256": "54461c77ae03c170d9ef53e0b5f84fec849eb0e84b31a571d486d2e679d70324",
+    "code": "TET-03ZE-2DVW",
+    "sha256": "1c6e202aee9e67a79f521ed1fb5a3355a2262b1c3d6f2025dc8919d9efa9cba1",
     "file": "paper/tet-technical-paper.html"
   },
   "pdf": {
-    "code": "TET-YJ9J-TS4Z",
-    "sha256": "b7e0990da9a1671289198fa8d60a242582443b409dc98b538b8ff10b25ec7b98",
+    "code": "TET-WF10-23HM",
+    "sha256": "bfea406cab426190c3726dbe3baef03a98cd06474ac8f4efdf8b33b3e956b283",
     "file": "paper/tet-technical-paper.pdf"
   },
   "signer": "e93a3597f03a8ee4621d8c7340d37fe871875f8dedbc5ec9e139293d0af847bd",

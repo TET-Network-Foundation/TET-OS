@@ -53,6 +53,10 @@ cat > "$STUBS/date" <<'EOF'
 #!/usr/bin/env bash
 if [ "${1:-}" = "+%s" ]; then echo "${FAKE_NOW:-1000000}"; else /bin/date "$@"; fi
 EOF
+cat > "$STUBS/timedatectl" <<'EOF'
+#!/usr/bin/env bash
+echo "${FAKE_NTP:-yes}"
+EOF
 chmod +x "$STUBS"/*
 
 failed=0
@@ -72,6 +76,17 @@ pings()   { grep -c '^PING' "$CALLS" || true; }
 has()     { grep -q -- "$1" "$CALLS"; }
 outhas()  { grep -q -- "$1" "$WORK/out"; }
 rc()      { cat "$WORK/rc"; }
+
+# --- a host clock that isn't NTP-synced is red (posts are checked against it) ------------------
+run ntp FAKE_NTP=no
+if has 'PING /fail | clock not NTP-synchronized' && [ "$(rc)" = 1 ]; then pass "clock not NTP-synced → /fail with the reason"; else flunk "clock not NTP-synced → /fail with the reason"; fi
+# Control: the same run against a copy of the probe without the clock check must NOT report it.
+# shellcheck disable=SC2016  # a literal sed pattern
+sed '/^# --- 2b. clock/,/^\[ "\$ntp" = yes \]/d' "$SCRIPT" > "$WORK/no-ntp.sh"
+: > "$CALLS"
+env PATH="$STUBS:$PATH" TET_HC_URL="https://hc.example/abc123" TET_HC_STATE_DIR="$WORK/state-ntpc" \
+    TET_HC_COMPOSE_DIR="$WORK/nonexistent" TET_HC_UNIT_DIR="$WORK/units" FAKE_NTP=no bash "$WORK/no-ntp.sh" > "$WORK/out" 2>&1
+if ! has 'clock not NTP-synchronized'; then pass "control: without the clock check the run doesn't report it"; else flunk "control: without the clock check the run doesn't report it"; fi
 
 # --- a dead node is red -----------------------------------------------------------------------
 run dead FAKE_HEALTH=exited

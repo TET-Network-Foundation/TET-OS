@@ -173,7 +173,7 @@ export default function HowPanel(props: { go: LandingGo }) {
           <li>{t("Now: v0.2 testnet. Two seed nodes, one block producer, coins with no value.")}</li>
           <li>{t("Target: the Phase 1 genesis in Q1 2027. It binds the ML-DSA key to the wallet, signs blocks and renames the chain. It's a target, not a date.")}</li>
           <li>
-            <span className={PLANNED}>{t("planned")}</span> {t("TetSearch at search.stevenexus.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.")} {t("Keys without a human vouch can't publish.")}
+            <span className={PLANNED}>{t("planned")}</span> {t("TetSearch at search.tetnet.org: searches only signed TET sites; only vouched people can publish; built to keep out mass AI generation.")} {t("Keys without a human vouch can't publish.")}
           </li>
           <li>
             {t("What's open is in")}{" "}
@@ -204,6 +204,9 @@ export default function HowPanel(props: { go: LandingGo }) {
         <h2 className={H}>{t("FAQ")}</h2>
         <p>{t("Testnet TET is a practice unit. It has no monetary value and cannot be bought.")}</p>
         <p className="mt-1">{t("This is a testnet. Data may be reset.")}</p>
+        <p className="mt-1">{t("The testnet's genesis contains a founder wallet, locked by a one-year cliff, and a treasury address that collects test fees. This chain can never become mainnet; mainnet supply and allocation are undecided.")}</p>
+        <p className="mt-1">{t("The founder allocation is locked until 2027-09-22: a one-year cliff from this testnet's genesis on 2026-09-22.")}</p>
+        <p className="mt-1">{t("The welcome airdrop is 1,000 TET (practice unit, can't be exchanged for money), once per wallet, for up to 10,000 wallets.")}</p>
         <h3 className="mt-3 font-semibold">{t("AI and TET")}</h3>
         <p>{t("Members-only spaces are encrypted; public pages opt out of AI training crawlers that respect robots.txt.")}</p>
         <p className="mt-1">{t("That opt-out is a request: crawlers that ignore robots.txt, or don't say who they are, aren't stopped by it. Anything public (blocks, transactions, public boards, published marks) can be read by anyone who runs a node, AI included. Only the members-only spaces are out of reach, because they're end-to-end encrypted.")}</p>

@@ -1,5 +1,5 @@
 /**
- * What the page checks itself, instead of trusting the node (SECURITY.md, 2026-10-11):
+ * What the page checks itself, instead of trusting the node (SECURITY.md, 2026-10-10):
  *
  * 1. **Recipient keys.** Before encrypting to someone (DM, files, Shelter's sealed key), the page
  *    fetches their messaging keys and checks the registration is signed by *their* wallet:

@@ -184,10 +184,6 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::get(super::handlers::ledger::get_proof_by_id),
         )
         .route(
-            "/ledger/genesis_bridge",
-            axum::routing::post(super::handlers::ledger::post_genesis_bridge_enveloped),
-        )
-        .route(
             "/tx/submit",
             axum::routing::post(super::handlers::ledger::post_tx_submit),
         )
@@ -317,6 +313,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             "/explorer/tx/:hash",
             axum::routing::get(super::handlers::ledger::get_explorer_tx),
         )
+        .route(
+            "/explorer/block/:height",
+            axum::routing::get(super::handlers::ledger::get_explorer_block),
+        )
         .route("/tmail/anon/fast/:receiver/:posting_key", axum::routing::get(super::handlers::tmail::get_tmail_anon_fast))
         // Shelter (tmail/shelter.rs): 404 while off; reads are signed, most members-only.
         // Testnet practice grants (grants.rs): 404 while the payer is off.
@@ -334,6 +334,8 @@ pub fn build_router(state: RestState) -> axum::Router {
         .route("/sigs/publish", axum::routing::post(super::handlers::sigs::post_sigs_publish))
         .route("/sigs/search", axum::routing::get(super::handlers::sigs::get_sigs_search))
         .route("/sites/edit", axum::routing::post(super::handlers::sites::post_site_edit))
+        .route("/search/list", axum::routing::post(super::handlers::search::post_search_list))
+        .route("/search/listings", axum::routing::get(super::handlers::search::get_search_listings))
         .route("/sites/:site_id", axum::routing::get(super::handlers::sites::get_site))
         .route(
             "/explorer/blocks/recent",

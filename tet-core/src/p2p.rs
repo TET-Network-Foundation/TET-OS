@@ -1450,7 +1450,7 @@ pub(crate) async fn handle_tx_broadcast(
         }
     }
 
-    match crate::rest::state::enqueue_without_broadcast(mempool, env).await {
+    match crate::rest::state::enqueue_without_broadcast(mempool, ledger, env).await {
         Ok(_evicted) => {
             let mempool_len = mempool.lock().await.len();
             TxGossipOutcome::Enqueued {
@@ -1512,6 +1512,12 @@ pub(crate) fn handle_tmail_network_event(
             // Shelter's posts never arrive by gossip: they are made on this node only.
             if crate::tmail::shelter::is_shelter_board(&envelope.receiver_wallet_id) {
                 return TmailGossipOutcome::Rejected { reason: "Shelter posts are not gossiped".into() };
+            }
+            // The same clock rule as a REST send, so every node keeps the same posts.
+            if let Err(r) = crate::tmail::envelope::check_sent_at(envelope, crate::tmail::envelope::sent_at_clock_now_ms()) {
+                return TmailGossipOutcome::Rejected {
+                    reason: format!("time: {}", r.message()),
+                };
             }
             if let Err(e) = crate::tmail::envelope::verify_tmail_envelope_v1(envelope) {
                 return TmailGossipOutcome::Rejected {

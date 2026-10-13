@@ -1,3 +1,8 @@
+> **Superseded. Historical, not the current design.** Kept for the record. The current description of
+> TET is the technical paper v2: <https://tetnet.org/whitepaper> (source
+> `tet-network/ui/app/whitepaper/paper.ts`, files in `tet-network/ui/public/paper/`). Where this
+> document and the paper differ, the paper is right.
+
 # TET Network — State of the Project, 2026-09
 
 > ## ⚠ SUPERSEDED IN PART — annotated 2026-09-20
@@ -22,7 +27,7 @@
 **Compiled:** 2026-09-17
 **Method:** Read-only repository archaeology (git history, all `docs/`, all whitepaper versions, and the Rust/TypeScript source as it exists on disk). No code was changed.
 **Audience:** An incoming CTO with no prior context.
-**Working directory:** `/Users/sengokukazuma/Nexus_Network`
+**Working directory:** `~/Nexus_Network`
 **Remote:** `https://github.com/TET-Network-Foundation/TET-OS.git`, branch `main`, no tags, no other branches.
 
 > **Read this first.** The last commit on `main` is `ff6f7be`, dated **2026-06-12**. Today is **2026-09-17**. The repository has been **dormant for 3 months and 5 days**. The Phase 0 public ship date, locked in writing on 2026-05-19 and repeated in the whitepaper, the README, and every planning document, was **2026-09-15** — two days ago. It was not met, and there is no commit, doc, or note in the repo explaining why. Everything below describes a project that was moving very fast and then stopped.

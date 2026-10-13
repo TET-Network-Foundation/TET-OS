@@ -16,6 +16,7 @@ pub mod pages;
 pub mod sigs;
 pub mod grants;
 pub mod shelter;
+pub mod search;
 pub mod sites;
 pub mod phase4;
 pub mod system;

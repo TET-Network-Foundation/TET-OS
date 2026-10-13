@@ -31,6 +31,12 @@ check("the abuse contact is the Terms page's", () => {
   const abuse = /ABUSE_CONTACT = "([^"]+)"/.exec(terms)?.[1];
   assert.ok(abuse && field("Contact").includes(`mailto:${abuse}`), `security.txt doesn't name ${abuse}`);
 });
+check("hello@ is the one What is TET shows, and both contacts are on the main domain", () => {
+  const what = readFileSync(new URL("../app/try/WhatPanel.tsx", import.meta.url), "utf8");
+  const hello = /mailto:(hello@[^"]+)"/.exec(what)?.[1];
+  assert.ok(hello && field("Contact").includes(`mailto:${hello}`), `security.txt doesn't name ${hello}`);
+  for (const c of field("Contact").filter((c) => /mailto:(abuse|hello)@/.test(c))) assert.match(c, /@tetnet\.org$/, c);
+});
 check("it links the policy (SECURITY.md)", () => {
   assert.ok(field("Policy").some((p) => p.endsWith("/SECURITY.md")));
 });
