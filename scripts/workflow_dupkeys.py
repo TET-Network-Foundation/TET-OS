@@ -6,7 +6,7 @@ seven branches). PyYAML would keep the last value without a word, so this loader
 Run by .github/workflows/workflow-lint.yml, which is separate from ci.yml so a broken ci.yml can't
 hide its own breakage.
 """
-import yaml,sys
+import re,yaml,sys
 class L(yaml.SafeLoader): pass
 def cm(loader,node,deep=False):
     keys=[loader.construct_object(k,deep=deep) for k,_ in node.value]
@@ -17,7 +17,17 @@ L.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, cm)
 bad = 0
 for path in sys.argv[1:]:
     try:
-        yaml.load(open(path), Loader=L)
+        doc = yaml.load(open(path), Loader=L)
+        # GitHub also rejects (silently, with no jobs) a step whose `uses:` is empty, which is still
+        # valid YAML; and Actions must be pinned to a full commit SHA (THREAT_MODEL rule 9).
+        for job_name, job in ((doc or {}).get("jobs") or {}).items():
+            for i, step in enumerate((job or {}).get("steps") or []):
+                if isinstance(step, dict) and "uses" in step:
+                    u = step["uses"]
+                    if not isinstance(u, str) or not u.strip():
+                        raise ValueError(f"job {job_name}, step {i + 1}: empty `uses:`")
+                    if not u.startswith("./") and not re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", u.strip()):
+                        raise ValueError(f"job {job_name}, step {i + 1}: `uses: {u}` is not pinned to a full commit SHA")
         print(f"ok   {path}")
     except Exception as e:
         bad += 1
