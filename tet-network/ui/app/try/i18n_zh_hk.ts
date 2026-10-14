@@ -1092,4 +1092,12 @@ export const ZH_HK: Record<string, string> = {
   "The welcome airdrop is 1,000 TET (practice unit, can't be exchanged for money), once per wallet, for up to 10,000 wallets.": "歡迎空投為 1,000 TET（練習用單位，不能兌換成金錢），每個錢包一次，最多 10,000 個錢包。",
   "your device clock is off: set it to the right time and try again": "你裝置的時鐘不準確：請把它調到正確時間，然後再試一次。",
   "the UTC day changed while this anonymous post was on its way; send it again": "這則匿名帖文傳送途中 UTC 日期已經改變；請再發送一次。",
+  "My ID": "我的 ID",
+  "This tab's ID: copy it, show its QR code, keep it.": "此分頁的 ID：複製、顯示 QR 碼、保留。",
+  "This tab has no ID yet.": "此分頁還沒有 ID。",
+  "Make my ID": "建立我的 ID",
+  "This node is busy right now. Try again in a moment.": "此節點現在很繁忙。請稍後再試。",
+  "This node is busy right now. Shelter will load in a moment.": "此節點現在很繁忙。庇護所稍後便會載入。",
+  "Couldn't reach this node. Shelter will load when it answers.": "連不上此節點。節點回應後，庇護所便會載入。",
+  "Try again": "再試一次",
 };
