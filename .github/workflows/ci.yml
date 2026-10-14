@@ -440,6 +440,12 @@ jobs:
         name: try page — the board's invite stays secret and anonymous never turns named
         run: node --experimental-strip-types scripts/try_board_guard.mjs
 
+      # Shelter says "not open" only when the node says it's off: a busy (429/503) or silent node is
+      # temporary and says so, and a 429 error reads "this node is busy". Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a busy node never reads as "Shelter isn't open"
+        run: node --experimental-strip-types scripts/shelter_state_guard.mjs
+
       # Try TET boards: threads are a convention inside the post text; only the first line can be a
       # header (a body can't start, move or title a thread) and the earliest title wins. Controls.
       - if: needs.gate.outputs.code == 'true'

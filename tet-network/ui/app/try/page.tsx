@@ -15,7 +15,6 @@ import { wordsFileText } from "../lib/disposable_wallet.mjs";
 import { openBoard, readDirectory, type OpenBoard } from "../lib/try_board";
 import DirectoryPanel from "./DirectoryPanel";
 import AboutPanel from "./AboutPanel";
-import { IdCard } from "./IdCard";
 import TermsPanel from "./TermsPanel";
 import LivePanel from "./LivePanel";
 import SignPanel from "./SignPanel";
@@ -40,10 +39,9 @@ import InsidePanel from "./InsidePanel";
 import GenuinePanel from "./GenuinePanel";
 import SealPanel from "./SealPanel";
 import ShelterPanel from "./ShelterPanel";
-import GrantsBox from "./GrantsBox";
+import IdPanel from "./IdPanel";
 import SearchPanel from "./SearchPanel";
 import { shelterOpen } from "../lib/shelter";
-import { formatTet } from "../lib/format_tet";
 
 /** A wallet the operator reads (deploy/demo/README.md, "message the demo"); empty when not set. */
 const DEMO_CONTACT = /^[0-9a-f]{64}$/.test((process.env.NEXT_PUBLIC_TET_DEMO_CONTACT ?? "").trim().toLowerCase())
@@ -72,7 +70,7 @@ const TOOLS = [
   { id: "about", label: "About", group: "footer" },
   { id: "terms", label: "Terms", group: "footer" },
 ] as const;
-type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home" | "how" | "what" | "inside";
+type ToolId = (typeof TOOLS)[number]["id"] | "new" | "home" | "how" | "what" | "inside" | "id";
 /** What the middle column shows: a board (by invite) or a tool. */
 type View = { board: string } | { tool: ToolId };
 const viewKey = (v: View) => ("board" in v ? `b:${v.board}` : `t:${v.tool}`);
@@ -255,83 +253,26 @@ function TopBar(props: { go: (v: View) => void; onSearch: (q: string) => void })
             className={cx(FOCUS, "w-full rounded-full border border-[#c9ced4] bg-white px-3.5 py-1.5 text-[15px]")}
           />
         </form>
-        <CompactWallet />
+        <CompactWallet go={props.go} />
       </div>
     </header>
   );
 }
 
-/** "a1b2c3d4 · save 12 words": this tab's wallet in one short line (the rest is under "this node"). */
-/** Read once, before this visit marks itself visited (ContinueBlock): is this a returning visitor? */
-const RETURNING = typeof window !== "undefined" && getUi("tet.ui.v1.visited") === "1";
-
-/**
- * This tab's ID in one short line. Keeping it ("save your passphrase") is offered when the visitor
- * asks (tap the ID) or on a returning visit — not pushed on the first one.
- */
-
-function CompactWallet() {
+/** This tab's ID in one short line: the short ID, linking to "My ID", where everything about it lives. */
+function CompactWallet(props: { go: (v: View) => void }) {
   const { t } = useLang();
   const { wallet } = useTryWallet();
-  const [offer, setOffer] = useState(RETURNING);
-  // The ID's testnet balance, read only when the ID area is open (home makes no extra request).
-  const [balance, setBalance] = useState<string | null>(null);
-  useEffect(() => {
-    if (!offer || !wallet) return;
-    let on = true;
-    void fetch(`${BASE}/ledger/balance/${wallet.walletId}`)
-      .then((r) => (r.ok ? (r.json() as Promise<{ balance_micro_tet?: number }>) : null))
-      .then((j) => on && j && setBalance(formatTet(j.balance_micro_tet ?? 0)))
-      .catch(() => {});
-    return () => {
-      on = false;
-    };
-  }, [offer, wallet]);
   if (!wallet) return null;
-  const save = () => {
-    const url = URL.createObjectURL(new Blob([wordsFileText(wallet.words, wallet.walletId)], { type: "text/plain" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `tet-testnet-wallet-${wallet.walletId.slice(0, 8)}.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-  // The ID stays in the bar; when open, its details take their own full-width row under it (the bar
-  // wraps), so they never squeeze the search box on a phone.
   return (
-    <>
-      <button
-        type="button"
-        aria-expanded={offer}
-        aria-controls="id-details"
-        title={t("your ID")}
-        onClick={() => setOffer(!offer)}
-        className={cx(FOCUS, MONO, INK.named, "shrink-0 rounded-sm text-[13px]")}
-      >
-        {wallet.walletId.slice(0, 8)}
-      </button>
-      {offer ? (
-        <div id="id-details" className="basis-full text-right text-[13px] text-[#5d646d]">
-          {balance !== null ? (
-            <>
-              <span>{t("{amount} TET (practice unit, can't be exchanged for money)", { amount: balance })}</span>
-              {" · "}
-            </>
-          ) : null}
-          <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2")} onClick={save}>
-            {t("Keep this ID? Save your passphrase (12 words)")}
-          </button>
-          <span className="block">{t("Lose your passphrase (12 words) and nobody can recover it.")} {t("TET asks for your passphrase (12 words) only on the restore screen; support never DMs you.")}</span>
-          <div className="mt-2 flex justify-end text-left">
-            <div>
-              <p className="font-semibold text-[#1c1f23]">{t("my ID")}</p>
-              <IdCard walletId={wallet.walletId} />
-            </div>
-          </div>
-          <GrantsBox />
-        </div>
-      ) : null}
-    </>
+    <button
+      type="button"
+      title={t("My ID")}
+      onClick={() => props.go({ tool: "id" })}
+      className={cx(FOCUS, MONO, INK.named, "shrink-0 rounded-sm text-[13px] underline-offset-2 hover:underline")}
+    >
+      {wallet.walletId.slice(0, 8)}
+    </button>
   );
 }
 
@@ -508,7 +449,7 @@ function TryApp() {
   // First load: the board in the `#`, or the tool in `?tab=`.
   useEffect(() => {
     const tab = new URLSearchParams(window.location.search).get("tab");
-    const tool: ToolId | undefined = TOOLS.find((t) => t.id === tab)?.id ?? (tab === "home" || tab === "how" || tab === "what" || tab === "inside" ? tab : undefined);
+    const tool: ToolId | undefined = TOOLS.find((t) => t.id === tab)?.id ?? (tab === "home" || tab === "how" || tab === "what" || tab === "inside" || tab === "id" ? tab : undefined);
     const h = window.location.hash;
     let live = true;
     if (h.startsWith("#board=")) {
@@ -553,6 +494,7 @@ function TryApp() {
     about: t("About"),
     terms: t("Terms"),
     live: t("live"),
+    id: t("My ID"),
   };
   const isHome = "tool" in view && view.tool === "home";
   const ipNote = t("Testnet. The demo node sees your IP address and doesn't write it to any log; it keeps it in memory only to limit requests. For IP privacy, use Tor or your own node. Run by one person; nothing here is audited.");
@@ -665,6 +607,7 @@ function TryApp() {
           {panel({ tool: "about" }, <AboutPanel />)}
           {panel({ tool: "terms" }, <TermsPanel />)}
           {panel({ tool: "live" }, <LivePanel />)}
+          {panel({ tool: "id" }, <IdPanel baseUrl={BASE} active={"tool" in view && view.tool === "id"} />)}
         {isHome ? null : (
           <p className="px-4 py-4 text-[14px] md:px-5">
             <a href="#top" className={cx(FOCUS, "rounded-sm underline underline-offset-2")}>

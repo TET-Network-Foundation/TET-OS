@@ -17,6 +17,7 @@ import { b64ToBytes } from "./encoding";
 import { getHybridSignerSession } from "./hybrid_signer_session";
 import { mldsa44SignDeterministic } from "./pqc";
 import { trustedKeysFor, verifyEnvelopeSender } from "./key_trust";
+import { shelterState } from "./shelter_state";
 import { buildTmailEnvelopeV1, type TmailEnvelopeV1 } from "./tmail";
 import { decryptForReceiver } from "./tmail_e2ee";
 import { getTmailKeySession } from "./tmail_session";
@@ -96,13 +97,9 @@ async function signedGet<T>(baseUrl: string, sub: string, query = ""): Promise<{
   return { status: r.status, data: r.ok ? (j as T) : null, error: r.ok ? "" : String(j?.error ?? `HTTP ${r.status}`) };
 }
 
+/** Open, yes or no (a busy or unreachable node counts as no). The Shelter tab uses `shelterState`. */
 export async function shelterOpen(baseUrl: string): Promise<boolean> {
-  try {
-    const r = await fetch(`${baseUrl}/shelter/status`, { cache: "no-store" });
-    return r.ok && (await r.json())?.on === true;
-  } catch {
-    return false;
-  }
+  return (await shelterState(baseUrl)) === "open";
 }
 
 export async function shelterMe(baseUrl: string): Promise<ShelterMe> {
