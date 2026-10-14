@@ -509,29 +509,74 @@ impl RestState {
     }
 }
 
+/// The node-wide request limit, per client address, under a shared ceiling.
+///
+/// One-second windows. Each address may send `per_addr_per_sec` requests in a window. All addresses
+/// together share `max_per_sec`, the ceiling; past it, an address is still served while it has sent
+/// no more than its fair share of the ceiling in this window (`max_per_sec / addresses seen`, at
+/// least 1). So one client, or a few, flooding can't make the node refuse everyone else: they use up
+/// their own share and are refused, and a visitor sending a few requests is served. With every
+/// address under its share the node can serve up to about twice the ceiling in a window; that is the
+/// price of not refusing light users.
+///
+/// The address is the one the public gate accounts a request to ([`ClientKey`]), or, when the gate
+/// is off, the TCP peer (see `client_key`).
 #[derive(Debug)]
 pub struct HttpRateLimit {
     window_start: std::time::Instant,
     count: u64,
     max_per_sec: u64,
+    per_addr_per_sec: u64,
+    per_addr: std::collections::HashMap<String, u64>,
 }
 
+/// The client a request is accounted to, set by the public gate for the layers inside it.
+#[derive(Clone, Debug)]
+pub struct ClientKey(pub String);
+
 impl HttpRateLimit {
+    /// A ceiling of `max_per_sec`; each address may use all of it when it is alone.
     pub fn new(max_per_sec: u64) -> Self {
+        Self::with_per_address(max_per_sec, max_per_sec)
+    }
+
+    pub fn with_per_address(max_per_sec: u64, per_addr_per_sec: u64) -> Self {
         Self {
             window_start: std::time::Instant::now(),
             count: 0,
             max_per_sec: max_per_sec.max(1),
+            per_addr_per_sec: per_addr_per_sec.max(1),
+            per_addr: std::collections::HashMap::new(),
         }
     }
 
-    pub(crate) fn tick_allow(&mut self) -> bool {
-        let now = std::time::Instant::now();
+    pub(crate) fn allow(&mut self, client: &str) -> bool {
+        self.allow_at(client, std::time::Instant::now())
+    }
+
+    pub(crate) fn allow_at(&mut self, client: &str, now: std::time::Instant) -> bool {
         if now.duration_since(self.window_start) >= std::time::Duration::from_secs(1) {
             self.window_start = now;
             self.count = 0;
+            self.per_addr.clear();
         }
         self.count = self.count.saturating_add(1);
-        self.count <= self.max_per_sec
+        let mine = self.per_addr.entry(client.to_string()).or_insert(0);
+        *mine = mine.saturating_add(1);
+        let mine = *mine;
+        if mine > self.per_addr_per_sec {
+            return false;
+        }
+        if self.count <= self.max_per_sec {
+            return true;
+        }
+        let share = (self.max_per_sec / self.per_addr.len() as u64).max(1);
+        mine <= share
+    }
+
+    /// Requests counted in the current window, refused ones included (for tests).
+    #[cfg(test)]
+    pub(crate) fn window_count(&self) -> u64 {
+        self.count
     }
 }

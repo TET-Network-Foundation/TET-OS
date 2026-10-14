@@ -158,7 +158,8 @@ TET-Core runs an **Axum** HTTP server over a **sled**-backed ledger (`ledger.rs`
 | `TET_PROD` / `TET_MAINNET` | off | Production hardening (requires DB key, forbids weak ZK) |
 | `TET_WALLET_ID` | `local-wallet` | Dev node identity label / default wallet |
 | `TET_DEV_FAUCET_MICRO` | — | Dev-only faucet credit on boot (disabled in prod) |
-| `TET_HTTP_RPS` | `25` | Global HTTP rate limit |
+| `TET_HTTP_RPS` | `25` | HTTP requests per second, all clients together (a ceiling; past it, a client under its fair share is still served) |
+| `TET_HTTP_RPS_PER_ADDR` | `TET_HTTP_RPS` | HTTP requests per second from one client address |
 | `RISC0_SKIP_BUILD` | — | Skip RISC0 guest build (CI/dev; set for `cargo build`) |
 | `TET_JSON_LOG` | `true` | Structured JSON logs when `true` |
 

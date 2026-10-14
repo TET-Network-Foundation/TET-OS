@@ -34,9 +34,26 @@ pub async fn global_http_ratelimit(
     if req.method() == axum::http::Method::OPTIONS {
         return next.run(req).await;
     }
+    // The public gate (outside this layer) has already worked out the client; otherwise it is the TCP
+    // peer, with X-Forwarded-For believed only from a configured proxy.
+    let client = match req.extensions().get::<super::ClientKey>() {
+        Some(k) => k.0.clone(),
+        None => {
+            let peer = req
+                .extensions()
+                .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+                .map(|c| c.0.ip());
+            super::public_api::client_key(peer, req.headers(), &super::public_api::trusted_proxies_from_env())
+        }
+    };
     let mut rl = state.http_ratelimit.lock().await;
-    if !rl.tick_allow() {
-        return (StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded").into_response();
+    if !rl.allow(&client) {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(axum::http::header::RETRY_AFTER, "1")],
+            "this node is busy; try again in a moment",
+        )
+            .into_response();
     }
     drop(rl);
     next.run(req).await
