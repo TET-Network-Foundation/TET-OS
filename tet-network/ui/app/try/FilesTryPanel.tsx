@@ -33,10 +33,10 @@ type Item = { env: FileEnvelopeV1; filename: string; mimeType: string };
 
 const LIMITS = (t: (en: string) => string) => [
   t("Photos, PDFs and short videos, up to 100 MB each, kept 7 days. Encrypted in this tab before upload."),
-  t("Why not more: the demo node stores every file itself, on its own disk, for everyone. There is no storage market yet that pays nodes to keep files, so this one keeps the limits small."),
+  t("Why not more: the demo node stores every file itself, on its own disk, for everyone. Nothing yet rewards other nodes for keeping files, so this one keeps the limits small."),
   t("Files over 5 MB stay on the demo node only: other nodes accept up to 5 MB, so they neither relay nor keep a copy."),
   t("Each connection can upload up to 200 MB a day, and the demo keeps up to 10 GB in all; when it is full, uploads wait for older files to expire."),
-  t("The 1,000 µTET fee is paid by the demo's sponsor, up to 5 files per connection and per ID a day. Past that the file still arrives; its fee shows as unpaid."),
+  t("The demo's sponsor covers the 1,000 µTET fee (practice unit, can't be exchanged for money), up to 5 files per connection and per ID a day. Past that the file still arrives; its fee shows as not covered."),
   t("The node sees sender, recipient, size and time; not the contents or the file name. The page offers photos, PDFs and videos, but the node can't check what a file is."),
   t("A delivered file proves which ID sent it. Only the recipient can open it, if the safety number you see for them in DM matches theirs. It doesn't prove who is behind that ID, or that the file is what its name says."),
 ];

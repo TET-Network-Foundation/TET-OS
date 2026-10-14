@@ -13,7 +13,7 @@ const REPO = "https://github.com/TET-Network-Foundation/TET-OS";
 
 /** Bitcoin, Ethereum and TET side by side. True claims only; never "first". */
 export const ROWS: [string, string, string, string][] = [
-  ["Purpose", "Digital money", "A platform for smart contracts", "Checking who made something, and when"],
+  ["Purpose", "Digital currency", "A platform for smart contracts", "Checking who made something, and when"],
   ["Post-quantum signatures today", "No (proposals are under discussion)", "No (on the research roadmap)", "Partly: every transaction also carries an ML-DSA-44 signature, but the wallet ID is still the Ed25519 key until Phase 1"],
   ["Anonymous one-person-one-vote", "No", "Not built in (apps such as MACI add it)", "Built in: members-only polls, one vote per member"],
   ["Everyday interface", "Wallet apps from other projects", "Wallets and apps from other projects", "Built in: boards, signing and polls in the browser"],
@@ -187,7 +187,7 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
           </a>
         </li>
       </ul>
-      <p className="mt-2">{t("TET is a volunteer open-source project. There are no paid roles or tokens to offer.")}</p>
+      <p className="mt-2">{t("TET is a volunteer open-source project. There are no jobs or tokens to offer.")}</p>
 
       <p className="mt-6">
         <button type="button" className={link} onClick={() => props.go("how")}>

@@ -13,7 +13,7 @@
 //    and Hong Kong Chinese.
 
 import { register } from "node:module";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import assert from "node:assert/strict";
 
 register("./lib/ts_hooks.mjs", import.meta.url);
@@ -72,6 +72,46 @@ await check("no \"first\" claims, in any language", () => noFirst(SRC));
 await mustThrow("a \"first\" claim is caught", () => noFirst(SRC.replace('"Checking who made something, and when"', '"The first network for checking who made something"')));
 await mustThrow("a Japanese \"first\" claim is caught", () => noFirst(SRC, { ...JA, "Checking who made something, and when": "世界初の、作者を確かめるネットワーク" }));
 
+// 1b. No "first" CLAIM anywhere /try or /agents shows (added 2026-10-13). Until then only this page
+// was checked. A claim is "the first <blockchain|network|…>", "first-ever", "first of its kind",
+// "the first to …", 世界初 / 業界初 / 史上初, 首個 / 首創 / 全球首 / 第一個<區塊鏈|網絡|平台>.
+// Ordinary sequence words ("join the set first", "the first post of a thread") are not claims and
+// stay allowed on tetnet.org.
+export const FIRST_CLAIM = new RegExp(
+  [
+    "\\b(?:the|world'?s|TET'?s?|our)\\s+first\\s+(?:post-quantum\\s+|quantum[- ]\\w+\\s+|public\\s+|open\\s+)?(?:blockchain|chain|network|ledger|L1|layer[- ]?1|project|platform|system|protocol|wallet|app|OS)\\b",
+    "\\bthe\\s+first\\s+to\\s+(?:combine|offer|use|ship|bring|build|run|make)\\b",
+    "\\bfirst[- ]ever\\b|\\bfirst of its kind\\b",
+    "世界初|業界初|史上初|首個|首創|全球首|第一個(?:區塊鏈|網絡|平台)",
+  ].join("|"),
+  "i",
+);
+const shownStrings = (path, text) => {
+  const out = [];
+  text.split("\n").forEach((line, i) => {
+    if (/^\s*(?:\/\/|\*|\/\*)/.test(line)) return;
+    const re = /i18n_[a-z_]+\.ts$|agents_text\.ts$/.test(path) ? /"((?:[^"\\]|\\.)*)"/g : /\bt\("((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g;
+    for (const m of line.matchAll(re)) out.push([i + 1, m[1] ?? m[2]]);
+  });
+  return out;
+};
+const firstClaims = (files) =>
+  files.flatMap(([path, text]) => shownStrings(path, text).filter(([, str]) => FIRST_CLAIM.test(str)).map(([n, str]) => `${path}:${n}: ${str.slice(0, 100)}`));
+const shownDirs = ["../app/try/", "../app/agents/"].map((d) => new URL(d, import.meta.url)).filter((u) => existsSync(u));
+const shownFiles = shownDirs.flatMap((u) => readdirSync(u).filter((n) => /\.(?:tsx?|mjs)$/.test(n)).map((n) => [`${u.pathname.split("/app/")[1]}${n}`, readFileSync(new URL(n, u), "utf8")]));
+await check(`no "first" claim anywhere /try or /agents shows (${shownFiles.length} files)`, () => {
+  const bad = firstClaims(shownFiles);
+  assert.deepEqual(bad, [], bad.join("\n     "));
+});
+await check("control: \"first\" claims are caught in any language; ordinary \"first\" isn't", () => {
+  for (const c of ["TET is the first post-quantum blockchain.", "The world's first network for checking who made something.", "TET was the first to combine these.", "A first-ever.", "世界初のブロックチェーン", "首個後量子區塊鏈", "第一個區塊鏈"]) {
+    assert.equal(firstClaims([["x.tsx", `t("${c}")`]]).length, 1, c);
+  }
+  for (const ok of ["Join the anonymity set first.", "The first post of the thread…", "the first 128 bits of the .sig.json's SHA-256", "最初の投稿"]) {
+    assert.equal(firstClaims([["x.tsx", `t("${ok}")`]]).length, 0, ok);
+  }
+});
+
 // 2. no dates beyond Phase 1
 const PHASE1 = "Phase 1: genesis, the start of the real network. Target: Q1 2027. A target, not a promise; it moves if the work isn't ready.";
 const datesOk = (src, ja, zh) => {
@@ -98,7 +138,7 @@ const REQUIRED = [
   "No security audit has been done.",
   "Very few people use it.",
   "After that: the vision. No dates; the order may change.",
-  "TET is a volunteer open-source project. There are no paid roles or tokens to offer.",
+  "TET is a volunteer open-source project. There are no jobs or tokens to offer.",
 ];
 const honest = (src) => {
   const { en } = pageText(src);
