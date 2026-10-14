@@ -155,6 +155,15 @@ needed the founder's key; it did not bypass the founder lock. Since 7e909cb, dep
 and the demo node on 2026-10-13, the route is gone and the transaction endpoint refuses that kind of
 transaction; blocks never accepted it.
 
+**Fixed: one client could make the public node refuse other visitors' requests.** Until
+2026-10-14, a node's request limit was one counter shared by every client, so a client sending
+requests fast enough, or a few of them together, used it up and the node then refused everyone
+else's requests while they kept going. On the demo the page then looked broken: boards and balances
+failed to load and Shelter read as closed. Nothing could be read or changed this way. Since 34e78a6,
+deployed on both seeds and the demo node on 2026-10-14, each client address has its own limit under
+the shared ceiling, and once the ceiling is reached a client still under its fair share is served.
+The page also says "this node is busy" for a refusal instead of reporting the feature as closed.
+
 **Some balance writes do not go through consensus.** A number of paths still change balances outside
 the block pipeline. They are all signed or admin-gated — none is anonymous — but a signature
 authorises a caller, it does not put a write through consensus, so two nodes can disagree about
