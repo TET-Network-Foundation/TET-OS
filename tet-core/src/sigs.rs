@@ -18,6 +18,12 @@
 //!   [`MAX_RECORDS_PER_SIGNER`] per signer; in public mode each publish is charged to the client's
 //!   daily upload budget, like Files and sites. Records don't expire: a signature is meant to last.
 //! - **Takedown:** the operator hiding a signer's wallet stops that signer's records being served.
+//! - **An anchor** (optional): the signer can attach the hash of a mined `FileFee` whose `file_id` is
+//!   the record's stamp id ([`stamp_file_id`]: the first 16 bytes of the record's SHA-256, as a
+//!   UUID): the "hash-only stamp". The node checks the transaction against its own chain before it
+//!   stores the anchor ([`check_anchor`]), keeps the earliest one, and serves it with the record;
+//!   readers re-check it in their own tab. It shows the record existed before that block. Blocks
+//!   carry no time yet, so it is a place in the chain, not a date.
 
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -54,6 +60,41 @@ pub struct StoredRecord {
     pub file_sha256: String,
     pub signer_ed25519: String,
     pub published_at_ms: u64,
+    /// A mined `FileFee` that stamps exactly this record (checked by [`check_anchor`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<Anchor>,
+}
+
+/// Where a record is anchored: the fee transaction and the height of its canonical block.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Anchor {
+    pub tx_hash: String,
+    pub block_height: u64,
+}
+
+/// A record's stamp id, as `file_id` carries it: the first 16 bytes of the record's SHA-256, as a
+/// lowercase UUID (the page's `stampFileId`).
+pub fn stamp_file_id(record: &[u8]) -> String {
+    let h = hex::encode(&sha2::Sha256::digest(record)[..16]);
+    format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
+}
+
+/// Is `row` a mined fee transaction that stamps exactly `record`? It must be in a canonical block
+/// with a height, be a `FileFee`, and carry the record's [`stamp_file_id`]. Anything else is refused.
+pub fn check_anchor(record: &[u8], row: &crate::ledger::TxIndexRecordV1) -> Result<Anchor, SigsError> {
+    if !row.canonical {
+        return Err(SigsError::Anchor("the transaction is in a block that is no longer on the chain".into()));
+    }
+    if row.block_height == 0 {
+        return Err(SigsError::Anchor("the transaction has no block height yet".into()));
+    }
+    let crate::protocol::TxV1::FileFee { file_id, .. } = &row.tx.tx else {
+        return Err(SigsError::Anchor("the transaction is not a file fee".into()));
+    };
+    if file_id.trim().to_ascii_lowercase() != stamp_file_id(record) {
+        return Err(SigsError::Anchor("the transaction stamps a different file".into()));
+    }
+    Ok(Anchor { tx_hash: row.hash.to_ascii_lowercase(), block_height: row.block_height })
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -74,6 +115,10 @@ pub enum SigsError {
     StoreFull,
     #[error("store: {0}")]
     Store(String),
+    #[error("not an anchor for this record: {0}")]
+    Anchor(String),
+    #[error("no such record on this node")]
+    UnknownRecord,
 }
 
 #[derive(Deserialize)]
@@ -244,6 +289,7 @@ impl SigStore {
             file_sha256: file_sha256.clone(),
             signer_ed25519: signer.clone(),
             published_at_ms: now_ms,
+            anchor: None,
         };
         let val = serde_json::to_vec(&r).map_err(|x| SigsError::Store(x.to_string()))?;
         // The cap counts what is actually stored: the record (base64, with its fields) and its four
@@ -268,6 +314,22 @@ impl SigStore {
         self.by_time.insert(tk, &[]).map_err(st)?;
         self.meta.insert(TOTAL_KEY, &(total + cost).to_be_bytes()).map_err(st)?;
         Ok((r, true))
+    }
+
+    /// Attach a checked anchor to a stored record. The earliest block wins: a later anchor for the
+    /// same record is ignored, so nobody can move a record's place in the chain forward.
+    pub fn set_anchor(&self, record_sha256: &str, anchor: Anchor) -> Result<StoredRecord, SigsError> {
+        let _g = self.lock.lock().unwrap_or_else(|p| p.into_inner());
+        let st = |x: sled::Error| SigsError::Store(x.to_string());
+        let v = self.records.get(record_sha256.as_bytes()).map_err(st)?.ok_or(SigsError::UnknownRecord)?;
+        let mut r: StoredRecord = serde_json::from_slice(&v).map_err(|x| SigsError::Store(x.to_string()))?;
+        if r.anchor.as_ref().is_some_and(|a| a.block_height <= anchor.block_height) {
+            return Ok(r);
+        }
+        r.anchor = Some(anchor);
+        let val = serde_json::to_vec(&r).map_err(|x| SigsError::Store(x.to_string()))?;
+        self.records.insert(record_sha256.as_bytes(), val).map_err(st)?;
+        Ok(r)
     }
 
     fn get(&self, rh: &str) -> Option<StoredRecord> {

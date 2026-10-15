@@ -14708,6 +14708,107 @@ fn envelope_for_tests(words: &str, payload_type: &str, payload: &[u8]) -> Vec<u8
     serde_json::to_vec(&rec).unwrap()
 }
 
+/// **SECURITY REGRESSION GUARD: a record's anchor is a mined fee that stamps exactly that record.**
+/// `check_anchor` accepts a canonical, mined `FileFee` whose `file_id` is the record's stamp id and
+/// refuses one for another file, another kind of transaction, a non-canonical block and a block with
+/// no height. The stamp id is the page's `stampFileId` (a fixed vector both sides check).
+/// Negative controls (run by hand): the file_id comparison removed → FAILED at "another file";
+/// the canonical check removed → FAILED at "non-canonical".
+#[test]
+fn hash_only_stamp_anchor_must_be_a_mined_fee_for_exactly_this_record() {
+    let _g = env_lock();
+    set_test_env_base();
+    assert_eq!(crate::sigs::stamp_file_id(b"abc"), "ba7816bf-8f01-cfea-4141-40de5dae2223", "the page's stampFileId vector");
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.clone();
+    let rec = hash_record_for_tests(&words, b"illustration.png bytes", crate::sigs::HASH_PAYLOAD_TYPE);
+    let row = |tx: crate::protocol::SignedTxEnvelopeV1, height: u64, canonical: bool| crate::ledger::TxIndexRecordV1 {
+        v: 1, hash: "0xAB".repeat(1) + &"cd".repeat(31), block_height: height, tx_index: 0, tx_kind: "file_fee".into(),
+        workload_flag: 0, signer_wallet: id.clone(), canonical, tx, indexed_at_ms: 0,
+    };
+    let fee = |file_id: &str| signed_file_fee_env_for_tests(&words, &id, &id, file_id);
+    let good = crate::sigs::check_anchor(&rec, &row(fee(&crate::sigs::stamp_file_id(&rec)), 42, true)).expect("a mined fee for this record");
+    assert_eq!(good.block_height, 42);
+    assert!(good.tx_hash.starts_with("0xab"), "stored lowercase");
+    assert!(crate::sigs::check_anchor(&rec, &row(fee(&crate::sigs::stamp_file_id(b"another record")), 42, true)).is_err(), "another file");
+    assert!(crate::sigs::check_anchor(&rec, &row(signed_transfer_env_for_tests(&words, &id, &id, 1_000), 42, true)).is_err(), "not a file fee");
+    assert!(crate::sigs::check_anchor(&rec, &row(fee(&crate::sigs::stamp_file_id(&rec)), 42, false)).is_err(), "non-canonical");
+    assert!(crate::sigs::check_anchor(&rec, &row(fee(&crate::sigs::stamp_file_id(&rec)), 0, true)).is_err(), "no height");
+}
+
+/// The registry keeps a record's EARLIEST anchor: a later one can't move it forward, an earlier one
+/// replaces it. An anchor needs a stored record. Records stored before anchors existed still load.
+/// Negative control (run by hand): `set_anchor` always overwrites → FAILED at "a later anchor".
+#[test]
+fn the_registry_keeps_a_records_earliest_anchor() {
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let ledger = open_temp_ledger();
+    let store = crate::sigs::SigStore::open(&ledger.sled_db()).unwrap();
+    let words = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let rec = hash_record_for_tests(&words, b"sketch, v3", crate::sigs::HASH_PAYLOAD_TYPE);
+    let (r, _) = store.publish(&rec, &consent_for_tests(&words, &rec), 1_000).unwrap();
+    let a = |h: u64| crate::sigs::Anchor { tx_hash: format!("0x{h:064x}"), block_height: h };
+    assert_eq!(store.set_anchor(&r.record_sha256, a(50)).unwrap().anchor.unwrap().block_height, 50);
+    assert_eq!(store.set_anchor(&r.record_sha256, a(60)).unwrap().anchor.unwrap().block_height, 50, "a later anchor moved the record forward");
+    assert_eq!(store.set_anchor(&r.record_sha256, a(40)).unwrap().anchor.unwrap().block_height, 40, "an earlier anchor is kept");
+    let found = store.search(&crate::sigs::SigQuery { code_prefix: Some(r.record_sha256[..10].to_string()), file_sha256: None, signer: None, from_ms: None, to_ms: None });
+    assert_eq!(found[0].anchor.as_ref().map(|x| x.block_height), Some(40), "search serves the anchor");
+    assert!(matches!(store.set_anchor(&hex::encode(sha2::Sha256::digest(b"nothing")), a(1)), Err(crate::sigs::SigsError::UnknownRecord)));
+    let old: crate::sigs::StoredRecord = serde_json::from_str(r#"{"record_b64":"e30=","record_sha256":"00","file_sha256":"00","signer_ed25519":"00","published_at_ms":1}"#).unwrap();
+    assert!(old.anchor.is_none(), "a record stored before anchors existed still loads");
+}
+
+/// Through the router: `POST /sigs/publish` with `anchor_tx` stores the anchor only when the node's
+/// own chain has that transaction as a fee for exactly this record, and search serves it. A wrong
+/// transaction is refused and leaves the record unanchored.
+/// Negative control (run by hand): the handler skips `check_anchor` → FAILED at "a fee for another file".
+#[tokio::test]
+async fn publish_with_anchor_tx_is_checked_against_the_nodes_chain() {
+    use base64::Engine as _;
+    use tower::ServiceExt as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let _p = EnvVarGuard::set("TET_PUBLIC_API", "0");
+    let ledger = std::sync::Arc::new(open_temp_ledger());
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let id = w.address_hex.clone();
+    let rec = hash_record_for_tests(&words, b"commission, final", crate::sigs::HASH_PAYLOAD_TYPE);
+    let good_tx = format!("0x{}", "11".repeat(32));
+    let wrong_tx = format!("0x{}", "22".repeat(32));
+    ledger.record_tx_index(&good_tx, 77, 0, &signed_file_fee_env_for_tests(&words, &id, &id, &crate::sigs::stamp_file_id(&rec))).unwrap();
+    ledger.record_tx_index(&wrong_tx, 70, 0, &signed_file_fee_env_for_tests(&words, &id, &id, &crate::sigs::stamp_file_id(b"another"))).unwrap();
+    let router = crate::rest::routes::build_router(rest_state_for_tests(ledger));
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let publish = |anchor: Option<&str>| {
+        let mut body = serde_json::json!({ "record_b64": b64.encode(&rec), "consent_b64": b64.encode(consent_for_tests(&words, &rec)) });
+        if let Some(a) = anchor { body["anchor_tx"] = serde_json::json!(a); }
+        let router = router.clone();
+        async move {
+            let req = axum::http::Request::builder().method("POST").uri("/sigs/publish").header("content-type", "application/json").body(axum::body::Body::from(body.to_string())).unwrap();
+            let resp = router.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let j: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap()).unwrap();
+            (status, j)
+        }
+    };
+    assert_eq!(publish(None).await.0, StatusCode::ACCEPTED);
+    let (s, j) = publish(Some(&wrong_tx)).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a fee for another file: {j}");
+    let (s, j) = publish(Some(&format!("0x{}", "33".repeat(32)))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "a transaction the chain doesn't have: {j}");
+    let (s, j) = publish(Some(&good_tx)).await;
+    assert_eq!(s, StatusCode::ACCEPTED, "{j}");
+    assert_eq!(j["anchor"]["block_height"], 77);
+    let req = axum::http::Request::builder().uri(format!("/sigs/search?file={}", hex::encode(<sha2::Sha256 as sha2::Digest>::digest(b"commission, final")))).body(axum::body::Body::empty()).unwrap();
+    let resp = router.clone().oneshot(req).await.unwrap();
+    let j: serde_json::Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap()).unwrap();
+    assert_eq!(j["records"][0]["anchor"]["block_height"], 77, "search serves the anchor: {j}");
+}
+
 /// **SECURITY REGRESSION GUARD: the signature registry holds only real, public, hash-only records
 /// their signers chose to publish, and finds them by code, file, signer and date.** Publishing
 /// needs the record's own signer's consent for exactly its bytes: without it, with a stranger's,

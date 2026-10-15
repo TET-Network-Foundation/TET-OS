@@ -10,6 +10,7 @@
 import { useEffect, useState } from "react";
 import { sha256 } from "@noble/hashes/sha2";
 import { findSignatures, registryRecords, type FoundSignature } from "../lib/proof_code";
+import { checkStamp } from "../lib/sign_anything";
 import { mldsa44Verify } from "../lib/pqc";
 import { FOCUS, MONO, cx, OfflineVerifier } from "./ui";
 import { BASE } from "./wallet";
@@ -24,6 +25,40 @@ function download(name: string, bytes: Uint8Array) {
   a.download = name;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** A listed anchor, re-checked in this tab against the node's chain before it is shown. */
+function AnchorLine(props: { recordBytes: Uint8Array; anchor: { txHash: string; blockHeight: number } }) {
+  const { t } = useLang();
+  const [state, setState] = useState<"checking" | "ok" | "bad">("checking");
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    let on = true;
+    void checkStamp({
+      sigBytes: props.recordBytes,
+      receipt: { tx_hash: props.anchor.txHash },
+      fetchTx: async (hash) => {
+        const r = await fetch(`${BASE}/explorer/tx/${hash}`);
+        if (r.status === 404) return { found: false };
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      },
+    })
+      .then((c) => {
+        if (!on) return;
+        if (c.state === "anchored") {
+          setHeight(c.height);
+          setState("ok");
+        } else setState("bad");
+      })
+      .catch(() => on && setState("bad"));
+    return () => {
+      on = false;
+    };
+  }, [props.recordBytes, props.anchor.txHash]);
+  if (state === "checking") return <span className="text-[#5d646d]">{t("Checking…")}</span>;
+  if (state === "bad") return <span className="text-[#8a1f1f]">{t("This node lists an anchor that doesn't check out.")}</span>;
+  return <span className="text-[#1f5132]">✓ {t("existed before block {height} (checked in this tab)", { height })}</span>;
 }
 
 /** Does `copy` hash to exactly the marked fingerprint? Pure. */
@@ -161,6 +196,14 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                   <dd className="m-0">{t("recorded on this node at {when}", { when: new Date(h.publishedAtMs).toLocaleString(locale) })}</dd>
                   <dt className="text-[#5d646d]">{t("What")}</dt>
                   <dd className={cx(MONO, "m-0 break-all text-[13px]")}>{t("fingerprint (SHA-256)")} {h.fileSha256}</dd>
+                  {h.verified && h.anchor ? (
+                    <>
+                      <dt className="text-[#5d646d]">{t("On chain")}</dt>
+                      <dd className="m-0">
+                        <AnchorLine recordBytes={h.recordBytes} anchor={h.anchor} />
+                      </dd>
+                    </>
+                  ) : null}
                 </dl>
                 {h.verified ? <p className="text-[13.5px] text-[#5d646d]">{t("This shows that this ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.")}</p> : <p className="text-[13.5px]">{h.reason}</p>}
                 <p className="text-[13px]">

@@ -92,9 +92,13 @@ const fingerprintOnly = (src) => {
   assert.ok(/signFileHash\(bytes, chain\)/.test(src), "marking doesn't sign the fingerprint");
   assert.ok(/publishRecord\(BASE, rec\.bytes, chain\)/.test(src), "marking doesn't publish the record (with consent)");
   assert.ok(!/fetch\(|FormData|postFilesUpload|files\/upload/.test(src), "the mark page sends something itself");
+  // The optional "Anchor on chain" step (lib/hash_stamp.ts) is handed the signed RECORD, never the
+  // file; hash_stamp_guard checks what that step uploads.
+  if (/anchorRecord\(/.test(src)) assert.ok(/anchorRecord\(\{[^}]*record: done\.record[,\s}]/.test(src) && !/anchorRecord\(\{[^}]*record: bytes/.test(src), "the anchor step isn't given the record");
 };
 await check("marking sends the fingerprint, never the file", () => fingerprintOnly(PANEL));
 await mustThrow("an upload is caught", () => fingerprintOnly(PANEL.replace("const chain = await", "await fetch('/tet-node-api/files/upload', { method: 'POST', body: bytes });\n      const chain = await")));
+await mustThrow("an anchor step handed the file is caught", () => fingerprintOnly(PANEL.replace("record: done.record", "record: bytes")));
 
 // ── Never "proves you made it" ─────────────────────────────────────────────────────────────────
 // A mark proves when, and whose mark: not authorship. No page string, and no translation, may say
