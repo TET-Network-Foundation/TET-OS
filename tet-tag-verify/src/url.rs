@@ -17,6 +17,10 @@ pub enum UrlError {
     NoQuery,
     Missing(&'static str),
     UnknownParam(String),
+    /// The same parameter twice: which one the tag wrote is unclear, so nothing is checked.
+    Repeated(String),
+    /// The MAC input must start before the MAC; otherwise the data it should cover is unchecked.
+    MacInputAfterMac(String),
     Sun(SunError),
 }
 
@@ -26,6 +30,13 @@ impl std::fmt::Display for UrlError {
             UrlError::NoQuery => write!(f, "the URL has no query part (nothing after '?')"),
             UrlError::Missing(what) => write!(f, "the URL has no {what}"),
             UrlError::UnknownParam(p) => write!(f, "the URL has no parameter named '{p}'"),
+            UrlError::Repeated(p) => write!(f, "the URL has the parameter '{p}' more than once"),
+            UrlError::MacInputAfterMac(p) => {
+                write!(
+                    f,
+                    "the parameter '{p}' comes after the MAC, so it can't be where the MAC input starts"
+                )
+            }
             UrlError::Sun(e) => write!(f, "{e}"),
         }
     }
@@ -62,6 +73,11 @@ fn params(url: &str) -> Result<Vec<Param<'_>>, UrlError> {
         }
         pos += part.len() + 1;
     }
+    for (i, p) in out.iter().enumerate() {
+        if out[..i].iter().any(|q| q.name == p.name) {
+            return Err(UrlError::Repeated(p.name.to_string()));
+        }
+    }
     Ok(out)
 }
 
@@ -93,7 +109,10 @@ pub fn verify_url(
                 .find(|p| p.name == name)
                 .ok_or_else(|| UrlError::UnknownParam(name.to_string()))?;
             // From the start of that value up to the start of the MAC's value.
-            url.get(from.start..mac.start).unwrap_or("").as_bytes()
+            if from.start > mac.start {
+                return Err(UrlError::MacInputAfterMac(name.to_string()));
+            }
+            &url.as_bytes()[from.start..mac.start]
         }
     };
     let file_key = mac_key.unwrap_or(key);

@@ -103,3 +103,18 @@ fn wrong_key_fails() {
     let url = "https://ntag.nxp.com/424?e=EF963FF7828658A599F3041510671E88&c=94EED9EE65337086";
     assert!(verify_url(&other, None, url, None).is_err());
 }
+
+/// Not from a source: a MAC-input start placed after the MAC is refused, not read as an empty
+/// input (which would leave the data meant to be covered unchecked).
+#[test]
+fn mac_input_after_mac_is_refused() {
+    let url = "https://www.my424dna.com/?picc_data=FD91EC264309878BE6345CBE53BADF40&cmac=ECC1E7F6C6C73BF6&enc=CEE9A53E3E463EF1F459635736738962";
+    assert!(verify_url(&ZERO, None, url, Some("enc")).is_err());
+}
+
+/// Not from a source: a repeated parameter (two MACs here) is refused, not resolved silently.
+#[test]
+fn repeated_parameter_is_refused() {
+    let url = "https://ntag.nxp.com/424?e=EF963FF7828658A599F3041510671E88&c=0000000000000000&c=94EED9EE65337086";
+    assert!(verify_url(&ZERO, None, url, None).is_err());
+}
