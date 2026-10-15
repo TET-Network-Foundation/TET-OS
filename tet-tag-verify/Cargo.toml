@@ -1,0 +1,19 @@
+[package]
+name = "tet-tag-verify"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "Offline NTAG 424 DNA SUN/SDM checks and the genuine-tag document formats (docs/plans/GENUINE_TAG.md)"
+
+[dependencies]
+aes = "0.8"
+clap = { version = "4", features = ["derive"] }
+cmac = "0.7"
+hex = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[[bin]]
+name = "tet-tag-verify"
+path = "src/main.rs"
