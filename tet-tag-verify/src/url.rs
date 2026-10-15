@@ -88,6 +88,8 @@ fn find<'a>(ps: &'a [Param<'a>], names: &[&str]) -> Option<&'a Param<'a>> {
 pub struct Checked {
     pub mode: Mode,
     pub result: SunResult,
+    /// The URL text the MAC was computed over (empty for the usual setup).
+    pub mac_input: String,
 }
 
 /// Check one SUN URL. `mac_key` defaults to `key` when the tag uses one key for both.
@@ -101,8 +103,8 @@ pub fn verify_url(
 ) -> Result<Checked, UrlError> {
     let ps = params(url)?;
     let mac = find(&ps, &["cmac", "c"]).ok_or(UrlError::Missing("SDMMAC (cmac= or c=)"))?;
-    let mac_input: &[u8] = match mac_input_from {
-        None => &[],
+    let mac_input_text: &str = match mac_input_from {
+        None => "",
         Some(name) => {
             let from = ps
                 .iter()
@@ -112,15 +114,17 @@ pub fn verify_url(
             if from.start > mac.start {
                 return Err(UrlError::MacInputAfterMac(name.to_string()));
             }
-            &url.as_bytes()[from.start..mac.start]
+            &url[from.start..mac.start]
         }
     };
+    let mac_input = mac_input_text.as_bytes();
     let file_key = mac_key.unwrap_or(key);
     if let Some(e) = find(&ps, &["picc_data", "e"]) {
         let result = sun::verify_encrypted(key, file_key, e.value, mac.value, mac_input)?;
         return Ok(Checked {
             mode: Mode::Encrypted,
             result,
+            mac_input: mac_input_text.to_string(),
         });
     }
     let uid = find(&ps, &["uid"]).ok_or(UrlError::Missing(
@@ -131,5 +135,6 @@ pub fn verify_url(
     Ok(Checked {
         mode: Mode::Plain,
         result,
+        mac_input: mac_input_text.to_string(),
     })
 }

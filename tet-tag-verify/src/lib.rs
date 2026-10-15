@@ -3,5 +3,6 @@
 //! No network, no node: everything here works on text and bytes.
 
 pub mod docs;
+pub mod report;
 pub mod sun;
 pub mod url;
