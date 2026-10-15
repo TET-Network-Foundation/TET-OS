@@ -89,8 +89,8 @@ enum DocCmd {
         /// The brand's SUN verifier, an https:// address.
         #[arg(long)]
         verifier_url: String,
-        /// The counter of the tap that registered the tag.
-        #[arg(long, default_value_t = 0)]
+        /// The counter of the tap that registered the tag (required: there is no safe default).
+        #[arg(long)]
         counter: u32,
     },
     /// Print a canonical tet_tag_claim document and its SHA-256.

@@ -34,7 +34,7 @@ physical tag is the real check.
 tet-tag-verify verify --key <32 hex> --url <sun-url> [--json] [--last-counter N]
                       [--mac-key <32 hex>] [--mac-input-from <param>]
 tet-tag-verify doc registration --uid <hex> --chip ntag424dna|ntag424dna_tt --product <label>
-                      [--ref <text>] [--image-sha256 <hex>]... --verifier-url <https://…> [--counter N]
+                      [--ref <text>] [--image-sha256 <hex>]... --verifier-url <https://…> --counter N
 tet-tag-verify doc claim --uid <hex> --registration-sha256 <hex> --new-owner <id> --counter N
                       --attestation-sha256 <hex> [--previous-claim-sha256 <hex>]
                       [--release-sha256 <hex>] [--tamper closed|open]
@@ -44,5 +44,7 @@ tet-tag-verify doc hash <file.json>
 `verify` exits 0 when the signature is valid, 1 when it isn't, 2 on bad input. `doc registration`
 and `doc claim` print the canonical JSON, then its SHA-256. `doc hash` prints the SHA-256 of a
 document file's canonical form, and exits 1 if the file isn't a valid document.
+
+To see the output without a tag: `tet-tag-verify/examples/an12196_demo.sh` (from the repo root; it checks the AN12196 page 12 example with the all-zero key, no download).
 
 Planned, not wired: the registration hash is meant to be anchored through the existing hash-only stamp (#148).

@@ -220,3 +220,16 @@ fn readme_says_what_the_cli_says() {
         "Planned, not wired: the registration hash is meant to be anchored through the existing hash-only stamp (#148)."
     ));
 }
+
+#[test]
+fn doc_registration_needs_a_counter() {
+    // The pinned arguments without "--counter 61": refused with a clear error, nothing printed.
+    let mut args = registration_args();
+    let i = args.iter().position(|a| *a == "--counter").unwrap();
+    args.drain(i..i + 2);
+    let o = run(&args);
+    assert_eq!(o.status.code(), Some(2));
+    assert!(o.stdout.is_empty());
+    let err = String::from_utf8(o.stderr).unwrap();
+    assert!(err.contains("--counter"), "{err}");
+}
