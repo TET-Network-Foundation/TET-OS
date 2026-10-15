@@ -18,6 +18,10 @@ pub struct PublishBody {
     pub record_b64: String,
     /// The signer's consent to publish exactly this record (`sigs::CONSENT_PAYLOAD_TYPE`), base64.
     pub consent_b64: String,
+    /// Optional: the hash of a mined `FileFee` that stamps this record (the hash-only stamp). The
+    /// node checks it against its own chain (`sigs::check_anchor`) before storing it.
+    #[serde(default)]
+    pub anchor_tx: Option<String>,
 }
 
 /// `POST /sigs/publish` — publish a hash-only signature record its signer chose to make public.
@@ -37,7 +41,23 @@ pub async fn post_sigs_publish(State(state): State<RestState>, Json(b): Json<Pub
     }
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
     match state.sigs.publish(&bytes, &consent, now) {
-        Ok((r, stored)) => (StatusCode::ACCEPTED, Json(serde_json::json!({ "ok": true, "stored": stored, "record_sha256": r.record_sha256, "published_at_ms": r.published_at_ms }))).into_response(),
+        Ok((r, stored)) => {
+            let r = match b.anchor_tx.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+                None => r,
+                Some(tx) => {
+                    let row = match state.ledger.tx_by_hash(tx) {
+                        Ok(Some(row)) => row,
+                        Ok(None) => return bad(StatusCode::BAD_REQUEST, "not an anchor for this record: this node's chain has no such transaction (not mined yet?)".into()),
+                        Err(e) => return bad(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+                    };
+                    match crate::sigs::check_anchor(&bytes, &row).and_then(|a| state.sigs.set_anchor(&r.record_sha256, a)) {
+                        Ok(r) => r,
+                        Err(e) => return bad(StatusCode::BAD_REQUEST, e.to_string()),
+                    }
+                }
+            };
+            (StatusCode::ACCEPTED, Json(serde_json::json!({ "ok": true, "stored": stored, "record_sha256": r.record_sha256, "published_at_ms": r.published_at_ms, "anchor": r.anchor }))).into_response()
+        }
         Err(e @ (SigsError::SignerFull | SigsError::StoreFull)) => bad(StatusCode::INSUFFICIENT_STORAGE, e.to_string()),
         Err(e) => bad(StatusCode::BAD_REQUEST, e.to_string()),
     }

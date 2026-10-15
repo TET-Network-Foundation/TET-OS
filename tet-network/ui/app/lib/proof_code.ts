@@ -80,6 +80,25 @@ function b64(bytes: Uint8Array): string {
  * Publish a record to this node's signature registry, with the tab key's consent for exactly these
  * bytes (signed now, by the same keys as the record). Returns its proof code.
  */
+/** Tell the node a published record is anchored by `txHash` (a mined `FileFee` stamping it). The
+ *  node checks the transaction against its own chain before it stores the anchor. */
+export async function publishAnchor(baseUrl: string, recordBytes: Uint8Array, chain: Chain, txHash: string): Promise<{ blockHeight: number }> {
+  const consent = await signContent(sha256(recordBytes), CONSENT_PAYLOAD_TYPE, chain);
+  const r = await fetch(tetCoreUrl(baseUrl, "/sigs/publish"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ record_b64: b64(recordBytes), consent_b64: b64(sigJsonBytes(consent)), anchor_tx: txHash }),
+  });
+  let j: { error?: string; anchor?: { block_height?: number } } = {};
+  try {
+    j = await r.json();
+  } catch {
+    /* not JSON */
+  }
+  if (r.status !== 202 || !j.anchor?.block_height) throw new Error(`the node didn't link the anchor: ${j.error ?? `HTTP ${r.status}`}`);
+  return { blockHeight: j.anchor.block_height };
+}
+
 export async function publishRecord(baseUrl: string, recordBytes: Uint8Array, chain: Chain): Promise<string> {
   const consent = await signContent(sha256(recordBytes), CONSENT_PAYLOAD_TYPE, chain);
   const r = await fetch(tetCoreUrl(baseUrl, "/sigs/publish"), {
@@ -102,7 +121,7 @@ export async function publishRecord(baseUrl: string, recordBytes: Uint8Array, ch
 export type RecordQuery = { codePrefix?: string; file?: string; signer?: string; fromMs?: number; toMs?: number };
 
 /** Published records matching `q`, from this node's registry (not yet checked), newest first. */
-export async function registryRecords(baseUrl: string, q: RecordQuery): Promise<{ bytes: Uint8Array; publishedAtMs: number }[]> {
+export async function registryRecords(baseUrl: string, q: RecordQuery): Promise<{ bytes: Uint8Array; publishedAtMs: number; anchor?: { txHash: string; blockHeight: number } }[]> {
   const params: Record<string, string> = {};
   if (q.codePrefix) params.code = q.codePrefix;
   if (q.file) params.file = q.file;
@@ -111,8 +130,12 @@ export async function registryRecords(baseUrl: string, q: RecordQuery): Promise<
   if (q.toMs !== undefined) params.to = String(q.toMs);
   const r = await fetch(tetCoreUrl(baseUrl, "/sigs/search", params));
   if (!r.ok) throw new Error(`the registry didn't answer (HTTP ${r.status})`);
-  const j = (await r.json()) as { records?: { record_b64: string; published_at_ms: number }[] };
-  return (j.records ?? []).map((x) => ({ bytes: Uint8Array.from(atob(x.record_b64), (c) => c.charCodeAt(0)), publishedAtMs: x.published_at_ms }));
+  const j = (await r.json()) as { records?: { record_b64: string; published_at_ms: number; anchor?: { tx_hash?: unknown; block_height?: unknown } }[] };
+  return (j.records ?? []).map((x) => ({
+    bytes: Uint8Array.from(atob(x.record_b64), (c) => c.charCodeAt(0)),
+    publishedAtMs: x.published_at_ms,
+    anchor: typeof x.anchor?.tx_hash === "string" && Number(x.anchor?.block_height) > 0 ? { txHash: x.anchor.tx_hash, blockHeight: Number(x.anchor.block_height) } : undefined,
+  }));
 }
 
 export type FoundSignature = {
@@ -126,6 +149,8 @@ export type FoundSignature = {
   reason?: string;
   /** The record's exact bytes (download it to check a file in Verify). */
   recordBytes: Uint8Array;
+  /** The anchor this node lists for the record (a hash-only stamp); re-check it before showing it. */
+  anchor?: { txHash: string; blockHeight: number };
 };
 
 /**
@@ -139,7 +164,7 @@ export async function findSignatures(o: {
   chain: Chain;
   fromMs?: number;
   toMs?: number;
-  records: (q: RecordQuery) => Promise<{ bytes: Uint8Array; publishedAtMs: number }[]>;
+  records: (q: RecordQuery) => Promise<{ bytes: Uint8Array; publishedAtMs: number; anchor?: { txHash: string; blockHeight: number } }[]>;
   mldsa44Verify: (pubB64: string, sigB64: string, msg: Uint8Array) => Promise<boolean>;
 }): Promise<FoundSignature[]> {
   const code = parseProofCode(o.query);
@@ -182,7 +207,7 @@ export async function findSignatures(o: {
     if (!hit) continue;
     const v = await verifyEnvelope({ envelope: env, content: new Uint8Array(), recordOnly: true, chain: o.chain, mldsa44Verify: o.mldsa44Verify });
     const match: FoundSignature["match"] = code ? "code" : fileHash === h ? "file" : "signer";
-    out.push({ code: c, match, fileSha256: fileHash, signerEd25519: signer, publishedAtMs: rec.publishedAtMs, verified: v.ok === true, reason: v.ok ? undefined : v.reason, recordBytes: rec.bytes });
+    out.push({ code: c, match, fileSha256: fileHash, signerEd25519: signer, publishedAtMs: rec.publishedAtMs, verified: v.ok === true, reason: v.ok ? undefined : v.reason, recordBytes: rec.bytes, anchor: rec.anchor });
   }
   // A file's markings: the earliest first, so the first person to mark it is the one shown on top
   // (later markings of the same file by others can't take its place). Everything else: newest first.
