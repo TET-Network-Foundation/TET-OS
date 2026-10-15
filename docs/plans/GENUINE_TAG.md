@@ -27,6 +27,13 @@ Each document is canonical JSON. Its SHA-256 is signed as a hash-only record and
 document itself is served by the brand's verifier and shown on the scan page, where anyone can
 recompute the hash.
 
+- **Kind strings, fixed:** `kind` is `"tet_tag_registration"` or `"tet_tag_claim"`, and the
+  version is the separate field `v: 1`.
+- **Canonical form:** UTF-8 JSON, keys sorted, no whitespace, integers only, absent values
+  written as `null` (never left out), hashes and IDs as lowercase hex. The record's payload is
+  the SHA-256 of that text, as the `tet-tag-verify` crate computes it (pinned in its tests).
+- **A change to either means a new version** (`v: 2`), not a new hash for `v: 1`.
+
 ```
 tet_tag_registration_v1 {
   v: 1, kind, tag_id,            // SHA-256("tet tag v1" ‖ UID), never the raw UID
@@ -117,7 +124,11 @@ A tap opens `/tag?…` with the SUN data. The page asks the listed verifier, the
   - counter rollover;
   - whether iOS and Android open the URL without an app;
   - tamper-evident attachment;
-  - cost per tag.
+  - cost per tag;
+  - per-tag key diversification (AN10922) and LRP mode are required before any real
+    registration. The prototype doesn't need them;
+  - test vectors so far come from sdm-backend's tests, which cite AN12196. The real check is
+    the first physical tag.
 - **Protocol (Manu):**
   - should verifier attestations themselves be anchored, or stay registry-only?
   - relay attacks: a live relay of a real tap can't be stopped by SUN alone. Is a short attestation
@@ -125,6 +136,9 @@ A tap opens `/tag?…` with the SUN data. The page asks the listed verifier, the
   - verifier key compromise: is expiry-only revocation acceptable, or does this need the Agent ID
     plan's revocation record?
   - privacy: hashed UIDs, public owner IDs, whether the verifier keeps logs.
+  - `tag_id = SHA-256("tet tag v1" ‖ UID)` can be enumerated: UIDs come in known ranges per
+    brand, so anyone can hash a range and find its tags. Decide a keyed hash or a per-tag salt
+    before Phase 1.
 - **Product:**
   - is "ownership" the right word given it isn't a legal title?
   - what a brand must publish about its verifier before its tags show as registered.
