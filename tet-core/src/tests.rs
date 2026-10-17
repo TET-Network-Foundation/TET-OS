@@ -5365,6 +5365,31 @@ mod block_sync {
         stop(&[n1, n2]);
     }
 
+    /// A flood block that gets as far as the apply queue: `alice` (in [`block_sync_env`]'s genesis set)
+    /// signs its id, so it parses on the receiving side and passes the producer check, and only its
+    /// fake state root makes it unappliable.
+    fn flood_block_event(
+        block_height: u64,
+        block_id: String,
+        parent: &str,
+        ts_ms: u64,
+    ) -> crate::models::NetworkEvent {
+        let producer_sig = super::test_producer_key("alice").sign_block_id(&block_id).unwrap();
+        crate::models::NetworkEvent::BlockMined {
+            block_height,
+            block_id,
+            parent_block_id: Some(parent.to_string()),
+            producer_id: "alice".into(),
+            base_reward_micro: 0,
+            compute_reward_micro: 0,
+            total_reward_micro: 0,
+            state_root: "not-a-real-root".into(),
+            txs: vec![],
+            ts_ms,
+            producer_sig,
+        }
+    }
+
     /// **G4 (accept loop B): the loop keeps draining under 1000 queued blocks, with bounded memory.**
     /// The producer floods the follower with 1000 gossip blocks while each apply takes 2 s. The
     /// follower's loop keeps iterating (no gap over 1.5 s), its apply queue never holds more than its
@@ -5397,17 +5422,7 @@ mod block_sync {
         let gossip = n1.state.gossip_tx.clone().expect("publish channel");
         let salt = crate::swarm_health::now_ms();
         for i in 0..1000u32 {
-            let ev = crate::models::NetworkEvent::BlockMined {
-                block_height: h + 1,
-                block_id: format!("flood-{salt}-{i:04}"),
-                parent_block_id: Some(tip.clone()),
-                producer_id: "alice".into(),
-                base_reward_micro: 0,
-                compute_reward_micro: 0,
-                total_reward_micro: 0,
-                state_root: "not-a-real-root".into(),
-                txs: vec![],
-            };
+            let ev = flood_block_event(h + 1, format!("flood-{salt}-{i:04}"), &tip, salt);
             gossip.send(serde_json::to_string(&ev).unwrap()).await.unwrap();
         }
         let deadline = Instant::now() + Duration::from_secs(30);
