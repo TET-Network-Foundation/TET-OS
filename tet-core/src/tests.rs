@@ -4647,9 +4647,10 @@ mod block_sync {
             std::env::set_var("TET_BOOTNODES", &n1.boot_multiaddr);
             std::env::remove_var("TET_IS_BOOTNODE");
         }
-        let hello2 = crate::sync::new_hello_registry();
-        let driver2 = crate::sync::new_catch_up_driver();
-        let board2 = crate::sync::new_block_sync_board(hello2.clone(), driver2.clone());
+        let sync2 = crate::sync::new_sync_state();
+        let hello2 = sync2.clone();
+        let driver2 = sync2.clone();
+        let board2 = sync2.clone();
         let port = alloc_tcp_port();
         let (_g2, _f2, _t2, _a2, task2) = crate::p2p::start_mdns_ping_swarm(
             ledger2.clone(),
@@ -4667,24 +4668,22 @@ mod block_sync {
 
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            if hello2.lock().await.get(&block_id).is_some() {
+            if hello2.with(|s| s.registry.get(&block_id).is_some()) {
                 break;
             }
             assert!(
                 Instant::now() < deadline,
                 "follower never recorded the node under its block-plane PeerId {block_id}; saw {:?}",
-                hello2.lock().await.heights_snapshot()
+                hello2.with(|s| s.registry.heights_snapshot())
             );
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
-        let reg = hello2.lock().await;
         for other in [ks1.peer_id(), keys1.peer_id(Plane::Nexus), keys1.peer_id(Plane::Ledger)] {
             assert!(
-                reg.get(&other.to_string()).is_none(),
+                hello2.with(|s| s.registry.get(&other.to_string()).is_none()),
                 "block plane answered under a non-block identity {other}"
             );
         }
-        drop(reg);
         task2.abort();
         stop(&[n1]);
     }
