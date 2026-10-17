@@ -63,20 +63,26 @@ tet-tag-verify serve --keys <file> --state <file> [--listen 127.0.0.1:8787]
 It answers `GET /tap?<the tag's SUN parameters>` with the `verify` report. The parameters are the
 ones `verify` reads: `picc_data` (or `e`) and `cmac` (or `c`) for encrypted PICCData, or `uid`,
 `ctr` and `cmac` for plain mirroring. The answer is an HTML page, or, with
-`Accept: application/json`, the `verify --json` fields plus `result`, `reason` and `replayed`;
-there `valid` is true only for an accepted tap.
+`Accept: application/json`, the `verify --json` fields plus `result`, `reason` and `replayed`.
+That full answer is only for an accepted tap. A refused tap gets `result`, `reason` and
+`replayed` and nothing else: no UID, no counter, no tag ID (the HTML page shows only the result
+and the "does not show" list).
 
 - **Keys file**: JSON, all hex, mode 0600 (it refuses to start otherwise). Either one key per tag,
   `{"<uid>": "<key>", …}`, used for both the PICCData and the MAC; or `{"master": …, "aid": …,
   "sid": …}`, with each tag's key derived per AN10922. With a master key, encrypted PICCData also
-  needs `"meta"`, the PICCData key, because the UID is inside the PICCData. Keys are never logged,
-  echoed or quoted in an error.
+  needs `"meta"`, the PICCData key. That key is per batch while the MAC key is per tag, because the
+  UID is inside the PICCData and must be read before a per-tag key can be chosen. Keys are never
+  logged, echoed or quoted in an error.
 - **State file**: the last accepted counter per UID. It is rewritten after each accepted tap
   (temporary file, then rename), and a tap is not accepted unless that write succeeded.
 - **Accepted** only when the signature matches and the counter is above the stored one. Otherwise
-  the result is `INVALID`, with the reason `signature does not match`, `replayed` or
-  `no key for this tag`.
-- **Log**: one line per request, `tag_id=… counter=… result=…`. Nothing else.
+  the result is `INVALID`, with one of two reasons. `replayed`: the signature matches but the
+  counter is not above the stored one. `not valid for any key here`: everything else, whether the
+  signature is wrong or there is no key for the tag; the answer doesn't say which, and both cases
+  do the same checking work, so they take about the same time.
+- **Log**: one line per request, `tag_id=… counter=… result=…`. Nothing else. The tag ID and
+  counter are written only when the signature matched (accepted or replayed), `-` otherwise.
 
 What it shows: what a valid tap shows (above), and that this verifier had not accepted that
 counter, or a higher one, for this tag before.
@@ -90,9 +96,6 @@ Limits of the prototype:
 - No rate limiting yet (planned).
 - Localhost only by default, plain HTTP, no TLS. Putting it on a public address is not part of this
   prototype.
-- With plain mirroring the UID is in the URL, so the reasons `no key for this tag` and
-  `signature does not match` tell a caller whether a given UID has a key here. Encrypted PICCData
-  doesn't have this problem.
 - Only the usual empty MAC input (no `--mac-input-from`). An encrypted tap is tried against each
   per-tag key, at most 100000 keys; the count loaded is printed when it starts.
 - Answers are kept in one process with one state file; two copies running on the same state file

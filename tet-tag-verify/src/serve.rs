@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -25,11 +26,12 @@ use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
 use crate::diversify::{diversification_input, diversify_aes128};
+use crate::docs::tag_id;
 use crate::report::{
-    DOES_NOT_SHOW_HEADING, REASON_BAD_SIGNATURE, REASON_NO_KEY, REASON_REPLAYED, Report,
-    SHOWS_HEADING, report, report_no_key,
+    DOES_NOT_SHOW, DOES_NOT_SHOW_HEADING, REASON_NOT_VALID, REASON_REPLAYED, Report, SHOWS_HEADING,
+    report,
 };
-use crate::sun::{Key, PICC_DATA_TAG_UID_CTR_7, decrypt_picc_data, parse_hex};
+use crate::sun::{Key, PICC_DATA_TAG_UID_CTR_7, decrypt_picc_data, parse_hex, sdmmac};
 use crate::url::{self, verify_url};
 
 /// The longest request line accepted ("GET /tap?… HTTP/1.1"), in bytes.
@@ -189,6 +191,7 @@ pub struct Server {
     state_path: PathBuf,
     state: Mutex<State>,
     log: Mutex<Box<dyn Write + Send>>,
+    checks: AtomicU64,
 }
 
 impl Server {
@@ -201,6 +204,7 @@ impl Server {
             state_path: state.to_path_buf(),
             state: Mutex::new(st),
             log: Mutex::new(log),
+            checks: AtomicU64::new(0),
         })
     }
 
@@ -219,7 +223,15 @@ impl Server {
         let _ = w.flush();
     }
 
-    /// The PICCData key and MAC key for this tap, or None when there is none.
+    /// How many SDMMAC checks have run, real or the no-key path's stand-in. Tests use it to see
+    /// that an unknown tag costs the same work as a known one.
+    pub fn checks_run(&self) -> u64 {
+        self.checks.load(Ordering::Relaxed)
+    }
+
+    /// The PICCData key and MAC key for this tap, or None when there is none. Every per-tag key is
+    /// looked at, with no early exit, so the time taken doesn't depend on where in the file the
+    /// tag is, or whether it is there.
     fn keys_for(
         &self,
         encrypted: Option<&[u8; 16]>,
@@ -229,14 +241,24 @@ impl Server {
             (Keys::PerTag(v), Some(enc)) => {
                 // The UID is inside the PICCData; the right key is the one that decrypts it to
                 // tag 0xC7 and the UID that key is filed under.
-                v.iter().find_map(|(uid, k)| {
+                let mut hit = None;
+                for (uid, k) in v {
                     let p = decrypt_picc_data(k, enc);
-                    (p[0] == PICC_DATA_TAG_UID_CTR_7 && p[1..8] == uid[..]).then_some((*k, *k))
-                })
+                    if p[0] == PICC_DATA_TAG_UID_CTR_7 && p[1..8] == uid[..] {
+                        hit = Some((*k, *k));
+                    }
+                }
+                hit
             }
             (Keys::PerTag(v), None) => {
                 let u = plain_uid?;
-                v.iter().find(|(uid, _)| *uid == u).map(|(_, k)| (*k, *k))
+                let mut hit = None;
+                for (uid, k) in v {
+                    if *uid == u {
+                        hit = Some((*k, *k));
+                    }
+                }
+                hit
             }
             (
                 Keys::Master {
@@ -269,50 +291,56 @@ impl Server {
         }
     }
 
-    /// Check one tap. `path_and_query` is the request target, e.g. "/tap?picc_data=…&cmac=…".
-    fn tap(&self, path_and_query: &str) -> Result<Answer, String> {
-        let enc_hex = url::param(path_and_query, &["picc_data", "e"]).map_err(|e| e.to_string())?;
-        let mode = if enc_hex.is_some() {
-            "encrypted"
-        } else {
-            "plain"
-        };
-        let enc = enc_hex
+    /// Check one tap. `target` is the request target, e.g. "/tap?picc_data=…&cmac=…".
+    fn tap(&self, target: &str) -> Result<Answer, String> {
+        // The URL's form is checked in full before any key is looked up, so a malformed URL gets
+        // the same 400 whether or not this verifier has a key for the tag.
+        let missing = |what| url::UrlError::Missing(what).to_string();
+        let param = |names: &[&str]| url::param(target, names).map_err(|e| e.to_string());
+        let enc = param(&["picc_data", "e"])?
             .map(|h| parse_hex::<16>("encrypted PICCData", h))
             .transpose()
             .map_err(|e| e.to_string())?;
+        let mac = param(&["cmac", "c"])?.ok_or_else(|| missing("SDMMAC (cmac= or c=)"))?;
+        parse_hex::<8>("SDMMAC", mac).map_err(|e| e.to_string())?;
         let plain_uid = match enc {
             Some(_) => None,
-            None => url::param(path_and_query, &["uid"])
-                .map_err(|e| e.to_string())?
-                .map(|u| parse_hex::<7>("UID", u))
-                .transpose()
-                .map_err(|e| e.to_string())?,
+            None => {
+                let uid = param(&["uid"])?
+                    .ok_or_else(|| missing("encrypted data (picc_data= or e=) or UID (uid=)"))?;
+                let ctr = param(&["ctr"])?.ok_or_else(|| missing("counter (ctr=)"))?;
+                parse_hex::<3>("counter", ctr).map_err(|e| e.to_string())?;
+                Some(parse_hex::<7>("UID", uid).map_err(|e| e.to_string())?)
+            }
         };
-        if enc.is_none() && plain_uid.is_none() {
-            return Err(
-                url::UrlError::Missing("encrypted data (picc_data= or e=) or UID (uid=)")
-                    .to_string(),
-            );
-        }
-        let Some((meta_key, mac_key)) = self.keys_for(enc.as_ref(), plain_uid) else {
-            return Ok(Answer::refused(report_no_key(mode), REASON_NO_KEY, false));
+
+        // The two arms do the same work: for an encrypted tap one block decryption, then an
+        // SDMMAC (two CMACs over the same lengths). An unknown tag must not be answered sooner
+        // than a known tag with a wrong signature, or the delay would tell them apart.
+        let checked = match self.keys_for(enc.as_ref(), plain_uid) {
+            Some((meta_key, mac_key)) => {
+                let c = verify_url(&meta_key, Some(&mac_key), target, None).ok();
+                self.checks.fetch_add(1, Ordering::Relaxed);
+                c
+            }
+            None => {
+                dummy_check(enc.as_ref());
+                self.checks.fetch_add(1, Ordering::Relaxed);
+                None
+            }
         };
-        let c = verify_url(&meta_key, Some(&mac_key), path_and_query, None)
-            .map_err(|e| e.to_string())?;
+        // No key and a wrong signature get the same answer, with nothing about the tag in it.
+        let Some(c) = checked.filter(|c| c.result.mac_valid) else {
+            return Ok(Answer::refused(REASON_NOT_VALID, false, None));
+        };
+
+        // The signature checked: from here the tag is one this verifier holds a key for.
         let uid = hex::encode(c.result.uid);
-        if !c.result.mac_valid {
-            return Ok(Answer::refused(
-                report(&c, None),
-                REASON_BAD_SIGNATURE,
-                false,
-            ));
-        }
+        let verified = (tag_id(&c.result.uid), c.result.counter);
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let last = state.get(&uid).copied();
-        let r = report(&c, last);
         if last.is_some_and(|l| c.result.counter <= l) {
-            return Ok(Answer::refused(r, REASON_REPLAYED, true));
+            return Ok(Answer::refused(REASON_REPLAYED, true, Some(verified)));
         }
         let mut next = state.clone();
         next.insert(uid, c.result.counter);
@@ -321,33 +349,51 @@ impl Server {
             .map_err(|e| format!("can't save the state file: {}", e.kind()))?;
         *state = next;
         Ok(Answer {
-            report: r,
+            report: Some(report(&c, last)),
             result: "VALID",
             reason: None,
             replayed: false,
+            logged: Some(verified),
         })
     }
 }
 
-/// What `GET /tap` answers: the `verify --json` report plus the result of this verifier's checks.
-/// `valid` is true only when the tap is accepted (signature matches and the counter went up).
+/// The no-key path's stand-in for `verify_url`: the same block decryption (encrypted taps only,
+/// as there) and the same SDMMAC computation, under a fixed key, with the result thrown away.
+fn dummy_check(enc: Option<&[u8; 16]>) {
+    if let Some(e) = enc {
+        std::hint::black_box(decrypt_picc_data(&DUMMY_KEY, e));
+    }
+    std::hint::black_box(sdmmac(&DUMMY_KEY, &[0; 7], &[0; 3], b""));
+}
+
+/// The no-key path's key. Not a secret: it only makes that path do the same work.
+const DUMMY_KEY: Key = [0x5a; 16];
+
+/// What `GET /tap` answers. An accepted tap: the `verify --json` report plus result, reason
+/// (null) and replayed (false). A refused tap: result, reason and replayed only, with no UID,
+/// counter or tag ID.
 #[derive(Serialize)]
 struct Answer {
     #[serde(flatten)]
-    report: Report,
+    report: Option<Report>,
     result: &'static str,
     reason: Option<&'static str>,
     replayed: bool,
+    /// Tag ID and counter for the log line: only when the signature checked (accepted or
+    /// replayed). Never sent.
+    #[serde(skip)]
+    logged: Option<(String, u32)>,
 }
 
 impl Answer {
-    fn refused(mut report: Report, reason: &'static str, replayed: bool) -> Answer {
-        report.valid = false;
+    fn refused(reason: &'static str, replayed: bool, logged: Option<(String, u32)>) -> Answer {
         Answer {
-            report,
+            report: None,
             result: "INVALID",
             reason: Some(reason),
             replayed,
+            logged,
         }
     }
 }
@@ -360,7 +406,6 @@ fn escape(s: &str) -> String {
 }
 
 fn html(a: &Answer) -> String {
-    let r = &a.report;
     let mut out = String::from(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
@@ -372,20 +417,26 @@ fn html(a: &Answer) -> String {
         a.reason
             .map_or(String::new(), |r| format!(": {}", escape(r)))
     );
-    if !r.tag_id.is_empty() {
-        out += &format!(
-            "<p>Counter: {}</p>\n<p>Tag ID: {}</p>\n",
-            r.counter,
-            escape(&r.tag_id)
-        );
-    }
-    for (heading, lines) in [
-        (SHOWS_HEADING, &r.shows),
-        (DOES_NOT_SHOW_HEADING, &r.does_not_show),
-    ] {
+    // A refused tap gets only the result and the fixed "does not show" list: nothing about the tag.
+    let dns: Vec<String> = DOES_NOT_SHOW.iter().map(|s| s.to_string()).collect();
+    let sections = match &a.report {
+        Some(r) => {
+            out += &format!(
+                "<p>Counter: {}</p>\n<p>Tag ID: {}</p>\n",
+                r.counter,
+                escape(&r.tag_id)
+            );
+            vec![
+                (SHOWS_HEADING, r.shows.clone()),
+                (DOES_NOT_SHOW_HEADING, r.does_not_show.clone()),
+            ]
+        }
+        None => vec![(DOES_NOT_SHOW_HEADING, dns)],
+    };
+    for (heading, lines) in sections {
         out += &format!("<h2>{heading}</h2>\n<ul>\n");
         for l in lines {
-            out += &format!("<li>{}</li>\n", escape(l));
+            out += &format!("<li>{}</li>\n", escape(&l));
         }
         out += "</ul>\n";
     }
@@ -430,8 +481,7 @@ async fn handle(
         .is_some_and(|v| v.contains("application/json"));
     let mut resp = match s.tap(target) {
         Ok(a) => {
-            let tag = (!a.report.tag_id.is_empty()).then_some(a.report.tag_id.as_str());
-            let counter = tag.map(|_| a.report.counter);
+            let (tag, counter) = a.logged.as_ref().map(|(t, c)| (t.as_str(), *c)).unzip();
             s.log(tag, counter, a.result);
             if json {
                 (
@@ -474,6 +524,6 @@ pub fn router(server: Arc<Server>) -> Router {
 }
 
 /// Answer requests on `listener` until the process ends.
-pub async fn run(listener: tokio::net::TcpListener, server: Server) -> std::io::Result<()> {
-    axum::serve(listener, router(Arc::new(server))).await
+pub async fn run(listener: tokio::net::TcpListener, server: Arc<Server>) -> std::io::Result<()> {
+    axum::serve(listener, router(server)).await
 }

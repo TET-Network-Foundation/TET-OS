@@ -13,9 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tet_tag_verify::diversify::{diversification_input, diversify_aes128};
-use tet_tag_verify::report::{
-    DOES_NOT_SHOW, DOES_NOT_SHOW_HEADING, SHOWS_HEADING, SHOWS_INVALID, shows_valid,
-};
+use tet_tag_verify::report::{DOES_NOT_SHOW, DOES_NOT_SHOW_HEADING, SHOWS_HEADING, shows_valid};
 use tet_tag_verify::serve::{MAX_REQUEST_LINE, Server, run};
 use tet_tag_verify::sun::{Key, parse_hex, sdmmac};
 
@@ -78,6 +76,10 @@ fn load(d: &Path, keys_json: &str, log: &Log) -> Server {
 
 /// Start `server` on an ephemeral localhost port, on its own thread.
 fn start(server: Server) -> SocketAddr {
+    start_shared(Arc::new(server))
+}
+
+fn start_shared(server: Arc<Server>) -> SocketAddr {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     l.set_nonblocking(true).unwrap();
     let addr = l.local_addr().unwrap();
@@ -129,6 +131,14 @@ fn get_json(addr: SocketAddr, target: &str) -> serde_json::Value {
     serde_json::from_str(&r.body).unwrap()
 }
 
+/// A refused tap's answer: exactly these three fields, nothing about the tag.
+fn assert_refused(v: &serde_json::Value, reason: &str, replayed: bool) {
+    assert_eq!(
+        v,
+        &serde_json::json!({ "result": "INVALID", "reason": reason, "replayed": replayed })
+    );
+}
+
 fn state(d: &Path) -> Option<serde_json::Value> {
     std::fs::read_to_string(d.join("state.json"))
         .ok()
@@ -163,13 +173,9 @@ fn first_tap_is_valid_and_the_same_tap_again_is_replayed() {
     );
     assert_eq!(state(&d).unwrap(), serde_json::json!({ P12_UID: 61 }));
 
-    let v = get_json(addr, P12);
-    assert_eq!(v["result"], "INVALID");
-    assert_eq!(v["valid"], false);
-    assert_eq!(v["reason"], "replayed");
-    assert_eq!(v["replayed"], true);
-    assert_eq!(v["counter"], 61);
-    assert_eq!(v["counter_went_up"], false);
+    // Refused: no UID, counter or tag ID in the answer; the log keeps the tag ID and counter,
+    // because the signature checked.
+    assert_refused(&get_json(addr, P12), "replayed", true);
     assert_eq!(state(&d).unwrap(), serde_json::json!({ P12_UID: 61 }));
 
     assert_eq!(
@@ -189,9 +195,7 @@ fn a_replay_is_refused_after_a_restart() {
     let first = start(load(&d, &per_tag(P12_UID, ZERO), &Log::default()));
     assert_eq!(get_json(first, P12)["result"], "VALID");
     let second = start(load(&d, &per_tag(P12_UID, ZERO), &Log::default()));
-    let v = get_json(second, P12);
-    assert_eq!(v["reason"], "replayed");
-    assert_eq!(v["replayed"], true);
+    assert_refused(&get_json(second, P12), "replayed", true);
 }
 
 /// Accepted only when the counter is above the stored one: 60 → 61 goes through; 61 and 62
@@ -203,9 +207,13 @@ fn only_a_counter_above_the_stored_one_is_accepted() {
         std::fs::write(d.join("state.json"), format!("{{\"{P12_UID}\": {stored}}}")).unwrap();
         let addr = start(load(&d, &per_tag(P12_UID, ZERO), &Log::default()));
         let v = get_json(addr, P12);
-        assert_eq!(v["valid"], accepted, "stored {stored}");
-        assert_eq!(v["replayed"], !accepted, "stored {stored}");
-        assert_eq!(v["counter_went_up"], accepted, "stored {stored}");
+        if accepted {
+            assert_eq!(v["valid"], true, "stored {stored}");
+            assert_eq!(v["replayed"], false, "stored {stored}");
+            assert_eq!(v["counter_went_up"], true, "stored {stored}");
+        } else {
+            assert_refused(&v, "replayed", true);
+        }
         let want = if accepted { 61 } else { stored };
         assert_eq!(state(&d).unwrap()[P12_UID], want, "stored {stored}");
     }
@@ -216,15 +224,17 @@ fn only_a_counter_above_the_stored_one_is_accepted() {
 #[test]
 fn a_tampered_cmac_is_invalid() {
     let d = dir("tampered");
-    let addr = start(load(&d, &per_tag(P12_UID, ZERO), &Log::default()));
+    let log = Log::default();
+    let addr = start(load(&d, &per_tag(P12_UID, ZERO), &log));
     let tampered = P12.replace("c=94EED9EE65337086", "c=94EED9EE65337087");
-    let v = get_json(addr, &tampered);
-    assert_eq!(v["result"], "INVALID");
-    assert_eq!(v["valid"], false);
-    assert_eq!(v["reason"], "signature does not match");
-    assert_eq!(v["replayed"], false);
-    assert_eq!(v["shows"][0], SHOWS_INVALID);
+    assert_refused(
+        &get_json(addr, &tampered),
+        "not valid for any key here",
+        false,
+    );
     assert_eq!(state(&d), None);
+    // The signature didn't check, so the log names no tag.
+    assert_eq!(log.lines(), ["tag_id=- counter=- result=INVALID"]);
     // And the genuine tap is still accepted afterwards.
     assert_eq!(get_json(addr, P12)["result"], "VALID");
 }
@@ -252,13 +262,7 @@ fn a_uid_without_a_key_is_invalid_and_nothing_about_it_is_echoed() {
         let r = get(addr, target, JSON);
         assert_eq!(r.status, 200);
         let v: serde_json::Value = serde_json::from_str(&r.body).unwrap();
-        assert_eq!(v["result"], "INVALID", "{target}");
-        assert_eq!(v["valid"], false);
-        assert_eq!(v["reason"], "no key for this tag");
-        assert_eq!(v["replayed"], false);
-        assert_eq!(v["uid"], "");
-        assert_eq!(v["tag_id"], "");
-        assert_eq!(v["counter"], 0);
+        assert_refused(&v, "not valid for any key here", false);
         for secret in [P12_UID, "041e3c8a2d6b80", TAG_ID] {
             assert!(
                 !r.body.to_lowercase().contains(secret),
@@ -268,6 +272,73 @@ fn a_uid_without_a_key_is_invalid_and_nothing_about_it_is_echoed() {
     }
     assert_eq!(state(&d), None);
     assert_eq!(log.lines(), ["tag_id=- counter=- result=INVALID"; 2]);
+}
+
+/// A known tag with a wrong signature and a tag with no key get the same answer, byte for byte,
+/// as JSON and as HTML, in both modes.
+#[test]
+fn no_key_and_a_wrong_signature_are_answered_the_same() {
+    let d = dir("same");
+    let addr = start(load(
+        &d,
+        &format!("{{\"{P12_UID}\": \"{ZERO}\", \"041e3c8a2d6b80\": \"{ZERO}\"}}"),
+        &Log::default(),
+    ));
+    // Known tag, wrong MAC; and the same MAC under a UID / PICCData with no key here.
+    let pairs = [
+        (
+            P12.replace("c=94EED9EE65337086", "c=94EED9EE65337087"),
+            P12.replace(
+                "e=EF963FF7828658A599F3041510671E88",
+                "e=EF963FF7828658A599F3041510671E89",
+            ),
+        ),
+        (
+            PLAIN.replace("cmac=4B00064004B0B3D3", "cmac=4B00064004B0B3D4"),
+            PLAIN.replace("uid=041E3C8A2D6B80", "uid=041E3C8A2D6B81"),
+        ),
+    ];
+    for (known, unknown) in &pairs {
+        for accept in [JSON, HTML] {
+            let a = get(addr, known, accept);
+            let b = get(addr, unknown, accept);
+            assert_eq!(
+                (a.status, &a.body),
+                (b.status, &b.body),
+                "{known} / {unknown}"
+            );
+            assert!(a.body.contains("not valid for any key here"));
+            assert!(!a.body.contains("Tag ID") && !a.body.contains(SHOWS_HEADING));
+        }
+    }
+    // A malformed URL is refused the same way for both too, before any key is looked up.
+    let known = get(addr, "/tap?uid=041E3C8A2D6B80&ctr=000006", JSON);
+    let unknown = get(addr, "/tap?uid=041E3C8A2D6B81&ctr=000006", JSON);
+    assert_eq!(known.status, 400);
+    assert_eq!((known.status, known.body), (unknown.status, unknown.body));
+}
+
+/// The no-key path runs a stand-in SDMMAC check, as the known-tag path runs the real one.
+/// (Not a timing test: it counts the checks, so it catches the stand-in being removed.)
+#[test]
+fn an_unknown_tag_costs_the_same_checks_as_a_known_one() {
+    let d = dir("checks");
+    let server = Arc::new(load(&d, &per_tag(P12_UID, ZERO), &Log::default()));
+    let addr = start_shared(server.clone());
+    let wrong_mac = P12.replace("c=94EED9EE65337086", "c=94EED9EE65337087");
+    let no_key = P12.replace(
+        "e=EF963FF7828658A599F3041510671E88",
+        "e=EF963FF7828658A599F3041510671E89",
+    );
+    for (target, plain) in [
+        (wrong_mac.as_str(), false),
+        (no_key.as_str(), false),
+        (PLAIN, true),
+    ] {
+        let before = server.checks_run();
+        get(addr, target, JSON);
+        assert_eq!(server.checks_run(), before + 1, "{target} (plain: {plain})");
+    }
 }
 
 #[test]
@@ -379,6 +450,10 @@ fn the_html_page_has_both_sections() {
         r.body
             .contains(&format!("<h2>{DOES_NOT_SHOW_HEADING}</h2>"))
     );
+    // A refused tap's page says nothing about the tag.
+    for absent in [SHOWS_HEADING, "Counter:", "Tag ID:", TAG_ID] {
+        assert!(!r.body.contains(absent), "replayed page shows {absent}");
+    }
 }
 
 // A master key (AN10922). These taps are made here with the library's own SDMMAC and the aes
@@ -444,7 +519,7 @@ fn a_master_key_checks_with_the_derived_key_only() {
     let addr = start(load(&d, &master_keys(false), &log));
     // MAC'd with the master key itself: the tag's key is the derived one, so this fails.
     let v = get_json(addr, &plain_tap(&h::<16>(MASTER), 5));
-    assert_eq!(v["reason"], "signature does not match");
+    assert_refused(&v, "not valid for any key here", false);
     let v = get_json(addr, &plain_tap(&derived(), 5));
     assert_eq!(v["result"], "VALID");
     assert_eq!(v["counter"], 5);
@@ -455,7 +530,7 @@ fn a_master_key_checks_with_the_derived_key_only() {
     assert_eq!(get_json(addr, &plain_tap(&derived(), 6))["result"], "VALID");
     // Encrypted PICCData can't be read without a PICCData key.
     let v = get_json(addr, &encrypted_tap(&h::<16>(META), &derived(), 7));
-    assert_eq!(v["reason"], "no key for this tag");
+    assert_refused(&v, "not valid for any key here", false);
 }
 
 #[test]
@@ -464,7 +539,7 @@ fn a_master_key_with_a_piccdata_key_reads_encrypted_taps() {
     let addr = start(load(&d, &master_keys(true), &Log::default()));
     let meta = h::<16>(META);
     let v = get_json(addr, &encrypted_tap(&meta, &h::<16>(MASTER), 9));
-    assert_eq!(v["reason"], "signature does not match");
+    assert_refused(&v, "not valid for any key here", false);
     let v = get_json(addr, &encrypted_tap(&meta, &derived(), 9));
     assert_eq!(v["result"], "VALID");
     assert_eq!(v["mode"], "encrypted");
@@ -504,7 +579,7 @@ fn the_log_has_one_line_per_request_and_nothing_else() {
     assert_eq!(lines[0], format!("tag_id={tag} counter=3 result=VALID"));
     assert_eq!(lines[1], format!("tag_id={tag} counter=3 result=INVALID"));
     assert_eq!(lines[2], format!("tag_id={tag} counter=4 result=VALID"));
-    assert_eq!(lines[3], format!("tag_id={tag} counter=8 result=INVALID"));
+    assert_eq!(lines[3], "tag_id=- counter=- result=INVALID");
     assert_eq!(lines[4], "tag_id=- counter=- result=INVALID");
     assert_eq!(lines[5], "tag_id=- counter=- result=404");
     assert_eq!(lines[6], "tag_id=- counter=- result=405");
@@ -517,10 +592,10 @@ fn the_log_has_one_line_per_request_and_nothing_else() {
 /// The README names the reasons serve gives, from the one place they are defined.
 #[test]
 fn readme_names_the_reasons_serve_gives() {
-    use tet_tag_verify::report::{REASON_BAD_SIGNATURE, REASON_NO_KEY, REASON_REPLAYED};
+    use tet_tag_verify::report::{REASON_NOT_VALID, REASON_REPLAYED};
     let readme = include_str!("../README.md");
     assert!(readme.contains("## serve (prototype)"));
-    for r in [REASON_BAD_SIGNATURE, REASON_REPLAYED, REASON_NO_KEY] {
+    for r in [REASON_NOT_VALID, REASON_REPLAYED] {
         assert!(readme.contains(&format!("`{r}`")), "README is missing: {r}");
     }
     assert!(readme.contains("No rate limiting yet (planned)."));

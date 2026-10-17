@@ -254,7 +254,7 @@ fn run(cmd: Cmd) -> Result<u8, String> {
                     .local_addr()
                     .map_err(|e| format!("can't read the listening address: {e}"))?;
                 eprintln!("serve: listening on {addr}, {}", server.describe());
-                tet_tag_verify::serve::run(listener, server)
+                tet_tag_verify::serve::run(listener, std::sync::Arc::new(server))
                     .await
                     .map_err(|e| format!("server stopped: {e}"))
             })?;
