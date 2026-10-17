@@ -842,21 +842,34 @@ pub fn block_time_from_env() -> Duration {
     Duration::from_secs(sec)
 }
 
-/// Is this node the sole validator **by explicit configuration** (#28)?
+/// Is this node the sole validator (#28)? Phase 1: the genesis validator set has exactly one entry,
+/// and it is this node's producer key. `TET_VALIDATOR_IDS` is not read: the set comes from genesis.
 ///
-/// `TET_VALIDATOR_IDS` must be set and name exactly this node. A validator set that merely
-/// defaulted to `[self]` (`ValidatorSet::from_env_or_single`) does not count: every node started
-/// without the variable has that set, and letting all of them mine with no peers would let any
+/// An empty set (dev chain) does not count. Every dev node's local mining set defaults to `[self]`
+/// (`ValidatorSet::for_local_mining`), and letting all of them mine with no peers would let any
 /// partitioned, misconfigured follower extend its own chain.
-pub fn is_explicit_sole_validator(
-    validator_ids_env: Option<&str>,
-    validator_set: &ValidatorSet,
-    local_node_id: &str,
+pub fn is_sole_genesis_validator(
+    validators: &[crate::genesis::GenesisValidator],
+    producer_key: Option<&crate::producer_key::ProducerPublicKey>,
 ) -> bool {
-    let explicit = validator_ids_env.is_some_and(|v| v.split(',').any(|s| !s.trim().is_empty()));
-    explicit
-        && validator_set.validators().len() == 1
-        && validator_set.validators()[0].as_str() == local_node_id
+    match (validators, producer_key) {
+        ([only], Some(pk)) => &only.key == pk,
+        _ => false,
+    }
+}
+
+/// [`is_sole_genesis_validator`] for this node: the genesis set from `TET_GENESIS_VALIDATORS` and
+/// the state's producer key. A genesis set that cannot be read is not a sole validator.
+pub fn sole_validator_from_genesis(state: &RestState) -> bool {
+    let validators = match crate::genesis::genesis_validators_from_env() {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[consensus] genesis validator set unreadable, not the sole validator: {e}");
+            return false;
+        }
+    };
+    let pk = state.producer_key.as_ref().map(|k| k.public_key());
+    is_sole_genesis_validator(&validators, pk.as_ref())
 }
 
 pub fn spawn_auto_miner(
@@ -867,11 +880,12 @@ pub fn spawn_auto_miner(
 ) -> tokio::task::JoinHandle<()> {
     let block_time = block_time_from_env();
     // The sole validator keeps mining when its peers leave (#28); see `peerless_mining_allowed`.
-    let sole_validator = is_explicit_sole_validator(
-        std::env::var("TET_VALIDATOR_IDS").ok().as_deref(),
-        &validator_set,
-        &local_node_id,
-    );
+    if std::env::var("TET_VALIDATOR_IDS").is_ok_and(|v| !v.trim().is_empty()) {
+        log::warn!(
+            "[consensus] TET_VALIDATOR_IDS is set but ignored since Phase 1: the validator set is the genesis set (TET_GENESIS_VALIDATORS)"
+        );
+    }
+    let sole_validator = sole_validator_from_genesis(&state);
     tokio::spawn(async move {
         log::info!(
             "[consensus] auto-mining enabled block_time_sec={} node_id={} sole_validator={sole_validator}",

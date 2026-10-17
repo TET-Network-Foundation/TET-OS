@@ -893,7 +893,7 @@ Generated from `tet-core/src/rest/routes.rs` (2026-05-21). Duplicate paths (alia
 | `TET_LEDGER_TMP_PATH` | `ledger.rs` | Snapshot tmp |
 | `TET_SNAPSHOT_EVERY_BLOCKS` | `ledger.rs` | Snapshot frequency |
 | `TET_PROTOCOL_FEE_BPS` | `ledger.rs` | Override fee bps (if set) |
-| `TET_VALIDATOR_IDS` | `consensus.rs` | Validator set |
+| `TET_VALIDATOR_IDS` | `consensus.rs` | Not read since Phase 1 (logged as ignored if set); the validator set is `TET_GENESIS_VALIDATORS` |
 | `TET_CONSENSUS_LEADER_MODE` | `consensus.rs` | Leader algorithm |
 | `TET_BASE_BLOCK_REWARD` | `consensus.rs` | Coinbase sizing |
 | `TET_PRUNE_EVERY_BLOCKS` | `consensus.rs` | Prune cadence |

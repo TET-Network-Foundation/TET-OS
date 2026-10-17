@@ -13481,17 +13481,20 @@ fn watchdog_action_boundaries() {
 // ---------------------------------------------------------------------------
 
 /// A producer as Helsinki runs: `TET_BOOTNODES` set (so the "awaiting first hello" rule applies),
-/// not a bootnode, a chain of `height` blocks mined as `alice`, and an empty sync board.
+/// not a bootnode, a chain of `height` blocks mined as `alice` with alice's producer key, and an
+/// empty sync board. `genesis` is the genesis validator set; the returned `bool` is whether this
+/// node is the sole validator, computed as `spawn_auto_miner` computes it.
 async fn sole_producer_fixture_for_tests(
     height: u64,
+    genesis: &[&str],
 ) -> (
     std::sync::Arc<crate::ledger::Ledger>,
     crate::sync::SharedBlockSyncBoard,
     crate::sync::SharedHelloRegistry,
+    bool,
 ) {
     set_test_env_base();
     unsafe {
-        std::env::set_var("TET_VALIDATOR_IDS", "alice");
         std::env::set_var("TET_SYNC_STABLE_SEC", "1");
         std::env::set_var(
             "TET_BOOTNODES",
@@ -13501,18 +13504,20 @@ async fn sole_producer_fixture_for_tests(
         std::env::remove_var("TET_AUTO_MINE_IGNORE_SYNC");
         std::env::remove_var("TET_SOLO_PRODUCER_GRACE_SEC");
     }
+    set_test_genesis_validators(genesis);
     let ledger = std::sync::Arc::new(open_temp_ledger());
     ledger.init_genesis_founder_premine_from_env().unwrap();
     let _ = ledger.apply_genesis_allocation("founder");
-    let state = rest_state_for_tests(ledger.clone());
+    let state = with_producer(&rest_state_for_tests(ledger.clone()), "alice");
     for _ in 0..height {
         crate::consensus::mine_pending_block_as(state.clone(), "alice".to_string())
             .await
             .expect("mine");
     }
+    let sole = crate::consensus::sole_validator_from_genesis(&state);
     let board = crate::sync::new_sync_state();
     let registry = board.clone();
-    (ledger, board, registry)
+    (ledger, board, registry, sole)
 }
 
 /// A peer at our own tip, as Nuremberg is in steady state.
@@ -13560,13 +13565,14 @@ async fn gate_opens_for_tests(
 #[tokio::test]
 async fn sole_validator_keeps_mining_after_its_last_peer_leaves() {
     let _g = env_lock();
-    let (ledger, board, registry) = sole_producer_fixture_for_tests(3).await;
+    let (ledger, board, registry, sole) = sole_producer_fixture_for_tests(3, &["alice"]).await;
+    assert!(sole, "genesis {{alice}} and this node holds alice's key: the sole validator");
     add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
-    assert!(gate_opens_for_tests(&board, &ledger, true).await, "mines with its follower connected");
+    assert!(gate_opens_for_tests(&board, &ledger, sole).await, "mines with its follower connected");
 
     registry.with(|s| s.registry.remove_peer("nuremberg"));
     assert!(
-        !crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
+        !crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, sole).await,
         "the sole validator must keep mining when its only peer disconnects"
     );
     assert!(
@@ -13582,16 +13588,40 @@ async fn sole_validator_keeps_mining_after_its_last_peer_leaves() {
 #[tokio::test]
 async fn sole_validator_still_gates_on_a_peer_ahead() {
     let _g = env_lock();
-    let (ledger, board, registry) = sole_producer_fixture_for_tests(3).await;
+    let (ledger, board, registry, sole) = sole_producer_fixture_for_tests(3, &["alice"]).await;
+    assert!(sole, "genesis {{alice}} and this node holds alice's key: the sole validator");
     add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
-    assert!(gate_opens_for_tests(&board, &ledger, true).await);
+    assert!(gate_opens_for_tests(&board, &ledger, sole).await);
     add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 5).await;
     // A peer ahead also sets `catch_up_triggered`, which gates by itself. Clear it, as a finished
     // catch-up does while the peer keeps moving, so only the peer-ahead check can hold the gate.
     registry.with(|s| s.registry.clear_catch_up_triggered());
     assert!(
-        crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, true).await,
+        crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, sole).await,
         "a peer ahead must stop the sole validator"
+    );
+}
+
+/// **SECURITY REGRESSION GUARD (#28, Phase 1): one validator of two does not mine peerless.**
+/// Genesis lists alice and bob; this node is alice. When its last peer leaves it must gate, or a
+/// partitioned validator would extend its own chain. `TET_VALIDATOR_IDS=alice` is set as well, as
+/// a pre-Phase-1 config would have it, to show the variable no longer makes a node sole.
+/// Negative control: `is_sole_genesis_validator` accepts any set containing this key → FAILED.
+#[tokio::test]
+async fn one_of_two_genesis_validators_stops_mining_when_its_last_peer_leaves() {
+    let _g = env_lock();
+    // Set before the fixture, so `sole` is computed with it present (`set_test_env_base` leaves it).
+    unsafe { std::env::set_var("TET_VALIDATOR_IDS", "alice") };
+    let (ledger, board, registry, sole) = sole_producer_fixture_for_tests(3, &["alice", "bob"]).await;
+    unsafe { std::env::remove_var("TET_VALIDATOR_IDS") };
+    assert!(!sole, "genesis {{alice, bob}}: not the sole validator, whatever TET_VALIDATOR_IDS says");
+    add_peer_at_our_tip_for_tests(&registry, &ledger, "nuremberg", 0).await;
+    assert!(gate_opens_for_tests(&board, &ledger, sole).await, "mines with its peer connected");
+
+    registry.with(|s| s.registry.remove_peer("nuremberg"));
+    assert!(
+        crate::sync::auto_mine_blocked_by_sync(Some(&board), &ledger, sole).await,
+        "one of two validators must stop mining when its last peer leaves"
     );
 }
 
@@ -13610,21 +13640,25 @@ fn peerless_mining_allowed_boundaries() {
     assert!(!ok(false, 10, true, D::from_secs(9_999), g), "not the sole validator → never peerless");
 }
 
-/// **SECURITY REGRESSION GUARD (#28): only an explicitly configured sole validator mines peerless.**
-/// With `TET_VALIDATOR_IDS` unset every node's set defaults to `[self]`; counting that as "sole"
-/// would let any partitioned follower started with `TET_AUTO_MINE=1` fork. Found by the commit
-/// security review of the first #28 change.
-/// Negative control: drop the `explicit` requirement → FAILED.
+/// **SECURITY REGRESSION GUARD (#28): only a genesis set of exactly this node's key is "sole".**
+/// An empty genesis set (dev chain) makes every node's local mining set `[self]`; counting that as
+/// "sole" would let any partitioned follower started with `TET_AUTO_MINE=1` fork. Found by the
+/// commit security review of the first #28 change (then phrased as an unset `TET_VALIDATOR_IDS`,
+/// which Phase 1 no longer reads).
+/// Negative control: treat an empty set as sole → FAILED.
 #[test]
 fn defaulted_validator_set_is_not_a_sole_validator() {
-    use crate::consensus::{is_explicit_sole_validator as sole, ValidatorSet};
-    let me = ValidatorSet::new(["local-wallet"]);
-    assert!(!sole(None, &me, "local-wallet"), "unset TET_VALIDATOR_IDS: defaulted, not sole");
-    assert!(!sole(Some("  "), &me, "local-wallet"), "blank TET_VALIDATOR_IDS: defaulted, not sole");
-    assert!(sole(Some("local-wallet"), &me, "local-wallet"), "explicit [self]: sole");
-    let two = ValidatorSet::new(["local-wallet", "nbg"]);
-    assert!(!sole(Some("local-wallet,nbg"), &two, "local-wallet"), "two validators: not sole");
-    assert!(!sole(Some("other"), &ValidatorSet::new(["other"]), "local-wallet"), "set names another node");
+    use crate::consensus::is_sole_genesis_validator as sole;
+    let entry = |id: &str| crate::genesis::GenesisValidator {
+        producer_id: id.to_string(),
+        key: test_producer_key(id).public_key(),
+    };
+    let alice = test_producer_key("alice").public_key();
+    assert!(!sole(&[], Some(&alice)), "empty genesis set: defaulted, not sole");
+    assert!(!sole(&[entry("alice")], None), "no producer key: not sole");
+    assert!(sole(&[entry("alice")], Some(&alice)), "genesis {{alice}}, alice's key: sole");
+    assert!(!sole(&[entry("alice"), entry("bob")], Some(&alice)), "two validators: not sole");
+    assert!(!sole(&[entry("bob")], Some(&alice)), "the one validator is another key");
 }
 // The ML-DSA half of a hybrid signature is not bound to the wallet (found by the item-5 nightly, #30).
 // ---------------------------------------------------------------------------
@@ -13696,7 +13730,7 @@ fn mldsa_key_unrelated_to_the_wallet_is_refused() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn catch_up_tick_and_sync_gate_never_deadlock() {
     let _g = env_lock();
-    let (ledger, sync, _) = sole_producer_fixture_for_tests(3).await;
+    let (ledger, sync, _, _) = sole_producer_fixture_for_tests(3, &["alice"]).await;
     let h = ledger.block_height().unwrap();
     add_peer_at_our_tip_for_tests(&sync, &ledger, "nuremberg", 0).await;
 

@@ -810,10 +810,12 @@ Admin / faucet routes may require `TET_ADMIN_API_KEY` (see `tet-core/.env.exampl
 ```
 
 - **`synced: false`** while catching up, awaiting first hello (when `TET_BOOTNODES` set), or **tip conflict** (same height, different `state_root` / `tip_block_id` vs a peer).
-- **The sole validator does not wait for peers** (since 2026-10-05, #28). With
-  `TET_VALIDATOR_IDS` **explicitly set** to only this node (an unset variable defaults the set to
-  `[self]` on every node and does **not** count), losing every peer no longer stops it mining: a
-  follower outage cannot halt the chain. Two limits keep the fork guard: an empty chain (height 0)
+- **The sole validator does not wait for peers** (since 2026-10-05, #28). A node is the sole
+  validator when the genesis validator set (`TET_GENESIS_VALIDATORS`) lists **exactly one** entry
+  and it is **this node's producer key**. An empty set (dev chain) does **not** count, because
+  every node's local mining set is then `[self]`. `TET_VALIDATOR_IDS` is not read since Phase 1;
+  if it is set, the node logs that it is ignored. For the sole validator, losing every peer no
+  longer stops it mining: a follower outage cannot halt the chain. Two limits keep the fork guard: an empty chain (height 0)
   still waits for a hello, and a freshly started producer waits `TET_SOLO_PRODUCER_GRACE_SEC`
   (default 120) for a peer before mining alone. A peer that is **ahead** still stops it.
 - Auto-mine also waits **`TET_SYNC_STABLE_SEC`** after `synced` becomes true before producing blocks.
