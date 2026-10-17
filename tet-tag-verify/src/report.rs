@@ -16,6 +16,14 @@ pub const DOES_NOT_SHOW: [&str; 4] = [
 pub const SHOWS_INVALID: &str =
     "Nothing. The signature doesn't match this key: wrong key, a changed URL, or not this tag.";
 
+pub const SHOWS_HEADING: &str = "What this shows";
+pub const DOES_NOT_SHOW_HEADING: &str = "What this does not show";
+
+/// Why `serve` refused a tap (the `reason` of its answer).
+pub const REASON_BAD_SIGNATURE: &str = "signature does not match";
+pub const REASON_REPLAYED: &str = "replayed";
+pub const REASON_NO_KEY: &str = "no key for this tag";
+
 pub fn shows_valid(counter: u32) -> String {
     format!("The chip that made this URL knew this key when it was tapped, at counter {counter}.")
 }
@@ -53,6 +61,22 @@ pub fn report(c: &Checked, last_counter: Option<u32>) -> Report {
         } else {
             SHOWS_INVALID.to_string()
         }],
+        does_not_show: DOES_NOT_SHOW.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// The report for a tap the verifier holds no key for. Nothing about the tag is read or echoed:
+/// no UID, no counter, no tag ID.
+pub fn report_no_key(mode: &'static str) -> Report {
+    Report {
+        valid: false,
+        mode,
+        uid: String::new(),
+        counter: 0,
+        counter_went_up: None,
+        tag_id: String::new(),
+        mac_input_used: String::new(),
+        shows: vec![SHOWS_INVALID.to_string()],
         does_not_show: DOES_NOT_SHOW.iter().map(|s| s.to_string()).collect(),
     }
 }

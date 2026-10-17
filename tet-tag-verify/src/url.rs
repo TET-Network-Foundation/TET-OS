@@ -85,6 +85,15 @@ fn find<'a>(ps: &'a [Param<'a>], names: &[&str]) -> Option<&'a Param<'a>> {
     names.iter().find_map(|n| ps.iter().find(|p| p.name == *n))
 }
 
+/// The value of the first of `names` the URL's query carries, as written (no decoding). Refuses
+/// the same URLs `verify_url` refuses for their query (none, or a repeated parameter).
+pub fn param<'a>(url: &'a str, names: &[&str]) -> Result<Option<&'a str>, UrlError> {
+    let ps = params(url)?;
+    Ok(names
+        .iter()
+        .find_map(|n| ps.iter().find(|p| p.name == *n).map(|p| p.value)))
+}
+
 pub struct Checked {
     pub mode: Mode,
     pub result: SunResult,

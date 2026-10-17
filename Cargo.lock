@@ -7673,12 +7673,14 @@ name = "tet-tag-verify"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "axum 0.7.9",
  "clap",
  "cmac",
  "hex",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]

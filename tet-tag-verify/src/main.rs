@@ -4,6 +4,7 @@
 //! - derive --master <hex> --uid <hex> --aid <hex> --sid <hex>   → the tag's diversified key (AN10922)
 //! - doc registration … / doc claim …   → canonical JSON, then its SHA-256
 //! - doc hash <file.json>              → SHA-256 of the document's canonical form
+//! - serve --keys <file> --state <file> → answer GET /tap?… with the same report (prototype)
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::process::ExitCode;
@@ -12,7 +13,8 @@ use tet_tag_verify::docs::{
     CLAIM_KIND, Chip, Product, REGISTRATION_KIND, TagClaimV1, TagRegistrationV1, Tamper, Tap,
     tag_id,
 };
-use tet_tag_verify::report::report;
+use tet_tag_verify::report::{DOES_NOT_SHOW_HEADING, SHOWS_HEADING, report};
+use tet_tag_verify::serve::Server;
 use tet_tag_verify::sun::{Key, parse_hex};
 use tet_tag_verify::url::verify_url;
 
@@ -63,6 +65,18 @@ enum Cmd {
         /// The system identifier as hex, up to 21 bytes (may be empty: --sid "").
         #[arg(long)]
         sid: String,
+    },
+    /// Answer GET /tap?<SUN parameters> with the verify report, refusing replayed counters (prototype).
+    Serve {
+        /// Address to listen on. Localhost by default.
+        #[arg(long, default_value = "127.0.0.1:8787")]
+        listen: String,
+        /// The keys file (JSON, mode 0600): {"<uid>": "<key>", …} or {"master", "aid", "sid", "meta"?}.
+        #[arg(long)]
+        keys: std::path::PathBuf,
+        /// The state file: the last accepted counter per UID (created on the first accepted tap).
+        #[arg(long)]
+        state: std::path::PathBuf,
     },
     /// Write a tag document, or hash one.
     Doc {
@@ -198,11 +212,11 @@ fn run(cmd: Cmd) -> Result<u8, String> {
                     "Tag ID:     {} (SHA-256 of \"tet tag v1\" and the UID)",
                     r.tag_id
                 );
-                println!("\nWhat this shows");
+                println!("\n{SHOWS_HEADING}");
                 for s in &r.shows {
                     println!("- {s}");
                 }
-                println!("\nWhat this does not show");
+                println!("\n{DOES_NOT_SHOW_HEADING}");
                 for s in &r.does_not_show {
                     println!("- {s}");
                 }
@@ -222,6 +236,28 @@ fn run(cmd: Cmd) -> Result<u8, String> {
             let d = diversification_input(&u, &aid, &sid);
             let k = diversify_aes128(&master, &d).map_err(|e| e.to_string())?;
             println!("{}", hex::encode(k));
+            Ok(0)
+        }
+        Cmd::Serve {
+            listen,
+            keys,
+            state,
+        } => {
+            let server = Server::load(&keys, &state, Box::new(std::io::stderr()))?;
+            let rt = tokio::runtime::Runtime::new()
+                .map_err(|e| format!("can't start the runtime: {e}"))?;
+            rt.block_on(async {
+                let listener = tokio::net::TcpListener::bind(&listen)
+                    .await
+                    .map_err(|e| format!("can't listen on {listen}: {e}"))?;
+                let addr = listener
+                    .local_addr()
+                    .map_err(|e| format!("can't read the listening address: {e}"))?;
+                eprintln!("serve: listening on {addr}, {}", server.describe());
+                tet_tag_verify::serve::run(listener, server)
+                    .await
+                    .map_err(|e| format!("server stopped: {e}"))
+            })?;
             Ok(0)
         }
         Cmd::Doc {
