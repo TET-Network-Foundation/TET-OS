@@ -9,13 +9,18 @@ No network, no node: it works on text and bytes.
   AES key, per NXP AN12196. Plain mirroring (UID, counter, SDMMAC) and encrypted PICCData (tag
   byte 0xC7) are read. The result: whether the signature is valid for that key, the UID, the
   counter, and the tag ID (SHA-256 of `"tet tag v1"` and the UID).
+- **One tag's key from a master key**, per NXP AN10922 (AES-128): the diversified key for
+  UID ‖ AID ‖ system identifier. The worked example in AN10922 section 2.2.1 checks. An input of 15 bytes or less (so
+  0x01 ‖ input fits one block) is read as still running two blocks; no published vector covers
+  that case yet.
 - **The two tag documents**, `tet_tag_registration` and `tet_tag_claim` (`v: 1`): their
   canonical JSON (keys sorted, no whitespace, nulls written) and its SHA-256. A change to that
   form means a new version, not a new hash.
 
-Not done yet: LRP mode and per-tag key diversification (AN10922). Both are needed before any real
-registration. The test vectors come from sdm-backend's tests, which cite AN12196; the first
-physical tag is the real check.
+Not done yet: LRP mode, needed before any real registration. Diversification is implemented;
+its vector is AN10922's own example, and the short-input case is still unverified (see
+`tests/diversify_vectors.rs`). The SUN test vectors come from sdm-backend's tests, which cite
+AN12196; the first physical tag is the real check.
 
 ## What a valid tap shows
 
@@ -39,11 +44,14 @@ tet-tag-verify doc claim --uid <hex> --registration-sha256 <hex> --new-owner <id
                       --attestation-sha256 <hex> [--previous-claim-sha256 <hex>]
                       [--release-sha256 <hex>] [--tamper closed|open]
 tet-tag-verify doc hash <file.json>
+tet-tag-verify derive --master <32 hex> --uid <14 hex> --aid <6 hex> --sid <hex, up to 21 bytes>
 ```
 
 `verify` exits 0 when the signature is valid, 1 when it isn't, 2 on bad input. `doc registration`
 and `doc claim` print the canonical JSON, then its SHA-256. `doc hash` prints the SHA-256 of a
-document file's canonical form, and exits 1 if the file isn't a valid document.
+document file's canonical form, and exits 1 if the file isn't a valid document. `derive` prints
+the tag's diversified key as 32 hex characters (exit 2 on bad input); the master key never
+leaves the computer it is typed on.
 
 To see the output without a tag: `tet-tag-verify/examples/an12196_demo.sh` (from the repo root; it checks the AN12196 page 12 example with the all-zero key, no download).
 

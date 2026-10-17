@@ -12,7 +12,7 @@
 //! The MAC input is the URL text from SDMMACInputOffset up to the MAC; with the usual
 //! configuration (SDMMACInputOffset = SDMMACOffset) it is empty.
 //!
-//! LRP mode and per-tag key diversification (AN10922) are not implemented.
+//! LRP mode is not implemented. Per-tag key diversification (AN10922) is in `diversify`.
 
 use aes::Aes128;
 use aes::cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray};

@@ -1,11 +1,13 @@
 //! tet-tag-verify: check a tap offline, and write or hash the two tag documents.
 //!
 //! - verify --key <hex> --url <sun-url> [--json]
+//! - derive --master <hex> --uid <hex> --aid <hex> --sid <hex>   → the tag's diversified key (AN10922)
 //! - doc registration … / doc claim …   → canonical JSON, then its SHA-256
 //! - doc hash <file.json>              → SHA-256 of the document's canonical form
 
 use clap::{Parser, Subcommand, ValueEnum};
 use std::process::ExitCode;
+use tet_tag_verify::diversify::{diversification_input, diversify_aes128};
 use tet_tag_verify::docs::{
     CLAIM_KIND, Chip, Product, REGISTRATION_KIND, TagClaimV1, TagRegistrationV1, Tamper, Tap,
     tag_id,
@@ -46,6 +48,21 @@ enum Cmd {
         /// Print the result as JSON.
         #[arg(long)]
         json: bool,
+    },
+    /// Derive one tag's AES-128 key from a master key, per NXP AN10922 (prints 32 hex characters).
+    Derive {
+        /// The master key, 32 hex characters.
+        #[arg(long)]
+        master: String,
+        /// The tag's UID, 7 bytes as hex.
+        #[arg(long)]
+        uid: String,
+        /// The application identifier, 3 bytes as hex.
+        #[arg(long)]
+        aid: String,
+        /// The system identifier as hex, up to 21 bytes (may be empty: --sid "").
+        #[arg(long)]
+        sid: String,
     },
     /// Write a tag document, or hash one.
     Doc {
@@ -191,6 +208,21 @@ fn run(cmd: Cmd) -> Result<u8, String> {
                 }
             }
             Ok(if r.valid { 0 } else { 1 })
+        }
+        Cmd::Derive {
+            master,
+            uid: u,
+            aid,
+            sid,
+        } => {
+            let master = key("master key", &master)?;
+            let u = uid(&u)?;
+            let aid = parse_hex::<3>("AID", &aid).map_err(|e| e.to_string())?;
+            let sid = hex::decode(sid.trim()).map_err(|_| "system identifier is not valid hex".to_string())?;
+            let d = diversification_input(&u, &aid, &sid);
+            let k = diversify_aes128(&master, &d).map_err(|e| e.to_string())?;
+            println!("{}", hex::encode(k));
+            Ok(0)
         }
         Cmd::Doc {
             doc:

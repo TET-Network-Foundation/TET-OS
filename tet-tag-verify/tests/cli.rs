@@ -233,3 +233,76 @@ fn doc_registration_needs_a_counter() {
     let err = String::from_utf8(o.stderr).unwrap();
     assert!(err.contains("--counter"), "{err}");
 }
+
+/// AN10922 section 2.2.1, AES-128 example (see tests/diversify_vectors.rs for the source).
+#[test]
+fn derive_gives_the_an10922_example() {
+    let o = run(&[
+        "derive",
+        "--master",
+        "00112233445566778899AABBCCDDEEFF",
+        "--uid",
+        "04782E21801D80",
+        "--aid",
+        "3042F5",
+        "--sid",
+        "4E585020416275",
+    ]);
+    assert_eq!(o.status.code(), Some(0));
+    assert_eq!(stdout(&o), "a8dd63a3b89d54b37ca802473fda9175\n");
+}
+
+#[test]
+fn derive_bad_input_exits_2() {
+    const M: &str = "00112233445566778899AABBCCDDEEFF";
+    let cases: [(&str, &[&str]); 4] = [
+        (
+            "AID of 2 bytes",
+            &["derive", "--master", M, "--uid", "04782E21801D80", "--aid", "3042", "--sid", ""],
+        ),
+        (
+            "UID of 4 bytes",
+            &["derive", "--master", M, "--uid", "04782E21", "--aid", "3042F5", "--sid", ""],
+        ),
+        (
+            "system identifier of 22 bytes (the input would be 32)",
+            &[
+                "derive",
+                "--master",
+                M,
+                "--uid",
+                "04782E21801D80",
+                "--aid",
+                "3042F5",
+                "--sid",
+                "00112233445566778899AABBCCDDEEFF001122334455",
+            ],
+        ),
+        (
+            "system identifier that is not hex",
+            &["derive", "--master", M, "--uid", "04782E21801D80", "--aid", "3042F5", "--sid", "NXP Abu"],
+        ),
+    ];
+    for (name, args) in cases {
+        let o = run(args);
+        assert_eq!(o.status.code(), Some(2), "{name}");
+        assert!(o.stdout.is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn derive_with_an_empty_system_identifier_is_allowed() {
+    let o = run(&[
+        "derive",
+        "--master",
+        "00112233445566778899AABBCCDDEEFF",
+        "--uid",
+        "04782E21801D80",
+        "--aid",
+        "3042F5",
+        "--sid",
+        "",
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", String::from_utf8_lossy(&o.stderr));
+    assert_eq!(stdout(&o).trim().len(), 32);
+}
