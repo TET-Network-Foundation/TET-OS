@@ -1,0 +1,52 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TET home variant A</title>
+<style>
+@font-face { font-family: 'TET Serif'; src: url('../fonts/librebaskerville/LibreBaskerville[wght].ttf'); font-weight: 400 700; }
+@font-face { font-family: 'TET Serif JA'; src: url('../fonts/shipporimincho/ShipporiMincho-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'TET Serif JA'; src: url('../fonts/shipporimincho/ShipporiMincho-Bold.ttf'); font-weight: 700; }
+@font-face { font-family: 'TET Mono'; src: url('../fonts/jetbrainsmono/JetBrainsMono[wght].ttf'); font-weight: 100 800; }
+@font-face { font-family: 'TET Mono JA'; src: url('../fonts/mplus1code/MPLUS1Code[wght].ttf'); font-weight: 100 700; }
+@font-face { font-family: 'TET Sans'; src: url('../fonts/archivo/Archivo[wdth,wght].ttf'); font-weight: 100 900; font-stretch: 62% 125%; }
+@font-face { font-family: 'TET Sans JA'; src: url('../fonts/zenkakugothicnew/ZenKakuGothicNew-Regular.ttf'); font-weight: 400; }
+@font-face { font-family: 'TET Sans JA'; src: url('../fonts/zenkakugothicnew/ZenKakuGothicNew-Bold.ttf'); font-weight: 700; }
+
+*{box-sizing:border-box} html,body{margin:0;height:100%} body{display:flex;flex-direction:column;min-height:100vh;background:var(--bg);color:var(--fg)}
+.center{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 16px;text-align:center}
+.mark{display:flex;align-items:center;gap:14px;justify-content:center}
+.logo{width:72px;height:72px}
+.sub{margin:6px 0 22px;color:var(--dim)}
+form{display:flex;gap:8px;width:100%;max-width:560px}
+input{flex:1;min-width:0;font:inherit;font-size:16px;padding:11px 16px;background:var(--field);color:var(--fg);border:1px solid var(--line)}
+button{font:inherit;font-size:15px;padding:11px 16px;background:var(--field);color:var(--fg);border:1px solid var(--line)}
+.links{margin-top:16px;font-size:15px} .links a{color:var(--fg)}
+.cont{margin-top:10px;font-size:13.5px;color:var(--dim)} .cont a{color:var(--dim)}
+.strip{font-family:'TET Mono','TET Mono JA',monospace;font-size:12px;line-height:1.6;white-space:pre;overflow:hidden;background:var(--sbg);color:var(--sfg);padding:8px 20px}
+.strip p{margin:0} .strip i{font-style:normal;color:var(--sdim)} .strip .dim{color:var(--sdim)} .strip .hi{font-weight:400;color:var(--shi)} .strip .link{color:var(--shi)}
+footer{font-size:13px;color:var(--dim);padding:12px 20px;border-top:1px solid var(--line)}
+footer a{color:var(--dim)}
+@media (prefers-color-scheme:dark){ .logo{border-radius:50%;box-shadow:0 0 0 1px #929292} }
+@media (max-width:600px){ .logo{width:56px;height:56px} .strip{font-size:11px;padding:8px 14px} }
+
+:root{--bg:#fbfaf6;--fg:#1c1f23;--dim:#5d646d;--field:#fff;--line:#b9b4a6;--sbg:#16181b;--sfg:#c9d1d9;--sdim:#6c737b;--shi:#8fd3a8;--t1:#1a237e;--e:#1f5132;--t2:#8a1f1f}
+@media (prefers-color-scheme:dark){:root{--bg:#14161a;--fg:#e6e3da;--dim:#9aa0a6;--field:#1d2025;--line:#3b3f46;--t1:#9fa8ff;--e:#7fd1a0;--t2:#f0a0a0}}
+body{font-family:'TET Serif','TET Serif JA',serif}
+.word{font-family:'TET Serif','TET Serif JA',serif;font-weight:700;font-size:76px;letter-spacing:.02em;line-height:1}
+.word .t1{color:var(--t1)} .word .e{color:var(--e)} .word .t2{color:var(--t2)}
+input,button{border-radius:2px;box-shadow:inset 1px 1px 0 rgba(0,0,0,.08)}
+.links a,.cont a,footer a{text-decoration:underline}
+@media (max-width:600px){.word{font-size:56px}}
+</style></head><body>
+<div class="center">
+  <div class="mark"><img class="logo" src="tet-logo.svg" alt=""><span class="word"><span class="t1">T</span><span class="e">E</span><span class="t2">T</span></span></div>
+  <p class="sub"><span data-en="v0.2 · testnet" data-ja="v0.2 · テストネット"></span></p>
+  <form onsubmit="return false"><input id="q"><button><span data-en="Search" data-ja="検索"></span></button></form>
+  <p class="links"><span data-en="&lt;a&gt;Try&lt;/a&gt; · &lt;a&gt;Sign&lt;/a&gt; · &lt;a&gt;Verify&lt;/a&gt; · &lt;a&gt;How it works&lt;/a&gt;" data-ja="&lt;a&gt;試す&lt;/a&gt; · &lt;a&gt;署名&lt;/a&gt; · &lt;a&gt;検証&lt;/a&gt; · &lt;a&gt;しくみ&lt;/a&gt;"></span></p>
+  <p class="cont"><span data-en="continue: &lt;a&gt;Club board&lt;/a&gt; · &lt;a&gt;key options&lt;/a&gt;" data-ja="続き: &lt;a&gt;Club board&lt;/a&gt; · &lt;a&gt;鍵の設定&lt;/a&gt;"></span></p>
+</div>
+<div class="strip"><p class="dim" data-en="newest blocks on this node · blocks aren't producer-signed yet" data-ja="このノードの最新ブロック · ブロックにはまだ生成者の署名がありません"></p><p><b class="hi">#8965</b> <i>hash</i> 768259fb9c <i>prev</i> <span class="">e58b51dd72</span> <i>root</i> 0b0f13b2 <i>txs</i> 0 <i>t</i> 1791470238325 <i>by</i> 9beaeaab40bf</p><p><b class="hi">#8966</b> <i>hash</i> e72904bcd0 <i>prev</i> <span class="link">=768259fb9c</span> <i>root</i> 5f4c5bc8 <i>txs</i> 0 <i>t</i> 1791470244336 <i>by</i> 9beaeaab40bf</p><p><b class="hi">#8967</b> <i>hash</i> 25b934f175 <i>prev</i> <span class="link">=e72904bcd0</span> <i>root</i> 6d6a7f29 <i>txs</i> 0 <i>t</i> 1791470250343 <i>by</i> 9beaeaab40bf</p><p><b class="hi">#8968</b> <i>hash</i> 94a2f63dfa <i>prev</i> <span class="link">=25b934f175</span> <i>root</i> deef6670 <i>txs</i> 0 <i>t</i> 1791470256350 <i>by</i> 9beaeaab40bf</p><p><b class="hi">#8969</b> <i>hash</i> 48daa3e31e <i>prev</i> <span class="link">=94a2f63dfa</span> <i>root</i> 52b2b0b4 <i>txs</i> 0 <i>t</i> 1791470262361 <i>by</i> 9beaeaab40bf</p></div>
+<footer><span data-en="Testnet. The demo node sees your IP address and doesn&#x27;t log it. &lt;a&gt;this node&lt;/a&gt; · &lt;a&gt;About&lt;/a&gt; · &lt;a&gt;Terms&lt;/a&gt;" data-ja="テストネットです。デモノードはあなたのIPアドレスを見ますが、ログには書きません。 &lt;a&gt;このノード&lt;/a&gt; · &lt;a&gt;このサイトについて&lt;/a&gt; · &lt;a&gt;利用規約&lt;/a&gt;"></span></footer>
+<script>
+const ja = new URLSearchParams(location.search).get('lang') === 'ja';
+document.documentElement.lang = ja ? 'ja' : 'en';
+for (const el of document.querySelectorAll('[data-en]')) el.innerHTML = ja ? el.dataset.ja : el.dataset.en;
+document.getElementById('q').placeholder = ja ? "スレッドを検索、または証明コードを入力" : "Search threads, or enter a proof code";
+</script></body></html>
