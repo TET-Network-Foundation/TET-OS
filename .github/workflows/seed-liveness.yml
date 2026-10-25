@@ -1,15 +1,22 @@
 name: seed liveness
 
-# External reachability check for the public seed. This tests the two things the
-# on-box probe cannot, because both are statements about the view FROM THE
-# INTERNET rather than from the host:
+# Two questions about the public seeds, both answered from OUTSIDE the hosts:
 #
-#   * 8002 IS reachable  — the Hetzner cloud firewall and routing are intact
-#   * 5010 is NOT reachable — the node's REST API has not become public
+#   1. LIVENESS — is each seed's chain advancing? Read from healthchecks.io's Management API: every
+#      check in the project must be "up". The on-box probe (deploy/seed-healthcheck.sh) pings a
+#      check's success only when that seed's height advanced, so "up" means "made progress in the
+#      last few minutes", and down/grace/new/paused all fail this job.
+#   2. EXPOSURE — is the P2P port reachable from the internet, and REST NOT reachable? The on-box
+#      probe cannot see the firewall from the inside.
 #
-# Everything else about the seed — chain progress, host health, liveness — is
-# covered by deploy/seed-healthcheck.sh pinging healthchecks.io every minute,
-# which is both more timely and free.
+# Until 2026-10-04 this job only did a TCP connect to the P2P port and was called liveness. The
+# kernel accepts that connection into the listen backlog even while the node above it is wedged,
+# so it stayed green through a 33 h outage (docs/postmortems/2026-10-04-producer-wedge-33h.md).
+# A liveness check that cannot go red is worse than none. The TCP connect is still here, as what
+# it is: an exposure check.
+#
+# Needs the repository secret HC_API_KEY_READONLY (healthchecks.io → project Settings → API Access
+# → read-only key). Without it the job FAILS: it must never pass because it could not look.
 #
 # INTERVAL: every 6 hours, deliberately. It ran every 15 minutes until
 # 2026-09-28, which is 2,880 runs a month; GitHub bills each job at a ONE MINUTE
@@ -17,11 +24,9 @@ name: seed liveness
 # ~2,880 of the 2,000 free private-repo minutes on its own and had blocked all
 # CI on the account. Six hours costs 120 minutes a month.
 #
-# Losing timeliness costs nothing here: healthchecks.io already alerts within a
-# minute if the seed dies. What this job catches is a firewall or routing change,
-# which is a thing someone does, not a thing that happens spontaneously — and a
-# 15-minute cadence was never the real detection window anyway, because GitHub's
-# scheduled runners are best-effort and routinely 15-60+ minutes late under load.
+# Losing timeliness costs nothing here: healthchecks.io alerts a person within a minute (push
+# channel, RUNNING_A_NODE § Alerts that reach a person). This job is the cross-check that the alert
+# path itself is configured and that both checks are up.
 #
 # Still true: GitHub disables scheduled workflows after 60 days with no repository
 # activity. This project has already been dormant for three months once, so that
@@ -40,36 +45,43 @@ permissions:
 
 jobs:
   reachable:
-    name: p2p port reachable from the internet
+    name: seeds are live (healthchecks.io) and exposed correctly
     runs-on: ubuntu-latest
     steps:
-      - name: TCP connect to the seed's block-plane port
-        env:
-          SEED_HOST: 95.217.158.153
-          SEED_P2P_PORT: '8002'
-        run: |
-          set -euo pipefail
-          echo "connecting to ${SEED_HOST}:${SEED_P2P_PORT}"
-          for attempt in 1 2 3; do
-            if timeout 10 bash -c ">/dev/tcp/${SEED_HOST}/${SEED_P2P_PORT}" 2>/dev/null; then
-              echo "::notice::seed ${SEED_HOST}:${SEED_P2P_PORT} reachable (attempt ${attempt})"
-              exit 0
-            fi
-            echo "attempt ${attempt} failed"
-            sleep 10
-          done
-          echo "::error::seed ${SEED_HOST}:${SEED_P2P_PORT} NOT reachable from the internet after 3 attempts"
-          exit 1
+      - uses: actions/checkout@v4
 
-      - name: REST must NOT be reachable
+      - name: healthchecks.io reports every seed check up
         env:
-          SEED_HOST: 95.217.158.153
+          HC_API_KEY: ${{ secrets.HC_API_KEY_READONLY }}
         run: |
           set -euo pipefail
-          # 5010 is published on the seed's loopback only and blocked upstream by
-          # the Hetzner firewall. If this ever succeeds, the node's API is public.
-          if timeout 10 bash -c ">/dev/tcp/${SEED_HOST}/5010" 2>/dev/null; then
-            echo "::error::seed REST port 5010 is reachable from the internet — it must not be"
+          if [ -z "${HC_API_KEY:-}" ]; then
+            echo "::error::secret HC_API_KEY_READONLY is not set; this job cannot see liveness and refuses to pass"
             exit 1
           fi
-          echo "::notice::5010 correctly not reachable"
+          curl -fsS -m 20 -H "X-Api-Key: ${HC_API_KEY}" https://healthchecks.io/api/v3/checks/ > checks.json
+          python3 scripts/hc_status.py --min-checks 2 checks.json
+
+      - name: P2P port reachable from the internet (exposure, not liveness)
+        run: |
+          set -euo pipefail
+          for host in 95.217.158.153 46.224.223.54; do
+            ok=0
+            for attempt in 1 2 3; do
+              if timeout 10 bash -c ">/dev/tcp/${host}/8002" 2>/dev/null; then ok=1; break; fi
+              echo "${host}: attempt ${attempt} failed"; sleep 10
+            done
+            if [ "$ok" = 1 ]; then echo "::notice::${host}:8002 reachable"; else
+              echo "::error::${host}:8002 NOT reachable from the internet after 3 attempts"; exit 1; fi
+          done
+
+      - name: REST must NOT be reachable
+        run: |
+          set -euo pipefail
+          for host in 95.217.158.153 46.224.223.54; do
+            if timeout 10 bash -c ">/dev/tcp/${host}/5010" 2>/dev/null; then
+              echo "::error::${host}: REST port 5010 is reachable from the internet — it must not be"
+              exit 1
+            fi
+            echo "::notice::${host}:5010 correctly not reachable"
+          done

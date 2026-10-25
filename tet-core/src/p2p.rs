@@ -796,25 +796,15 @@ impl BootnodeWatch {
         }
     }
 
-    async fn request_hello_from_connected_peers(
-        swarm: &mut Swarm<TetBehaviour>,
-        ledger: &crate::ledger::Ledger,
-        exclude: &HashSet<PeerId>,
-    ) {
-        let Ok(our_hello) = build_chain_hello(ledger) else {
-            return;
-        };
+    /// The connected peers a recovery hello should go to. The hello itself is built off the loop
+    /// (an O(N) state-root scan) and sent when it is ready; see `LoopLookups::hello_for`.
+    fn hello_targets(swarm: &Swarm<TetBehaviour>, exclude: &HashSet<PeerId>) -> Vec<PeerId> {
         let local = *swarm.local_peer_id();
-        for peer in swarm.connected_peers().cloned().collect::<Vec<_>>() {
-            if peer == local || exclude.contains(&peer) {
-                continue;
-            }
-            swarm
-                .behaviour_mut()
-                .chain_sync_hello
-                .send_request(&peer, our_hello.clone());
-            println!("[P2P-block] 👋 fallback chain_hello → {peer} (bootnode recovery)");
-        }
+        swarm
+            .connected_peers()
+            .cloned()
+            .filter(|p| *p != local && !exclude.contains(p))
+            .collect()
     }
 
     async fn tick(
@@ -828,7 +818,7 @@ impl BootnodeWatch {
         pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
         peer_dial_book: &HashMap<PeerId, Multiaddr>,
         dialing: &mut HashSet<PeerId>,
-    ) {
+    ) -> Vec<PeerId> {
         let now = now_ms();
         let timeout_ms = hello_timeout_sec_from_env().saturating_mul(1000);
         let redial_ms = bootnode_redial_sec_from_env().saturating_mul(1000);
@@ -866,29 +856,28 @@ impl BootnodeWatch {
         for peer in newly_dead {
             self.mark_bootnode_dead(peer);
             let _ = swarm.disconnect_peer_id(peer);
-            catch_up_driver
-                .lock()
-                .await
-                .blacklist_peer(peer.to_string());
+            catch_up_driver.with(|s| s.driver.blacklist_peer(peer.to_string()));
             dialing.remove(&peer);
         }
 
         if had_newly_dead {
-            self.run_bootnode_recovery_fallback(
-                swarm,
-                listen,
-                ledger,
-                hello_registry,
-                catch_up_driver,
-                block_sync_board,
-                pending_catch_up_range,
-                peer_dial_book,
-                dialing,
-            )
-            .await;
+            return self
+                .run_bootnode_recovery_fallback(
+                    swarm,
+                    listen,
+                    ledger,
+                    hello_registry,
+                    catch_up_driver,
+                    block_sync_board,
+                    pending_catch_up_range,
+                    peer_dial_book,
+                    dialing,
+                )
+                .await;
         } else if self.bootnode_ids.iter().any(|p| self.dead.contains(p)) {
             self.dial_known_followers(swarm, listen, peer_dial_book, dialing);
         }
+        Vec::new()
     }
 
     fn dial_known_followers(
@@ -926,7 +915,7 @@ impl BootnodeWatch {
         pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
         peer_dial_book: &HashMap<PeerId, Multiaddr>,
         dialing: &mut HashSet<PeerId>,
-    ) {
+    ) -> Vec<PeerId> {
         let exclude = self.dead.clone();
         let local = *swarm.local_peer_id();
         let gossip_peers: Vec<PeerId> = swarm
@@ -940,13 +929,13 @@ impl BootnodeWatch {
             }
         }
         self.dial_known_followers(swarm, listen, peer_dial_book, dialing);
-        Self::request_hello_from_connected_peers(swarm, ledger, &exclude).await;
+        let hello_to = Self::hello_targets(swarm, &exclude);
         let local_height = ledger.block_height().unwrap_or(0);
-        let mut reg = hello_registry.lock().await;
-        if reg.peer_count() == 0 || reg.any_peer_ahead(local_height) {
-            reg.force_catch_up_triggered();
-        }
-        drop(reg);
+        hello_registry.with(|s| {
+            if s.registry.peer_count() == 0 || s.registry.any_peer_ahead(local_height) {
+                s.registry.force_catch_up_triggered();
+            }
+        });
         try_start_catch_up(
             block_sync_board,
             catch_up_driver,
@@ -956,6 +945,7 @@ impl BootnodeWatch {
             pending_catch_up_range,
         )
         .await;
+        hello_to
     }
 }
 
@@ -1058,8 +1048,15 @@ async fn ingest_remote_chain_hello(
     }
     let local_height = ledger.block_height().unwrap_or(0);
     let peer_s = peer.to_string();
-    let mut reg = registry.lock().await;
-    let record = reg.record_peer_hello(&peer_s, hello, local_height);
+    let (record, snap, peer_count, catch_up_triggered) = registry.with(|s| {
+        let record = s.registry.record_peer_hello(&peer_s, hello, local_height);
+        (
+            record,
+            s.registry.heights_snapshot(),
+            s.registry.peer_count(),
+            s.registry.catch_up_triggered(),
+        )
+    });
     println!(
         "[P2P-block] 🤝 chain_hello from {peer} height={} tip={} local={local_height} diff={} catch_up_pending={}",
         record.hello.block_height,
@@ -1070,17 +1067,10 @@ async fn ingest_remote_chain_hello(
     if record.catch_up_pending {
         println!("[P2P-block] 🔔 catch-up trigger set (peer ahead; B.3b driver pending)");
     }
-    let snap = reg.heights_snapshot();
     println!(
-        "[P2P-block] sync_hello map peers={} catch_up_triggered={} snapshot={snap:?}",
-        reg.peer_count(),
-        reg.catch_up_triggered(),
+        "[P2P-block] sync_hello map peers={peer_count} catch_up_triggered={catch_up_triggered} snapshot={snap:?}",
     );
-    log::info!(
-        "[p2p][block] sync_hello peers={} catch_up_triggered={}",
-        reg.peer_count(),
-        reg.catch_up_triggered(),
-    );
+    log::info!("[p2p][block] sync_hello peers={peer_count} catch_up_triggered={catch_up_triggered}");
 }
 
 async fn run_catch_up_action(
@@ -1094,7 +1084,7 @@ async fn run_catch_up_action(
     match action {
         CatchUpAction::None => {}
         CatchUpAction::ClearCatchUpTriggered => {
-            hello_registry.lock().await.clear_catch_up_triggered();
+            hello_registry.with(|s| s.registry.clear_catch_up_triggered());
             set_in_progress_range(block_sync_board, None).await;
             println!("[P2P-block] ✅ catch-up complete; catch_up_triggered=false");
             log::info!("[p2p][block] catch-up complete");
@@ -1102,7 +1092,7 @@ async fn run_catch_up_action(
         CatchUpAction::SendRangeRequest { peer_id, request } => {
             let Ok(pid) = peer_id.parse::<PeerId>() else {
                 log::warn!("[p2p][block] catch-up invalid peer_id={peer_id}");
-                catch_up_driver.lock().await.blacklist_peer(peer_id);
+                catch_up_driver.with(|s| s.driver.blacklist_peer(peer_id));
                 return;
             };
             set_in_progress_range(
@@ -1127,6 +1117,21 @@ async fn run_catch_up_action(
     }
 }
 
+/// The catch-up tick's decision: driver and registry read and advanced in ONE acquisition of the one
+/// sync lock. With two locks this site held the driver while awaiting the registry and deadlocked
+/// against the auto-mine gate on 2026-10-03 (guard G1 drives it concurrently with the gate and REST).
+pub(crate) fn catch_up_trigger_action(
+    sync: &SharedCatchUpDriver,
+    local_height: u64,
+) -> Option<CatchUpAction> {
+    sync.with(|s| {
+        if !s.driver.is_idle() || !s.registry.catch_up_triggered() {
+            return None;
+        }
+        Some(s.driver.handle(CatchUpDriverEvent::Triggered, &s.registry, local_height))
+    })
+}
+
 async fn try_start_catch_up(
     block_sync_board: &SharedBlockSyncBoard,
     catch_up_driver: &SharedCatchUpDriver,
@@ -1136,16 +1141,8 @@ async fn try_start_catch_up(
     pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
 ) {
     let local_height = ledger.block_height().unwrap_or(0);
-    let action = {
-        let mut driver = catch_up_driver.lock().await;
-        if !driver.is_idle() {
-            return;
-        }
-        let reg = hello_registry.lock().await;
-        if !reg.catch_up_triggered() {
-            return;
-        }
-        driver.handle(CatchUpDriverEvent::Triggered, &reg, local_height)
+    let Some(action) = catch_up_trigger_action(catch_up_driver, local_height) else {
+        return;
     };
     run_catch_up_action(
         action,
@@ -1237,7 +1234,7 @@ async fn on_catch_up_range_response(
     catch_up_driver: &SharedCatchUpDriver,
     hello_registry: &SharedHelloRegistry,
     ledger: Arc<crate::ledger::Ledger>,
-    mempool: Arc<Mutex<Vec<SignedTxEnvelopeV1>>>,
+    apply_queue: &crate::apply_worker::ApplyQueue,
     swarm: &mut Swarm<TetBehaviour>,
     pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
 ) {
@@ -1250,19 +1247,17 @@ async fn on_catch_up_range_response(
 
     if response.blocks.is_empty() {
         set_in_progress_range(block_sync_board, None).await;
-        let action = {
-            let mut driver = catch_up_driver.lock().await;
-            let reg = hello_registry.lock().await;
+        let action = catch_up_driver.with(|s| {
             let local_height = ledger.block_height().unwrap_or(0);
-            driver.handle(
+            s.driver.handle(
                 CatchUpDriverEvent::RangeFailed {
                     peer_id: peer_s,
                     reason: "empty range response".into(),
                 },
-                &reg,
+                &s.registry,
                 local_height,
             )
-        };
+        });
         run_catch_up_action(
             action,
             block_sync_board,
@@ -1275,24 +1270,61 @@ async fn on_catch_up_range_response(
         return;
     }
 
-    let (applied, failed, held) =
-        apply_catch_up_blocks(ledger.clone(), mempool, response.blocks).await;
+    // Applied by the apply worker; the driver stays in `Requesting` until its result comes back
+    // (`on_catch_up_batch_applied`), so at most one batch is ever queued.
+    if apply_queue.offer_catch_up(crate::apply_worker::ApplyJob::CatchUpBatch {
+        peer,
+        blocks: response.blocks,
+    }) {
+        return;
+    }
     set_in_progress_range(block_sync_board, None).await;
     let local_height = ledger.block_height().unwrap_or(0);
-    let action = {
-        let mut driver = catch_up_driver.lock().await;
-        let reg = hello_registry.lock().await;
-        driver.handle(
+    let action = catch_up_driver.with(|s| {
+        s.driver.handle(
+            CatchUpDriverEvent::LocalBackpressure { peer_id: peer_s },
+            &s.registry,
+            local_height,
+        )
+    });
+    run_catch_up_action(
+        action,
+        block_sync_board,
+        swarm,
+        hello_registry,
+        catch_up_driver,
+        pending_catch_up_range,
+    )
+    .await;
+}
+
+/// The apply worker finished a catch-up batch: drive the catch-up driver as the inline apply did.
+async fn on_catch_up_batch_applied(
+    peer: PeerId,
+    applied: usize,
+    failed: bool,
+    held: bool,
+    block_sync_board: &SharedBlockSyncBoard,
+    catch_up_driver: &SharedCatchUpDriver,
+    hello_registry: &SharedHelloRegistry,
+    ledger: &crate::ledger::Ledger,
+    swarm: &mut Swarm<TetBehaviour>,
+    pending_catch_up_range: &mut HashMap<request_response::OutboundRequestId, PeerId>,
+) {
+    set_in_progress_range(block_sync_board, None).await;
+    let local_height = ledger.block_height().unwrap_or(0);
+    let action = catch_up_driver.with(|s| {
+        s.driver.handle(
             CatchUpDriverEvent::BatchApplied {
-                peer_id: peer_s,
+                peer_id: peer.to_string(),
                 applied,
                 failed,
                 held,
             },
-            &reg,
+            &s.registry,
             local_height,
         )
-    };
+    });
     run_catch_up_action(
         action,
         block_sync_board,
@@ -1316,18 +1348,16 @@ async fn on_catch_up_range_failed(
 ) {
     set_in_progress_range(block_sync_board, None).await;
     let local_height = ledger.block_height().unwrap_or(0);
-    let action = {
-        let mut driver = catch_up_driver.lock().await;
-        let reg = hello_registry.lock().await;
-        driver.handle(
+    let action = catch_up_driver.with(|s| {
+        s.driver.handle(
             CatchUpDriverEvent::RangeFailed {
                 peer_id: peer.to_string(),
                 reason,
             },
-            &reg,
+            &s.registry,
             local_height,
         )
-    };
+    });
     run_catch_up_action(
         action,
         block_sync_board,
@@ -1794,6 +1824,123 @@ async fn block_record_by_id_offloaded(
         .unwrap_or(None)
 }
 
+/// A disk lookup or chain_hello build the loop started, now finished. The loop sends the result
+/// (and holds any response channel, keyed by `token`), so it never awaits the work itself.
+enum LookupDone {
+    /// A hello to send to `peers` (connected, periodic, or bootnode recovery).
+    HelloFor {
+        peers: Vec<PeerId>,
+        why: &'static str,
+        hello: Result<ChainHello, String>,
+    },
+    /// Our hello in answer to a peer's hello request.
+    HelloReply { token: u64, hello: ChainHello },
+    Range {
+        token: u64,
+        peer: PeerId,
+        request: ChainSyncRangeRequest,
+        response: Option<ChainSyncRangeResponse>,
+    },
+    Block {
+        token: u64,
+        peer: PeerId,
+        block_id: String,
+        block: Option<crate::ledger::BlockRecordV1>,
+    },
+}
+
+/// At most this many lookups in flight; past it the loop declines (and counts) rather than queueing.
+const LOOKUPS_IN_FLIGHT: usize = 16;
+
+struct LoopLookups {
+    ledger: Arc<crate::ledger::Ledger>,
+    permits: Arc<tokio::sync::Semaphore>,
+    tx: mpsc::Sender<LookupDone>,
+}
+
+impl LoopLookups {
+    fn new(ledger: Arc<crate::ledger::Ledger>, tx: mpsc::Sender<LookupDone>) -> Self {
+        Self { ledger, permits: Arc::new(tokio::sync::Semaphore::new(LOOKUPS_IN_FLIGHT)), tx }
+    }
+
+    /// Start `work` on its own task; `false` (and counted) when too many are in flight.
+    fn start<F>(&self, work: F) -> bool
+    where
+        F: std::future::Future<Output = LookupDone> + Send + 'static,
+    {
+        let Ok(permit) = self.permits.clone().try_acquire_owned() else {
+            crate::metrics::LOOP_LOOKUPS_REFUSED_TOTAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return false;
+        };
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let done = work.await;
+            let _ = tx.send(done).await;
+            drop(permit);
+        });
+        true
+    }
+
+    fn hello_for(&self, peers: Vec<PeerId>, why: &'static str) -> bool {
+        if peers.is_empty() {
+            return true;
+        }
+        let ledger = self.ledger.clone();
+        self.start(async move {
+            let hello = build_chain_hello_offloaded(&ledger).await.map_err(|e| e.to_string());
+            LookupDone::HelloFor { peers, why, hello }
+        })
+    }
+
+    fn hello_reply(&self, token: u64) -> bool {
+        let ledger = self.ledger.clone();
+        self.start(async move { LookupDone::HelloReply { token, hello: build_chain_hello_resilient(&ledger).await } })
+    }
+
+    fn range(&self, token: u64, peer: PeerId, request: ChainSyncRangeRequest) -> bool {
+        let ledger = self.ledger.clone();
+        self.start(async move {
+            let response = build_chain_sync_range_response_offloaded(&ledger, &request).await;
+            LookupDone::Range { token, peer, request, response }
+        })
+    }
+
+    fn block(&self, token: u64, peer: PeerId, block_id: String) -> bool {
+        let ledger = self.ledger.clone();
+        self.start(async move {
+            let block = block_record_by_id_offloaded(&ledger, block_id.clone()).await;
+            LookupDone::Block { token, peer, block_id, block }
+        })
+    }
+}
+
+/// The answer to a direct tx-submit, from the admission outcome.
+fn tx_submit_response(peer: &PeerId, outcome: TxGossipOutcome) -> TxSubmitResponse {
+    match outcome {
+        TxGossipOutcome::Enqueued { tx_hash, mempool_len } => {
+            println!("[P2P][tx-submit] ✅ accepted from {peer} tx_hash={tx_hash} mempool_len={mempool_len}");
+            TxSubmitResponse { accepted: true, outcome: "enqueued".into(), tx_hash: Some(tx_hash), reason: None }
+        }
+        TxGossipOutcome::AlreadyQueued { tx_hash } => TxSubmitResponse {
+            accepted: true,
+            outcome: "already_queued".into(),
+            tx_hash: Some(tx_hash),
+            reason: None,
+        },
+        TxGossipOutcome::AlreadyApplied { tx_hash } => TxSubmitResponse {
+            accepted: true,
+            outcome: "already_applied".into(),
+            tx_hash: Some(tx_hash),
+            reason: None,
+        },
+        TxGossipOutcome::Rejected { reason } => {
+            crate::metrics::inc_gossip_rejected();
+            println!("[P2P][tx-submit] ❌ rejected from {peer}: {reason}");
+            TxSubmitResponse { accepted: false, outcome: "rejected".into(), tx_hash: None, reason: Some(reason) }
+        }
+    }
+}
+
 /// Handles returned by [`start_mdns_ping_swarm`]: gossip publish channel, files-fetch command
 /// channel (`/tet/v1/files/fetch`), and the swarm task join handle.
 pub type BlockSwarmHandles = (
@@ -2164,6 +2311,23 @@ async fn run_mdns_ping_swarm(
     resubscribe_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     let mut publish_closed = false;
+
+    // The loop only routes (docs/DESIGN_accept_loop.md, B). Block application, mempool admission and
+    // disk lookups run elsewhere and come back as events on these receivers; the loop never awaits
+    // them, and every queue is bounded.
+    let (apply_queue, mut apply_done_rx) =
+        crate::apply_worker::spawn_apply_worker(ledger.clone(), mempool.clone());
+    let (admission, mut admit_done_rx) =
+        crate::apply_worker::spawn_admission_worker(ledger.clone(), mempool.clone());
+    let (lookup_tx, mut lookup_rx) = mpsc::channel::<LookupDone>(LOOKUPS_IN_FLIGHT * 2);
+    let lookups = LoopLookups::new(ledger.clone(), lookup_tx);
+    let mut next_token: u64 = 0;
+    let mut hello_replies: HashMap<u64, request_response::ResponseChannel<ChainHello>> = HashMap::new();
+    let mut range_replies: HashMap<u64, request_response::ResponseChannel<ChainSyncRangeResponse>> =
+        HashMap::new();
+    let mut block_replies: HashMap<u64, request_response::ResponseChannel<BlockResponse>> = HashMap::new();
+    let mut tx_replies: HashMap<u64, (request_response::ResponseChannel<TxSubmitResponse>, PeerId)> =
+        HashMap::new();
     let mut tx_submit_closed = false;
     let mut files_fetch_closed = false;
     loop {
@@ -2175,7 +2339,7 @@ async fn run_mdns_ping_swarm(
         swarm_health.set_listeners(swarm.listeners().count());
         tokio::select! {
             _ = catch_up_interval.tick() => {
-                bootnode_watch
+                let recovery_hello_to = bootnode_watch
                     .tick(
                         &mut swarm,
                         &listen,
@@ -2188,6 +2352,7 @@ async fn run_mdns_ping_swarm(
                         &mut dialing,
                     )
                     .await;
+                lookups.hello_for(recovery_hello_to, "bootnode recovery");
                 try_start_catch_up(
                     &block_sync_board,
                     &catch_up_driver,
@@ -2212,26 +2377,12 @@ async fn run_mdns_ping_swarm(
                         })
                         .collect();
                     if !due_peers.is_empty() {
-                        // Build the hello once (heavy O(N) state-root scan, offloaded) and reuse it
-                        // for every due peer instead of re-scanning the ledger per peer.
-                        match build_chain_hello_offloaded(&ledger).await {
-                            Ok(our_hello) => {
-                                for peer in due_peers {
-                                    swarm
-                                        .behaviour_mut()
-                                        .chain_sync_hello
-                                        .send_request(&peer, our_hello.clone());
-                                    bootnode_watch.on_hello_sent(peer);
-                                    last_chain_hello_sent_at.insert(peer, now);
-                                    println!(
-                                        "[P2P-block] 🔁 chain_hello periodic resend to {peer}"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                log::warn!("[p2p][block] periodic chain_hello build failed: {e}");
-                            }
+                        // Built once off the loop (an O(N) state-root scan) and sent to every due
+                        // peer when it is ready. Stamped now, so the next tick does not ask again.
+                        for peer in &due_peers {
+                            last_chain_hello_sent_at.insert(*peer, now);
                         }
+                        lookups.hello_for(due_peers, "periodic resend");
                     }
                 }
                 if kad_bootstrap_interval_ms > 0 {
@@ -2251,6 +2402,145 @@ async fn run_mdns_ping_swarm(
                     }
                 }
             }
+            Some(done) = apply_done_rx.recv() => match done {
+                crate::apply_worker::ApplyDone::Gossip { block_height, source, result } => match result {
+                    Ok(crate::consensus::RemoteBlockApplyOutcome::Applied {
+                        block_height,
+                        tx_count,
+                        evicted_count,
+                        state_root,
+                    }) => {
+                        println!(
+                            "[P2P] ✅ REMOTE BLOCK APPLIED height={} tx_count={} evicted_mempool={} state_root={}",
+                            block_height, tx_count, evicted_count, state_root
+                        );
+                    }
+                    Ok(crate::consensus::RemoteBlockApplyOutcome::ForkLost { reason }) => {
+                        println!("[P2P] ⚠️ REMOTE FORK WINS BUT REORG UNSUPPORTED: {}", reason);
+                    }
+                    Ok(crate::consensus::RemoteBlockApplyOutcome::Skipped { reason }) => {
+                        println!("[P2P] ⏭️ REMOTE BLOCK SKIPPED: {}", reason);
+                        let local_h = ledger.block_height().unwrap_or(0);
+                        let needs_catch_up = reason.contains("missing previous blocks") || block_height > local_h;
+                        if needs_catch_up {
+                            if let Some(source) = source {
+                                let peer_s = source.to_string();
+                                hello_registry.with(|s| {
+                                    s.registry.note_peer_block_height(&peer_s, block_height, local_h)
+                                });
+                            }
+                            try_start_catch_up(
+                                &block_sync_board,
+                                &catch_up_driver,
+                                &hello_registry,
+                                ledger.as_ref(),
+                                &mut swarm,
+                                &mut pending_catch_up_range,
+                            )
+                            .await;
+                        }
+                    }
+                    Err(reason) => {
+                        println!("[P2P] ❌ REMOTE BLOCK REJECTED: {}", reason);
+                    }
+                },
+                crate::apply_worker::ApplyDone::CatchUpBatch { peer, applied, failed, held } => {
+                    on_catch_up_batch_applied(
+                        peer,
+                        applied,
+                        failed,
+                        held,
+                        &block_sync_board,
+                        &catch_up_driver,
+                        &hello_registry,
+                        ledger.as_ref(),
+                        &mut swarm,
+                        &mut pending_catch_up_range,
+                    )
+                    .await;
+                }
+                crate::apply_worker::ApplyDone::BackfillReorg { peer, results } => {
+                    for (tip, r) in results {
+                        match r {
+                            Ok(true) => {
+                                orphan_buffer.remove(&tip);
+                                println!("[P2P] ✅ BACKFILLED BRANCH REORG APPLIED tip={tip}");
+                            }
+                            Ok(false) => println!("[P2P] ⏭️ BACKFILLED BRANCH DID NOT WIN tip={tip}"),
+                            Err(e) => {
+                                // A held branch (block time ahead of our clock) is not the peer's
+                                // fault; anything else is (phase1's rule, carried into the worker).
+                                if !e.starts_with("reorg held") {
+                                    blacklisted_peers.insert(peer, now_ms());
+                                }
+                                println!("[P2P] ❌ BACKFILLED REORG FAILED tip={tip} err={e}");
+                            }
+                        }
+                    }
+                }
+            },
+            Some(done) = admit_done_rx.recv() => match done.token {
+                Some(token) => {
+                    if let Some((ch, peer)) = tx_replies.remove(&token) {
+                        let resp = tx_submit_response(&peer, done.outcome);
+                        let _ = swarm.behaviour_mut().tx_submit.send_response(ch, resp);
+                    }
+                }
+                None => match done.outcome {
+                    TxGossipOutcome::Enqueued { tx_hash, mempool_len } => {
+                        println!("[P2P] ✅ MEMPOOL TX ENQUEUED tx_hash={tx_hash} mempool_len={mempool_len}");
+                    }
+                    TxGossipOutcome::AlreadyQueued { tx_hash } => {
+                        println!("[P2P] ⏭️ MEMPOOL TX ALREADY QUEUED tx_hash={tx_hash}");
+                    }
+                    TxGossipOutcome::AlreadyApplied { tx_hash } => {
+                        println!("[P2P] ⏭️ MEMPOOL TX ALREADY MINED tx_hash={tx_hash}");
+                    }
+                    TxGossipOutcome::Rejected { reason } => {
+                        crate::metrics::inc_gossip_rejected();
+                        println!("[P2P] ❌ MEMPOOL TX REJECTED: {reason}");
+                    }
+                },
+            },
+            Some(done) = lookup_rx.recv() => match done {
+                LookupDone::HelloFor { peers, why, hello } => match hello {
+                    Ok(hello) => {
+                        for peer in peers {
+                            if !swarm.is_connected(&peer) {
+                                continue;
+                            }
+                            swarm.behaviour_mut().chain_sync_hello.send_request(&peer, hello.clone());
+                            bootnode_watch.on_hello_sent(peer);
+                            println!("[P2P-block] 👋 chain_hello ({why}) → {peer}");
+                        }
+                    }
+                    Err(e) => log::warn!("[p2p][block] chain_hello ({why}) build failed: {e}"),
+                },
+                LookupDone::HelloReply { token, hello } => {
+                    if let Some(ch) = hello_replies.remove(&token) {
+                        let _ = swarm.behaviour_mut().chain_sync_hello.send_response(ch, hello);
+                    }
+                }
+                LookupDone::Range { token, peer, request, response } => {
+                    if let (Some(ch), Some(response)) = (range_replies.remove(&token), response) {
+                        println!(
+                            "[P2P-block] ↩️ CHAIN_SYNC RANGE peer={} req {}..{} → blocks={} actual_to={}",
+                            peer,
+                            request.from_height,
+                            request.to_height,
+                            response.blocks.len(),
+                            response.to_height
+                        );
+                        let _ = swarm.behaviour_mut().chain_sync_range.send_response(ch, response);
+                    }
+                }
+                LookupDone::Block { token, peer, block_id, block } => {
+                    if let Some(ch) = block_replies.remove(&token) {
+                        let _ = swarm.behaviour_mut().block_sync.send_response(ch, BlockResponse { block_id, block });
+                        println!("[P2P] ↩️ BLOCK RESPONSE SENT to {}", peer);
+                    }
+                }
+            },
             _ = resubscribe_interval.tick(), if resubscribe_sec > 0 => {
                 // Only the topics EVERY node subscribes to unconditionally (p2p.rs subscribe
                 // block). `ai-workload` is deliberately excluded: a PoR node legitimately does
@@ -2816,51 +3106,47 @@ async fn run_mdns_ping_swarm(
                     // Spend the rate-limit budget BEFORE verifying: the hybrid ML-DSA check is
                     // the expensive part, so a peer must not be able to make us do it at will.
                     tx_submit_limiter.prune();
-                    let resp = if !tx_submit_limiter.allow(&peer, tx_submit_rps) {
+                    let early = if !tx_submit_limiter.allow(&peer, tx_submit_rps) {
                         println!("[P2P][tx-submit] ⛔ rate limited peer={peer}");
-                        TxSubmitResponse {
+                        Some(TxSubmitResponse {
                             accepted: false,
                             outcome: "rate_limited".into(),
                             tx_hash: None,
                             reason: Some(format!("over {tx_submit_rps} tx/s")),
-                        }
+                        })
                     } else if request.v != 1 {
-                        TxSubmitResponse {
+                        Some(TxSubmitResponse {
                             accepted: false,
                             outcome: "rejected".into(),
                             tx_hash: None,
                             reason: Some("unsupported request version".into()),
-                        }
+                        })
                     } else {
-                        // Exactly the gossip admission path — same verify, same dedup, same
-                        // caps. A direct submission buys no trust it would not get over gossip.
-                        match handle_tx_broadcast(&ledger, &mempool, request.env).await {
-                            TxGossipOutcome::Enqueued { tx_hash, mempool_len } => {
-                                println!(
-                                    "[P2P][tx-submit] ✅ accepted from {peer} tx_hash={tx_hash} mempool_len={mempool_len}"
-                                );
-                                TxSubmitResponse { accepted: true, outcome: "enqueued".into(), tx_hash: Some(tx_hash), reason: None }
-                            }
-                            TxGossipOutcome::AlreadyQueued { tx_hash } => TxSubmitResponse {
-                                accepted: true,
-                                outcome: "already_queued".into(),
-                                tx_hash: Some(tx_hash),
-                                reason: None,
-                            },
-                            TxGossipOutcome::AlreadyApplied { tx_hash } => TxSubmitResponse {
-                                accepted: true,
-                                outcome: "already_applied".into(),
-                                tx_hash: Some(tx_hash),
-                                reason: None,
-                            },
-                            TxGossipOutcome::Rejected { reason } => {
-                                crate::metrics::inc_gossip_rejected();
-                                println!("[P2P][tx-submit] ❌ rejected from {peer}: {reason}");
-                                TxSubmitResponse { accepted: false, outcome: "rejected".into(), tx_hash: None, reason: Some(reason) }
-                            }
-                        }
+                        None
                     };
-                    let _ = swarm.behaviour_mut().tx_submit.send_response(channel, resp);
+                    if let Some(resp) = early {
+                        let _ = swarm.behaviour_mut().tx_submit.send_response(channel, resp);
+                    } else {
+                        // Exactly the gossip admission path — same verify, same dedup, same caps —
+                        // run by the admission worker, so the loop never waits on the mempool. The
+                        // answer goes out when the worker reports (`admit_done_rx`).
+                        next_token += 1;
+                        let token = next_token;
+                        tx_replies.insert(token, (channel, peer));
+                        if !admission.offer(crate::apply_worker::AdmitJob { token: Some(token), env: request.env })
+                            && let Some((ch, _)) = tx_replies.remove(&token)
+                        {
+                            let _ = swarm.behaviour_mut().tx_submit.send_response(
+                                ch,
+                                TxSubmitResponse {
+                                    accepted: false,
+                                    outcome: "busy".into(),
+                                    tx_hash: None,
+                                    reason: Some("admission queue full; retry or use gossip".into()),
+                                },
+                            );
+                        }
+                    }
                 }
                 request_response::Event::Message {
                     peer,
@@ -2898,10 +3184,7 @@ async fn run_mdns_ping_swarm(
                     )
                     .await;
                     if bootnode_watch.is_bootnode(&peer) {
-                        catch_up_driver
-                            .lock()
-                            .await
-                            .unblacklist_peer(&peer.to_string());
+                        catch_up_driver.with(|s| s.driver.unblacklist_peer(&peer.to_string()));
                     }
                     try_start_catch_up(
                         &block_sync_board,
@@ -2912,11 +3195,13 @@ async fn run_mdns_ping_swarm(
                         &mut pending_catch_up_range,
                     )
                     .await;
-                    let response = build_chain_hello_resilient(&ledger).await;
-                    let _ = swarm
-                        .behaviour_mut()
-                        .chain_sync_hello
-                        .send_response(channel, response);
+                    // Answered when the hello is built (`lookup_rx`); declined if too many builds
+                    // are in flight, which the peer sees as a failed request and retries.
+                    next_token += 1;
+                    hello_replies.insert(next_token, channel);
+                    if !lookups.hello_reply(next_token) {
+                        hello_replies.remove(&next_token);
+                    }
                 }
                 request_response::Event::Message {
                     peer,
@@ -2932,10 +3217,7 @@ async fn run_mdns_ping_swarm(
                     )
                     .await;
                     if bootnode_watch.is_bootnode(&peer) {
-                        catch_up_driver
-                            .lock()
-                            .await
-                            .unblacklist_peer(&peer.to_string());
+                        catch_up_driver.with(|s| s.driver.unblacklist_peer(&peer.to_string()));
                     }
                     try_start_catch_up(
                         &block_sync_board,
@@ -2958,21 +3240,10 @@ async fn run_mdns_ping_swarm(
                         },
                     ..
                 } => {
-                    if let Some(response) =
-                        build_chain_sync_range_response_offloaded(&ledger, &request).await
-                    {
-                        println!(
-                            "[P2P-block] ↩️ CHAIN_SYNC RANGE peer={} req {}..{} → blocks={} actual_to={}",
-                            peer,
-                            request.from_height,
-                            request.to_height,
-                            response.blocks.len(),
-                            response.to_height
-                        );
-                        let _ = swarm
-                            .behaviour_mut()
-                            .chain_sync_range
-                            .send_response(channel, response);
+                    next_token += 1;
+                    range_replies.insert(next_token, channel);
+                    if !lookups.range(next_token, peer, request) {
+                        range_replies.remove(&next_token);
                     }
                 }
                 request_response::Event::Message {
@@ -2992,7 +3263,7 @@ async fn run_mdns_ping_swarm(
                             &catch_up_driver,
                             &hello_registry,
                             ledger.clone(),
-                            mempool.clone(),
+                            &apply_queue,
                             &mut swarm,
                             &mut pending_catch_up_range,
                         )
@@ -3031,16 +3302,11 @@ async fn run_mdns_ping_swarm(
                             },
                         ..
                     } => {
-                        let block =
-                            block_record_by_id_offloaded(&ledger, request.block_id.clone()).await;
-                        let _ = swarm.behaviour_mut().block_sync.send_response(
-                            channel,
-                            BlockResponse {
-                                block_id: request.block_id,
-                                block,
-                            },
-                        );
-                        println!("[P2P] ↩️ BLOCK RESPONSE SENT to {}", peer);
+                        next_token += 1;
+                        block_replies.insert(next_token, channel);
+                        if !lookups.block(next_token, peer, request.block_id) {
+                            block_replies.remove(&next_token);
+                        }
                     }
                     request_response::Event::Message {
                         peer,
@@ -3138,36 +3404,11 @@ async fn run_mdns_ping_swarm(
 
                         let mut candidates = orphan_buffer.children_of(&stored.block_id, now_ms());
                         candidates.push(stored.clone());
-                        for candidate in candidates {
-                            match crate::consensus::try_reorg_backfilled_branch(
-                                ledger.as_ref(),
-                                &candidate.block_id,
-                            ) {
-                                Ok(true) => {
-                                    orphan_buffer.remove(&candidate.block_id);
-                                    println!(
-                                        "[P2P] ✅ BACKFILLED BRANCH REORG APPLIED tip={}",
-                                        candidate.block_id
-                                    );
-                                }
-                                Ok(false) => {
-                                    println!(
-                                        "[P2P] ⏭️ BACKFILLED BRANCH DID NOT WIN tip={}",
-                                        candidate.block_id
-                                    );
-                                }
-                                Err(e) => {
-                                    // A held branch (block time ahead of our clock) is not the
-                                    // peer's fault; anything else is.
-                                    if !e.starts_with("reorg held") {
-                                        blacklisted_peers.insert(peer, now_ms());
-                                    }
-                                    println!(
-                                        "[P2P] ❌ BACKFILLED REORG FAILED tip={} err={}",
-                                        candidate.block_id, e
-                                    );
-                                }
-                            }
+                        // The reorg rewrites the ledger: the apply worker runs it, in order with
+                        // every other block application (`apply_done_rx`).
+                        let tips: Vec<String> = candidates.into_iter().map(|c| c.block_id).collect();
+                        if !apply_queue.offer_droppable(crate::apply_worker::ApplyJob::BackfillReorg { peer, tips }) {
+                            println!("[P2P] ⏳ BACKFILL REORG DROPPED (apply queue full); catch-up will refetch");
                         }
                     }
                     request_response::Event::OutboundFailure {
@@ -3230,20 +3471,8 @@ async fn run_mdns_ping_swarm(
                             .gossipsub
                             .add_explicit_peer(&peer_id);
                     }
-                    match build_chain_hello_offloaded(&ledger).await {
-                        Ok(our_hello) => {
-                            swarm
-                                .behaviour_mut()
-                                .chain_sync_hello
-                                .send_request(&peer_id, our_hello);
-                            bootnode_watch.on_hello_sent(peer_id);
-                            last_chain_hello_sent_at.insert(peer_id, now_ms());
-                            println!("[P2P-block] 👋 chain_hello sent to {peer_id}");
-                        }
-                        Err(e) => {
-                            log::warn!("[p2p][block] chain_hello send failed: {e}");
-                        }
-                    }
+                    last_chain_hello_sent_at.insert(peer_id, now_ms());
+                    lookups.hello_for(vec![peer_id], "connected");
                 }
             }
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -3252,11 +3481,8 @@ async fn run_mdns_ping_swarm(
                 last_chain_hello_sent_at.remove(&peer_id);
                 if bootnode_watch.is_bootnode(&peer_id) && !bootnode_watch.is_dead(&peer_id) {
                     bootnode_watch.mark_bootnode_dead(peer_id);
-                    catch_up_driver
-                        .lock()
-                        .await
-                        .blacklist_peer(peer_id.to_string());
-                    bootnode_watch
+                    catch_up_driver.with(|s| s.driver.blacklist_peer(peer_id.to_string()));
+                    let recovery_hello_to = bootnode_watch
                         .run_bootnode_recovery_fallback(
                             &mut swarm,
                             &listen,
@@ -3269,23 +3495,21 @@ async fn run_mdns_ping_swarm(
                             &mut dialing,
                         )
                         .await;
+                    lookups.hello_for(recovery_hello_to, "bootnode recovery");
                 }
                 {
                     let peer_s = peer_id.to_string();
-                    let action = {
-                        let mut reg = hello_registry.lock().await;
-                        reg.remove_peer(&peer_s);
-                        println!(
-                            "[P2P-block] sync_hello removed peer={peer_id} map_size={}",
-                            reg.peer_count()
-                        );
-                        let local_height = ledger.block_height().unwrap_or(0);
-                        catch_up_driver.lock().await.handle(
+                    let local_height = ledger.block_height().unwrap_or(0);
+                    let (action, map_size) = hello_registry.with(|s| {
+                        s.registry.remove_peer(&peer_s);
+                        let action = s.driver.handle(
                             CatchUpDriverEvent::PeerRemoved { peer_id: peer_s },
-                            &reg,
+                            &s.registry,
                             local_height,
-                        )
-                    };
+                        );
+                        (action, s.registry.peer_count())
+                    });
+                    println!("[P2P-block] sync_hello removed peer={peer_id} map_size={map_size}");
                     run_catch_up_action(
                         action,
                         &block_sync_board,
@@ -3397,14 +3621,9 @@ async fn run_mdns_ping_swarm(
                                 let local_h = ledger.block_height().unwrap_or(0);
                                 if let Some(source) = source_peer {
                                     let peer_s = source.to_string();
-                                    {
-                                        let mut reg = hello_registry.lock().await;
-                                        reg.note_peer_block_height(
-                                            &peer_s,
-                                            block_height,
-                                            local_h,
-                                        );
-                                    }
+                                    hello_registry.with(|s| {
+                                        s.registry.note_peer_block_height(&peer_s, block_height, local_h)
+                                    });
                                     if block_height > local_h {
                                         try_start_catch_up(
                                             &block_sync_board,
@@ -3508,87 +3727,24 @@ async fn run_mdns_ping_swarm(
                                     }
                                     continue;
                                 }
-                                match crate::consensus::apply_remote_block_from_gossip(
-                                    ledger.clone(),
-                                    mempool.clone(),
+                                // Applied by the apply worker, in arrival order; the outcome comes
+                                // back on `apply_done_rx`. A full queue drops the block (counted):
+                                // it is re-fetchable, and the height noted above drives catch-up.
+                                if !apply_queue.offer_droppable(crate::apply_worker::ApplyJob::Gossip {
                                     gossip,
-                                )
-                                .await
-                                {
-                                    Ok(crate::consensus::RemoteBlockApplyOutcome::Applied {
-                                        block_height,
-                                        tx_count,
-                                        evicted_count,
-                                        state_root,
-                                    }) => {
-                                        println!(
-                                            "[P2P] ✅ REMOTE BLOCK APPLIED height={} tx_count={} evicted_mempool={} state_root={}",
-                                            block_height, tx_count, evicted_count, state_root
-                                        );
-                                    }
-                                    Ok(crate::consensus::RemoteBlockApplyOutcome::ForkLost {
-                                        reason,
-                                    }) => {
-                                        println!("[P2P] ⚠️ REMOTE FORK WINS BUT REORG UNSUPPORTED: {}", reason);
-                                    }
-                                    Ok(crate::consensus::RemoteBlockApplyOutcome::Skipped {
-                                        reason,
-                                    }) => {
-                                        println!("[P2P] ⏭️ REMOTE BLOCK SKIPPED: {}", reason);
-                                        let local_h = ledger.block_height().unwrap_or(0);
-                                        let needs_catch_up = reason.contains("missing previous blocks")
-                                            || block_height > local_h;
-                                        if needs_catch_up {
-                                            if let Some(source) = source_peer {
-                                                let peer_s = source.to_string();
-                                                let mut reg = hello_registry.lock().await;
-                                                reg.note_peer_block_height(
-                                                    &peer_s,
-                                                    block_height,
-                                                    local_h,
-                                                );
-                                                drop(reg);
-                                            }
-                                            try_start_catch_up(
-                                                &block_sync_board,
-                                                &catch_up_driver,
-                                                &hello_registry,
-                                                ledger.as_ref(),
-                                                &mut swarm,
-                                                &mut pending_catch_up_range,
-                                            )
-                                            .await;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        println!(
-                                            "[P2P] ❌ REMOTE BLOCK REJECTED: {}",
-                                            e.message()
-                                        );
-                                    }
+                                    source: source_peer,
+                                }) {
+                                    println!(
+                                        "[P2P] ⏳ GOSSIP BLOCK DROPPED height={block_height} (apply queue full, depth={}); catch-up will fetch it",
+                                        apply_queue.depth()
+                                    );
                                 }
                             }
                             NetworkEvent::TxBroadcast { env } => {
-                                match handle_tx_broadcast(&ledger, &mempool, env).await {
-                                    TxGossipOutcome::Enqueued { tx_hash, mempool_len } => {
-                                        println!(
-                                            "[P2P] ✅ MEMPOOL TX ENQUEUED tx_hash={tx_hash} mempool_len={mempool_len}"
-                                        );
-                                    }
-                                    TxGossipOutcome::AlreadyQueued { tx_hash } => {
-                                        println!(
-                                            "[P2P] ⏭️ MEMPOOL TX ALREADY QUEUED tx_hash={tx_hash}"
-                                        );
-                                    }
-                                    TxGossipOutcome::AlreadyApplied { tx_hash } => {
-                                        println!(
-                                            "[P2P] ⏭️ MEMPOOL TX ALREADY MINED tx_hash={tx_hash}"
-                                        );
-                                    }
-                                    TxGossipOutcome::Rejected { reason } => {
-                                        crate::metrics::inc_gossip_rejected();
-                                        println!("[P2P] ❌ MEMPOOL TX REJECTED: {reason}");
-                                    }
+                                // Admitted by the admission worker (`admit_done_rx`), so the loop
+                                // never waits on the mempool lock the miner holds.
+                                if !admission.offer(crate::apply_worker::AdmitJob { token: None, env }) {
+                                    println!("[P2P] ⏳ MEMPOOL TX DROPPED (admission queue full)");
                                 }
                             }
                             ev @ (NetworkEvent::TmailGossip { .. }

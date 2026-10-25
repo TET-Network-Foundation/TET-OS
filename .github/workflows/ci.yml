@@ -299,6 +299,29 @@ jobs:
             anonymous_post_names_no_poster_to_the_node
             anonymous_mail_from_six_members_is_all_retained
             anonymous_mail_is_capped_per_receiver
+            stalled_block_plane_exits_the_process_past_the_hard_threshold
+            stalled_block_plane_below_the_hard_threshold_keeps_running
+            sole_validator_keeps_mining_after_its_last_peer_leaves
+            sole_validator_still_gates_on_a_peer_ahead
+            defaulted_validator_set_is_not_a_sole_validator
+            catch_up_tick_and_sync_gate_never_deadlock
+            sync_state_lock_is_never_held_across_an_await
+            block_sync::loop_keeps_draining_while_apply_is_slow
+            block_sync::loop_keeps_draining_under_1000_queued_blocks
+            block_sync::loop_drains_while_mempool_is_held
+            public_mode_refuses_every_route_off_the_allowlist
+            public_mode_lets_every_allowlisted_route_through
+            public_mode_rate_limit_fires_per_client
+            public_mode_is_off_by_default
+            public_mode_ignores_forwarded_for_from_an_untrusted_peer
+            public_mode_limits_ipv6_per_slash_64
+            ui_signed_agent_manifest_is_byte_identical_in_rust
+            demo_sponsor_pays_once_for_its_own_upload_and_only_for_the_sender
+            demo_sponsor_caps_refuse_rather_than_queue
+            demo_sponsor_signs_nothing_but_file_fees_and_stores_no_address
+            ui_signed_sponsor_request_verifies_in_rust
+            sdk_question_envelope_verifies_in_rust
+            ui_answer_envelope_verifies_in_rust
           )
           # Phase 1 §1 replaced the wall-clock pin (`wallclock_time_changes_spendability_for_the_same_block`)
           # with the fix's guards: the block's time decides, the node's clock does not.
@@ -413,6 +436,39 @@ jobs:
         name: anonymous send — the poster names itself to nobody
         run: node scripts/anon_poster_guard.mjs
 
+      # Try TET (docs/DEMO_NODE.md): making the disposable wallet touches no network and no storage,
+      # the page names no server-side mnemonic route, and the wallet id is tet-core's derivation.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the disposable wallet stays in the tab
+        run: node scripts/try_wallet_guard.mjs
+
+      # Try TET part 1: the board's invite secret never reaches the node, anonymous never falls back
+      # to named, labels come from the envelope and the node. Runs the page's own TypeScript modules
+      # (Node strips the types; scripts/lib/ts_hooks.mjs resolves them as Next does).
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — the board's invite stays secret and anonymous never turns named
+        run: node --experimental-strip-types scripts/try_board_guard.mjs
+
+      # Try TET part 4: each step of the verdict proves only what it says, on fixtures tet-core
+      # itself asserts (agent_payload_envelopes.json; agent_manifest_v1.json, which the rust job
+      # re-signs byte for byte in ui_signed_agent_manifest_is_byte_identical_in_rust).
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — verify anything grades only what it proves
+        run: node --experimental-strip-types scripts/try_verify_guard.mjs
+
+      # Try TET parts 2-3: on the try page a visitor's wallet never pays a file fee (the demo's
+      # sponsor does, or it is unpaid), and every refusal is final and worded as the design says.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — file fees are sponsored or unpaid, never the visitor's
+        run: node --experimental-strip-types scripts/try_files_fee_guard.mjs
+
+      # Try TET part 5: an agent's owner is shown only from a manifest that vouches for both keys that
+      # signed the question; "answered" only from the asking key; answers go to the signed sender.
+      # Runs on the SDK-built question tet-core verifies (sdk_question_envelope_verifies_in_rust).
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — AI asks a human shows only the owner a manifest proves
+        run: node --experimental-strip-types scripts/try_questions_guard.mjs
+
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --
       # which would cost another billed minute per push AND have to be mirrored in
@@ -464,8 +520,8 @@ jobs:
           # jest exits 0 when a filter matches nothing, so the counts are asserted rather than the
           # exit code. The skipped suite is tests/slashing_audit.test.ts, which posts to a route the
           # September clean-up removed; the reason is recorded in the file.
-          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 49 passed, 50 total' || {
-            echo "::error::the agent SDK guards did not run — expected 49 passed and 1 skipped"
+          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 52 passed, 53 total' || {
+            echo "::error::the agent SDK guards did not run — expected 52 passed and 1 skipped"
             exit 1
           }
 
@@ -523,7 +579,27 @@ jobs:
           shellcheck --version
           # Every script, and the run fails on ANY finding. All are clean as of this commit, so
           # there is no backlog to normalise and a new finding is always new.
-          shellcheck deploy/*.sh tet-cli/scripts/*.sh
+          shellcheck deploy/*.sh deploy/tests/*.sh tet-cli/scripts/*.sh
+
+      # The seed monitor's guarantees, against stubbed docker/curl/df/date: a dead node is red,
+      # success means the height advanced, a rejected ping is logged, a stale install reports itself.
+      # Written after the 2026-10-04 33 h producer wedge (docs/postmortems/2026-10-04-producer-wedge-33h.md).
+      - if: needs.gate.outputs.code == 'true'
+        name: seed-healthcheck.sh behaves as documented
+        run: bash deploy/tests/seed-healthcheck.test.sh
+
+      # The demo node (docs/DEMO_NODE.md): provision refuses an unsafe demo role, and the composed
+      # config exposes only Caddy on 80/443, REST on loopback, no UI port, public mode on, the
+      # trusted-proxy range equal to the pinned subnet, and a Caddyfile that trusts no client XFF.
+      - if: needs.gate.outputs.code == 'true'
+        name: the demo node exposes only what the design says
+        run: bash deploy/tests/demo-node.test.sh
+
+      # seed-liveness.yml's verdict on healthchecks.io's status: every check "up", at least two,
+      # and a malformed or empty answer is a failure, never a pass.
+      - if: needs.gate.outputs.code == 'true'
+        name: hc_status.py decides liveness as documented
+        run: python3 scripts/test_hc_status.py
 
       # The refusal paths are the whole safety property, so they are asserted rather than assumed.
       # None of these reaches ssh: each exits during argument validation.

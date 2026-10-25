@@ -24,7 +24,7 @@ pub fn build_router(state: RestState) -> axum::Router {
     // Layer order (last `.layer` = **outermost**; runs first on incoming requests):
     //   Cors → default body limit → global rate limit → routes.
     // CORS must stay outermost so preflight and `Access-Control-*` apply before auth/rate-limit.
-    axum::Router::new()
+    let router = axum::Router::new()
         .route(
             "/",
             axum::routing::get(super::handlers::pages::get_core_root),
@@ -280,6 +280,10 @@ pub fn build_router(state: RestState) -> axum::Router {
             axum::routing::post(super::handlers::files::post_files_fee),
         )
         .route(
+            "/demo/files/sponsor-fee",
+            axum::routing::post(super::handlers::files::post_demo_sponsor_fee),
+        )
+        .route(
             "/files/inbox/:wallet_id",
             axum::routing::get(super::handlers::files::get_files_inbox),
         )
@@ -506,7 +510,16 @@ pub fn build_router(state: RestState) -> axum::Router {
                 .allow_methods(Any)
                 .allow_headers(Any)
                 .allow_private_network(true),
-        )
+        );
+    // Public-API mode (the demo node): the allow-list and per-client limits wrap everything, so a
+    // refused request reaches no handler, rate limiter or CORS layer.
+    if super::public_api::public_api_enabled() {
+        let gate = super::public_api::PublicGate::new(super::public_api::Limits::from_env());
+        log::info!("[rest] PUBLIC API mode: {} allow-listed routes, per-client limits", super::public_api::PUBLIC_ALLOWLIST.len());
+        router.layer(axum::middleware::from_fn_with_state(gate, super::public_api::public_api_gate))
+    } else {
+        router
+    }
 }
 
 async fn serve_router(

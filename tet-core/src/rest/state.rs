@@ -78,6 +78,8 @@ pub struct RestState {
     pub log_sse_connections: Arc<AtomicUsize>,
     /// Block-producer key (Phase 1). `None`: this node follows but cannot produce.
     pub producer_key: Option<Arc<crate::producer_key::ProducerKeypair>>,
+    /// The demo node's file-fee sponsor (`None` everywhere else). See [`crate::demo_sponsor`].
+    pub demo_sponsor: Option<Arc<crate::demo_sponsor::DemoSponsor>>,
 }
 
 #[derive(Debug, Clone)]

@@ -713,6 +713,30 @@ ML-DSA-44), so 0.61 s per 256-page and ~119 s for a full 50,000-member registry.
 carries a 30 s budget per peer, pauses at its cursor when spent, **logs that it did so**, and
 resumes next round.
 
+### S8 as built: two design choices confirmed by RISC Zero (2026-10-06)
+
+Bruestle (RISC Zero) confirmed two choices S8 made on its own measurements. Both are now rules,
+not preferences.
+
+1. **Journal tagging is required.** A receipt proves that the image committed these journal bytes.
+   It does not say which journal type the bytes are. Under risc0 serde, journal types of equal
+   length can decode as each other; the removed mode-2 journal and `ZkCourtJournalV1` were both
+   264 bytes, and one decoded cleanly as the other. TET therefore:
+   - round-trips every decode;
+   - gives the Tmail membership journal a `journal_kind` field, checked before the journal is
+     used (`zk_verifier.rs` `decode_journal_bytes`, `tmail/envelope.rs`).
+
+   **Every new journal type gets a kind tag, and its decode checks it.**
+2. **Receipt size is the cost of STARK security.** The receipt is ~239 KiB (measured in S8-1, above)
+   because it is a STARK, which rests on hashes and stays sound against a quantum adversary.
+   Wrapping it in Groth16 would shrink it to a few hundred bytes, but Groth16 rests on elliptic-curve
+   pairings, which a quantum computer breaks. That would make the proof the one classical component
+   of a post-quantum chain, the same reason S8 rejected ring signatures.
+
+   **TET keeps STARK receipts and handles their size in transport:** announce-then-pull (S8-2) and
+   a node-local receipt cache. Compression is not the answer. Do not propose a Groth16 wrap for a
+   receipt whose claim must hold post-quantum.
+
 ### Locked decision #6 — amended 2026-09-24
 
 The original locked decision reads: *"Marketing = **AT-3 + AT-4 + AT-5**"*.

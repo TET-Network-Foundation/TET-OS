@@ -1,12 +1,14 @@
 #![allow(dead_code)]
 
 mod agent;
+mod apply_worker;
 mod ai_filter;
 mod ai_proxy;
 mod attestation;
 mod chaos;
 mod conductor;
 mod consensus;
+mod demo_sponsor;
 mod e2ee;
 mod executor;
 mod files;
@@ -628,14 +630,15 @@ async fn main() -> Result<(), AnyErr> {
         None => None,
     };
 
-    let hello_registry = crate::sync::new_hello_registry();
-    let catch_up_driver = crate::sync::new_catch_up_driver();
+    // One sync state, one lock (DESIGN_accept_loop § A); the three names are clones of one handle.
+    let sync_state = crate::sync::new_sync_state();
+    let hello_registry = sync_state.clone();
+    let catch_up_driver = sync_state.clone();
 
     // --- Step 5: BlockSyncBoard (REST + auto-mine sync gate) ---
     let block_sync_board = if config.enable_p2p && plane_keys.is_some() {
-        let board =
-            crate::sync::new_block_sync_board(hello_registry.clone(), catch_up_driver.clone());
-        log::info!("[startup] sync board created (per-node Arc<BlockSyncBoard>)");
+        let board = sync_state.clone();
+        log::info!("[startup] sync state created (one lock: registry + catch-up driver + board)");
         Some(board)
     } else {
         log::info!("[startup] sync board skipped (p2p disabled or no keystore)");
@@ -668,11 +671,16 @@ async fn main() -> Result<(), AnyErr> {
                 ) {
                     Ok((tx, files_fetch_tx, tx_submit_tx, anon_register_tx, _swarm_jh)) => {
                         swarm_block = true;
-                        // Systemd watchdog: restarts the unit if the block-plane loop stalls,
-                        // before a heavy-work stall can cascade into an OS-level TCP wedge.
+                        // Watchdog: withholds the systemd ping once the block-plane loop stalls,
+                        // and exits the process past the hard threshold so any supervisor
+                        // (Docker's restart policy included) restarts it.
                         let stall_ms = crate::swarm_health::stall_threshold_ms_from_env();
-                        let _watchdog =
-                            crate::swarm_health::spawn_watchdog(swarm_health.clone(), stall_ms);
+                        let exit_after_ms = crate::swarm_health::exit_after_ms_from_env();
+                        let _watchdog = crate::swarm_health::spawn_watchdog(
+                            swarm_health.clone(),
+                            stall_ms,
+                            exit_after_ms,
+                        );
                         (
                             Some(tx),
                             Some(files_fetch_tx),
@@ -727,6 +735,19 @@ async fn main() -> Result<(), AnyErr> {
 
     let (log_tx, _log_rx) = broadcast::channel::<String>(100);
 
+    // The "Try TET" demo node's file-fee sponsor; off unless TET_DEMO_SPONSOR_MNEMONIC_FILE is set.
+    // Configured but unusable is fatal: an operator who set it must not get a node without one.
+    let demo_sponsor = match crate::demo_sponsor::DemoSponsor::from_env(&ledger.sled_db()) {
+        Ok(Some(s)) => {
+            log::info!("[demo-sponsor] on; sponsor wallet {}", s.wallet_id());
+            Some(Arc::new(s))
+        }
+        Ok(None) => None,
+        Err(e) => {
+            log::error!("{e}");
+            std::process::exit(2);
+        }
+    };
     let state = RestState {
         ledger,
         wallet_id: config.initial_wallet.clone(),
@@ -749,6 +770,7 @@ async fn main() -> Result<(), AnyErr> {
         log_tx,
         log_sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         producer_key,
+        demo_sponsor,
     };
 
     // Pending txs this node admitted over REST are re-published on a timer until they are mined.

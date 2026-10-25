@@ -842,6 +842,36 @@ pub fn block_time_from_env() -> Duration {
     Duration::from_secs(sec)
 }
 
+/// Is this node the sole validator (#28)? Phase 1: the genesis validator set has exactly one entry,
+/// and it is this node's producer key. `TET_VALIDATOR_IDS` is not read: the set comes from genesis.
+///
+/// An empty set (dev chain) does not count. Every dev node's local mining set defaults to `[self]`
+/// (`ValidatorSet::for_local_mining`), and letting all of them mine with no peers would let any
+/// partitioned, misconfigured follower extend its own chain.
+pub fn is_sole_genesis_validator(
+    validators: &[crate::genesis::GenesisValidator],
+    producer_key: Option<&crate::producer_key::ProducerPublicKey>,
+) -> bool {
+    match (validators, producer_key) {
+        ([only], Some(pk)) => &only.key == pk,
+        _ => false,
+    }
+}
+
+/// [`is_sole_genesis_validator`] for this node: the genesis set from `TET_GENESIS_VALIDATORS` and
+/// the state's producer key. A genesis set that cannot be read is not a sole validator.
+pub fn sole_validator_from_genesis(state: &RestState) -> bool {
+    let validators = match crate::genesis::genesis_validators_from_env() {
+        Ok(v) => v,
+        Err(e) => {
+            log::warn!("[consensus] genesis validator set unreadable, not the sole validator: {e}");
+            return false;
+        }
+    };
+    let pk = state.producer_key.as_ref().map(|k| k.public_key());
+    is_sole_genesis_validator(&validators, pk.as_ref())
+}
+
 pub fn spawn_auto_miner(
     state: RestState,
     block_sync_board: Option<crate::sync::SharedBlockSyncBoard>,
@@ -849,9 +879,16 @@ pub fn spawn_auto_miner(
     validator_set: ValidatorSet,
 ) -> tokio::task::JoinHandle<()> {
     let block_time = block_time_from_env();
+    // The sole validator keeps mining when its peers leave (#28); see `peerless_mining_allowed`.
+    if std::env::var("TET_VALIDATOR_IDS").is_ok_and(|v| !v.trim().is_empty()) {
+        log::warn!(
+            "[consensus] TET_VALIDATOR_IDS is set but ignored since Phase 1: the validator set is the genesis set (TET_GENESIS_VALIDATORS)"
+        );
+    }
+    let sole_validator = sole_validator_from_genesis(&state);
     tokio::spawn(async move {
         log::info!(
-            "[consensus] auto-mining enabled block_time_sec={} node_id={}",
+            "[consensus] auto-mining enabled block_time_sec={} node_id={} sole_validator={sole_validator}",
             block_time.as_secs(),
             local_node_id
         );
@@ -860,7 +897,7 @@ pub fn spawn_auto_miner(
         loop {
             tokio::time::sleep(block_time).await;
             let local_height = state.ledger.block_height().unwrap_or(0);
-            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                 .await
             {
                 let sync = match block_sync_board.as_ref() {
@@ -908,7 +945,7 @@ pub fn spawn_auto_miner(
                     "[consensus] auto-mine routing: node_id={} is not POC; preserving AI workload mempool and mining coinbase-only block",
                     local_node_id
                 );
-                if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+                if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                     .await
                 {
                     continue;
@@ -935,7 +972,7 @@ pub fn spawn_auto_miner(
                 continue;
             }
 
-            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger)
+            if crate::sync::auto_mine_blocked_by_sync(block_sync_board.as_ref(), &state.ledger, sole_validator)
                 .await
             {
                 continue;

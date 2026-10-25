@@ -108,6 +108,8 @@ export default function MessagesPanel(props: {
   winBtn: string;
   baseUrl: string;
   myWalletId: string;
+  /** One-click recipients shown under the field (the try page's "message the demo"). */
+  quickRecipients?: ReadonlyArray<{ label: string; walletId: string }>;
 }) {
   const { outset, inset, winBtn, baseUrl } = props;
   const myWalletId = normalizeWalletId64(props.myWalletId);
@@ -533,6 +535,20 @@ export default function MessagesPanel(props: {
             className={`${inset} flex-1 bg-white px-2 py-1 text-xs font-mono outline-none`}
           />
         </div>
+        {props.quickRecipients?.length ? (
+          <div className="flex flex-wrap items-center gap-1 pl-[5.5rem]">
+            {props.quickRecipients.map((q) => (
+              <button
+                key={q.walletId}
+                type="button"
+                className={`${winBtn} bg-[#DAD8D2] px-2 py-0.5 text-xs`}
+                onClick={() => setRecipient(q.walletId)}
+              >
+                {q.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <textarea
           value={messageText}
           onChange={(e) => setMessageText(e.target.value)}

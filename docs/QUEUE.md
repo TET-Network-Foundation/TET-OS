@@ -52,6 +52,17 @@ Listed so they are decided rather than forgotten. All `autonomous: no`; a design
 | **Locate a file blob without a machine identity** | §2.4 cost 1; `PHASE1_ITEM4_STORAGE_NODE.md` | `storage_node` is an opaque hint (item 4, option A), so `files_fetch` asks the first connected peer and availability falls as the network grows. Candidates: ask the receiver's peers in turn, or a Kademlia provider record keyed by `file_id`. Neither may put a node `PeerId` in the gossiped, signed envelope. Files are off-chain, so this is not genesis-bound |
 | **Validator-set rotation** (Phase 1.1) | §1 design 5, D4 | the set is in the genesis hash, so today any change is a new genesis; rotation needs a signed, consensus-applied set change and a rule for which set signs the block that changes it |
 
+## Main (testnet) items — not Phase 1
+
+Work on `main`, against the live testnet. **The nightly does not take these**: it reads only the
+Queue table above, and these are not autonomous.
+
+| Item | Spec | Autonomous | Status |
+|---|---|---|---|
+| **Block-plane loop A: one sync lock** (the deadlock fix, 2026-10-03 root cause): `SyncState` behind one mutex, never held across an await, snapshot reads for the gate and REST; G1 (the reproduction, red→green) and G2 | [`DESIGN_accept_loop.md`](./DESIGN_accept_loop.md) § A; postmortem § Root cause | **no** — reviewed PR, live check on both seeds | in progress |
+| **Block-plane loop B: the loop only routes**: apply worker, bounded channels, explicit backpressure, mempool off the loop; G3, G4, G6 | design § B | **no** | after A is stable for a day |
+| **Block-plane loop C: lag watchdog**: per-iteration latency and queue depth, exit on lag; G5 | design § C | **no** | after B |
+
 ## Decisions
 
 Recorded 2026-10-02. These bind every item above; an item that seems to need otherwise stops and asks.

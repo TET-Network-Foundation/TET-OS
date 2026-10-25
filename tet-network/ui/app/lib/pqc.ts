@@ -2,6 +2,7 @@ type PqcWasmModule = {
   default: (wasmPath: string) => Promise<void>;
   mldsa44_keypair_from_mnemonic_b64: (mnemonic12: string) => { pubkey_b64: string; keypair_b64: string };
   mldsa44_sign_deterministic_b64: (keypair_b64: string, msgBytes: Uint8Array) => string;
+  mldsa44_verify_b64: (pubkey_b64: string, sig_b64: string, msgBytes: Uint8Array) => boolean;
 };
 
 let initPromise: Promise<PqcWasmModule> | null = null;
@@ -46,4 +47,17 @@ export async function mldsa44KeypairFromMnemonic(mnemonic12: string): Promise<{ 
 export async function mldsa44SignDeterministic(keypair_b64: string, msgBytes: Uint8Array): Promise<string> {
   const m = await pqcInit();
   return m.mldsa44_sign_deterministic_b64(keypair_b64, msgBytes);
+}
+
+/**
+ * Verify an ML-DSA-44 signature (WASM). Returns false rather than throwing on malformed input. The
+ * caller pins the level by size first: the verifier accepts a consistent ML-DSA-65 pair too.
+ */
+export async function mldsa44Verify(pubkey_b64: string, sig_b64: string, msgBytes: Uint8Array): Promise<boolean> {
+  const m = await pqcInit();
+  try {
+    return m.mldsa44_verify_b64(pubkey_b64, sig_b64, msgBytes) === true;
+  } catch {
+    return false;
+  }
 }
