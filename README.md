@@ -1,53 +1,88 @@
 # TET
 
-**In an age when AI can make anything: prove "I put this out, on this day" in 10 seconds.**
+**A key you own · a membership proof that does not say who · a shared clock.**
 
-Your proofs and keys, in your hands, not a company's. TET is a public **test network** for checking
-who signed something, and when. Every transaction and signed record carries two signatures, Ed25519
-and ML-DSA-44, and the page checks them in your browser instead of trusting a server.
+TET is a public test network. You hold your own key, made in your browser. You can show you are a
+member of a group without saying which member. Records are ordered by one shared chain, so anyone
+can check that something existed before block N. Every signature is two signatures, Ed25519 and
+ML-DSA-44, and the page checks them in your browser instead of trusting a server.
 
-Try it: **<https://tetnet.org>** (no sign-up; an ID is made in your browser).
+Try it: **<https://tetnet.org>** (no sign-up).
 
-> **Testnet. One block producer, one operator. Not audited. The units have no value:** they are
-> practice units that can't be exchanged for money, and the chain may be reset.
+## What TET is not
 
-## What works today, and what each part proves
+- **Not a token.** Testnet units are practice units. They can't be exchanged for anything, and this
+  chain will not become a mainnet.
+- **Not a market.** Nothing is listed or offered here.
+- **Not tracking.** The chain holds public keys and proofs, never your passwords, personal data or
+  private keys. Nodes do see network addresses and timing (see Limits).
+- **Not a claim that an object is genuine.** A tag check shows that a chip knew a key when it was
+  tapped. A tag can be removed and moved; the check is about the chip, not the object it is on.
 
-| Part | What it does | What it proves, and what it doesn't |
+## Running today, prototype, in design
+
+| Running today | Prototype (code public, tests green) | In design |
 |---|---|---|
-| Sign | Sign a file or text with your key; optionally stamp it on chain. | This key signed these exact bytes (and, stamped, that they existed by a block). Not who holds the key, and not authorship by itself. |
-| Verify | Check a `.sig.json`, a proof code, a stamp; also offline, without TET (`tet-network/ui/public/verify/`). | Each step says what it proves; a valid signature alone doesn't say who holds the key. |
-| Boards | Threads with anonymous or named posts. | An anonymous post proves a member wrote it, not which one. It doesn't hide your IP from the node. |
-| DM | End-to-end encrypted messages; a safety number to compare in person. | Which key sent it. The node still sees who writes to whom, and when. |
-| Files | Encrypted files up to 100 MB, kept 7 days. | Only the recipient can open it. Not that the file is what its name says. |
-| Sealed prediction | Seal a text now (only its salted hash is posted); reveal it later. | The text was fixed when it was sealed. Not that it was a good guess, or that the same person didn't seal others. |
+| The demo at tetnet.org and two seeds: Helsinki makes the blocks, Nuremberg is a full node | Tag verifier `tet-tag-verify`: NTAG 424 DNA tap check (AN12196), per-tag keys (AN10922 `derive`), a `serve` prototype; 50 tests (PR #150, draft) | Tag registration and owners on TET (`GENUINE_TAG.md`, PR #149) |
+| Sign a file or text; stamp it on chain to show it existed before block N (the signed file is stored on the node, encrypted to you, for 7 days) | Hash-only stamp (the file never leaves your device): merged on main (#148), not yet confirmed on the demo | A new chain on Phase 1's blocks, with the time in the block header; today's records archived |
+| Verify a signature, a proof code or a stamp, also offline | Phase 1 (PR #151, open, not merged): blocks carry a producer signature and a timestamp (`ts_ms`); the validator set is read from genesis | `wallet_id_v2`: the ML-DSA key bound to the wallet ID |
+| Boards: anonymous posts that show a member wrote them, not which one (RISC Zero membership proof) | | Moving the message key exchange from Kyber-768 (Round 3) to ML-KEM (FIPS 203) |
+| End-to-end encrypted messages, and encrypted files up to 100 MB kept 7 days | | More block producers, and an external audit |
+| Sealed predictions: only a salted hash is posted until you reveal the text | | Agent identity for AI agents |
 
-## Honest limits
+## How it differs
 
-- **Testnet.** One block producer and one operator today; a sustained attack, or the operator,
-  can stop it. More producers are on the roadmap (technical paper §13).
-- **No external audit yet.** It is planned (Phase 2).
+- **Each check says what it shows and what it does not.** A valid signature shows which key signed
+  these bytes, not who holds the key. An anonymous post shows a member wrote it, not which one.
+- **Nodes hold nothing worth taking.** They keep public keys, signatures, proofs and ciphertext; no
+  passwords or private keys. For tags, the design keeps the maker's master key with the maker and
+  gives a verifier per-tag keys only (in design: today's `serve` prototype still accepts a
+  master-key file).
+- **Built for thirty items.** The tag plan starts with one maker and thirty tags, not a catalogue.
+- **One key model for people, objects and agents.** People and AI agents sign with the same hybrid
+  key pair (the browser and `tet-agent-sdk`). An object is named by its tag's ID and registered
+  with its maker's key (in design).
+- **Records outlive the operator.** A signed record checks offline, without TET's servers. When the
+  new chain starts, today's records are archived rather than dropped (in design).
+
+## Where it goes
+
+All of this is in design; nothing below is live.
+
+1. **December 2026:** one maker, thirty tags.
+2. **Early 2027:** a new chain with the time in the block header; today's records archived.
+3. **Then:** small brands, and identity for AI agents.
+
+## Links
+
+- The demo: <https://tetnet.org>
+- Tag verifier README: [`tet-tag-verify/README.md`](https://github.com/TET-Network-Foundation/TET-OS/blob/tag-verify-core/tet-tag-verify/README.md) (on the PR #150 branch)
+- Tag plan: [`docs/plans/GENUINE_TAG.md`](https://github.com/TET-Network-Foundation/TET-OS/blob/plan-genuine-tag/docs/plans/GENUINE_TAG.md) (on the PR #149 branch, design only)
+- [PR #150](https://github.com/TET-Network-Foundation/TET-OS/pull/150): the tag verifier (draft)
+- [PR #151](https://github.com/TET-Network-Foundation/TET-OS/pull/151): Phase 1, main merged into it (draft, not merged)
+
+Maintained by Steve (Kazuma Sengoku).
+
+## Limits
+
+- **Testnet.** One block producer and one operator today; a sustained attack, or the operator, can
+  stop it. The chain may be reset.
+- **No external audit yet.**
 - **Quantum resistance is incomplete.** Every signature is hybrid, but the wallet ID is the Ed25519
-  key and the ML-DSA key isn't bound to it until `wallet_id_v2` (Phase 1). Once it is, forging a
-  transaction will require breaking both Ed25519 and ML-DSA-44. Messages use X25519 + Kyber-768
-  (Round 3), not the final ML-KEM standard (FIPS 203); moving to ML-KEM is planned.
-- **No token value.** Testnet units are practice units; there is no sale, and this chain can never
-  become mainnet. Its genesis contains a founder wallet, locked by a one-year cliff, and a treasury
-  address that collects test fees. Mainnet supply and allocation are undecided.
-- **Not IP privacy.** Nodes see addresses and timing; use Tor or your own node.
-- **Lose your passphrase (12 words) and nobody can recover it.**
+  key until `wallet_id_v2`. Messages use X25519 + Kyber-768 (Round 3), not the final ML-KEM standard.
+- **The genesis holds a founder wallet**, locked for one year, and a treasury address. Testnet units
+  can't be exchanged for anything.
+- **Nodes see network addresses and timing.** Use Tor or your own node if that matters to you.
+- **Lose your 12 words and nobody can recover your key.**
 
 ## Read more
 
 - **Technical paper v2:** <https://tetnet.org/whitepaper> (source
-  `tet-network/ui/app/whitepaper/paper.ts`; HTML and PDF in `tet-network/ui/public/paper/`, each with
-  a proof code you can check, also offline).
-- **Security:** [`SECURITY.md`](./SECURITY.md) (how to report, and every known limitation and fixed
-  issue) and [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md).
+  `tet-network/ui/app/whitepaper/paper.ts`; HTML and PDF in `tet-network/ui/public/paper/`).
+- **Security:** [`SECURITY.md`](./SECURITY.md) and [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md).
 - **Contributing:** [`CONTRIBUTING.md`](./CONTRIBUTING.md).
-- **Discord:** <https://discord.gg/ANcpc76k8m> (questions, reports of things that look wrong; security problems go through `SECURITY.md`, not Discord).
-- Older documents (whitepapers v1.0 and v1.1, status snapshots) are in [`archive/`](./archive):
-  historical, not the current design.
+- **Discord:** <https://discord.gg/ANcpc76k8m> (questions and reports; security problems go through `SECURITY.md`).
+- Older documents are in [`archive/`](./archive): historical, not the current design.
 
 ## Repository
 
@@ -55,7 +90,8 @@ Try it: **<https://tetnet.org>** (no sign-up; an ID is made in your browser).
 - [`tet-network/ui/`](./tet-network/ui): the web app (Next.js): the `/try` page, the technical paper,
   the offline verifier.
 - [`tet-pqc-wasm/`](./tet-pqc-wasm): ML-DSA-44 compiled to WebAssembly for the browser. The build
-  artifact is gitignored: a fresh clone builds it first (see `docs/RUNNING_A_NODE.md`).
+  artifact is gitignored; a fresh clone builds it (see `docs/RUNNING_A_NODE.md`).
+- [`tet-agent-sdk/`](./tet-agent-sdk): signing for AI agents, with the same hybrid keys.
 - [`methods/`](./methods), [`prover/`](./prover): the RISC Zero membership proof (anonymous posts).
 - [`deploy/`](./deploy): the seed and demo host setup.
 
