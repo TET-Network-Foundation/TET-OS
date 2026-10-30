@@ -13,7 +13,7 @@ Try it: **<https://tetnet.org>** (no sign-up).
 
 - **Not a token.** Testnet units are practice units. They can't be exchanged for anything, and this
   chain will not become a mainnet.
-- **Not a market.** Nothing is listed, offered or traded here.
+- **Not a market.** Nothing is listed or offered here.
 - **Not tracking.** The chain holds public keys and proofs, never your passwords, personal data or
   private keys. Nodes do see network addresses and timing (see Limits).
 - **Not a claim that an object is genuine.** A tag check shows that a chip knew a key when it was
@@ -24,7 +24,7 @@ Try it: **<https://tetnet.org>** (no sign-up).
 | Running today | Prototype (code public, tests green) | In design |
 |---|---|---|
 | The demo at tetnet.org and two seeds: Helsinki makes the blocks, Nuremberg is a full node | Tag verifier `tet-tag-verify`: NTAG 424 DNA tap check (AN12196), per-tag keys (AN10922 `derive`), a `serve` prototype; 50 tests (PR #150, draft) | Tag registration and owners on TET (`GENUINE_TAG.md`, PR #149) |
-| Sign a file or text; stamp its hash on chain to show it existed before block N | Hash-only stamp for "Mark as genuine": merged on main (#148), not yet confirmed on the demo | A new chain on Phase 1's blocks, with the time in the block header; today's records archived |
+| Sign a file or text; stamp it on chain to show it existed before block N (the signed file is stored on the node, encrypted to you, for 7 days) | Hash-only stamp (the file never leaves your device): merged on main (#148), not yet confirmed on the demo | A new chain on Phase 1's blocks, with the time in the block header; today's records archived |
 | Verify a signature, a proof code or a stamp, also offline | Phase 1 (PR #151, open, not merged): blocks carry a producer signature and a timestamp (`ts_ms`); the validator set is read from genesis | `wallet_id_v2`: the ML-DSA key bound to the wallet ID |
 | Boards: anonymous posts that show a member wrote them, not which one (RISC Zero membership proof) | | Moving the message key exchange from Kyber-768 (Round 3) to ML-KEM (FIPS 203) |
 | End-to-end encrypted messages, and encrypted files up to 100 MB kept 7 days | | More block producers, and an external audit |
