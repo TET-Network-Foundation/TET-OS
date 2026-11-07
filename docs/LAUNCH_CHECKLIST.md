@@ -76,10 +76,9 @@ only when its check has passed and is written next to it with the date.
 
 ## What needs the founder
 
-- **Which server is the demo.** DNS sends tetnet.org and try.stevenexus.org to 167.233.31.223,
-  which answers on no port (also seen from a seed); 167.233.239.82 is up with nothing listening on
-  80/443 and SSH firewalled, like an unprovisioned demo host. Check in the Hetzner console, and fix
-  the **Porkbun** A/AAAA records if they point at the wrong one.
+- ~~**Which server is the demo.**~~ Resolved 2026-11-07: the demo is 167.233.239.82, and DNS
+  sends tetnet.org and try.stevenexus.org there. The old 167.233.31.223 belongs to someone else now;
+  nothing of ours should point at it, and its SSH host key is not ours.
 - **Demo host SSH.** Port 22 is blocked from the network Claude runs on; from your own terminal run
   the 8443 one-liner in `deploy/demo/README.md` (and allow 8443/tcp in the Hetzner firewall).
 - **hstspreload.org** submission; the **DISCORD_CT_WEBHOOK** secret.
