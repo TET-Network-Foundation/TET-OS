@@ -114,14 +114,14 @@ export default function HomePanel(props: {
             {t("In an age when AI can make anything.")}
             <br />
             {/* Break only after the last 、/， (ja/zh), never before を; each part still wraps if too wide. */}
-            {lastCommaParts(t("Prove 'I put this out, on this day' in 10\u00a0seconds.")).map((part, i) => (
+            {lastCommaParts(t("Mark a file as yours. Check later that it existed before block\u00a0N.")).map((part, i) => (
               <span key={i} className="inline-block">
                 {part}
               </span>
             ))}
           </p>
           {/* The limit, right under the claim (try_genuine_guard). */}
-          <p className="mt-1 text-[13px] text-[#5d646d]">{t("It proves when, and whose mark. Not who the author is.")}</p>
+          <p className="mt-1 text-[13px] text-[#5d646d]">{t("It shows which key signed, and before which block. It does not show who you are, or a date.")}</p>
         </div>
         <form
           onSubmit={submit}

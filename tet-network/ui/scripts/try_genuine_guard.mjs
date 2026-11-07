@@ -101,8 +101,9 @@ await mustThrow("an upload is caught", () => fingerprintOnly(PANEL.replace("cons
 await mustThrow("an anchor step handed the file is caught", () => fingerprintOnly(PANEL.replace("record: done.record", "record: bytes")));
 
 // ── Never "proves you made it" ─────────────────────────────────────────────────────────────────
-// A mark proves when, and whose mark: not authorship. No page string, and no translation, may say
-// it proves you made something; and the home headline carries its limit right under it.
+// A mark shows which key, and before which block: not authorship. No page string, and no
+// translation, may say it proves you made something; and the home headline carries its limit right
+// under it.
 const TRY_DIR = new URL("../app/try/", import.meta.url);
 const ALL_TRY = readdirSync(TRY_DIR)
   .filter((f) => /\.(tsx|ts)$/.test(f))
@@ -131,14 +132,14 @@ await check("control: \"proves you made it\" and 「作ったことを証明」 
 
 const HOME = readFileSync(new URL("../app/try/HomePanel.tsx", import.meta.url), "utf8");
 function headlineHasItsLimit(src) {
-  const i = src.indexOf(`t("Prove 'I put this out, on this day'`);
+  const i = src.indexOf('t("Mark a file as yours. Check later that it existed before block');
   assert.ok(i >= 0, "the headline is missing");
   const after = src.slice(i, i + 600);
-  assert.ok(after.includes('t("It proves when, and whose mark. Not who the author is.")'), "the limit line isn't right under the headline");
+  assert.ok(after.includes('t("It shows which key signed, and before which block. It does not show who you are, or a date.")'), "the limit line isn't right under the headline");
 }
 await check("the home headline carries its limit right under it", () => headlineHasItsLimit(HOME));
 await check("control: a headline without its limit line is caught", () => {
-  assert.throws(() => headlineHasItsLimit(HOME.replace('t("It proves when, and whose mark. Not who the author is.")', 't("Try it.")')));
+  assert.throws(() => headlineHasItsLimit(HOME.replace('t("It shows which key signed, and before which block. It does not show who you are, or a date.")', 't("Try it.")')));
 });
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
