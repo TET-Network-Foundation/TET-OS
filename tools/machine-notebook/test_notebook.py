@@ -112,6 +112,20 @@ class Notebook(unittest.TestCase):
         rc, _ = nb("init", "--dir", self.base)
         self.assertEqual(rc, 2, "init must refuse an existing device.key")
 
+    def test_init_keeps_the_genesis_hash_exactly_as_get_chain_gives_it(self):
+        # A node's GET /chain says "0x…", and the signature binds that exact string.
+        d = os.path.join(self.tmp, "chain-0x")
+        g = "0x" + hashlib.sha256(b"a node's genesis").hexdigest()
+        old = {k: os.environ.get(k) for k in CHAIN}
+        os.environ.update({"TET_CHAIN_ID": "tet-notebook-test", "TET_GENESIS_HASH": g})
+        try:
+            rc, out = nb("init", "--dir", d)
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(notebook.chain_env(d)["TET_GENESIS_HASH"], g)
+
     def test_a_untouched_log_is_valid(self):
         rc, out = nb("verify", "--dir", self.copy())
         self.assertEqual(rc, 0, out)
@@ -205,6 +219,70 @@ class Notebook(unittest.TestCase):
             v = subprocess.run([CLI, "agent", "verify", "--sig", p], capture_output=True, env={**os.environ, **notebook.chain_env(d)})
             self.assertEqual(v.returncode, 0, f"{name}: {v.stdout.decode()}")
         self.assertRegex(out, r"published record 2: TET-[0-9A-Z]{4}-[0-9A-Z]{4}")
+
+    def test_verify_node_reports_every_record_and_rechecks_the_anchor(self):
+        d = self.copy()
+        import argparse
+        hash2, _ = notebook.build_publish_body(argparse.Namespace(dir=d, seq=2, tet_cli=CLI))
+        # Record 3's hash record, made "elsewhere": not saved in this notebook, found only on the node.
+        e = self.copy()
+        hash3, _ = notebook.build_publish_body(argparse.Namespace(dir=e, seq=3, tet_cli=CLI))
+        # Record 1 under ANOTHER key: same file hash, a different signer; it must not count.
+        other = os.path.join(self.tmp, "other")
+        old = {k: os.environ.get(k) for k in CHAIN}
+        os.environ.update(CHAIN)
+        try:
+            nb("init", "--dir", other)
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        shutil.copy(self.rec(d, 1), self.rec(other, 1))
+        hash1_other, _ = notebook.build_publish_body(argparse.Namespace(dir=other, seq=1, tet_cli=CLI))
+        def sha(n):
+            with open(self.rec(d, n), "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        tx_good, tx_wrong = "a" * 64, "b" * 64
+        state = {"anchor2": None}
+
+        class Stub(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path.startswith("/sigs/search?file="):
+                    f = self.path.split("=", 1)[1]
+                    recs = {sha(1): [hash1_other], sha(2): [hash2], sha(3): [hash3]}.get(f, [])
+                    body = {"records": [{"record_b64": base64.b64encode(r).decode(), **({"anchor": state["anchor2"]} if r is hash2 and state["anchor2"] else {})} for r in recs]}
+                elif self.path == f"/explorer/tx/{tx_good}":
+                    body = {"found": True, "canonical": True, "block_height": 7, "tx": {"tx": {"kind": "file_fee", "file_id": notebook.stamp_file_id(hash2)}}}
+                elif self.path == f"/explorer/tx/{tx_wrong}":
+                    body = {"found": True, "canonical": True, "block_height": 7, "tx": {"tx": {"kind": "file_fee", "file_id": notebook.stamp_file_id(hash3)}}}
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps(body).encode())
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Stub)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}"
+        try:
+            rc, out = nb("verify", "--dir", d, "--node", url)
+            self.assertEqual(rc, 0, out)
+            self.assertIn("stamp: record 1: not on this node", out)  # only another key's record is there
+            self.assertIn("stamp: record 2: published, not anchored", out)
+            self.assertIn("stamp: record 3: published, not anchored", out)  # found, re-verified here
+            state["anchor2"] = {"tx_hash": tx_good, "block_height": 7}
+            _, out = nb("verify", "--dir", d, "--node", url)
+            self.assertIn("stamp: record 2: existed before block 7 (this node's chain)", out)
+            state["anchor2"] = {"tx_hash": tx_wrong, "block_height": 7}
+            _, out = nb("verify", "--dir", d, "--node", url)
+            self.assertIn("stamp: record 2: anchor stamps a different file", out)
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
 
 if __name__ == "__main__":

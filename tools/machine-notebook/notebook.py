@@ -131,8 +131,10 @@ def cmd_init(a):
         raise Fail(f"{key} exists; refusing to replace a device key")
     chain_id = os.environ.get("TET_CHAIN_ID", "").strip()
     genesis = os.environ.get("TET_GENESIS_HASH", "").strip().lower()
-    if not chain_id or not re.fullmatch(r"[0-9a-f]{64}", genesis):
-        raise Fail("set TET_CHAIN_ID and TET_GENESIS_HASH (64 hex) for the chain to sign for; a node's GET /chain shows both")
+    # Kept exactly as GET /chain gives it, "0x" included: the signed pre-image binds the genesis hash
+    # as a string (tet-core agent.rs), so dropping the prefix would sign for a chain no node has.
+    if not chain_id or not re.fullmatch(r"(0x)?[0-9a-f]{64}", genesis):
+        raise Fail("set TET_CHAIN_ID and TET_GENESIS_HASH (64 hex, 0x allowed) for the chain to sign for; a node's GET /chain shows both")
     rc, out, _ = run_cli(tet_cli(a), ["keys", "generate", "--words", "12"])
     if rc != 0:
         raise Fail(f"tet-cli keys generate failed (exit {rc})")
@@ -337,22 +339,60 @@ def stamp_file_id(record_bytes):
     return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
 
-def check_stamps(d, node):
-    """Each published record's anchor, re-checked the way checkStamp (lib/sign_anything.ts) does."""
+def is_my_hash_record(d, cli, raw, log_sha):
+    """A registry record made elsewhere counts only if it re-verifies here: this device's key, a
+    hash-only envelope over exactly this log record's SHA-256, under the notebook's chain."""
+    try:
+        env = json.loads(raw)
+        signer = env["tet"]["agent_ed25519_pubkey_hex"]
+        payload = base64.b64decode(env["payload"])
+    except (ValueError, KeyError, TypeError):
+        return False
+    kp = os.path.join(d, "device.keyid")
+    if not os.path.exists(kp):
+        return False
+    with open(kp) as f:
+        if f.read().strip() != f"tet-ed25519:{signer}":
+            return False
+    if env.get("payloadType") != HASH_PAYLOAD_TYPE or payload != log_sha:
+        return False
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, "found.sig.json")
+        with open(p, "wb") as f:
+            f.write(raw)
+        rc, _, _ = run_cli(cli, ["agent", "verify", "--sig", p], chain_env(d))
+    return rc == 0
+
+
+def check_stamps(d, node, cli):
+    """Every record: is it in this node's registry, and is its anchor real? The anchor is
+    re-checked the way checkStamp (lib/sign_anything.ts) does."""
     node = node.rstrip("/")
     lines = []
-    for hp in sorted(glob.glob(os.path.join(d, "records", "*.hash.sig.json")), key=lambda p: int(os.path.basename(p).split(".")[0])):
-        seq = os.path.basename(hp).split(".")[0]
-        with open(hp, "rb") as f:
-            hash_record = f.read()
-        with open(os.path.join(d, "records", f"{seq}.json"), "rb") as f:
+    rec_dir = os.path.join(d, "records")
+    seqs = sorted(int(m.group(1)) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n)))
+    for seq in seqs:
+        with open(os.path.join(rec_dir, f"{seq}.json"), "rb") as f:
             log_record = f.read()
+        hp = os.path.join(rec_dir, f"{seq}.hash.sig.json")
+        local = None
+        if os.path.exists(hp):
+            with open(hp, "rb") as f:
+                local = f.read()
         found = get_json(f"{node}/sigs/search?file={sha256_hex(log_record)}").get("records") or []
-        mine = [r for r in found if base64.b64decode(r.get("record_b64", "")) == hash_record]
+        mine = []
+        for r in found:
+            try:
+                raw = base64.b64decode(r.get("record_b64", ""))
+            except ValueError:
+                continue
+            if raw == local or (local is None and is_my_hash_record(d, cli, raw, hashlib.sha256(log_record).digest())):
+                mine.append((r, raw))
         if not mine:
             lines.append(f"stamp: record {seq}: not on this node")
             continue
-        a = mine[0].get("anchor") or {}
+        r, hash_record = mine[0]
+        a = r.get("anchor") or {}
         tx = str(a.get("tx_hash", "")).lower().removeprefix("0x")
         if not re.fullmatch(r"[0-9a-f]{64}", tx):
             lines.append(f"stamp: record {seq}: published, not anchored")
@@ -368,7 +408,7 @@ def check_stamps(d, node):
             lines.append(f"stamp: record {seq}: anchor has no block height yet")
         else:
             lines.append(f"stamp: record {seq}: existed before block {height} (this node's chain)")
-    return lines or ["stamp: no record published from this notebook"]
+    return lines
 
 
 def cmd_verify(a):
@@ -385,7 +425,7 @@ def cmd_verify(a):
     for s in DOES_NOT_SHOW:
         print(f"  - {s}")
     if a.node:
-        for ln in check_stamps(a.dir, a.node):
+        for ln in check_stamps(a.dir, a.node, tet_cli(a)):
             print(ln)
     else:
         print("stamp: not checked (no node)")
