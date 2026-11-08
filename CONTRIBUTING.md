@@ -19,6 +19,9 @@ few days. Small, focused pull requests are easiest to review.
   `http://localhost:3000/try`.
 - The page's guards (wording, security and translation checks, each with a negative control):
   `node --experimental-strip-types scripts/<name>_guard.mjs` in `tet-network/ui`. CI runs all of them.
+- All of CI's guards at once, before any push: `bash scripts/run_guards.sh` from the root. It needs
+  a built `tet-cli` (`cargo build -p tet-cli --release`) and `npm ci --ignore-scripts` in
+  `tet-network/ui`.
 
 ## Rules every change keeps
 
