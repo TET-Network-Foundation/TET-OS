@@ -66,7 +66,7 @@ translation starts after that, so your changes carry over.
 | The node holds it, encrypted to you, until the date. Up to 30 days ahead on this node; if the node is gone, so is the letter. | 日付まで暗号化したままノードが預かります。このノードでは30日先まで。ノードがなくなれば手紙も消えます。 |
 | attendance | 出席 |
 | Scan the venue's QR, which changes every 30 seconds. | 会場のQR（30秒ごとに変わる）を読み取る。 |
-| Proves you scanned the venue QR. Not that you were there: someone could pass the code on within 30 seconds. | 会場のQRを読み取ったことを証明。その場にいたことは証明しません（30秒以内に誰かが転送できます）。 |
+| Shows that this key scanned the venue QR. Not that you were there: someone could pass the code on within 30 seconds. | 会場の QR をこの鍵で読み取ったことを示す。その場にいたことは示さない（30 秒以内に誰かが転送できる）。 |
 | recommendation | 推薦 |
 | A member recommends someone anonymously. | メンバーが匿名で誰かを推薦する。 |
 | The recipient must opt in to receive them, and nothing is shown publicly unless the recipient chooses to. Proves a member wrote it, not which one. | 受け取る側が受け取りを選んだときだけ届き、本人が選ばない限り公開されません。メンバーの誰かが書いたことを証明し、誰かは示しません。 |

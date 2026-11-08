@@ -453,7 +453,7 @@ export const ZH_HK: Record<string, string> = {
   "The node holds it, encrypted to you, until the date. Up to 30 days ahead on this node; if the node is gone, so is the letter.": "節點會將信加密保存到指定日期。此節點最長 30 日；節點消失，信亦會消失。",
   "attendance": "出席",
   "Scan the venue's QR, which changes every 30 seconds.": "掃描會場每 30 秒更新的 QR 碼。",
-  "Proves you scanned the venue QR. Not that you were there: someone could pass the code on within 30 seconds.": "證明你掃描了會場的 QR 碼。不證明你在場：有人可在 30 秒內把碼轉傳。",
+  "Shows that this key scanned the venue QR. Not that you were there: someone could pass the code on within 30 seconds.": "顯示這條鑰匙掃描了會場的 QR 碼。不顯示你在場：有人可在 30 秒內把碼轉傳。",
   "recommendation": "推薦",
   "A member recommends someone anonymously.": "成員匿名推薦某人。",
   "The recipient must opt in to receive them, and nothing is shown publicly unless the recipient chooses to. Proves a member wrote it, not which one.": "收件人須選擇接收才會收到，除非收件人選擇公開，否則不會公開顯示。證明由某位成員所寫，不顯示是哪一位。",

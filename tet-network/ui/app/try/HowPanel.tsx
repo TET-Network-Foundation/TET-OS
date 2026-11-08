@@ -119,7 +119,7 @@ export default function HowPanel(props: { go: LandingGo }) {
         <ul>
           <Row name={t("sealed prediction")} does={t("Seal a prediction now (only its salted hash is posted); reveal the text later.")} proves={t("Proves the text was fixed when it was sealed. Doesn't prove it was a good guess, or that the same person didn't seal other predictions too.")} />
           <Row name={t("letter to future self")} does={t("Write a letter that is delivered to you later.")} proves={t("The node holds it, encrypted to you, until the date. Up to 30 days ahead on this node; if the node is gone, so is the letter.")} />
-          <Row name={t("attendance")} does={t("Scan the venue's QR, which changes every 30 seconds.")} proves={t("Proves you scanned the venue QR. Not that you were there: someone could pass the code on within 30 seconds.")} />
+          <Row name={t("attendance")} does={t("Scan the venue's QR, which changes every 30 seconds.")} proves={t("Shows that this key scanned the venue QR. Not that you were there: someone could pass the code on within 30 seconds.")} />
           <Row name={t("recommendation")} does={t("A member recommends someone anonymously.")} proves={t("The recipient must opt in to receive them, and nothing is shown publicly unless the recipient chooses to. Proves a member wrote it, not which one.")} />
         </ul>
       </div>
