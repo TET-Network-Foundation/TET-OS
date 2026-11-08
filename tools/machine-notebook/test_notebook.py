@@ -126,6 +126,12 @@ class Notebook(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(notebook.chain_env(d)["TET_GENESIS_HASH"], g)
 
+    def test_a_record_carries_clock_utc_and_nothing_else(self):
+        with open(self.rec(self.base, 1), "rb") as f:
+            rec = json.loads(f.read())
+        self.assertEqual(set(rec), {"v", "kind", "seq", "prev", "reading", "clock_utc"})
+        self.assertRegex(rec["clock_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+
     def test_a_untouched_log_is_valid(self):
         rc, out = nb("verify", "--dir", self.copy())
         self.assertEqual(rc, 0, out)
