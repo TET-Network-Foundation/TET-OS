@@ -37,4 +37,8 @@ if [ "$rc" = 2 ]; then pass "no guards found: exit 2, not 0"; else flunk "no gua
 n=$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) } job == "ui" && /^[[:space:]]+run: node .*scripts\/[A-Za-z0-9_]+\.mjs/' .github/workflows/ci.yml | wc -l | tr -d ' ')
 if [ "$n" -gt 0 ]; then pass "ci.yml's ui job has $n guard steps for the runner"; else flunk "ci.yml's ui job has guard steps for the runner"; fi
 
+# The rust job's Python guard is picked up too (the machine notebook), and run from the root.
+nb=$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) } job == "rust" && /^[[:space:]]+run: python3 tools\/[A-Za-z0-9_\/-]+\/test_[A-Za-z0-9_]+\.py[[:space:]]*$/' .github/workflows/ci.yml | grep -c 'tools/machine-notebook/test_notebook.py')
+if [ "$nb" = 1 ]; then pass "ci.yml's rust job lists the machine notebook guard for the runner"; else flunk "ci.yml's rust job lists the machine notebook guard for the runner" "found $nb"; fi
+
 if [ "$failed" -eq 0 ]; then echo "all passed"; exit 0; else echo "$failed FAILED"; exit 1; fi

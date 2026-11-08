@@ -210,6 +210,15 @@ jobs:
           cargo build -p tet-cli
           tet-cli/scripts/agent_cli_interop.sh target/debug/tet-cli
 
+      # The machine notebook (tools/machine-notebook) signs and checks its log only through tet-cli,
+      # so it runs here, on the binary the step above built. A broken log must read INVALID for the
+      # reason each case is named for; scripts/run_guards.sh picks this line up too.
+      - if: needs.gate.outputs.code == 'true'
+        name: machine notebook — a broken log reads INVALID
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 tools/machine-notebook/test_notebook.py
+
       # Node lives in this job rather than a new one: the end-to-end check below needs BOTH the Rust
       # binaries and the SDK, and installing Node here is far cheaper than installing Rust in the ui
       # job. No new job, so the five required check names stay exactly as the ruleset lists them.
