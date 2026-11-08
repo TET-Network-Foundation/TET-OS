@@ -121,8 +121,32 @@ Two things this found, both fixed in `notebook.py` only:
   missing rather than "not on this node". It now asks about every record, and a registry record
   made elsewhere counts only if it re-verifies here as this device's hash-only record of it.
 
-Not tested against a node yet: an anchored record (that needs a mined file-stamp transaction); the
-anchor check is covered by the guard against a stub.
+Not tested against a node yet: an anchored record (that needs a mined file-stamp transaction; see
+"Anchoring" below). The anchor check is covered by the guard against a stub.
+
+## Anchoring: not possible from the notebook yet
+
+`verify --node` re-checks an anchor, but the notebook cannot make one. Checked 2026-11-08 against
+`main` (d06d799): no `tet-cli` command and no REST route stamps a given hash on its own. Every way
+in needs a signature that only browser code makes today, and the notebook adds no cryptography.
+
+Where the stamp is built today (all in `tet-network/ui/app/lib/`):
+
+- `hash_stamp.ts`, `anchorRecord()`: the whole flow for a hash-only record. Upload the record,
+  encrypted to its signer (`/files/upload`); get its `FileFee` transaction submitted; wait until that
+  transaction is mined (`checkStamp()`); then give the node its hash (`publishAnchor()` in
+  `proof_code.ts`, `POST /sigs/publish` with `anchor_tx`).
+- `files_fee.ts`, `settleFileFee()`: the `FileFee` transaction. `"demo-sponsor"` posts a
+  `SponsorFeeRequestV1`, signed by the file's sender, to `POST /demo/files/sponsor-fee`
+  (`tet-core/src/demo_sponsor.rs`; only for files uploaded through that node, and only where a
+  sponsor is configured). `"self"` signs a `TxV1::FileFee` and posts it to `POST /files/fee`.
+- `files.ts`, `buildFileFeeEnvelopeV1()`: builds and hybrid-signs that `TxV1::FileFee`.
+- `sign_anything.ts`, `stampFileId()`: the `file_id` a stamp carries, the leading 16 bytes of
+  the record's SHA-256 as a UUID (`tet-core/src/sigs.rs`, `stamp_file_id()`, is the same).
+
+What it would take: a `tet-cli` command that signs a `TxV1::FileFee` (or a `SponsorFeeRequestV1`)
+with the same signer the node already verifies. That is a change to `tet-cli`, so it is the owner's
+call, and it is not in this tool.
 
 ## The guard
 
