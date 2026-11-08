@@ -81,9 +81,54 @@ page does (`checkStamp`): a mined file-stamp transaction in a canonical block th
 record. An anchor places a record before a block on that node's chain; blocks carry no time yet.
 Without `--node`, verify prints `stamp: not checked (no node)`.
 
+## Tested against a local node
+
+2026-11-07, on a Mac: a dev node from this repository (`docker compose -f docker-compose.yml -f
+docker-compose.dev.yml up -d --build tet-core`, P2P off, so it joined nothing), tet-core at 5dd6895.
+A fresh folder and a new test-only device key. The phrase and `device.key` are not shown here.
+
+```console
+$ curl -s localhost:5010/chain
+{"chain_id":"tet-local-dev","genesis_hash":"0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36"}
+$ export TET_CHAIN_ID=tet-local-dev TET_GENESIS_HASH=0x9d6ccb13…efbb36    # exactly as /chain gives it
+$ notebook.py init --dir $D
+tet-ed25519:9ed6f592718e89b309a7cda44f80fb0a68f14709e37893e1327c7a834169ea7a
+$ notebook.py record --dir $D --source loadavg      # three times
+seq 1: 12.25 load-1m
+seq 2: 12.25 load-1m
+seq 3: 12.25 load-1m
+$ notebook.py publish --dir $D --seq 2 --node http://127.0.0.1:5010
+published record 2: TET-26XN-A7J1
+$ notebook.py verify --dir $D --node http://127.0.0.1:5010
+VALID
+  3 records, all signed by tet-ed25519:9ed6f592718e89b309a7cda44f80fb0a68f14709e37893e1327c7a834169ea7a
+  … (the Shows / Does not show lists)
+stamp: record 1: not on this node
+stamp: record 2: published, not anchored
+stamp: record 3: not on this node
+$ notebook.py verify --dir $D
+VALID
+  …
+stamp: not checked (no node)
+```
+
+Two things this found, both fixed in `notebook.py` only:
+- `init` refused the node's own genesis hash, because `/chain` writes it with `0x`. The signature
+  binds that string as written, so the notebook now keeps it exactly as given. With the `0x`
+  stripped by hand the node refuses the record: `the record's signatures don't verify:
+  Ed25519("Ed25519Failed")`.
+- `verify --node` listed only the records this notebook had published, so records 1 and 3 were
+  missing rather than "not on this node". It now asks about every record, and a registry record
+  made elsewhere counts only if it re-verifies here as this device's hash-only record of it.
+
+Not tested against a node yet: an anchored record (that needs a mined file-stamp transaction); the
+anchor check is covered by the guard against a stub.
+
 ## The guard
 
 `python3 tools/machine-notebook/test_notebook.py` (CI's rust job, and `scripts/run_guards.sh`). Three
 records under a temporary key; one byte flipped, two records swapped, one deleted, and one re-signed
-with a `prev` that skips its predecessor must each read INVALID for their own reason. It needs a built
+with a `prev` that skips its predecessor must each read INVALID for their own reason. It also checks
+the chain binding is kept as `/chain` gives it, the publish body, and `verify --node` against a stub
+(not on the node, published, anchored, an anchor for another file, another key's record). It needs a built
 `tet-cli` and fails, rather than skips, without one.
