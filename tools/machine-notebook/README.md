@@ -58,7 +58,7 @@ is all it needs.
 ## What a record holds
 
 ```json
-{"kind":"tet_machine_log_v1","local_clock":"2026-11-07T18:52:52Z","prev":"<sha256 of the record before, or 64 zeros>","reading":{"source":"loadavg","unit":"load-1m","value":1.92},"seq":1,"v":1}
+{"clock_utc":"2026-11-07T18:52:52Z","kind":"tet_machine_log_v1","prev":"<sha256 of the record before, or 64 zeros>","reading":{"source":"loadavg","unit":"load-1m","value":1.92},"seq":1,"v":1}
 ```
 
 Canonical JSON (sorted keys, no spaces) in `records/<seq>.json`, its envelope in

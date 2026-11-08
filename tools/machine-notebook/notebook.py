@@ -215,7 +215,7 @@ def record_once(a):
         "prev": chain[-1] if chain else ZERO,
         "reading": read_source(a.source),
         # UTC, so the record carries no time-zone offset (an offset narrows down where a device is).
-        "local_clock": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "clock_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     }
     body = canonical(record)
     with open(path, "wb") as f:
