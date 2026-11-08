@@ -90,7 +90,7 @@ check("the marks match the files and the records", () => marksMatch(marks));
 check("control: a file hash that doesn't match is caught", () => assert.throws(() => marksMatch({ ...marks, pdf: { ...marks.pdf, sha256: "0".repeat(64) } })));
 
 const allText = (p) =>
-  [p.TITLE, p.SUBTITLE, p.ABSTRACT, ...p.SECTIONS.flatMap((s) => [s.title, ...s.body.flatMap((b) => ("p" in b ? [b.p] : "ul" in b ? b.ul : [...b.table.head, ...b.table.rows.flat()]))])];
+  [p.TITLE, p.SUBTITLE, ...(p.ERRATA ? [p.ERRATA] : []), p.ABSTRACT, ...p.SECTIONS.flatMap((s) => [s.title, ...s.body.flatMap((b) => ("p" in b ? [b.p] : "ul" in b ? b.ul : [...b.table.head, ...b.table.rows.flat()]))])];
 const RULES = [
   ["a \"first\" claim", /\bfirst\b|世界初|初の/i],
   ["money wording", MONEY],

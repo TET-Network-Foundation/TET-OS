@@ -27,7 +27,8 @@ export function paperHtml(extra = "") {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(paper.TITLE)}</title><style>${CSS}</style></head><body>
 <h1>${esc(paper.TITLE)}</h1>
-<p class="meta">${esc(paper.SUBTITLE)} · ${esc(paper.DATE)} · written against commit <a href="${REPO}/tree/${paper.WRITTEN_AGAINST}">${paper.WRITTEN_AGAINST}</a> · the public seeds run ${esc(paper.SEEDS_RUN)} · this is a testnet; data may be reset</p>
+${paper.ERRATA ? `<p class="meta"><strong>Errata</strong> ${inline(paper.ERRATA.replace(/^Errata, /, ""))}</p>
+` : ""}<p class="meta">${esc(paper.SUBTITLE)} · ${esc(paper.DATE)} · written against commit <a href="${REPO}/tree/${paper.WRITTEN_AGAINST}">${paper.WRITTEN_AGAINST}</a> · the public seeds run ${esc(paper.SEEDS_RUN)} · this is a testnet; data may be reset</p>
 <p class="abstract">${inline(paper.ABSTRACT)}</p>
 ${paper.SECTIONS.map(
   (s) =>

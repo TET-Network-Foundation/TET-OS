@@ -32,6 +32,23 @@
         "file": "paper/tet-technical-paper-v1.pdf",
         "record": "paper/marks/v1/pdf.record.json"
       }
+    },
+    {
+      "version": "2",
+      "date": "2026-10-10",
+      "superseded_by": "2.1",
+      "html": {
+        "code": "TET-03ZE-2DVW",
+        "sha256": "1c6e202aee9e67a79f521ed1fb5a3355a2262b1c3d6f2025dc8919d9efa9cba1",
+        "file": "paper/tet-technical-paper-v2.html",
+        "record": "paper/marks/v2/html.record.json"
+      },
+      "pdf": {
+        "code": "TET-WF10-23HM",
+        "sha256": "bfea406cab426190c3726dbe3baef03a98cd06474ac8f4efdf8b33b3e956b283",
+        "file": "paper/tet-technical-paper-v2.pdf",
+        "record": "paper/marks/v2/pdf.record.json"
+      }
     }
   ]
 }

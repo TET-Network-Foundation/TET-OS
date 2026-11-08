@@ -1057,6 +1057,7 @@ export const ZH_HK: Record<string, string> = {
   "(the code)": "（程式碼）",
   "Download the PDF (English)": "下載 PDF（英文）",
   "proof code {code} (marks this PDF file)": "證明碼 {code}（標記此 PDF 檔案）",
+  "Version 2 (2026-10-10, superseded, kept):": "第 2 版（2026-10-10，已被取代，保留）：",
   "Version 1 (2026-10-09, superseded, kept):": "第 1 版（2026-10-09，已被取代，保留）：",
   "proof codes {a} and {b}": "證明碼 {a} 和 {b}",
   "Contents": "目錄",
