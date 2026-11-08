@@ -176,7 +176,7 @@ export default function WalletUnlockBody({
           <p className="text-xs font-semibold text-black">Enter PIN to Unlock</p>
           <p className="text-xs text-black/75 leading-snug">
             {persistedWalletKind === "vault"
-              ? "Enter the same master password you used on /setup (8+ characters, not only digits)."
+              ? "Enter the master password of the wallet you created earlier on this device (8+ characters, not only digits)."
               : persistedWalletKind === "legacy_plain"
                 ? "This device has a legacy wallet — enter your PIN (6–8 digits). It will upgrade to AES-GCM storage."
                 : "Encrypted wallet on this device — enter your 6–8 digit PIN. Keys stay in memory only after unlock."}
