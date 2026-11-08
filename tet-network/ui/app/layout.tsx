@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { LanguageProvider } from "./context/LanguageContext";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -15,9 +14,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="bg-[#D4D0C8] text-black font-sans">
-        <LanguageProvider>
-          <div className="relative z-0">{children}</div>
-        </LanguageProvider>
+        <div className="relative z-0">{children}</div>
       </body>
     </html>
   );

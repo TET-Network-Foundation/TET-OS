@@ -16,9 +16,10 @@
 //    "Testnet TET is a practice unit. It has no monetary value and cannot be bought."
 //    Control: the line itself doesn't trip check 1; a plan without it is caught.
 //
-// Not covered, on purpose: the older home, "participate" and /os pages (app/i18n/translations.ts,
-// app/os). The demo serves only /try (deploy/demo/Caddyfile), and their wording is a separate
-// decision; see the PR.
+// Not covered, on purpose: the old wallet home (app/page.tsx) and /os (app/os). The demo serves
+// neither (deploy/demo/Caddyfile sends / to /try), and their wording is a separate decision. The
+// older "understand", "participate" and "setup" pages and their dictionary
+// (app/i18n/translations.ts) were removed on 2026-11-08.
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import assert from "node:assert/strict";
