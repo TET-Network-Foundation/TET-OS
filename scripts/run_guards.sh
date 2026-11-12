@@ -12,7 +12,8 @@
 # named as skipped, never silently dropped.
 #
 # Exit codes: 0 every guard green · 1 a guard is red (it stops there: the guards after it are NOT
-# run) · 2 the guards couldn't be run at all (no node_modules, no ci.yml). Never 0 unless all ran green.
+# run) · 2 the guards couldn't be run at all (no node_modules, no ci.yml, untracked files). Never 0 unless
+# all ran green.
 #
 # CLAUDE.md: "A push never happens while any guard is red." A loop over branches runs this per branch
 # and stops at the first non-zero exit.
@@ -22,6 +23,21 @@ CI="$ROOT/.github/workflows/ci.yml"
 UI="$ROOT/tet-network/ui"
 [ -f "$CI" ] || { echo "run_guards: no $CI" >&2; exit 2; }
 [ -d "$UI/node_modules" ] || { echo "run_guards: $UI/node_modules is missing; run npm ci --ignore-scripts there first" >&2; exit 2; }
+
+# Untracked files make a green run meaningless. Guards that scan the repository read `git ls-files`,
+# so a file that is not committed yet is not checked at all: on 2026-11-12 four new guards each
+# reported "all green" while their own file was untracked, and went red once it was committed. So a
+# run with untracked (not ignored) files is not run: exit 2, naming them. Commit first, then run.
+untracked=$(cd "$ROOT" && git ls-files --others --exclude-standard)
+if [ -n "$untracked" ]; then
+  n=$(printf '%s\n' "$untracked" | wc -l | tr -d ' ')
+  list=$(printf '%s\n' "$untracked" | head -20 | tr '\n' ' ')
+  [ "$n" -gt 20 ] && list="$list(and $((n - 20)) more)"
+  echo "run_guards: untracked files not scanned: $list; commit or stash first" >&2
+  exit 2
+fi
+# The Python guards must not leave __pycache__ behind, which would stop the next run.
+export PYTHONDONTWRITEBYTECODE=1
 
 # `TET_GUARDS_LIST` (tests only): a file of "dir<TAB>command" lines used instead of ci.yml.
 if [ -n "${TET_GUARDS_LIST:-}" ]; then
