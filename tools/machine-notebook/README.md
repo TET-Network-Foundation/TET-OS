@@ -16,6 +16,7 @@ Shows:
 - which key signed each record
 - that the records are in this order
 - that each record existed before the next one in the same chain
+- that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires
 
 Does not show:
 - that the reading is true
@@ -23,6 +24,7 @@ Does not show:
 - where the device was
 - who operates the device
 - that the key was not copied
+- that a permit was used only here: it does not stop a copied key from writing a second log
 
 ## The device key
 
@@ -42,6 +44,8 @@ python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source load
 echo '{"value": 21.5, "unit": "celsius"}' | python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source stdin-json
 python3 tools/machine-notebook/notebook.py run    --dir ~/notebook --source loadavg --every 60   # stops at 22:00
 python3 tools/machine-notebook/notebook.py verify --dir ~/notebook
+python3 tools/machine-notebook/notebook.py permit --dir ~/notebook --action open-valve --expires-seq 20   # prints the permit id
+python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit <permit id>
 ```
 
 `init` saves the chain in `<dir>/chain.json`; every later command uses it, so a log is always signed
@@ -65,7 +69,32 @@ Canonical JSON (sorted keys, no spaces) in `records/<seq>.json`, its envelope in
 `records/<seq>.json.sig.json` (payload type `application/vnd.tet.machine-log+json`), and its SHA-256
 appended to `chain.txt`. The clock is the device's, in UTC, so a record carries no time-zone offset.
 No hostname, IP address, location or name goes into a record or a log line. `stdin-json` accepts
-exactly `{"value", "unit"}`, so nothing else can ride along.
+exactly `{"value", "unit"}`, so nothing else can ride along. A record that cites a permit also carries
+`"permit":"<permit id>"`.
+
+## One-time permits
+
+A permit is the device's own signed note that one action may be recorded once. `permit` writes it and
+prints its id; `record --permit <id>` cites it. A record cites at most one.
+
+```json
+{"action":"open-valve","expires_seq":20,"kind":"tet_machine_permit_v1","permit_id":"<16 random bytes, hex>"}
+```
+
+Canonical JSON in `permits/<permit_id>.json`, its envelope in `permits/<permit_id>.json.sig.json`
+(payload type `application/vnd.tet.machine-permit+json`), signed with `tet-cli agent sign` like a
+record and checked with `tet-cli agent verify`. `expires_seq` is the last record number that may cite
+the permit. `--action` is a short name (letters, digits, `. _ -`), so no name or place rides along.
+
+`verify` reads the log INVALID if any permit is cited twice, cited after its `expires_seq`, or not
+signed by this device's key. It also refuses a cited permit that is missing, was edited after signing,
+was signed as something other than a permit, or sits under a file name that is not its own id.
+`record` makes the same check before it writes anything, because one bad citation would leave an
+append-only log INVALID for good.
+
+What that is worth: a permit limits how often **this key's log** accepts an action. It does not stop
+a copied key from writing a second log that cites the same permit. One-time means once per log, not
+once in the world.
 
 ## Publishing (off unless you name a node)
 
@@ -152,7 +181,10 @@ call, and it is not in this tool.
 
 `python3 tools/machine-notebook/test_notebook.py` (CI's rust job, and `scripts/run_guards.sh`). Three
 records under a temporary key; one byte flipped, two records swapped, one deleted, and one re-signed
-with a `prev` that skips its predecessor must each read INVALID for their own reason. It also checks
+with a `prev` that skips its predecessor must each read INVALID for their own reason. For permits: one
+cited once at its last open seq is VALID; cited twice, cited after `expires_seq`, signed by another
+key, edited after signing, copied under a second name, missing, or signed as a log record, each reads
+INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. It also checks
 the chain binding is kept as `/chain` gives it, the publish body, and `verify --node` against a stub
 (not on the node, published, anchored, an anchor for another file, another key's record). It needs a built
 `tet-cli` and fails, rather than skips, without one.

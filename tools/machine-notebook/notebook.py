@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Machine notebook v0: a device keeps its own signed, chained log of readings. Prototype.
+"""Machine notebook v1: a device keeps its own signed, chained log of readings, and can sign
+one-time permits that a record may cite. Prototype.
 
     python3 notebook.py init    --dir DIR
-    python3 notebook.py record  --dir DIR --source loadavg|cpu-temp|stdin-json
+    python3 notebook.py record  --dir DIR --source loadavg|cpu-temp|stdin-json [--permit PERMIT_ID]
+    python3 notebook.py permit  --dir DIR --action NAME --expires-seq N
     python3 notebook.py run     --dir DIR --source ... --every SECONDS [--until HH:MM]
     python3 notebook.py verify  --dir DIR [--node URL]
     python3 notebook.py publish --dir DIR --seq N --node URL
@@ -20,6 +22,8 @@ Layout of DIR:
   records/<seq>.json.sig.json   its envelope (payload type application/vnd.tet.machine-log+json)
   records/<seq>.hash.sig.json   only after `publish`: the hash-only record the node stores
   chain.txt               the SHA-256 of each record, one per line, in order
+  permits/<permit_id>.json           a one-time permit, canonical JSON
+  permits/<permit_id>.json.sig.json  its envelope (payload type application/vnd.tet.machine-permit+json)
 
 Privacy: a record holds the reading, its unit, a sequence number, the previous record's hash and
 the device clock in UTC. No hostname, IP, location or name is written to a record or printed.
@@ -42,6 +46,11 @@ import urllib.request
 
 KIND = "tet_machine_log_v1"
 PAYLOAD_TYPE = "application/vnd.tet.machine-log+json"
+# A one-time permit: the device key signs it, a record may cite its id, and verify refuses a log that
+# cites one twice, after expires_seq, or that this device's key did not sign.
+PERMIT_KIND = "tet_machine_permit_v1"
+PERMIT_PAYLOAD_TYPE = "application/vnd.tet.machine-permit+json"
+PERMIT_KEYS = {"kind", "permit_id", "action", "expires_seq"}
 # The node's registry (tet-core/src/sigs.rs): a published record is a hash-only envelope, and the
 # node accepts it only with its signer's consent over that record's exact SHA-256.
 HASH_PAYLOAD_TYPE = "application/vnd.tet.sha256"
@@ -53,6 +62,7 @@ SHOWS = [
     "which key signed each record",
     "that the records are in this order",
     "that each record existed before the next one in the same chain",
+    "that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires",
 ]
 DOES_NOT_SHOW = [
     "that the reading is true",
@@ -60,6 +70,7 @@ DOES_NOT_SHOW = [
     "where the device was",
     "who operates the device",
     "that the key was not copied",
+    "that a permit was used only here: it does not stop a copied key from writing a second log",
 ]
 
 
@@ -160,6 +171,104 @@ def cmd_init(a):
     print(keyid)
 
 
+# ── permits ───────────────────────────────────────────────────────────────────────────────────
+
+
+def device_keyid(d):
+    p = os.path.join(d, "device.keyid")
+    if not os.path.exists(p):
+        return None
+    with open(p) as f:
+        return f.read().strip()
+
+
+def cmd_permit(a):
+    d = a.dir
+    if not os.path.exists(os.path.join(d, "device.key")):
+        raise Fail(f"no device key in {d}; run init before this")
+    # A short name for the action, not a sentence: like a record, a permit carries no name or place.
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", a.action):
+        raise Fail("--action is a short name: 1 to 64 of A-Z a-z 0-9 . _ -")
+    if a.expires_seq < 1:
+        raise Fail("--expires-seq is the last record number that may cite the permit; it must be 1 or more")
+    pid = os.urandom(16).hex()
+    permit = {"kind": PERMIT_KIND, "permit_id": pid, "action": a.action, "expires_seq": a.expires_seq}
+    os.makedirs(os.path.join(d, "permits"), exist_ok=True)
+    path = os.path.join(d, "permits", f"{pid}.json")
+    with open(path, "xb") as f:
+        f.write(canonical(permit))
+    try:
+        sign(tet_cli(a), d, path, PERMIT_PAYLOAD_TYPE)
+    except Fail:
+        os.remove(path)
+        raise
+    print(pid)
+
+
+def permit_problem(d, cli, pid, seq, used, device):
+    """Why record `seq` may not cite permit `pid`, or None if it may. `used` maps a permit id to the
+    record that already cited it; `device` is the key id this log belongs to. Returns (reason, permit).
+
+    One reason per citation, in this order, so each has exactly one check that can give it: the permit
+    is in the notebook; its envelope verifies over exactly these bytes (tet-cli agent verify); this
+    device's key signed it; it is a permit, and the one the record names; it is still open at this
+    seq; nothing cited it before."""
+    if not isinstance(pid, str) or not re.fullmatch(r"[0-9a-f]{32}", pid):
+        return "permit: not a permit id (32 hex)", None
+    path = os.path.join(d, "permits", f"{pid}.json")
+    sig = path + ".sig.json"
+    if not os.path.exists(path) or not os.path.exists(sig):
+        return f"permit: {pid} is not in this notebook", None
+    rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", sig, "--payload", path], chain_env(d))
+    if rc != 0:
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+        why = next((ln.split(":", 1)[1].strip() for ln in plain.splitlines() if ln.startswith("FAIL")), "tet-cli agent verify refused it")
+        return f"permit: {pid}: signature: {why}", None
+    # Only after tet-cli accepted the envelope: it has checked that each keyid names the key that signed.
+    with open(sig) as f:
+        env = json.load(f)
+    if env.get("payloadType") != PERMIT_PAYLOAD_TYPE:
+        return f"permit: {pid}: payload type is {env.get('payloadType')!r}, not {PERMIT_PAYLOAD_TYPE}", None
+    signer = ed_keyid(env)
+    if device is None or signer != device:
+        return f"permit: {pid} is signed by {signer}, not this device's {device}", None
+    with open(path, "rb") as f:
+        body = f.read()
+    try:
+        permit = json.loads(body)
+    except ValueError:
+        permit = None
+    if (
+        not isinstance(permit, dict) or set(permit) != PERMIT_KEYS or permit["kind"] != PERMIT_KIND or canonical(permit) != body
+        or not isinstance(permit["action"], str) or type(permit["expires_seq"]) is not int
+    ):
+        return f"permit: {pid} is not a {PERMIT_KIND} permit", None
+    # The id inside the signed bytes, not the file name, is the permit: a copy of one permit under a
+    # second name must not count as a second permit.
+    if permit["permit_id"] != pid:
+        return f"permit: {pid}.json holds permit {permit['permit_id']}", None
+    if seq > permit["expires_seq"]:
+        return f"permit: {pid} expired after seq {permit['expires_seq']}", permit
+    if pid in used:
+        return f"permit: {pid} was already used by record {used[pid]}", permit
+    return None, permit
+
+
+def cited_permits(d):
+    """{permit id: seq of the first record citing it}, read from the records on disk."""
+    used = {}
+    rec_dir = os.path.join(d, "records")
+    for seq in sorted(int(m.group(1)) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))):
+        try:
+            with open(os.path.join(rec_dir, f"{seq}.json"), "rb") as f:
+                pid = json.loads(f.read()).get("permit")
+        except (ValueError, AttributeError):
+            continue
+        if isinstance(pid, str):
+            used.setdefault(pid, seq)
+    return used
+
+
 # ── record ────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -217,6 +326,14 @@ def record_once(a):
         # UTC, so the record carries no time-zone offset (an offset narrows down where a device is).
         "clock_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     }
+    pid = getattr(a, "permit", None)
+    if pid is not None:
+        # The same check verify makes, before anything is written: a log is append-only, so one record
+        # citing a used or expired permit would leave the whole log INVALID for good.
+        why, _ = permit_problem(d, tet_cli(a), pid, seq, cited_permits(d), device_keyid(d))
+        if why:
+            raise Fail(f"not recorded: {why}")
+        record["permit"] = pid
     body = canonical(record)
     with open(path, "wb") as f:
         f.write(body)
@@ -227,7 +344,7 @@ def record_once(a):
         raise
     with open(os.path.join(d, "chain.txt"), "a") as f:
         f.write(sha256_hex(body) + "\n")
-    print(f"seq {seq}: {record['reading']['value']} {record['reading']['unit']}")
+    print(f"seq {seq}: {record['reading']['value']} {record['reading']['unit']}" + (f" (permit {pid})" if pid else ""))
 
 
 def cmd_record(a):
@@ -264,7 +381,7 @@ def check_chain(d, cli):
         (int(m.group(1)), n) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))
     ) if os.path.isdir(rec_dir) else []
     if not names:
-        return [(None, "no records")], []
+        return [(None, "no records")], [], []
     chain = chain_lines(d)
     if len(chain) != len(names):
         problems.append((None, f"chain.txt lists {len(chain)} records, records/ holds {len(names)}"))
@@ -274,8 +391,11 @@ def check_chain(d, cli):
         with open(kp) as f:
             want_keyid = f.read().strip()
     signers = []
+    used = {}  # permit id -> the record that cited it first
+    uses = []  # (seq, permit) for every citation that checked out
     prev_hash = ZERO
     for i, (n, name) in enumerate(names, start=1):
+        k = None
         path = os.path.join(rec_dir, name)
         with open(path, "rb") as f:
             body = f.read()
@@ -320,10 +440,20 @@ def check_chain(d, cli):
             problems.append((n, "prev: does not name the record before it"))
         if i <= len(chain) and chain[i - 1] != h:
             problems.append((n, "chain.txt: hash differs from the record"))
+        # 3. the permit it cites, if any: this device's own, still open at this seq, not cited before
+        if isinstance(rec, dict) and "permit" in rec:
+            pid = rec["permit"]
+            why, permit = permit_problem(d, cli, pid, i, used, want_keyid or k)
+            if why:
+                problems.append((n, why))
+            else:
+                uses.append((n, permit))
+            if isinstance(pid, str):
+                used.setdefault(pid, n)
         prev_hash = h
     if len(set(signers)) > 1:
         problems.append((None, f"key: {len(set(signers))} different keys signed this log"))
-    return problems, signers
+    return problems, signers, uses
 
 
 def get_json(url):
@@ -412,12 +542,14 @@ def check_stamps(d, node, cli):
 
 
 def cmd_verify(a):
-    problems, signers = check_chain(a.dir, tet_cli(a))
+    problems, signers, uses = check_chain(a.dir, tet_cli(a))
     print("INVALID" if problems else "VALID")
     for seq, why in problems:
         print(f"  {'record ' + str(seq) if seq is not None else 'log'}: {why}")
     if not problems:
         print(f"  {len(signers)} records, all signed by {signers[0]}")
+        for seq, permit in uses:
+            print(f"  permit {permit['permit_id']} ({permit['action']}): used once, by record {seq}; open until seq {permit['expires_seq']}")
     print("Shows:")
     for s in SHOWS:
         print(f"  - {s}")
@@ -498,6 +630,11 @@ def main(argv=None):
     s = sub.add_parser("record")
     s.add_argument("--dir", required=True)
     s.add_argument("--source", required=True, choices=["loadavg", "cpu-temp", "stdin-json"])
+    s.add_argument("--permit", help="cite this one-time permit; refused if it is unknown, expired, or already cited")
+    s = sub.add_parser("permit")
+    s.add_argument("--dir", required=True)
+    s.add_argument("--action", required=True, help="a short name for what the permit allows once")
+    s.add_argument("--expires-seq", type=int, required=True, help="the last record number that may cite it")
     s = sub.add_parser("run")
     s.add_argument("--dir", required=True)
     s.add_argument("--source", required=True, choices=["loadavg", "cpu-temp", "stdin-json"])
@@ -516,7 +653,7 @@ def main(argv=None):
     if a.cmd == "run" and a.source == "stdin-json":
         p.error("run reads a source repeatedly; stdin-json is for record")
     try:
-        return {"init": cmd_init, "record": cmd_record, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish}[a.cmd](a) or 0
+        return {"init": cmd_init, "record": cmd_record, "permit": cmd_permit, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish}[a.cmd](a) or 0
     except Fail as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
