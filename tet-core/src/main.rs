@@ -313,6 +313,10 @@ async fn main() -> Result<(), AnyErr> {
             std::process::exit(2);
         }
     }
+    if let Err(e) = crate::genesis::check_public_sync_trust(&|k| std::env::var(k).ok()) {
+        eprintln!("[FATAL] {e}");
+        std::process::exit(2);
+    }
     if config.is_mainnet {
         let allow_mock_zk = std::env::var("TET_ALLOW_MOCK_ZK")
             .ok()

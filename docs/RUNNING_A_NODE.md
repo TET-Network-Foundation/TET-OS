@@ -729,7 +729,10 @@ the offline verifier) name that pair explicitly and still check offline.
 `TET_CHAIN_ID` is set and is neither `tet-dev-local` nor `tet-local-dev`, and `TET_GENESIS_FILE` names
 a JSON file `{"chain_id", "founder_wallet_id", "treasury_address", "genesis_hash"}` for that chain,
 with a founder and treasury that are not the dev ones and a `genesis_hash` equal to the one the node
-recomputes. A founder, treasury or `TET_GENESIS_HASH` set in the environment must agree with the file.
+recomputes. The founder (`TET_GENESIS_FOUNDER_WALLET_ID`) and `TET_TREASURY_ADDRESS` must be set and
+equal the file; `TET_GENESIS_HASH`, when set, must agree. A public node also never trusts every peer
+for chain sync: a follower must set `TET_PRODUCER_PEERS=local-wallet=<PeerId>` or
+`TET_SYNC_TRUSTED_PEERS`, and a producer must set `TET_VALIDATOR_IDS` to itself.
 
 ---
 

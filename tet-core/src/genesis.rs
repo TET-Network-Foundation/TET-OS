@@ -196,6 +196,32 @@ pub fn check_public_chain(env: &dyn Fn(&str) -> Option<String>) -> Result<Option
     Ok(Some(g))
 }
 
+/// With `TET_ENV=testnet`, a public node never trusts every peer for chain sync (p2p `SyncTrust`):
+/// a follower (P2P on, not mining) must pin its producer (`TET_PRODUCER_PEERS`) or name trusted
+/// relays (`TET_SYNC_TRUSTED_PEERS`), and a producer must be the sole validator by explicit
+/// configuration (`TET_VALIDATOR_IDS`). The flags are read exactly as the node reads them: P2P is
+/// on unless `TET_ENABLE_P2P` is set to something other than 1/true. Any other `TET_ENV` changes
+/// nothing (a local dev network may trust its peers).
+pub fn check_public_sync_trust(env: &dyn Fn(&str) -> Option<String>) -> Result<(), String> {
+    let get = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    if get("TET_ENV").map(|v| v.to_ascii_lowercase()).as_deref() != Some("testnet") {
+        return Ok(());
+    }
+    let p2p = env("TET_ENABLE_P2P").is_none_or(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+    if !p2p {
+        return Ok(());
+    }
+    let mines = matches!(env("TET_AUTO_MINE").as_deref().map(str::trim), Some("1" | "true" | "TRUE" | "yes" | "YES"));
+    if mines {
+        if get("TET_VALIDATOR_IDS").is_none() {
+            return Err("TET_ENV=testnet: a producer must set TET_VALIDATOR_IDS (itself, the sole validator), or chain sync trusts every peer".into());
+        }
+    } else if get("TET_PRODUCER_PEERS").is_none() && get("TET_SYNC_TRUSTED_PEERS").is_none() {
+        return Err("TET_ENV=testnet: a follower must pin its producer (TET_PRODUCER_PEERS=local-wallet=<PeerId>) or set TET_SYNC_TRUSTED_PEERS, or chain sync trusts every peer".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -346,5 +372,27 @@ mod tests {
         assert!(check(&env).unwrap_err().contains("TET_TREASURY_ADDRESS is unset or differs"));
         let (_d, env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[("TET_GENESIS_FOUNDER_WALLET_ID", GENESIS_FOUNDER_DEV_PUBLIC_HEX)]);
         assert!(check(&env).unwrap_err().contains("founder wallet in the environment differs"));
+    }
+
+    fn trust(pairs: &[(&str, &str)]) -> Result<(), String> {
+        let env: std::collections::HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        check_public_sync_trust(&|k| env.get(k).cloned())
+    }
+
+    #[test]
+    fn a_public_node_never_trusts_every_peer_for_sync() {
+        let t = ("TET_ENV", "testnet");
+        // a follower: P2P on (unset counts as on), not mining
+        assert!(trust(&[t]).unwrap_err().contains("follower must pin its producer"));
+        assert!(trust(&[t, ("TET_ENABLE_P2P", "1"), ("TET_PRODUCER_PEERS", "")]).unwrap_err().contains("follower"));
+        assert_eq!(trust(&[t, ("TET_PRODUCER_PEERS", "local-wallet=12D3KooWExample")]), Ok(()));
+        assert_eq!(trust(&[t, ("TET_SYNC_TRUSTED_PEERS", "12D3KooWExample")]), Ok(()));
+        // a producer
+        assert!(trust(&[t, ("TET_AUTO_MINE", "1")]).unwrap_err().contains("producer must set TET_VALIDATOR_IDS"));
+        assert_eq!(trust(&[t, ("TET_AUTO_MINE", "1"), ("TET_VALIDATOR_IDS", "local-wallet")]), Ok(()));
+        // P2P off, or not a public node: nothing required
+        assert_eq!(trust(&[t, ("TET_ENABLE_P2P", "0")]), Ok(()));
+        assert_eq!(trust(&[]), Ok(()));
+        assert_eq!(trust(&[("TET_ENV", "dev")]), Ok(()));
     }
 }
