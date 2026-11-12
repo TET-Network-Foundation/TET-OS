@@ -91,6 +91,30 @@ const files = tracked.map((p) => {
   }
 });
 
+// NOT_CLAIMS may hold only guard scripts, whose controls quote the banned phrases on purpose
+// (owner, 2026-11-12): files matching tet-network/ui/scripts/*_guard.mjs, plus tet-core/src/ai_filter.rs,
+// pinned by name because it predates the rule. Each entry must also be a committed file.
+const NOT_CLAIMS_PINNED = new Set(["tet-core/src/ai_filter.rs"]);
+const GUARD_SCRIPT = /^tet-network\/ui\/scripts\/[A-Za-z0-9_]+_guard\.mjs$/;
+function notClaimsProblems(list, trackedFiles) {
+  return [...list].flatMap((p) => [
+    ...(NOT_CLAIMS_PINNED.has(p) || GUARD_SCRIPT.test(p) ? [] : [`${p}: not a scripts/*_guard.mjs file`]),
+    ...(trackedFiles.includes(p) ? [] : [`${p}: not a committed file`]),
+  ]);
+}
+await check("NOT_CLAIMS lists only committed scripts/*_guard.mjs files (and ai_filter.rs, pinned by name)", () => {
+  const bad = notClaimsProblems(NOT_CLAIMS, tracked);
+  assert.deepEqual(bad, [], bad.join("\n     "));
+});
+await check("control: a page, a non-guard script, or a missing file in NOT_CLAIMS is caught", () => {
+  const extra = ["tet-network/ui/app/try/page.tsx", "tet-network/ui/scripts/build_manifest.mjs", "tet-network/ui/scripts/nothing_here_guard.mjs"];
+  assert.deepEqual(notClaimsProblems(new Set([...NOT_CLAIMS, ...extra]), [...tracked, extra[0], extra[1]]), [
+    "tet-network/ui/app/try/page.tsx: not a scripts/*_guard.mjs file",
+    "tet-network/ui/scripts/build_manifest.mjs: not a scripts/*_guard.mjs file",
+    "tet-network/ui/scripts/nothing_here_guard.mjs: not a committed file",
+  ]);
+});
+
 await check("SECURITY: no file claims untraceable, IP-hidden or complete anonymity", () => {
   const found = overclaims(files);
   assert.equal(found.length, 0, found.join("\n     "));
