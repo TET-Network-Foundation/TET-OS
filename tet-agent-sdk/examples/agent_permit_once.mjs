@@ -80,7 +80,7 @@ try {
   const forged = nb(["verify"]);
   // Exactly one problem, the reuse: the forged record is otherwise well-formed and validly signed.
   const problems = forged.stdout.split("\n").filter((l) => /^  (record \d+|log):/.test(l));
-  expect(forged.status === 1 && problems.length === 1 && problems[0].includes(`permit: ${permitId} already used by record`), `forged second use: INVALID (${problems.join("; ").trim()})`);
+  expect(forged.status === 1 && problems.length === 1 && problems[0].includes(`permit: ${permitId} was already used by record`), `forged second use: INVALID (${problems.join("; ").trim()})`);
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
