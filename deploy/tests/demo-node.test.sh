@@ -53,6 +53,20 @@ refuses "a file for another chain" "is for chain"               TET_NODE_ROLE=se
 refuses "the dev founder"        "dev founder"                  TET_NODE_ROLE=seed TET_CHAIN_ID=tet-testnet-2 TET_GENESIS_FILE="$G/devfounder.json"
 refuses "the dev treasury"       "dev treasury"                 TET_NODE_ROLE=seed TET_CHAIN_ID=tet-testnet-2 TET_GENESIS_FILE="$G/devtreasury.json"
 
+# A producer is the sole validator by explicit configuration, so chain sync trusts no unsolicited
+# peer: the demo-producer overlay sets it, and provision-seed.sh writes it for every producer.
+# Text checks (no Docker needed); control: the overlay without the line is caught.
+# shellcheck disable=SC2016  # literal script text
+producer_trust() { # $1 overlay text, $2 provision text
+  grep -qE '^\s+TET_VALIDATOR_IDS: "local-wallet"' <<<"$1" || echo "overlay: no TET_VALIDATOR_IDS"
+  grep -q 'VALIDATOR_IDS="${TET_VALIDATOR_IDS:-local-wallet}"' <<<"$2" || echo "provision: producers get no validator id"
+  grep -q '^${VALIDATOR_IDS:+TET_VALIDATOR_IDS=$VALIDATOR_IDS}$' <<<"$2" || echo "provision: .env does not carry TET_VALIDATOR_IDS"
+}
+PO=$(cat deploy/demo/docker-compose.producer.yml); PS=$(cat deploy/provision-seed.sh)
+p=$(producer_trust "$PO" "$PS")
+if [ -z "$p" ]; then pass "a producer is the explicit sole validator"; else flunk "a producer is the explicit sole validator" "$p"; fi
+if [ -n "$(producer_trust "$(grep -v TET_VALIDATOR_IDS <<<"$PO")" "$PS")" ]; then pass "control: an overlay without it is caught"; else flunk "control: an overlay without it is caught" "not caught"; fi
+
 compose_json() { docker compose -f docker-compose.yml -f "$1" config --format json 2>&1; }
 
 json=$(TET_DEMO_DOMAIN=try.example.org TET_DEMO_ACME_EMAIL=ops@example.org compose_json deploy/demo/docker-compose.demo.yml)

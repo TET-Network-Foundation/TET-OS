@@ -59,7 +59,9 @@ x-tet-core-common: &tet-core-common
     TET_P2P_LISTEN: "${TET_P2P_LISTEN:-/ip4/0.0.0.0/tcp/8002}"
     # Followers accept a gossiped block only from the producer's libp2p PeerId, pinned to the
     # producer id "local-wallet": TET_PRODUCER_PEERS=local-wallet=<PeerId>. No default (the producer
-    # of the network you join prints its PeerId). Inert while TET_ENABLE_P2P=0; empty means off.
+    # of the network you join prints its PeerId). Inert while TET_ENABLE_P2P=0. Empty means chain
+    # sync trusts every peer: fine on a local dev network, refused with TET_ENV=testnet (the node
+    # will not start as a public follower without a pin or TET_SYNC_TRUSTED_PEERS).
     TET_PRODUCER_PEERS: "${TET_PRODUCER_PEERS-}"
     RUST_LOG: "${RUST_LOG:-info}"
   ports:

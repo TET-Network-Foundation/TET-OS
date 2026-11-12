@@ -102,10 +102,15 @@ fi
 # A follower pins the producer's PeerId (as producer "local-wallet") so it accepts gossiped blocks
 # only from it. There is no default: the producer's PeerId is printed when it is provisioned. The
 # producer writes the variable EMPTY: docker-compose.yml would otherwise fill in a follower default.
+# A producer is the chain's sole validator by explicit configuration (its own node id, local-wallet):
+# without it, chain sync would trust every peer (p2p SyncTrust), and the node refuses to start that
+# way with TET_ENV=testnet.
 if [ "$AUTO_MINE" = 1 ]; then
   PRODUCER_PEERS=""
+  VALIDATOR_IDS="${TET_VALIDATOR_IDS:-local-wallet}"
 else
   PRODUCER_PEERS="${TET_PRODUCER_PEERS:-}"
+  VALIDATOR_IDS="${TET_VALIDATOR_IDS:-}"
 fi
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -304,6 +309,7 @@ TET_AUTO_MINE=$AUTO_MINE
 TET_BLOCK_TIME_SEC=12
 ${BOOTNODES:+TET_BOOTNODES=$BOOTNODES}
 TET_PRODUCER_PEERS=$PRODUCER_PEERS
+${VALIDATOR_IDS:+TET_VALIDATOR_IDS=$VALIDATOR_IDS}
 RUST_LOG=info
 
 # --- build profile ($PROFILE) -----------------------------------------------
