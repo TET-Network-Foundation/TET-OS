@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noarchive">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<title>TET testnet is offline</title>
+<style>
+:root{--bg:#ffffff;--fg:#1c1f23;--muted:#5d646d;--rule:#e3e5e8;--link:#0b57d0}
+@media (prefers-color-scheme:dark){:root{--bg:#121417;--fg:#e8eaed;--muted:#a3a9b1;--rule:#2c3036;--link:#8ab4f8}}
+html{background:var(--bg)}
+body{font:17px/1.6 system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;color:var(--fg);background:var(--bg);max-width:40rem;margin:0 auto;padding:2.5rem 1rem 3rem}
+h1{font-size:1.6rem;line-height:1.3;margin:0 0 1rem}
+h2{font-size:1.05rem;margin:1.6rem 0 .3rem}
+p{margin:.4rem 0}
+a{color:var(--link)}
+nav{font-size:.9rem;color:var(--muted);margin-bottom:1.5rem}
+section+section{border-top:1px solid var(--rule);margin-top:2.5rem;padding-top:2rem}
+code{font:.9em ui-monospace,Menlo,monospace}
+.small{font-size:.85rem;color:var(--muted)}
+</style>
+</head>
+<body>
+<nav><a href="#en">English</a> · <a href="#ja" lang="ja">日本語</a></nav>
+
+<section id="en" lang="en">
+<h1>The TET test network is offline</h1>
+<p>The company that hosted our servers closed the account after a payment was late. The servers and
+everything stored on them are gone: the test chain, and the files and messages it held. Nothing on
+them can be brought back.</p>
+
+<h2>What still works</h2>
+<p>A signature made earlier still checks offline. Keep your <code>.sig.json</code> file and the file
+it signs, and open them in the <a href="https://github.com/TET-Network-Foundation/TET-OS/tree/main/tet-network/ui/public/verify">offline verifier</a>:
+it needs no network and no TET server. It shows which key signed, and that the file is exactly the
+one that was signed. It doesn't show who holds the key.</p>
+
+<h2>What can no longer be checked</h2>
+<p>A record that says it existed before block N of the old test chain can no longer be checked
+against a live node: no node serves that chain any more. The signature itself still checks; the
+block it names can't be looked up.</p>
+
+<h2>What comes next</h2>
+<p>A new test chain is planned. It will have its own name and its own genesis, so a record made for
+the old chain can't be mistaken for one on the new chain. Your 12 words still make the same key:
+keep them.</p>
+
+<h2>Code and updates</h2>
+<p><a href="https://github.com/TET-Network-Foundation/TET-OS">github.com/TET-Network-Foundation/TET-OS</a></p>
+<p class="small">This page runs no scripts, loads nothing from anywhere else and sets no cookies.</p>
+</section>
+
+<section id="ja" lang="ja">
+<h1>TET のテストネットワークは停止しています</h1>
+<p>サーバーを預けていた会社が、支払いの遅れを理由にアカウントを閉じました。サーバーと、そこに保存されていたものはすべて失われました。テストチェーンと、そこにあったファイルやメッセージです。サーバー上のものは元に戻せません。</p>
+
+<h2>今も使えること</h2>
+<p>以前に付けた署名は、今もオフラインで確かめられます。<code>.sig.json</code> ファイルと、署名した元のファイルを手元に残し、<a href="https://github.com/TET-Network-Foundation/TET-OS/tree/main/tet-network/ui/public/verify">オフライン検証ツール</a>で開いてください。ネットワークも TET のサーバーも要りません。どの鍵が署名したか、そしてファイルが署名されたものとちょうど同じかを示します。鍵を誰が持っているかは示しません。</p>
+
+<h2>もう確かめられないこと</h2>
+<p>古いテストチェーンの「ブロック N より前にあった」という記録は、もう動いているノードで確かめることができません。そのチェーンを配信するノードがもうないからです。署名そのものは今も確かめられますが、記録が指すブロックは調べられません。</p>
+
+<h2>これから</h2>
+<p>新しいテストチェーンを計画しています。名前もジェネシスも新しくなるので、古いチェーンの記録が新しいチェーンのものと取り違えられることはありません。あなたの 12 語からは今も同じ鍵ができます。大切に保管してください。</p>
+
+<h2>コードとお知らせ</h2>
+<p><a href="https://github.com/TET-Network-Foundation/TET-OS">github.com/TET-Network-Foundation/TET-OS</a></p>
+<p class="small">このページはスクリプトを動かさず、他の場所から何も読み込まず、クッキーも使いません。</p>
+</section>
+</body>
+</html>
