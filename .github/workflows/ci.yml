@@ -579,6 +579,14 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — no price / earn / invest wording
         run: node --experimental-strip-types scripts/try_money_guard.mjs
+
+      # /future (a concept page for one-shot keys, docs/research/ONE_SHOT_TET.md): the banner is exact
+      # in en/ja and on every view, every figure is a sample, send only opens an explanation (no
+      # request, navigation or storage), the three links are there, "token" only in "No token
+      # exists.", no money / prove / untraceable / quantum-proof wording. Controls for each.
+      - if: needs.gate.outputs.code == 'true'
+        name: future page — a concept that moves nothing
+        run: node --experimental-strip-types scripts/future_concept_guard.mjs
       # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
       # case, encoding); ordinary routes still pass. Control.
       - if: needs.gate.outputs.code == 'true'
