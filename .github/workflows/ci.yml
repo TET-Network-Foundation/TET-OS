@@ -713,6 +713,14 @@ jobs:
         name: try page — AI asks a human shows only the owner a manifest proves
         run: node --experimental-strip-types scripts/try_questions_guard.mjs
 
+      # /signin, Sign in with TET (prototype, design not reviewed): the status line in EN and JA;
+      # what a site sees is a key id, a challenge and a verdict, never a name; Shows / Does not show
+      # are tools/sign-in/README.md's lines word for word; the walkthrough is labelled; the page talks
+      # to 127.0.0.1 only and writes no storage; banned wording; translations. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: sign-in demo — what a site sees, loopback only, read-only records
+        run: node --experimental-strip-types scripts/signin_demo_guard.mjs
+
       # Lives in this job because it is the one that already has Node; it checks
       # tet-core's artifact, not the UI's. Keeping it here avoids a fifth job --
       # which would cost another billed minute per push AND have to be mirrored in
