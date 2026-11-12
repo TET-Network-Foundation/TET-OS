@@ -512,6 +512,11 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: verify without TET, Level 2 — a stamp in a chain copy, offline
         run: node --experimental-strip-types scripts/chain_verify_guard.mjs
+      # The UI's genesis binding (chain_binding.ts) against tet-core's vectors: the dev default is
+      # tet-dev-local with its marker, tet-local-dev keeps the old public hash. Controls in its commit.
+      - if: needs.gate.outputs.code == 'true'
+        name: genesis binding — UI matches tet-core vectors
+        run: node --experimental-strip-types scripts/verify-genesis-hash.mjs
       # TetSearch v1: ranking (one voice per member), only verified chains searched, wording. Controls.
       - if: needs.gate.outputs.code == 'true'
         name: TetSearch — ranking, verified sites only, wording
