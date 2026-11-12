@@ -144,8 +144,10 @@ pub struct GenesisFile {
 
 /// With `TET_ENV=testnet`, a node runs a public chain and must say exactly which: an explicit
 /// `TET_CHAIN_ID` (not a dev id), and `TET_GENESIS_FILE` naming that chain, its founder and treasury
-/// (not the dev ones) and its genesis hash, which must match the hash recomputed here. The founder,
-/// treasury and `TET_GENESIS_HASH` in the environment, when set, must agree with the file.
+/// (not the dev ones) and its genesis hash, which must match the hash recomputed here. The node mints
+/// from the environment, so the founder (`TET_GENESIS_FOUNDER_WALLET_ID`) and `TET_TREASURY_ADDRESS`
+/// must be SET there and equal the file: an unset founder would fall back to the dev wallet while
+/// the file names another. `TET_FOUNDER_WALLET` and `TET_GENESIS_HASH`, when set, must agree too.
 /// Any other `TET_ENV` (or none) changes nothing: `Ok(None)`.
 pub fn check_public_chain(env: &dyn Fn(&str) -> Option<String>) -> Result<Option<GenesisFile>, String> {
     let get = |k: &str| env(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
@@ -178,11 +180,15 @@ pub fn check_public_chain(env: &dyn Fn(&str) -> Option<String>) -> Result<Option
         return Err(format!("TET_GENESIS_FILE genesis_hash does not match its chain, founder and treasury (recomputed {want})"));
     }
     let agrees = |k: &str, v: &str| get(k).is_none_or(|e| e.to_ascii_lowercase() == v);
-    if !agrees("TET_GENESIS_FOUNDER_WALLET_ID", &founder) || !agrees("TET_FOUNDER_WALLET", &founder) {
+    let required = |k: &str, v: &str| get(k).is_some_and(|e| e.to_ascii_lowercase() == v);
+    if get("TET_GENESIS_FOUNDER_WALLET_ID").is_none() {
+        return Err("TET_ENV=testnet requires TET_GENESIS_FOUNDER_WALLET_ID (the founder in TET_GENESIS_FILE)".into());
+    }
+    if !required("TET_GENESIS_FOUNDER_WALLET_ID", &founder) || !agrees("TET_FOUNDER_WALLET", &founder) {
         return Err("the founder wallet in the environment differs from TET_GENESIS_FILE".into());
     }
-    if !agrees("TET_TREASURY_ADDRESS", &treasury) {
-        return Err("TET_TREASURY_ADDRESS differs from TET_GENESIS_FILE".into());
+    if !required("TET_TREASURY_ADDRESS", &treasury) {
+        return Err("TET_TREASURY_ADDRESS is unset or differs from TET_GENESIS_FILE".into());
     }
     if !agrees("TET_GENESIS_HASH", &want) {
         return Err("TET_GENESIS_HASH differs from TET_GENESIS_FILE".into());
@@ -255,6 +261,8 @@ mod tests {
             ("TET_ENV", "testnet"),
             ("TET_CHAIN_ID", "tet-testnet-2"),
             ("TET_GENESIS_FILE", path.to_str().unwrap()),
+            ("TET_GENESIS_FOUNDER_WALLET_ID", FOUNDER),
+            ("TET_TREASURY_ADDRESS", TREASURY),
         ]
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
@@ -283,7 +291,7 @@ mod tests {
 
     #[test]
     fn a_public_chain_with_its_own_genesis_file_starts() {
-        let (_d, env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[("TET_TREASURY_ADDRESS", TREASURY)]);
+        let (_d, env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[]);
         let g = check(&env).unwrap().unwrap();
         assert_eq!(g.chain_id, "tet-testnet-2");
     }
@@ -322,8 +330,21 @@ mod tests {
         assert!(check(&env).unwrap_err().contains("is for chain"));
         // the environment disagreeing with the file
         let (_d, env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[("TET_TREASURY_ADDRESS", TREASURY_DEV_HEX)]);
-        assert!(check(&env).unwrap_err().contains("TET_TREASURY_ADDRESS differs"));
+        assert!(check(&env).unwrap_err().contains("TET_TREASURY_ADDRESS is unset or differs"));
         let (_d, env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[("TET_GENESIS_HASH", OLD_PUBLIC_GENESIS)]);
         assert!(check(&env).unwrap_err().contains("TET_GENESIS_HASH differs"));
+    }
+
+    #[test]
+    fn testnet_requires_the_founder_and_treasury_the_node_mints_from() {
+        // Unset, the node's founder would fall back to the dev wallet while the file names another.
+        let (_d, mut env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[]);
+        env.remove("TET_GENESIS_FOUNDER_WALLET_ID");
+        assert!(check(&env).unwrap_err().contains("requires TET_GENESIS_FOUNDER_WALLET_ID"));
+        let (_d, mut env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[]);
+        env.remove("TET_TREASURY_ADDRESS");
+        assert!(check(&env).unwrap_err().contains("TET_TREASURY_ADDRESS is unset or differs"));
+        let (_d, env) = public_env(file("tet-testnet-2", FOUNDER, TREASURY), &[("TET_GENESIS_FOUNDER_WALLET_ID", GENESIS_FOUNDER_DEV_PUBLIC_HEX)]);
+        assert!(check(&env).unwrap_err().contains("founder wallet in the environment differs"));
     }
 }
