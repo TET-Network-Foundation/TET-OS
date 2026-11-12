@@ -570,6 +570,13 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — no price / earn / invest wording
         run: node --experimental-strip-types scripts/try_money_guard.mjs
+
+      # The offline notice page (deploy/notice/index.html), served at tetnet.org while there is no
+      # host: no scripts, nothing loaded, only repository links; both languages say what happened
+      # and what still checks; the site's wording; no date promises. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: offline notice page — static, honest, no date promises
+        run: node scripts/notice_page_guard.mjs
       # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
       # case, encoding); ordinary routes still pass. Control.
       - if: needs.gate.outputs.code == 'true'
