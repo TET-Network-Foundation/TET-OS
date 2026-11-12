@@ -14,6 +14,20 @@ Three records under a temporary device key, then:
 so without (e) the prev check could be deleted and every case would still go INVALID.
 Each case asserts the reason it is named for, not just INVALID.
 
+One-time permits (a permit the device key signs; a record may cite its id):
+  (f) a permit cited once, at its last open seq   -> VALID, and verify names the use
+  (g) the same permit cited by two records        -> INVALID, "was already used by record 4"
+  (h) a permit cited one record after expires_seq -> INVALID, "expired after seq 3"
+  (i) a permit another key signed, validly        -> INVALID, "is signed by <that key>, not this device's"
+  (j) a permit whose expires_seq was edited after signing -> INVALID, the permit's signature
+  (k) one permit copied under a second file name  -> INVALID, the second name "holds permit <first>"
+  (l) a cited permit that is not in the notebook  -> INVALID, "is not in this notebook"
+  (m) the permit's bytes signed as a log record   -> INVALID, the permit's payload type
+  (n) `record --permit` on a used permit          -> refused (exit 2), nothing written, log still VALID
+(g) to (m) build the bad log by hand, because `record` refuses a bad citation before writing it. In
+each, the permit passes every check except the one the case is named for, and the case asserts that
+verify reports exactly that one problem: a record that is INVALID for two reasons proves neither check.
+
 publish is checked against a local stub (no node is contacted): the body is {record_b64, consent_b64},
 the record is a hash-only envelope over the log record's SHA-256, and the consent is the same key
 over the record's exact SHA-256 (tet-core/src/sigs.rs, verify_consent).
@@ -45,17 +59,23 @@ CLI = os.environ.get("TET_CLI") or os.path.join(ROOT, "target", "release", "tet-
 CHAIN = {"TET_CHAIN_ID": "tet-notebook-test", "TET_GENESIS_HASH": hashlib.sha256(b"machine notebook test").hexdigest()}
 
 
-def nb(*argv, stdin=""):
-    """Run notebook.main in-process; returns (exit code, stdout)."""
-    out = io.StringIO()
+def nb_err(*argv, stdin=""):
+    """Run notebook.main in-process; returns (exit code, stdout, stderr)."""
+    out, err = io.StringIO(), io.StringIO()
     old_stdin = sys.stdin
     sys.stdin = io.StringIO(stdin)
     try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = notebook.main(["--tet-cli", CLI, *argv])
     finally:
         sys.stdin = old_stdin
-    return rc, out.getvalue()
+    return rc, out.getvalue(), err.getvalue()
+
+
+def nb(*argv, stdin=""):
+    """Run notebook.main in-process; returns (exit code, stdout)."""
+    rc, out, _ = nb_err(*argv, stdin=stdin)
+    return rc, out
 
 
 class Notebook(unittest.TestCase):
@@ -181,6 +201,151 @@ class Notebook(unittest.TestCase):
         with open(os.path.join(d, "chain.txt"), "w") as f:
             f.write("\n".join(chain) + "\n")
         self.assertInvalidBecause(d, "record 2: prev:")
+
+    # ── one-time permits ──────────────────────────────────────────────────────────────────────
+
+    READING = json.dumps({"value": 1, "unit": "count"})
+
+    def permit(self, d, expires_seq):
+        rc, out = nb("permit", "--dir", d, "--action", "open-valve", "--expires-seq", str(expires_seq))
+        self.assertEqual(rc, 0, out)
+        return out.strip()
+
+    def permit_path(self, d, pid):
+        return os.path.join(d, "permits", f"{pid}.json")
+
+    def cite(self, d, pid):
+        """Append a record citing `pid`, signed with the device's own key, WITHOUT going through
+        `record`: `record` refuses a bad citation up front, and verify must be shown the bad log."""
+        chain = notebook.chain_lines(d)
+        seq = len(chain) + 1
+        rec = {"v": 1, "kind": notebook.KIND, "seq": seq, "prev": chain[-1], "permit": pid,
+               "reading": {"source": "stdin-json", "value": 1, "unit": "count"}, "clock_utc": "2026-11-12T00:00:00Z"}
+        body = notebook.canonical(rec)
+        with open(self.rec(d, seq), "wb") as f:
+            f.write(body)
+        notebook.sign(CLI, d, self.rec(d, seq), notebook.PAYLOAD_TYPE)
+        with open(os.path.join(d, "chain.txt"), "a") as f:
+            f.write(hashlib.sha256(body).hexdigest() + "\n")
+        return seq
+
+    def assertOnlyProblem(self, d, reason, prefix=False):
+        """verify says INVALID and lists exactly one problem: the one this case is named for."""
+        rc, out = nb("verify", "--dir", d)
+        self.assertEqual(rc, 1, out)
+        lines = out.splitlines()
+        self.assertEqual(lines[0], "INVALID", out)
+        problems = [ln.strip() for ln in lines[1:lines.index("Shows:")]]
+        self.assertEqual(len(problems), 1, f"not exactly the one problem this case is named for:\n{out}")
+        if prefix:
+            self.assertTrue(problems[0].startswith(reason), out)
+        else:
+            self.assertEqual(problems[0], reason, out)
+
+    def test_f_a_permit_cited_once_before_it_expires_is_valid(self):
+        d = self.copy()
+        pid = self.permit(d, 4)  # open until record 4, and record 4 cites it: the last seq allowed
+        self.assertRegex(pid, r"^[0-9a-f]{32}$")
+        with open(self.permit_path(d, pid), "rb") as f:
+            permit = json.loads(f.read())
+        self.assertEqual(permit, {"kind": "tet_machine_permit_v1", "permit_id": pid, "action": "open-valve", "expires_seq": 4})
+        with open(self.permit_path(d, pid) + ".sig.json") as f:
+            env = json.load(f)
+        self.assertEqual((env["payloadType"], notebook.ed_keyid(env)), (notebook.PERMIT_PAYLOAD_TYPE, self.keyid))
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=self.READING)
+        self.assertEqual(rc, 0, out)
+        with open(self.rec(d, 4), "rb") as f:
+            self.assertEqual(json.loads(f.read())["permit"], pid)
+        rc, out = nb("verify", "--dir", d)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(out.splitlines()[0], "VALID")
+        self.assertIn(f"permit {pid} (open-valve): used once, by record 4; open until seq 4", out)
+
+    def test_g_the_same_permit_cited_twice_is_invalid(self):
+        d = self.copy()
+        pid = self.permit(d, 9)  # open well past both records, so only the reuse can be wrong
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=self.READING)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.cite(d, pid), 5)
+        self.assertOnlyProblem(d, f"record 5: permit: {pid} was already used by record 4")
+
+    def test_h_a_permit_cited_after_expires_seq_is_invalid(self):
+        d = self.copy()
+        pid = self.permit(d, 3)  # the log already holds 3 records, so record 4 is one too late
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} expired after seq 3")
+
+    def test_i_a_permit_signed_by_another_key_is_invalid(self):
+        d = self.copy()
+        # Another device on the same chain signs a perfectly good permit: its envelope verifies, it is
+        # open, it is cited once. Only "whose key is this?" can refuse it.
+        other = os.path.join(self.tmp, "other-permit")
+        old = {k: os.environ.get(k) for k in CHAIN}
+        os.environ.update(CHAIN)
+        try:
+            rc, out = nb("init", "--dir", other)
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        self.assertEqual(rc, 0, out)
+        other_keyid = out.strip()
+        self.assertNotEqual(other_keyid, self.keyid)
+        pid = self.permit(other, 9)
+        os.makedirs(os.path.join(d, "permits"))
+        for suffix in ("", ".sig.json"):
+            shutil.copy(self.permit_path(other, pid) + suffix, self.permit_path(d, pid) + suffix)
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is signed by {other_keyid}, not this device's {self.keyid}")
+
+    def test_j_a_permit_edited_after_signing_is_invalid(self):
+        d = self.copy()
+        pid = self.permit(d, 3)
+        with open(self.permit_path(d, pid), "rb") as f:
+            body = f.read()
+        edited = body.replace(b'"expires_seq":3', b'"expires_seq":9')  # still canonical, now "open" at record 4
+        self.assertNotEqual(edited, body)
+        with open(self.permit_path(d, pid), "wb") as f:
+            f.write(edited)
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid}: signature:", prefix=True)
+
+    def test_k_one_permit_under_two_names_is_invalid(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=self.READING)
+        self.assertEqual(rc, 0, out)
+        alias = hashlib.sha256(pid.encode()).hexdigest()[:32]
+        for suffix in ("", ".sig.json"):
+            shutil.copy(self.permit_path(d, pid) + suffix, self.permit_path(d, alias) + suffix)
+        self.assertEqual(self.cite(d, alias), 5)  # a second citation of the same signed permit, by another name
+        self.assertOnlyProblem(d, f"record 5: permit: {alias}.json holds permit {pid}")
+
+    def test_l_a_cited_permit_that_is_not_in_the_notebook_is_invalid(self):
+        d = self.copy()
+        pid = "ab" * 16
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not in this notebook")
+
+    def test_m_permit_bytes_signed_as_a_log_record_are_not_a_permit(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        # The device's own key over the very same bytes, but as a log record: replaces the envelope.
+        notebook.sign(CLI, d, self.permit_path(d, pid), notebook.PAYLOAD_TYPE)
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid}: payload type is '{notebook.PAYLOAD_TYPE}', not {notebook.PERMIT_PAYLOAD_TYPE}")
+
+    def test_n_record_refuses_a_used_permit_and_writes_nothing(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=self.READING)
+        self.assertEqual(rc, 0, out)
+        rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=self.READING)
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f"not recorded: permit: {pid} was already used by record 4", err)
+        self.assertFalse(os.path.exists(self.rec(d, 5)))
+        self.assertEqual(len(notebook.chain_lines(d)), 4)
+        rc, out = nb("verify", "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
 
     def test_publish_builds_the_registry_body(self):
         d = self.copy()
