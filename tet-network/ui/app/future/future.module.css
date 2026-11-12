@@ -1,0 +1,162 @@
+/* /future: plain early-2000s web. System fonts, simple borders, underlined links, modest colour. */
+.page {
+  min-height: 100vh;
+  background: #f3f1e8;
+  color: #111;
+  font-family: Verdana, Tahoma, "Hiragino Kaku Gothic ProN", "Meiryo", "Microsoft JhengHei", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.page a {
+  color: #1a3fa8;
+  text-decoration: underline;
+}
+.page a:visited {
+  color: #5a2a82;
+}
+.banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #ffffcc;
+  border-bottom: 2px solid #b08a00;
+  padding: 6px 12px;
+  font-weight: bold;
+  text-align: center;
+}
+.banner p {
+  margin: 2px 0;
+}
+.wrap {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 10px 12px 24px;
+}
+.head {
+  width: 100%;
+  border-collapse: collapse;
+  background: #dfe3ea;
+  border: 1px solid #8a93a3;
+  margin: 8px 0 12px;
+}
+.head td {
+  padding: 6px 8px;
+  vertical-align: middle;
+}
+.right {
+  text-align: right;
+}
+.lang {
+  display: inline-block;
+  margin-left: 10px;
+}
+.logo {
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: bold;
+  font-size: 20px;
+  color: #23366b;
+}
+.sub {
+  color: #444;
+}
+.page h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  font-weight: bold;
+  margin: 6px 0 8px;
+}
+.page h2 {
+  font-size: 14px;
+  font-weight: bold;
+  margin: 0 0 6px;
+  padding: 3px 6px;
+  background: #e8ecf3;
+  border-bottom: 1px solid #8a93a3;
+}
+.page h3 {
+  font-size: 13px;
+  font-weight: bold;
+  margin: 8px 0 4px;
+}
+.page p {
+  margin: 6px 0;
+}
+.page ul {
+  margin: 4px 0;
+  padding-left: 20px;
+  list-style: disc;
+}
+.page hr {
+  border: 0;
+  border-top: 1px solid #999;
+  margin: 16px 0 8px;
+}
+.box {
+  background: #fff;
+  border: 1px solid #8a93a3;
+  padding: 8px 10px;
+  margin: 12px 0;
+}
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 6px 0;
+}
+.grid th,
+.grid td {
+  border: 1px solid #a6adb9;
+  padding: 4px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+.grid th {
+  background: #eef0f4;
+  font-weight: bold;
+}
+.small {
+  font-size: 11px;
+  color: #444;
+}
+.button {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 3px 14px;
+  background: #e9e9e4;
+  border: 2px outset #c8c8c0;
+  color: #000;
+  cursor: pointer;
+}
+.button:active {
+  border-style: inset;
+}
+.explain {
+  border: 2px solid #b08a00;
+  background: #fffdf0;
+  margin: 8px 0;
+}
+.explain h3,
+.explain p,
+.explain button {
+  margin-left: 10px;
+  margin-right: 10px;
+}
+.explain button {
+  margin-bottom: 10px;
+}
+.explain .banner {
+  position: static;
+}
+@media (max-width: 480px) {
+  .banner {
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+  .head td {
+    display: block;
+    text-align: left;
+  }
+  .lang {
+    display: block;
+    margin: 6px 0 0;
+  }
+}

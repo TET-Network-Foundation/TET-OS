@@ -61,8 +61,9 @@ function dictProblems(name, dict, keys) {
 }
 
 const dir = new URL("../app/try/", import.meta.url);
-// The try page, and the other pages that use its dictionaries (the technical paper's page).
+// The try page, and the other pages that use its dictionaries (the technical paper's page, /future).
 const wpDir = new URL("../app/whitepaper/", import.meta.url);
+const futureDir = new URL("../app/future/", import.meta.url);
 const sources = Object.fromEntries([
   ...readdirSync(dir)
     .filter((n) => /\.tsx?$/.test(n) && !/^i18n_/.test(n))
@@ -70,6 +71,10 @@ const sources = Object.fromEntries([
   ...readdirSync(wpDir)
     .filter((n) => /\.tsx$/.test(n))
     .map((n) => [`whitepaper/${n}`, readFileSync(new URL(n, wpDir), "utf8")]),
+  // The /future concept page.
+  ...readdirSync(futureDir)
+    .filter((n) => /\.tsx$/.test(n))
+    .map((n) => [`future/${n}`, readFileSync(new URL(n, futureDir), "utf8")]),
 ]);
 const keys = pageKeys(sources);
 
