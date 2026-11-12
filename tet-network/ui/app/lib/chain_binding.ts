@@ -47,12 +47,15 @@ function truthyEnv(name: string): boolean {
   return v === "1" || v === "true" || v === "yes";
 }
 
-/** Mirrors tet-core `ledger::chain_id_from_env`. */
+/** Mirrors tet-core `genesis::DEV_CHAIN_ID`: the default, clearly local (its genesis carries a dev marker). */
+export const DEV_CHAIN_ID = "tet-dev-local";
+
+/** Mirrors tet-core `genesis::chain_id_from_env`. */
 export function publicChainId(): string {
   const explicit = envText("NEXT_PUBLIC_TET_CHAIN_ID");
   if (explicit) return explicit;
   if (truthyEnv("NEXT_PUBLIC_TET_MAINNET")) return "tet-mainnet-1";
-  return "tet-local-dev";
+  return DEV_CHAIN_ID;
 }
 
 function normalizeWalletId(raw: string, label: string): string {
@@ -106,7 +109,9 @@ export function buildGenesisPayloadV1(inputs: GenesisBindingInputs): string {
     `|treasury_micro=${GENESIS_TREASURY_SHARE_MICRO}` +
     `|reserve=${WALLET_PROTOCOL_RESERVE}` +
     `|reserve_micro=${GENESIS_PROTOCOL_RESERVE_SHARE_MICRO}` +
-    `|max_supply_micro=${MAX_SUPPLY_MICRO}`
+    `|max_supply_micro=${MAX_SUPPLY_MICRO}` +
+    // Mirrors tet-core `genesis::genesis_payload_v1`: only the dev chain id carries the marker.
+    (inputs.chainId === DEV_CHAIN_ID ? "|dev=1" : "")
   );
 }
 

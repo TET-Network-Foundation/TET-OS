@@ -7,7 +7,7 @@
 # Locked decision #12 requires node **and** UI from one compose file; before this
 # file only `tet-core` was wired.
 #
-# Defaults here are a LOCAL DEV chain (TET_CHAIN_ID=tet-local-dev, no peers, no
+# Defaults here are a LOCAL DEV chain (TET_CHAIN_ID=tet-dev-local, no peers, no
 # secrets). They are deliberately safe to commit. A real deployment supplies its
 # own values in `.env`, which is read when present and overrides everything below.
 #
@@ -43,7 +43,7 @@ x-tet-core-common: &tet-core-common
     # rejected. That is why the `ui` service below passes them as build args.
     TET_TREASURY_ADDRESS: "${TET_TREASURY_ADDRESS:-fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321}"
     TET_GENESIS_FOUNDER_WALLET_ID: "${TET_GENESIS_FOUNDER_WALLET_ID:-57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0}"
-    TET_CHAIN_ID: "${TET_CHAIN_ID:-tet-local-dev}"
+    TET_CHAIN_ID: "${TET_CHAIN_ID:-tet-dev-local}"
     # --- runtime --------------------------------------------------------------
     TET_REST_BIND: "0.0.0.0:5010"
     TET_DB_DIR: "/data/tet.db"
@@ -110,7 +110,7 @@ services:
       args:
         NEXT_PUBLIC_TET_TREASURY_ADDRESS: "${TET_TREASURY_ADDRESS:-fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321}"
         NEXT_PUBLIC_TET_GENESIS_FOUNDER_WALLET_ID: "${TET_GENESIS_FOUNDER_WALLET_ID:-57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0}"
-        NEXT_PUBLIC_TET_CHAIN_ID: "${TET_CHAIN_ID:-tet-local-dev}"
+        NEXT_PUBLIC_TET_CHAIN_ID: "${TET_CHAIN_ID:-tet-dev-local}"
         # The commit the try page's "verify this page" names.
         NEXT_PUBLIC_TET_BUILD_SHA: "${TET_GIT_SHA:-}"
     container_name: tet-ui

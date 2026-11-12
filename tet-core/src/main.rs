@@ -303,6 +303,16 @@ async fn main() -> Result<(), AnyErr> {
     if config.is_prod && NEXUS_GUEST_ID == [0u32; 8] {
         panic!("CRITICAL: ZK Guest ID is zero. Refusing to boot in production mode.");
     }
+    // A public chain names itself: TET_ENV=testnet refuses the dev chain id, founder and treasury,
+    // and requires a genesis file that matches (genesis::check_public_chain).
+    match crate::genesis::check_public_chain(&|k| std::env::var(k).ok()) {
+        Ok(Some(g)) => log::info!("[startup] public chain {} genesis {}", g.chain_id, g.genesis_hash),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("[FATAL] {e}");
+            std::process::exit(2);
+        }
+    }
     if config.is_mainnet {
         let allow_mock_zk = std::env::var("TET_ALLOW_MOCK_ZK")
             .ok()
