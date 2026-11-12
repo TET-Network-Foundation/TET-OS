@@ -16,8 +16,7 @@
 // 6. "token" appears only in "No token exists." (トークン / 代幣 only in its translations).
 // 7. Banned wording, in the page's English, Japanese and Hong Kong Chinese: money words, prices,
 //    earn/invest/buy/yield, prove/proof, quantum-proof, AI, guarantee, and no "untraceable" claim.
-// (The patterns below spell those claims as character classes, e.g. untrace[a]b, so that
-// try_privacy_guard, which scans every tracked file, does not read this list as a claim.)
+// (This file quotes those words on purpose; try_privacy_guard lists it in NOT_CLAIMS.)
 // Each check has a control below: the check is run on a broken copy and must fail.
 
 import { register } from "node:module";
@@ -243,11 +242,11 @@ export const BANNED = new RegExp(
     "\\b(?:money|pay(?:s|ing|ment|ments|out)?|paid|coins?|funds?|cash|dollars?|currency|currencies)\\b",
     "\\b(?:price[sd]?|pricing|earn(?:s|ed|ing|ings)?|invest(?:s|ed|ing|ment|ments|or|ors)?|buy(?:s|ing)?|bought|purchase[sd]?|yield(?:s)?|profit(?:s|able)?|returns? on)\\b",
     "\\bprov(?:e|es|ed|en|ing|ably)\\b|\\bproofs?\\b",
-    "untrace[a]b|untrack[a]b|\\banonymous\\b",
+    "untraceab|untrackab|\\banonymous\\b",
     "quantum[- ](?:proof|safe|secure|resistant)|unbreakable|\\bimpossible to (?:break|forge|copy)\\b",
     "\\bguarantee",
     "お金|支払|コイン|価格|値段|稼|投資|儲|利回り|購入|買|証明|追跡(?:不可能|できない|されない)|耐量子|量子耐性|保証|通貨|円",
-    "金錢|付款|支付|硬幣|價格|價錢|賺|投資|收益|購買|買|證明|無法追[蹤]|不可追[蹤]|抗量子|保證|貨幣",
+    "金錢|付款|支付|硬幣|價格|價錢|賺|投資|收益|購買|買|證明|無法追蹤|不可追蹤|抗量子|保證|貨幣",
   ].join("|"),
   "i",
 );
