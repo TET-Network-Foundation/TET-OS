@@ -33,7 +33,7 @@ else
   list=$(awk '
     /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) }
     job == "rust" && /^[[:space:]]+run: python3 tools\/[A-Za-z0-9_\/-]+\/test_[A-Za-z0-9_]+\.py[[:space:]]*$/ { sub(/^[[:space:]]+run: /, ""); print ".\t" $0 }
-    job == "ui" && /^[[:space:]]+run: node .*scripts\/[A-Za-z0-9_]+\.mjs/ { sub(/^[[:space:]]+run: /, ""); print "tet-network/ui\t" $0 }
+    job == "ui" && /^[[:space:]]+run: node .*scripts\/[A-Za-z0-9_-]+\.mjs/ { sub(/^[[:space:]]+run: /, ""); print "tet-network/ui\t" $0 }
     job == "wasm" && /^[[:space:]]+run: node tet-agent-sdk\/scripts\/check_wasm_interop\.mjs/ { sub(/^[[:space:]]+run: /, ""); print ".\t" $0 }
   ' "$CI")
 fi
