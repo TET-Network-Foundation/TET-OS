@@ -154,3 +154,7 @@ Dual-licensed under either of
 at your option. Unless you explicitly state otherwise, any contribution you
 intentionally submit for inclusion in this work shall be dual-licensed as above,
 without any additional terms or conditions.
+
+---
+
+No token. No company. Open source. Long-term research: one-shot keys.
