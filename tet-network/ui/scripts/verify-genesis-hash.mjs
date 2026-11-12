@@ -7,6 +7,7 @@
  *
  * It imports the shipped module, not a replica, and reads the vectors and dev constants out of
  * genesis.rs, so neither side can move without the other:
+ *   0. the dev founder is genesis.rs GENESIS_FOUNDER_DEV_PUBLIC_HEX;
  *   1. with no NEXT_PUBLIC_TET_CHAIN_ID, publicChainId() is genesis.rs DEV_CHAIN_ID;
  *   2. the dev default (DEV_CHAIN_ID, dev founder, dev treasury) hashes to the vector that
  *      `a_fresh_dev_node_is_clearly_local_and_not_the_old_public_chain` pins, and carries `|dev=1`;
@@ -28,6 +29,7 @@ function rust(re, what) {
 const R_DEV_CHAIN_ID = rust(/pub const DEV_CHAIN_ID: &str = "([^"]+)";/, "DEV_CHAIN_ID");
 const R_LEGACY_CHAIN_ID = rust(/pub const LEGACY_PUBLIC_CHAIN_ID: &str = "([^"]+)";/, "LEGACY_PUBLIC_CHAIN_ID");
 const R_TREASURY_DEV = rust(/pub const TREASURY_DEV_HEX: &str = "([0-9a-f]{64})";/, "TREASURY_DEV_HEX");
+const R_FOUNDER_DEV = rust(/pub const GENESIS_FOUNDER_DEV_PUBLIC_HEX: &str =\s*"([0-9a-f]{64})";/, "GENESIS_FOUNDER_DEV_PUBLIC_HEX");
 const R_OLD_PUBLIC = rust(/const OLD_PUBLIC_GENESIS: &str = "(0x[0-9a-f]{64})";/, "OLD_PUBLIC_GENESIS");
 const R_DEV_VECTOR = rust(
   /fn a_fresh_dev_node_is_clearly_local_and_not_the_old_public_chain\(\)[\s\S]*?assert_eq!\(h, "(0x[0-9a-f]{64})"\)/,
@@ -46,6 +48,7 @@ function check(ok, msg) {
 
 const dev = { founderWalletId: cb.GENESIS_FOUNDER_DEV_PUBLIC_HEX, treasuryWalletId: R_TREASURY_DEV };
 
+check(cb.GENESIS_FOUNDER_DEV_PUBLIC_HEX === R_FOUNDER_DEV, `the dev founder is the same on both sides (Rust ${R_FOUNDER_DEV}, UI ${cb.GENESIS_FOUNDER_DEV_PUBLIC_HEX})`);
 check(cb.DEV_CHAIN_ID === R_DEV_CHAIN_ID, `DEV_CHAIN_ID is ${R_DEV_CHAIN_ID} on both sides (UI: ${cb.DEV_CHAIN_ID})`);
 check(cb.publicChainId() === R_DEV_CHAIN_ID, `no NEXT_PUBLIC_TET_CHAIN_ID -> ${R_DEV_CHAIN_ID} (UI: ${cb.publicChainId()})`);
 
