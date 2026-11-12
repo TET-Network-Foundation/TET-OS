@@ -219,6 +219,15 @@ jobs:
           TET_CLI: target/debug/tet-cli
         run: python3 tools/machine-notebook/test_notebook.py
 
+      # Sign in with TET, the local-only prototype (tools/sign-in): signs and checks only through
+      # tet-cli, so it runs here on the same binary. A replayed nonce, another domain and an expired
+      # challenge must each be refused for that reason; scripts/run_guards.sh picks this line up too.
+      - if: needs.gate.outputs.code == 'true'
+        name: sign-in prototype — each challenge answered once, for this domain
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 tools/sign-in/test_signin.py
+
       # Node lives in this job rather than a new one: the end-to-end check below needs BOTH the Rust
       # binaries and the SDK, and installing Node here is far cheaper than installing Rust in the ui
       # job. No new job, so the five required check names stay exactly as the ruleset lists them.
