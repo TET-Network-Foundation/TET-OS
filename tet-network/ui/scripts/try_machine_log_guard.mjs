@@ -44,7 +44,7 @@ const PINNED_SHOWS = [
   "which key signed each record",
   "that the records are in this order",
   "that each record existed before the next one in the same chain",
-  "that a permit limits how often this key's log accepts an action (once, and not after it expires)",
+  "that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires",
 ];
 const PINNED_DOES_NOT_SHOW = [
   "that the reading is true",
@@ -52,7 +52,7 @@ const PINNED_DOES_NOT_SHOW = [
   "where the device was",
   "who operates the device",
   "that the key was not copied",
-  "that a copied key did not write a second log (a permit does not stop that)",
+  "that a permit was used only here: it does not stop a copied key from writing a second log",
 ];
 
 let failed = 0;
@@ -187,14 +187,18 @@ function cliLines(stdout) {
 /** The page's verdict in the same lines. */
 function pageLines(r) {
   if (r.kind !== "verdict") return [`error: ${r.error}`];
-  return [r.valid ? "VALID" : "INVALID", ...(r.valid ? [`${r.records} records, all signed by ${r.signer}`] : r.problems.map(ml.problemLine))];
+  return [r.valid ? "VALID" : "INVALID", ...(r.valid ? [`${r.records} records, all signed by ${r.signer}`, ...r.uses.map(ml.useLine)] : r.problems.map(ml.problemLine))];
 }
 
-/** A `signature:` line keeps only its prefix: the reason is the verifier's own wording. */
-const comparable = (l) => (/^record \d+: signature: /.test(l) && !/payload type is/.test(l) ? l.replace(/(signature: ).*/, "$1…") : l);
+/**
+ * A `signature:` line keeps only its prefix: the reason is the verifier's own wording. That holds for a
+ * record's envelope and for a cited permit's (`record N: permit: <id>: signature: …`).
+ */
+const comparable = (l) =>
+  /^record \d+: (permit: [0-9a-f]{32}: )?signature: /.test(l) && !/payload type is/.test(l) ? l.replace(/(signature: ).*/, "$1…") : l;
 
 await check(`B1 every fixture case gets notebook.py verify's verdict and problem lines (${FIX.cases.length} cases)`, async () => {
-  assert.ok(FIX.cases.length >= 10);
+  assert.ok(FIX.cases.length >= 14);
   for (const c of FIX.cases) {
     const { r } = await runCase(folder(c));
     assert.deepEqual(pageLines(r).map(comparable), cliLines(c.verify.stdout).map(comparable), c.name);
@@ -224,15 +228,19 @@ await check("B4 a valid Ed25519 half from another record is refused by the Ed255
   assert.deepEqual(await reasonOf("ed25519_half_swapped"), ["record 1: signature: ed25519 signature does not verify (on this chain binding)"]);
 });
 
-await check("B5 a correctly signed record citing a used, an expired, or another key's permit is refused for that reason alone", async () => {
+await check("B5 a correctly signed record citing a used, expired, foreign, edited, copied, missing or wrongly typed permit is refused for that reason alone", async () => {
   const one = async (name, re) => {
     const lines = await reasonOf(name);
     assert.equal(lines.length, 1, `${name}: ${lines.join(" | ")}`);
     assert.match(lines[0], re, name);
   };
-  await one("permit_reused", /^record 3: permit: [0-9a-f]{32} already used by record 2$/);
-  await one("permit_expired", /^record 3: permit: [0-9a-f]{32} expired \(expires_seq 2, cited by record 3\)$/);
-  await one("permit_other_key", /^record 3: permit: [0-9a-f]{32} not signed by this device's key \(signed by tet-ed25519:[0-9a-f]{64}\)$/);
+  await one("permit_reused", /^record 3: permit: [0-9a-f]{32} was already used by record 2$/);
+  await one("permit_expired", /^record 3: permit: [0-9a-f]{32} expired after seq 2$/);
+  await one("permit_other_key", /^record 3: permit: [0-9a-f]{32} is signed by tet-ed25519:[0-9a-f]{64}, not this device's tet-ed25519:[0-9a-f]{64}$/);
+  await one("permit_edited", /^record 2: permit: [0-9a-f]{32}: signature: /);
+  await one("permit_copied", /^record 3: permit: 0{31}1\.json holds permit [0-9a-f]{32}$/);
+  await one("permit_missing", /^record 3: permit: f{32} is not in this notebook$/);
+  await one("permit_wrong_type", /^record 3: permit: [0-9a-f]{32}: payload type is 'application\/vnd\.tet\.machine-log\+json', not application\/vnd\.tet\.machine-permit\+json$/);
 });
 
 await check("B6 Python's canonical JSON is reproduced exactly (21.0, 1e-05, non-ASCII stay as notebook.py wrote them)", () => {

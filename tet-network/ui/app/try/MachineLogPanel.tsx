@@ -8,7 +8,7 @@
  * Rules in `lib/machine_log.mjs`; scripts/try_machine_log_guard.mjs pins the lists and the verdicts.
  */
 import { useState, type DragEvent, type ReactNode } from "react";
-import { checkMachineLog, DOES_NOT_SHOW, MAX_RECORDS, notebookPaths, problemLine, SHOWS } from "../lib/machine_log.mjs";
+import { checkMachineLog, DOES_NOT_SHOW, MAX_RECORDS, notebookPaths, problemLine, SHOWS, useLine } from "../lib/machine_log.mjs";
 import { mldsa44Verify } from "../lib/pqc";
 import { Badge, FOCUS, INK, PanelHead, PinnedNotice, cx } from "./ui";
 import { useLang } from "./i18n";
@@ -177,9 +177,20 @@ export default function MachineLogPanel() {
                   <Badge tone={result.valid ? "ok" : "bad"}>{result.valid ? t("the log checks out") : t("the log does not check out")}</Badge>
                 </div>
                 {result.valid ? (
-                  <p className="break-words text-[15px] leading-relaxed">
-                    {t("{n} records, all signed by {key}", { n: result.records, key: result.signer ?? "" })}
-                  </p>
+                  <div>
+                    <p className="break-words text-[15px] leading-relaxed">
+                      {t("{n} records, all signed by {key}", { n: result.records, key: result.signer ?? "" })}
+                    </p>
+                    {result.uses.length ? (
+                      <ul translate="no" className="mt-1 space-y-1 font-mono text-[13px] leading-relaxed">
+                        {result.uses.map((u, i) => (
+                          <li key={i} className="break-all">
+                            {useLine(u)}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
                 ) : (
                   <div>
                     <p className="text-[15px] font-semibold">{t("Why:")}</p>

@@ -199,6 +199,53 @@ def main():
 
         case("permit_other_key", "record 3 cites a permit signed by another device's key", foreign_permit)
 
+        def keep_two(d):
+            """Records 3 and 4 removed, so a forced record 3 follows record 2."""
+            for s in ("3", "4"):
+                os.remove(os.path.join(d, "records", f"{s}.json"))
+                os.remove(os.path.join(d, "records", f"{s}.json.sig.json"))
+            with open(os.path.join(d, "chain.txt")) as f:
+                lines = f.read().splitlines()[:2]
+            with open(os.path.join(d, "chain.txt"), "w") as f:
+                f.write("".join(x + "\n" for x in lines))
+
+        def permit_edited(d):
+            # Record 2's permit: expires_seq raised after signing. Record 2 itself is untouched.
+            p = os.path.join(d, "permits", f"{pid}.json")
+            with open(p, "rb") as f:
+                body = f.read()
+            assert b'"expires_seq":3' in body
+            with open(p, "wb") as f:
+                f.write(body.replace(b'"expires_seq":3', b'"expires_seq":9'))
+
+        case("permit_edited", "record 2's permit edited after signing (expires_seq 3 -> 9)", permit_edited)
+
+        def permit_copied(d):
+            # One signed permit under a second file name: its bytes and envelope verify, but the id
+            # inside them is the first name's.
+            keep_two(d)
+            copy = "0" * 31 + "1"
+            for ext in (".json", ".json.sig.json"):
+                shutil.copy(os.path.join(d, "permits", pid + ext), os.path.join(d, "permits", copy + ext))
+            forced_record(d, 1e-05, "volt", copy)
+
+        case("permit_copied", "record 3 cites a copy of record 2's permit saved under another id", permit_copied)
+
+        def permit_missing(d):
+            keep_two(d)
+            forced_record(d, 1e-05, "volt", "f" * 32)
+
+        case("permit_missing", "record 3 cites a permit id that is not in permits/", permit_missing)
+
+        def permit_wrong_type(d):
+            # A permit's exact bytes, signed by the device key, but as a log record (payload type).
+            keep_two(d)
+            p4 = permit(d, "drain", 9)
+            nb.sign(CLI, d, os.path.join(d, "permits", f"{p4}.json"), nb.PAYLOAD_TYPE)
+            forced_record(d, 1e-05, "volt", p4)
+
+        case("permit_wrong_type", "record 3 cites a permit whose envelope is a log record's payload type", permit_wrong_type)
+
         def other_key(d):
             other = os.path.join(t, "other-record-device")
             init(other)

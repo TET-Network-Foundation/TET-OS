@@ -1145,11 +1145,11 @@ export const JA: Record<string, string> = {
   "which key signed each record": "どの鍵がそれぞれの記録に署名したか",
   "that the records are in this order": "記録がこの順番であること",
   "that each record existed before the next one in the same chain": "同じつながりの中で、各記録が次の記録より前に存在したこと",
-  "that a permit limits how often this key's log accepts an action (once, and not after it expires)": "許可証によって、この鍵のログがある操作を受け付ける回数が制限されていること（1回だけ、期限が切れた後は受け付けない）",
+  "that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires": "許可証によって、この鍵のログがある操作を受け付ける回数が制限されていること：同じ許可証が2回引用されることも、期限が切れた後に引用されることもない",
   "that the reading is true": "測定値が正しいこと",
   "that the device clock was right": "デバイスの時計が正しかったこと",
   "where the device was": "デバイスがどこにあったか",
   "who operates the device": "誰がデバイスを運用しているか",
   "that the key was not copied": "鍵がコピーされていないこと",
-  "that a copied key did not write a second log (a permit does not stop that)": "コピーされた鍵が2つ目のログを書いていないこと（許可証ではそれを防げません）",
+  "that a permit was used only here: it does not stop a copied key from writing a second log": "許可証がここでだけ使われたこと：許可証は、コピーされた鍵が2つ目のログを書くことを防げません",
 };

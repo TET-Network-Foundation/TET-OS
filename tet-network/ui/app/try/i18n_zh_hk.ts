@@ -1145,11 +1145,11 @@ export const ZH_HK: Record<string, string> = {
   "which key signed each record": "每項紀錄由哪一把金鑰簽署",
   "that the records are in this order": "紀錄是按這個次序排列",
   "that each record existed before the next one in the same chain": "在同一條紀錄鏈中，每項紀錄都早於下一項存在",
-  "that a permit limits how often this key's log accepts an action (once, and not after it expires)": "許可證限制了這把金鑰的日誌接受某個動作的次數（只限一次，過期後不再接受）",
+  "that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires": "許可證限制了這把金鑰的日誌接受某個動作的次數：沒有許可證被引用兩次，也沒有在過期後被引用",
   "that the reading is true": "讀數是真實的",
   "that the device clock was right": "裝置的時鐘是準確的",
   "where the device was": "裝置當時在哪裏",
   "who operates the device": "誰在操作這部裝置",
   "that the key was not copied": "金鑰沒有被複製",
-  "that a copied key did not write a second log (a permit does not stop that)": "被複製的金鑰沒有寫出第二份日誌（許可證無法阻止這種情況）",
+  "that a permit was used only here: it does not stop a copied key from writing a second log": "許可證只在這裏使用過：許可證無法阻止被複製的金鑰寫出第二份日誌",
 };

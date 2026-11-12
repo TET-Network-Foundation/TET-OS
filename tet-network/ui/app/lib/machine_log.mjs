@@ -1,5 +1,5 @@
 // "Check a machine's log" (Try TET): the browser's copy of `notebook.py verify`
-// (tools/machine-notebook/notebook.py, `check_chain` and `permit_problems`), run on a notebook folder
+// (tools/machine-notebook/notebook.py, `check_chain` and `permit_problem`), run on a notebook folder
 // the visitor drops. Same checks, same order, same wording for every problem it finds itself.
 //
 // No new cryptography. Every envelope (records/<seq>.json.sig.json, permits/<id>.json.sig.json) is
@@ -29,7 +29,7 @@ export const SHOWS = [
   "which key signed each record",
   "that the records are in this order",
   "that each record existed before the next one in the same chain",
-  "that a permit limits how often this key's log accepts an action (once, and not after it expires)",
+  "that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires",
 ];
 
 /** Word for word notebook.py's DOES_NOT_SHOW (scripts/try_machine_log_guard.mjs pins it). */
@@ -39,7 +39,7 @@ export const DOES_NOT_SHOW = [
   "where the device was",
   "who operates the device",
   "that the key was not copied",
-  "that a copied key did not write a second log (a permit does not stop that)",
+  "that a permit was used only here: it does not stop a copied key from writing a second log",
 ];
 
 /**
@@ -309,7 +309,8 @@ export function notebookPaths(raw) {
  *   notebook.py verify opens, never device.key.
  * @returns {Promise<
  *   | { kind: "verdict", valid: boolean, problems: { seq: number | null, why: string }[], records: number,
- *       signer: string | null, chain: { chainId: string, genesisHash: string }, hasDeviceKey: boolean }
+ *       signer: string | null, uses: { seq: number, permit: { permitId: string, action: string, expiresSeq: bigint } }[],
+ *       chain: { chainId: string, genesisHash: string }, hasDeviceKey: boolean }
  *   | { kind: "error", error: "no_chain" | "too_many", records: number, hasDeviceKey: boolean }>}
  */
 export async function checkMachineLog(o) {
@@ -329,7 +330,7 @@ export async function checkMachineLog(o) {
   names.sort((a, b) => a[0] - b[0] || byCodePoint(a[1], b[1]));
   const problems = [];
   if (!names.length) {
-    return { kind: "verdict", valid: false, problems: [{ seq: null, why: "no records" }], records: 0, signer: null, chain: null, hasDeviceKey };
+    return { kind: "verdict", valid: false, problems: [{ seq: null, why: "no records" }], records: 0, signer: null, uses: [], chain: null, hasDeviceKey };
   }
   if (names.length > MAX_RECORDS) return { kind: "error", error: "too_many", records: names.length, hasDeviceKey };
   // notebook.py's chain_env: without chain.json it stops (an error, not a verdict) at the first check.
@@ -355,12 +356,18 @@ export async function checkMachineLog(o) {
     return r.ok ? null : r.reason;
   };
 
-  async function permitProblems(pid, seq) {
-    if (typeof pid !== "string" || !/^[0-9a-f]{32}$/.test(pid)) return ["permit: the cited permit_id is not 32 hex characters"];
+  /**
+   * notebook.py permit_problem: why record `seq` may not cite permit `pid`, or null if it may, as
+   * { why, permit }. One reason per citation, in notebook.py's order, so each reason has exactly one
+   * check that can give it: a permit id; in the notebook; its envelope verifies over exactly these
+   * bytes; permit payload type; signed by this device's key; a permit, and the one the file name says;
+   * still open at this seq; not cited before. `used` maps a permit id to the record that cited it first.
+   */
+  async function permitProblem(pid, seq, used, device) {
+    if (typeof pid !== "string" || !/^[0-9a-f]{32}$/.test(pid)) return { why: "permit: not a permit id (32 hex)", permit: null };
     const path = `permits/${pid}.json`;
     const sig = `${path}.sig.json`;
-    if (!exists(path) || !exists(sig)) return [`permit: ${pid} not found in permits/`];
-    const out = [];
+    if (!exists(path) || !exists(sig)) return { why: `permit: ${pid} is not in this notebook`, permit: null };
     const body = await read(path);
     const sigBytes = await read(sig);
     let envObj;
@@ -369,32 +376,39 @@ export async function checkMachineLog(o) {
     } catch {
       envObj = undefined;
     }
-    if (envObj === undefined || (await agentVerify(envObj, body)) !== null) out.push(`permit: ${pid} signature does not verify`);
+    const sigWhy = envObj === undefined ? "the .sig.json is not JSON" : await agentVerify(envObj, body);
+    if (sigWhy !== null) return { why: `permit: ${pid}: signature: ${sigWhy}`, permit: null };
+    // Only after the envelope verified, as notebook.py: each keyid then names the key that signed.
     const env = loadsEnvelope(sigBytes);
-    if (env.payloadType !== PERMIT_PAYLOAD_TYPE) out.push(`permit: ${pid} is not a permit envelope`);
-    const signer = edKeyId(env);
-    if (!wantKeyid || signer !== wantKeyid) out.push(`permit: ${pid} not signed by this device's key (signed by ${pyStr(signer)})`);
-    const p = loads(body);
-    if (p === undefined) return [...out, `permit: ${pid} is not JSON`];
-    const isMap = p instanceof Map;
-    const keys = isMap ? [...p.keys()].sort().join(",") : "";
-    if (
-      pyCanonical(p) !== utf8.decode(body) ||
-      keys !== "action,expires_seq,kind,permit_id" ||
-      !isMap ||
-      p.get("kind") !== PERMIT_KIND ||
-      p.get("permit_id") !== pid
-    ) {
-      out.push(`permit: ${pid} is not a ${PERMIT_KIND} for this id`);
+    if (env.payloadType !== PERMIT_PAYLOAD_TYPE) {
+      return { why: `permit: ${pid}: payload type is ${pyRepr(env.payloadType)}, not ${PERMIT_PAYLOAD_TYPE}`, permit: null };
     }
-    const exp = isMap ? p.get("expires_seq") : undefined;
-    if (!pyIsInt(exp)) out.push(`permit: ${pid} has no expires_seq`);
-    else if (BigInt(seq) > exp.big) out.push(`permit: ${pid} expired (expires_seq ${exp.big}, cited by record ${seq})`);
-    return out;
+    const signer = edKeyId(env);
+    if (!device || signer !== device) return { why: `permit: ${pid} is signed by ${pyStr(signer)}, not this device's ${pyStr(device)}`, permit: null };
+    const p = loads(body);
+    const isMap = p instanceof Map;
+    if (
+      !isMap ||
+      [...p.keys()].sort().join(",") !== "action,expires_seq,kind,permit_id" ||
+      p.get("kind") !== PERMIT_KIND ||
+      pyCanonical(p) !== utf8.decode(body) ||
+      typeof p.get("action") !== "string" ||
+      !pyIsInt(p.get("expires_seq"))
+    ) {
+      return { why: `permit: ${pid} is not a ${PERMIT_KIND} permit`, permit: null };
+    }
+    // The id inside the signed bytes, not the file name, is the permit: a copy under a second name is
+    // not a second permit.
+    if (p.get("permit_id") !== pid) return { why: `permit: ${pid}.json holds permit ${pyStr(p.get("permit_id"))}`, permit: null };
+    const permit = { permitId: pid, action: p.get("action"), expiresSeq: p.get("expires_seq").big };
+    if (BigInt(seq) > permit.expiresSeq) return { why: `permit: ${pid} expired after seq ${permit.expiresSeq}`, permit };
+    if (used.has(pid)) return { why: `permit: ${pid} was already used by record ${used.get(pid)}`, permit };
+    return { why: null, permit };
   }
 
   const signers = [];
-  const permitsUsed = new Map();
+  const used = new Map(); // permit id -> the record that cited it first
+  const uses = []; // { seq, permit } for every citation that checked out
   let prevHash = ZERO;
   for (const [idx, [n, name]] of names.entries()) {
     const i = idx + 1;
@@ -402,6 +416,7 @@ export async function checkMachineLog(o) {
     const body = await read(path);
     const h = hex(sha256(body));
     const add = (why) => problems.push({ seq: n, why });
+    let k = null;
     if (n !== i) add(`seq: file ${name} where record ${i} should be (a record is missing)`);
     // 1. the envelope: both signature halves, and the payload is exactly this file
     const sig = `${path}.sig.json`;
@@ -419,7 +434,7 @@ export async function checkMachineLog(o) {
       if (why !== null) add(`signature: ${why}`);
       const env = loadsEnvelope(sigBytes);
       if (env.payloadType !== PAYLOAD_TYPE) add(`signature: payload type is ${pyRepr(env.payloadType)}, not ${PAYLOAD_TYPE}`);
-      const k = edKeyId(env);
+      k = edKeyId(env);
       signers.push(k);
       if (wantKeyid && k !== wantKeyid) add(`key: signed by ${pyStr(k)}, not this device's ${wantKeyid}`);
     }
@@ -436,14 +451,14 @@ export async function checkMachineLog(o) {
     if (!pyEqInt(get("seq"), i)) add(`seq: says ${pyStr(get("seq"))}, is record ${i} in order`);
     if (get("prev") !== prevHash) add("prev: does not name the record before it");
     if (i <= chainLines.length && chainLines[i - 1] !== h) add("chain.txt: hash differs from the record");
-    // 3. a cited one-time permit: signed by the device key, not expired, not cited before
+    // 3. the permit it cites, if any: this device's own, still open at this seq, not cited before
     if (rec instanceof Map && rec.has("permit")) {
       const pid = rec.get("permit");
-      for (const why of await permitProblems(pid, i)) add(why);
-      if (typeof pid === "string") {
-        if (permitsUsed.has(pid)) add(`permit: ${pid} already used by record ${permitsUsed.get(pid)}`);
-        else permitsUsed.set(pid, n);
-      }
+      const { why, permit } = await permitProblem(pid, i, used, wantKeyid || k);
+      if (why) add(why);
+      else uses.push({ seq: n, permit });
+      // notebook.py's used.setdefault: a citation counts as the first use even when it was refused.
+      if (typeof pid === "string" && !used.has(pid)) used.set(pid, n);
     }
     prevHash = h;
   }
@@ -455,6 +470,7 @@ export async function checkMachineLog(o) {
     problems,
     records: names.length,
     signer: problems.length === 0 ? signers[0] : null,
+    uses: problems.length === 0 ? uses : [],
     chain,
     hasDeviceKey,
   };
@@ -463,4 +479,9 @@ export async function checkMachineLog(o) {
 /** notebook.py verify's problem line: `record 3: prev: …` or `log: …`. */
 export function problemLine(p) {
   return `${p.seq !== null ? `record ${p.seq}` : "log"}: ${p.why}`;
+}
+
+/** notebook.py verify's line for a permit used in a VALID log. */
+export function useLine(u) {
+  return `permit ${u.permit.permitId} (${u.permit.action}): used once, by record ${u.seq}; open until seq ${u.permit.expiresSeq}`;
 }
