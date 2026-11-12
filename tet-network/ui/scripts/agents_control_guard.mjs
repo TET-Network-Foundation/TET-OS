@@ -458,6 +458,23 @@ await check(`W1 no money word, "prove"/"proof", "untraceable" or AI claim in wha
   assert.deepEqual(bad, [], bad.join("\n     "));
 });
 
+// W1 reads only t() keys. Text written straight into the page (a JSX text node, or a string literal
+// outside t()) would not be in SHOWN, so every literal and text fragment of the page's own source is
+// checked too.
+const SOURCE_TEXT = (src) => {
+  const s = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return [...s.matchAll(/"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`|>([^<>{}]+)</g)].map((m) => m[1] ?? m[2] ?? m[3] ?? m[4]);
+};
+await check("W1b no banned wording written straight into the page's source (JSX text and literals outside t())", () => {
+  const bad = wordingProblems([...SOURCE_TEXT(PAGE), ...SOURCE_TEXT(read("app/agents/page.tsx"))]);
+  assert.deepEqual(bad, [], bad.join("\n     "));
+});
+await check("W1b control: a sentence written as JSX text is caught", () => {
+  const planted = PAGE.replace("<header", "<p>This proves the reading.</p>\n<header");
+  assert.notEqual(planted, PAGE, "the control's anchor is gone");
+  assert.ok(wordingProblems(SOURCE_TEXT(planted)).length > wordingProblems(SOURCE_TEXT(PAGE)).length, "JSX text is not scanned");
+});
+
 await check("W control: each kind of wording is caught", () => {
   for (const s of ["Free to use, no payment", "This proves the reading", "untraceable devices", "AI can't read it", "価格", "お金", "證明", "購買", "guaranteed"]) {
     assert.ok(wordingProblems([s]).length > 0, s);
