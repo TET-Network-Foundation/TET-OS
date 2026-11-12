@@ -1,4 +1,4 @@
-# Public seed overlay — the profile the Helsinki bootnode runs.
+# Public seed overlay — the profile a seed (a P2P node, no web page) runs.
 #
 #     docker compose -f docker-compose.yml -f deploy/docker-compose.seed.yml up -d tet-core
 #
@@ -9,9 +9,12 @@
 #     iptables DNAT rules into the `DOCKER` chain, which ufw never inspects —
 #     `ufw deny 5010` does NOT close a port published on 0.0.0.0. The only
 #     host-level close that actually holds is to not publish it publicly. The
-#     Hetzner cloud firewall blocks 5010 upstream as well; this is the layer
+#     provider's firewall blocks 5010 upstream as well; this is the layer
 #     that survives someone editing that firewall. Reach the API over an SSH
-#     tunnel: `ssh -L 5010:127.0.0.1:5010 root@<seed>`.
+#     tunnel: `ssh -p 8443 -L 5010:127.0.0.1:5010 root@<seed>`.
+#
+#  4. **The genesis file is mounted read-only** at /etc/tet/genesis.json: with
+#     TET_ENV=testnet the node checks its chain against it before it starts.
 #
 #  2. **Only 8002/tcp is published.** All three swarms build
 #     `tcp::tokio::Transport` and nothing else — block plane `p2p.rs:1233`,
@@ -32,3 +35,5 @@ services:
     ports: !override
       - "127.0.0.1:5010:5010"
       - "8002:8002/tcp"
+    volumes:
+      - /etc/tet/genesis.json:/etc/tet/genesis.json:ro
