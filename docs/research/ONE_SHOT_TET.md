@@ -21,8 +21,8 @@ second signature cannot be made at all. Today TET only does the former.
 |---|---|---|---|
 | **Anonymous membership nullifier** | One message per (member, receiver, time bucket); one welcome grant per member, ever; one poll vote per (member, the poll's receiver, day) | The node stores each nullifier and refuses a second message, claim or vote that carries it | `tet-core/src/tmail/anon.rs`, `tmail/poll.rs`, `grants.rs`; the guest in `methods/` computes `tet_anon_nullifier_v1` |
 | **Machine notebook sequence** | Each record's `seq` exactly once, each `prev` naming the record before | `verify` refuses a gap, a swap, a duplicate `seq` or a `prev` that skips | `tools/machine-notebook` |
-| **Notebook one-time permits** | A device-signed permit cited by at most one record, not past its `expires_seq` | `verify` refuses a second citation, an expired one, or a permit another key signed | branch `tools/notebook-one-time`, not merged yet |
-| **Sign-in challenge nonce** | A signed answer to a site's challenge is accepted once, for that site's domain, before its `expires_seq` | The site keeps the nonces it issued and used, and refuses a second answer | `tools/sign-in`, branch `tools/sign-in-prototype`; local-only prototype, design not reviewed |
+| **Notebook one-time permits** | A device-signed permit cited by at most one record, not past its `expires_seq` | `verify` refuses a second citation, an expired one, or a permit another key signed | `tools/machine-notebook/notebook.py` (merged, #172) |
+| **Sign-in challenge nonce** | A signed answer to a site's challenge is accepted once, for that site's domain, before its `expires_seq` | The site keeps the nonces it issued and used, and refuses a second answer | `tools/sign-in`, PR #174; local-only prototype, design not reviewed |
 | **Genuine tag read counter** | Each tap of an NTAG 424 DNA tag carries a counter that must go up | The brand's SUN verifier attests only to a tap whose counter rose; a claim cites the counter | `docs/plans/GENUINE_TAG.md` on branch `plan-genuine-tag`; design only |
 
 All five are **detectable**, not impossible. The key could sign a second time. The second use is
