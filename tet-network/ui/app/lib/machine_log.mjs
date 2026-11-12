@@ -11,7 +11,7 @@
 // to tet-cli as TET_CHAIN_ID / TET_GENESIS_HASH, which tet-core trims, and lowercases the hash).
 //
 // Nothing here reads device.key: the caller hands a `read(path)` and this module asks only for the
-// paths below. The stamp check (`verify --node`) is not done here.
+// paths below, plus every permits/<id>.json(.sig.json) for the /agents permit list. The stamp check (`verify --node`) is not done here.
 //
 // Plain ESM; ML-DSA verification is injected (`mldsa44Verify`) so a guard runs this under Node.
 
@@ -47,6 +47,13 @@ export const DOES_NOT_SHOW = [
  * log is refused with this number named, never cut short (notebook.py verify has no limit).
  */
 export const MAX_RECORDS = 5000;
+
+/**
+ * The most permit files this page lists for one folder (/agents). Each is two signature checks; past
+ * this, the listing is refused with the count named (`permitsTooMany`), never cut short. The verdict
+ * itself is unaffected: it checks only the permits records cite, as notebook.py verify does.
+ */
+export const MAX_PERMITS = 1000;
 
 const SECRET = "device.key";
 
@@ -310,7 +317,10 @@ export function notebookPaths(raw) {
  * @returns {Promise<
  *   | { kind: "verdict", valid: boolean, problems: { seq: number | null, why: string }[], records: number,
  *       signer: string | null, uses: { seq: number, permit: { permitId: string, action: string, expiresSeq: bigint } }[],
- *       chain: { chainId: string, genesisHash: string }, hasDeviceKey: boolean }
+ *       chain: { chainId: string, genesisHash: string }, hasDeviceKey: boolean, keyid: string | null,
+ *       citations: { seq: number, permitId: string | null, ok: boolean }[],
+ *       permits: { permitId: string, permit: { permitId: string, action: string, expiresSeq: bigint } | null, why: string | null }[],
+ *       permitsTooMany: number | null }
  *   | { kind: "error", error: "no_chain" | "too_many", records: number, hasDeviceKey: boolean }>}
  */
 export async function checkMachineLog(o) {
@@ -330,7 +340,7 @@ export async function checkMachineLog(o) {
   names.sort((a, b) => a[0] - b[0] || byCodePoint(a[1], b[1]));
   const problems = [];
   if (!names.length) {
-    return { kind: "verdict", valid: false, problems: [{ seq: null, why: "no records" }], records: 0, signer: null, uses: [], chain: null, hasDeviceKey };
+    return { kind: "verdict", valid: false, problems: [{ seq: null, why: "no records" }], records: 0, signer: null, uses: [], chain: null, hasDeviceKey, keyid: null, citations: [], permits: [], permitsTooMany: null };
   }
   if (names.length > MAX_RECORDS) return { kind: "error", error: "too_many", records: names.length, hasDeviceKey };
   // notebook.py's chain_env: without chain.json it stops (an error, not a verdict) at the first check.
@@ -409,6 +419,7 @@ export async function checkMachineLog(o) {
   const signers = [];
   const used = new Map(); // permit id -> the record that cited it first
   const uses = []; // { seq, permit } for every citation that checked out
+  const citations = []; // { seq, permitId, ok } for every record that names a permit, refused or not
   let prevHash = ZERO;
   for (const [idx, [n, name]] of names.entries()) {
     const i = idx + 1;
@@ -457,6 +468,7 @@ export async function checkMachineLog(o) {
       const { why, permit } = await permitProblem(pid, i, used, wantKeyid || k);
       if (why) add(why);
       else uses.push({ seq: n, permit });
+      citations.push({ seq: n, permitId: typeof pid === "string" ? pid : null, ok: !why });
       // notebook.py's used.setdefault: a citation counts as the first use even when it was refused.
       if (typeof pid === "string" && !used.has(pid)) used.set(pid, n);
     }
@@ -464,6 +476,23 @@ export async function checkMachineLog(o) {
   }
   const distinct = new Set(signers);
   if (distinct.size > 1) problems.push({ seq: null, why: `key: ${distinct.size} different keys signed this log` });
+
+  // Every permit file in the folder, for /agents' list (notebook.py verify opens only the cited ones;
+  // this changes no verdict). Each goes through the same permitProblem as a citation, with nothing
+  // marked used and at seq 0, so `permit` is set exactly when the permit is genuine and this device's.
+  // The device is device.keyid, else the one key that signed every record; with neither, no permit is
+  // this device's.
+  const permitIds = [...new Set(o.paths.map((p) => /^permits\/([0-9a-f]{32})\.json$/.exec(p)?.[1]).filter(Boolean))].sort();
+  const device = wantKeyid || (distinct.size === 1 ? [...distinct][0] : null);
+  const permits = [];
+  let permitsTooMany = null;
+  if (permitIds.length > MAX_PERMITS) permitsTooMany = permitIds.length;
+  else {
+    for (const pid of permitIds) {
+      const { why, permit } = await permitProblem(pid, 0, new Map(), device);
+      permits.push({ permitId: pid, permit, why: permit ? null : why });
+    }
+  }
   return {
     kind: "verdict",
     valid: problems.length === 0,
@@ -473,6 +502,10 @@ export async function checkMachineLog(o) {
     uses: problems.length === 0 ? uses : [],
     chain,
     hasDeviceKey,
+    keyid: wantKeyid || null,
+    citations,
+    permits,
+    permitsTooMany,
   };
 }
 

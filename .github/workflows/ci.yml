@@ -700,6 +700,13 @@ jobs:
         name: try page — a machine's log is checked as notebook.py verify checks it
         run: node --experimental-strip-types scripts/try_machine_log_guard.mjs
 
+      # /agents, agent and machine control (prototype): permit states follow notebook.py's semantics on
+      # the fixture's folders; the permit command agrees with the real notebook.py's argparse and
+      # cmd_permit on every input; Shows / Does not show under every verdict; nothing is uploaded.
+      - if: needs.gate.outputs.code == 'true'
+        name: agents page — permits and verdicts as notebook.py has them, nothing uploaded
+        run: node --experimental-strip-types scripts/agents_control_guard.mjs
+
       # Try TET parts 2-3: on the try page a visitor's wallet never pays a file fee (the demo's
       # sponsor does, or it is unpaid), and every refusal is final and worded as the design says.
       - if: needs.gate.outputs.code == 'true'
