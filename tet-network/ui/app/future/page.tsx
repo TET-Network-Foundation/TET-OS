@@ -1,9 +1,9 @@
 /**
- * /future: "A guess at the 2030s". A static concept page that imagines one-shot signing keys
- * (docs/research/ONE_SHOT_TET.md, status: idea). It moves nothing and talks to no server.
- * scripts/future_concept_guard.mjs checks the banner, the sample figures, the send button and the
- * wording; scripts/try_money_guard.mjs scans it for money wording. The page follows the visitor's
- * language through the /try dictionaries (FutureView).
+ * /future: "A guess at the 2030s". A concept page that imagines one-shot signing keys
+ * (docs/research/ONE_SHOT_TET.md, status: idea), with a sample wallet that lives only in the tab.
+ * It moves nothing and talks to no server. scripts/future_concept_guard.mjs checks the banner, the
+ * lead, the sample wallet's rules, the figures and the wording; scripts/try_money_guard.mjs scans it
+ * for money wording. The page follows the visitor's language through the /try dictionaries.
  */
 import type { Metadata } from "next";
 import { LangProvider } from "../try/i18n";
