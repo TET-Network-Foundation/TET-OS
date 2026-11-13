@@ -54,12 +54,12 @@ export const JA: Record<string, string> = {
     "同じサンプルのウォレットをスマートフォンで、ダークテーマで表示したもの。メモを一回渡した後です。",
   "The same page on a phone, dark theme.": "同じページをスマートフォンで（ダークテーマ）。",
   "Signatures": "署名",
-  "Every TET signature today is two signatures made together, Ed25519 and ML-DSA-44. A second post-quantum one is planned.":
-    "今の TET の署名は、どれも Ed25519 と ML-DSA-44 の二つを一緒に作ったものです。二つ目の耐量子署名が予定されています。",
+  "Every TET signature today is two signatures made together, Ed25519 and ML-DSA-44. A second post-quantum one is an idea, waiting for the FIPS 206 standard.":
+    "今の TET の署名は、どれも Ed25519 と ML-DSA-44 の二つを一緒に作ったものです。二つ目の耐量子署名はアイデアの段階で、FIPS 206 の標準を待っています。",
   "Two solid seals joined together, the two signatures used today, and a third seal drawn in dashed lines with a pause mark: it waits for its standard.":
     "つながった二つの塗りつぶしの印は、今使っている二つの署名。点線で描かれ一時停止の印が付いた三つ目は、標準を待っています。",
-  "Solid: Ed25519 and ML-DSA-44, used today. Dashed: FN-DSA, waiting for its final standard.":
-    "塗りつぶし：今使っている Ed25519 と ML-DSA-44。点線：最終の標準を待っている FN-DSA。",
+  "Solid: Ed25519 and ML-DSA-44, used today. Dashed: FN-DSA, an idea waiting for the FIPS 206 standard.":
+    "実線：今使っている Ed25519 と ML-DSA-44。破線：FN-DSA。FIPS 206 の標準を待っているアイデアです。",
   "A learning model": "学習モデル",
   "Papers": "論文",
   "Links only. The research note says how much of each one was read.":
@@ -121,17 +121,19 @@ export const JA: Record<string, string> = {
   "A real one-shot key. A copy of this model could be used twice.": "本物のワンショット鍵。この模型は、写せば二回使えてしまいます。",
   "Anything real: no request leaves the page, and nothing is stored.": "本物の何か。ページから通信は出ず、何も保存されません。",
   "Open the sample wallet": "サンプルのウォレットを開く",
-  "A learning model is planned. Nothing about it is designed or built yet.":
-    "学習モデルが予定されています。まだ何も設計されておらず、作られてもいません。",
-  "That a learning model is on the plan.": "学習モデルが予定に入っていること。",
-  "What it would learn, from what, or how. None of that is written down yet.":
-    "何を、何から、どう学ぶのか。どれもまだ書かれていません。",
+  "An idea for a small model with a few simulated qubits: it would show why a copied simulation can sign twice, and why a real one-shot key could not.":
+    "いくつかの量子ビットをシミュレートする小さな模型のアイデアです。写したシミュレーションはなぜ二回署名できてしまうのか、本物のワンショット鍵はなぜできないのかを見せます。",
+  "What the model is meant to teach: a simulation can be copied, so its key can sign twice; a real one-shot key cannot be copied.":
+    "この模型で伝えたいこと：シミュレーションは写せるので、その鍵は二回署名できてしまう。本物のワンショット鍵は写せない。",
+  "A working model. Nothing is designed or built yet.": "動く模型。まだ何も設計されておらず、作られてもいません。",
+  "Anything about real quantum hardware. A few simulated qubits on an ordinary computer are a model, not a key.":
+    "本物の量子ハードウェアについてのこと。普通のコンピューター上でシミュレートした数個の量子ビットは模型であって、鍵ではありません。",
   "FN-DSA, a second post-quantum signature": "FN-DSA：二つ目の耐量子署名",
-  "Today every TET signature is two signatures: Ed25519 and ML-DSA-44. FN-DSA is a second post-quantum signature scheme TET would add once its standard is final. It waits for that standard.":
-    "今の TET の署名は、どれも Ed25519 と ML-DSA-44 の二つの署名です。FN-DSA は、標準が確定したら TET が加える二つ目の耐量子署名方式です。その標準を待っています。",
+  "Today every TET signature is two signatures: Ed25519 and ML-DSA-44. FN-DSA is a second post-quantum signature scheme TET could add. Waiting for the FIPS 206 standard.":
+    "今の TET の署名は、どれも Ed25519 と ML-DSA-44 の二つの署名です。FN-DSA は、TET が加えられるかもしれない二つ目の耐量子署名方式です。FIPS 206 の標準を待っています。",
   "What TET signs with today: each signature is an Ed25519 signature and an ML-DSA-44 signature together.":
     "今の TET の署名方式：どの署名も、Ed25519 の署名と ML-DSA-44 の署名を一緒にしたものです。",
-  "Any FN-DSA code. Nothing is built.": "FN-DSA のコード。何も作られていません。",
-  "When it would come. It waits for the final standard, and that has no date here.":
-    "いつ来るか。最終の標準を待っていて、ここに日付はありません。",
+  "Any FN-DSA code. Nothing is built, and nothing is decided.": "FN-DSA のコード。何も作られておらず、何も決まっていません。",
+  "When the standard will be final. It has no date here.": "標準がいつ確定するか。ここに日付はありません。",
+  "Source: the pqc-forum discussion of the FIPS 206 plan": "出典：pqc-forum での FIPS 206 の計画についての議論",
 };

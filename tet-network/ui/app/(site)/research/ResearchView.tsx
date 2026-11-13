@@ -134,12 +134,12 @@ export default function ResearchView() {
         </div>
       </SiteSection>
 
-      <SiteSection title="Signatures" lead="Every TET signature today is two signatures made together, Ed25519 and ML-DSA-44. A second post-quantum one is planned.">
+      <SiteSection title="Signatures" lead="Every TET signature today is two signatures made together, Ed25519 and ML-DSA-44. A second post-quantum one is an idea, waiting for the FIPS 206 standard.">
         <div className="grid items-start gap-6 md:grid-cols-2">
           <Figure
             src="/site/research/signatures.svg"
             alt="Two solid seals joined together, the two signatures used today, and a third seal drawn in dashed lines with a pause mark: it waits for its standard."
-            caption="Solid: Ed25519 and ML-DSA-44, used today. Dashed: FN-DSA, waiting for its final standard."
+            caption="Solid: Ed25519 and ML-DSA-44, used today. Dashed: FN-DSA, an idea waiting for the FIPS 206 standard."
           />
           <FeatureCard id="fn-dsa" />
         </div>

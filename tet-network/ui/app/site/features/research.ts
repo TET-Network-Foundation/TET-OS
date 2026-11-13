@@ -46,23 +46,28 @@ export const FEATURES: Feature[] = [
   {
     id: "learning-model",
     title: "A learning model",
-    summary: "A learning model is planned. Nothing about it is designed or built yet.",
-    status: "planned",
+    summary:
+      "An idea for a small model with a few simulated qubits: it would show why a copied simulation can sign twice, and why a real one-shot key could not.",
+    status: "idea",
     evidence: [],
-    shows: ["That a learning model is on the plan."],
-    doesNot: ["What it would learn, from what, or how. None of that is written down yet."],
+    shows: ["What the model is meant to teach: a simulation can be copied, so its key can sign twice; a real one-shot key cannot be copied."],
+    doesNot: [
+      "A working model. Nothing is designed or built yet.",
+      "Anything about real quantum hardware. A few simulated qubits on an ordinary computer are a model, not a key.",
+    ],
   },
   {
     id: "fn-dsa",
     title: "FN-DSA, a second post-quantum signature",
     summary:
-      "Today every TET signature is two signatures: Ed25519 and ML-DSA-44. FN-DSA is a second post-quantum signature scheme TET would add once its standard is final. It waits for that standard.",
-    status: "planned",
+      "Today every TET signature is two signatures: Ed25519 and ML-DSA-44. FN-DSA is a second post-quantum signature scheme TET could add. Waiting for the FIPS 206 standard.",
+    status: "idea",
     evidence: [],
     shows: ["What TET signs with today: each signature is an Ed25519 signature and an ML-DSA-44 signature together."],
     doesNot: [
-      "Any FN-DSA code. Nothing is built.",
-      "When it would come. It waits for the final standard, and that has no date here.",
+      "Any FN-DSA code. Nothing is built, and nothing is decided.",
+      "When the standard will be final. It has no date here.",
     ],
+    link: { href: "https://groups.google.com/a/list.nist.gov/g/pqc-forum", label: "Source: the pqc-forum discussion of the FIPS 206 plan" },
   },
 ];
