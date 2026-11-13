@@ -114,6 +114,9 @@ const AUTHORSHIP = [
   /proves?\s+(?:who\s+)?(?:the\s+)?author(?:ship)?\b(?!\s+is\.)/i,
   /作ったことを証明|作ったことの証明|作者であることを証明|制作者であることを証明|あなたが作ったと証明/,
   /證明(?:是)?你(?:製作|做|創作|寫)|證明你是作者/,
+  // Never says who did something either: "proves you scanned …" names a person; a check shows a key.
+  /\bprove[sd]?\s+(?:that\s+)?you\s+[a-z]+ed\b/i,
+  /證明你\S{0,6}了/,
 ];
 function noAuthorshipClaim(files) {
   const bad = [];
@@ -128,6 +131,8 @@ await check("control: \"proves you made it\" and 「作ったことを証明」 
   assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["x.tsx", 't("This proves you made it.")']]));
   assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["i18n_ja.ts", '"x": "あなたが作ったことを証明します"']]));
   assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["i18n_zh_hk.ts", '"x": "證明是你製作的"']]));
+  assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["x.tsx", 't("Proves you scanned the venue QR.")']]));
+  assert.throws(() => noAuthorshipClaim([...ALL_TRY, ["i18n_zh_hk.ts", '"x": "證明你掃描了會場的 QR 碼"']]));
 });
 
 const HOME = readFileSync(new URL("../app/try/HomePanel.tsx", import.meta.url), "utf8");
