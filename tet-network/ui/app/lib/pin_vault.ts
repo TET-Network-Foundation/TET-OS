@@ -137,7 +137,7 @@ export function readVaultRecord(): VaultRecordV1 | null {
 }
 
 export async function createVault(): Promise<never> {
-  throw new Error("createVault is deprecated; use /setup with PQC hybrid generation");
+  throw new Error("createVault is deprecated: unlock the wallet you created earlier on this device instead");
 }
 
 export async function createVaultWithMnemonic(

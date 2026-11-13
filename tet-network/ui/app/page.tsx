@@ -91,7 +91,7 @@ export default function Home() {
     if (vaultExists()) {
       setHasWallet(true);
       setErr(
-        "A wallet from /setup exists on this device. Open Sovereign OS (/os) → File → Wallet… and enter your master password there.",
+        "The wallet you created earlier on this device is still here. Open Sovereign OS (/os) → File → Wallet… and enter your master password there.",
       );
       return;
     }
