@@ -34,7 +34,7 @@ const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "no-referrer" },
 ];
-export const PUBLIC_PAGES = ["/", "/try", "/try/:path*", "/whitepaper", "/whitepaper/:path*", "/verify/:path*", "/paper/:path*", "/tags", "/machines", "/keys", "/services", "/research", "/about", "/changelog"];
+export const PUBLIC_PAGES = ["/", "/try", "/try/:path*", "/whitepaper", "/whitepaper/:path*", "/verify/:path*", "/paper/:path*", "/tags", "/machines", "/keys", "/services", "/research", "/about", "/changelog", "/market"];
 
 /** project | app | all (default). See app/site/split.ts. */
 export const SITE_ROLE = process.env.TET_SITE_ROLE || "all";
