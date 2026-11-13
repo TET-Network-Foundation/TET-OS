@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">A site asks a question, a key answers, and the site sees a key, not a name</title>
+  <style>
+    .bg{fill:#f0fdfa}.card{fill:#ffffff;stroke:#cbd5e1}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}
+    .soft{fill:#ccfbf1}.mute{fill:#94a3b8}.mutes{stroke:#94a3b8}.no{stroke:#e11d48}.line{fill:#e2e8f0}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0b1f1e}.card{fill:#0f172a;stroke:#334155}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#99f6e4}
+      .soft{fill:#134e4a}.mute{fill:#64748b}.mutes{stroke:#64748b}.no{stroke:#fb7185}.line{fill:#1e293b}
+    }
+  </style>
+  <rect class="bg" width="400" height="300" rx="24"/>
+  <!-- the site: a plain window -->
+  <rect class="card" x="24" y="40" width="170" height="130" rx="14" stroke-width="2"/>
+  <circle class="mute" cx="42" cy="56" r="4"/><circle class="mute" cx="56" cy="56" r="4"/><circle class="mute" cx="70" cy="56" r="4"/>
+  <rect class="line" x="40" y="74" width="138" height="10" rx="5"/>
+  <!-- its one-time question -->
+  <path class="soft" d="M52 98 h92 a10 10 0 0 1 10 10 v28 a10 10 0 0 1 -10 10 h-56 l-14 12 v-12 h-22 a10 10 0 0 1 -10 -10 v-28 a10 10 0 0 1 10 -10 z"/>
+  <text class="deep" x="98" y="134" font-family="system-ui, sans-serif" font-size="32" font-weight="700" text-anchor="middle">?</text>
+  <!-- the key, on the right -->
+  <g transform="translate(250 64)">
+    <circle class="inks" cx="34" cy="34" r="24" fill="none" stroke-width="10"/>
+    <rect class="ink" x="56" y="29" width="62" height="10" rx="5"/>
+    <rect class="ink" x="96" y="39" width="8" height="16"/><rect class="ink" x="108" y="39" width="8" height="11"/>
+  </g>
+  <path class="mutes" d="M200 100 q24 -20 46 -6" fill="none" stroke-width="3" stroke-dasharray="6 6"/>
+  <path class="mutes" d="M300 132 q-20 44 -78 70" fill="none" stroke-width="3" stroke-dasharray="6 6"/>
+  <!-- what the site sees: a key and a check, not a person -->
+  <rect class="card" x="96" y="190" width="210" height="80" rx="14" stroke-width="2"/>
+  <g transform="translate(116 214) scale(0.5)">
+    <circle class="inks" cx="34" cy="34" r="24" fill="none" stroke-width="12"/>
+    <rect class="ink" x="56" y="28" width="62" height="12" rx="6"/>
+  </g>
+  <path class="inks" d="M188 232 l12 12 l22 -24" fill="none" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(250 210)">
+    <circle class="mute" cx="20" cy="12" r="9"/>
+    <path class="mute" d="M4 42 q16 -32 32 0 z"/>
+    <circle class="no" cx="20" cy="24" r="22" fill="none" stroke-width="4"/>
+    <line class="no" x1="5" y1="9" x2="35" y2="39" stroke-width="4"/>
+  </g>
+</svg>
