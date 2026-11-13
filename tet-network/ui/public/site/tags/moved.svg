@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 240" role="img" aria-labelledby="t">
+  <title id="t">The same tag moved from one bag to another: the chip still checks, though the object changed</title>
+  <style>
+    .bg{fill:#f8fafc}.a{fill:#0f766e}.b{fill:#94a3b8}.paper{fill:#ffffff}.line{stroke:#334155}.ok{stroke:#0f766e}.q{fill:#334155}
+    @media (prefers-color-scheme: dark){.bg{fill:#0f172a}.a{fill:#2dd4bf}.b{fill:#475569}.paper{fill:#1e293b}.line{stroke:#cbd5e1}.ok{stroke:#5eead4}.q{fill:#e2e8f0}}
+  </style>
+  <rect class="bg" width="480" height="240" rx="24"/>
+  <!-- the bag the tag was made for -->
+  <path class="a" d="M40 110 h120 l-10 100 h-100 z"/>
+  <path fill="none" class="line" stroke-width="6" d="M70 110 q30 -50 60 0"/>
+  <circle class="paper" cx="100" cy="160" r="16" stroke-dasharray="5 5" stroke="#64748b" stroke-width="3"/>
+  <!-- the arrow: the tag is peeled off and stuck elsewhere -->
+  <path fill="none" class="line" stroke-width="3" stroke-dasharray="8 7" d="M130 150 q110 -80 220 0"/>
+  <path class="q" d="M350 150 l-16 -4 l8 -12 z"/>
+  <!-- a different bag, now carrying the tag -->
+  <path class="b" d="M320 110 h120 l-10 100 h-100 z"/>
+  <path fill="none" class="line" stroke-width="6" d="M350 110 q30 -50 60 0"/>
+  <circle class="paper" cx="380" cy="160" r="16" stroke="#0f766e" stroke-width="4"/>
+  <path fill="none" class="ok" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M372 160 l6 6 l10 -12"/>
+  <!-- a question mark over the second bag: the tap cannot tell -->
+  <text class="q" x="380" y="78" font-family="system-ui, sans-serif" font-size="40" font-weight="700" text-anchor="middle">?</text>
+</svg>
