@@ -8,7 +8,7 @@ export const SECTION: Section = {
 };
 
 /** All three run on /market, a prototype on branch ui/market (no PR yet). Its own Shows / Does not show are the basis. */
-const MARKET: Evidence[] = [{ branch: "ui/market", what: "/market prototype" }];
+const MARKET: Evidence[] = [{ pr: 189, what: "/market prototype" }];
 const TRY = { href: "/market", label: "Try it on /market" };
 
 export const FEATURES: Feature[] = [
