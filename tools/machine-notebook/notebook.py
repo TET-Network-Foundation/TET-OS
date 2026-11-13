@@ -61,16 +61,16 @@ CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 SHOWS = [
     "which key signed each record",
     "that the records are in this order",
-    "that each record existed before the next one in the same chain",
-    "that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires",
+    "that each record was written before the next one",
+    "that no one-time permission was used twice in this log, or after it ran out",
 ]
 DOES_NOT_SHOW = [
     "that the reading is true",
-    "that the device clock was right",
-    "where the device was",
-    "who operates the device",
+    "that the machine's clock was right",
+    "where the machine was",
+    "who runs the machine",
     "that the key was not copied",
-    "that a permit was used only here: it does not stop a copied key from writing a second log",
+    "that a copied key did not use the same permission in another log",
 ]
 
 
