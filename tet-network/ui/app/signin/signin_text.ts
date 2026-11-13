@@ -1,5 +1,5 @@
 /**
- * /signin, "Sign in with TET": the fixed text and the recorded walkthrough. No JSX and no browser
+ * /signin, "Sign in with TET": the fixed text and the recorded sample. No JSX and no browser
  * APIs, so `scripts/signin_demo_guard.mjs` imports this module as the page does.
  *
  * The prototype is `tools/sign-in/signin.py` (design: docs/plans/SIGN_IN_WITH_TET.md, not reviewed).
@@ -12,18 +12,21 @@
 
 /** Shown at the very top, in English and Japanese. */
 export const STATUS_LINE = "Status: prototype, design not reviewed, not for real logins.";
-/** The label on the walkthrough, in English and Japanese. */
-export const WALKTHROUGH_LABEL = "Walkthrough: no server, nothing is signed or sent";
+/** The one plain sentence under the title: what the page is for and what the visitor learns. */
+export const LEAD =
+  "This page shows how a website can check that your key answered its question, without learning who you are.";
+/** The label on the sample: it is a recording, and the page sends nothing. */
+export const SAMPLE_LABEL = "Sample: a recording of a real run. This page signs nothing and sends nothing.";
 /** The design's limit sentence (docs/plans/SIGN_IN_WITH_TET.md), on every sign-in screen. */
 export const LIMIT_LINE = "If you lose your passphrase (12 words), nobody can recover your account.";
 
 /** tools/sign-in/README.md, "What it shows", word for word (the guard compares them). */
-export const SHOWS = ["This key answered this challenge for this domain, once, before it expired."];
+export const SHOWS = ["This key answered this site's question, once, before it expired."];
 /** tools/sign-in/README.md, "What it does not show", word for word (the guard compares them). */
 export const DOES_NOT_SHOW = [
-  "Who holds the key. Anyone with the 12 words can answer. The server learns a key id, not a person.",
-  "That the user meant to sign in to this domain: the client signs whatever challenge it is given. The design's signer would refuse a challenge whose origin is not the page that sent the user, and show the site's name before signing; neither is here.",
-  "Anything across a restart: issued and used nonces live in memory.",
+  "Who holds the key. Anyone with the 12 words can answer. The site learns a key, not a person.",
+  "That you meant to sign in to this site: the prototype signs any question it is given. The full design would check where the question came from and show the site's name first; neither is built.",
+  "Anything after a restart: the server keeps its questions in memory only.",
 ];
 
 /** Live mode talks to this host only: the prototype binds to the loopback address. */
@@ -55,7 +58,7 @@ export const KEY_ID = "tet-ed25519:6848297c2ac06548c64794d57aadc76863d9690f7a79f
 export type Challenge = { v: 1; kind: "tet_signin_challenge_v1"; domain: string; nonce: string; expires_seq: number };
 export type Scenario = {
   id: "accepted" | "replay" | "domain" | "expired";
-  /** What the visitor's device did, in one line (English; translated on the page). */
+  /** What happened to the answer, in one plain line (English; translated on the page). */
   what: string;
   /** GET /challenge, exactly as the server sent it. */
   served: string;
@@ -74,7 +77,7 @@ const KIND = "tet_signin_challenge_v1" as const;
 export const SCENARIOS: Scenario[] = [
   {
     id: "accepted",
-    what: "The device signs the challenge it was given and posts it once.",
+    what: "Your key answers the question, and the answer is sent once.",
     served: `{"v": 1, "kind": "tet_signin_challenge_v1", "domain": "example.test", "nonce": "${N1}", "expires_seq": 9}`,
     signed: { v: 1, kind: KIND, domain: "example.test", nonce: N1, expires_seq: 9 },
     status: 200,
@@ -82,7 +85,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     id: "replay",
-    what: "The same signed answer is posted a second time.",
+    what: "The same answer is sent a second time.",
     served: `{"v": 1, "kind": "tet_signin_challenge_v1", "domain": "example.test", "nonce": "${N1}", "expires_seq": 9}`,
     signed: { v: 1, kind: KIND, domain: "example.test", nonce: N1, expires_seq: 9 },
     status: 403,
@@ -90,7 +93,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     id: "domain",
-    what: "The challenge's domain is rewritten to evil.test, then validly signed.",
+    what: "The question is changed to name another site, evil.test, and then answered with the right key.",
     served: `{"v": 1, "kind": "tet_signin_challenge_v1", "domain": "example.test", "nonce": "${N2}", "expires_seq": 10}`,
     signed: { v: 1, kind: KIND, domain: "evil.test", nonce: N2, expires_seq: 10 },
     status: 403,
@@ -98,7 +101,7 @@ export const SCENARIOS: Scenario[] = [
   },
   {
     id: "expired",
-    what: "The answer arrives after nine more challenges were issued.",
+    what: "The answer arrives after the site has asked nine more questions.",
     served: `{"v": 1, "kind": "tet_signin_challenge_v1", "domain": "example.test", "nonce": "${N3}", "expires_seq": 11}`,
     signed: { v: 1, kind: KIND, domain: "example.test", nonce: N3, expires_seq: 11 },
     status: 403,
@@ -135,4 +138,31 @@ export function siteSees(s: Scenario): SiteSees {
   const a = JSON.parse(s.answer) as { accepted?: boolean; refused?: string };
   const verdict = a.accepted === true ? "accepted" : `refused: ${String(a.refused ?? "")}`;
   return { keyId: KEY_ID, domain: s.signed.domain, nonce: s.signed.nonce, expiresSeq: s.signed.expires_seq, verdict };
+}
+
+// ── the verdict, first ────────────────────────────────────────────────────────────────────────────
+
+/** The result line for each case: a label that stays visible, a tone and one short sentence. */
+export const VERDICT_SENTENCES = {
+  accepted: "The site accepted this answer",
+  used: "Refused: this answer was already used",
+  site: "Refused: the answer was for another site",
+  expired: "Refused: the question had expired",
+  other: "Refused: the site did not accept this answer",
+} as const;
+export type Verdict = { label: "ACCEPTED" | "REFUSED"; tone: "ok" | "bad"; sentence: (typeof VERDICT_SENTENCES)[keyof typeof VERDICT_SENTENCES] };
+
+/** The verdict read from the server's recorded answer (never from the case's name). */
+export function verdict(s: Scenario): Verdict {
+  const a = JSON.parse(s.answer) as { accepted?: boolean; refused?: string };
+  if (s.status === 200 && a.accepted === true) return { label: "ACCEPTED", tone: "ok", sentence: VERDICT_SENTENCES.accepted };
+  const why = String(a.refused ?? "");
+  const sentence = why.startsWith("nonce: already used")
+    ? VERDICT_SENTENCES.used
+    : why.startsWith("domain:")
+      ? VERDICT_SENTENCES.site
+      : why.startsWith("expired:")
+        ? VERDICT_SENTENCES.expired
+        : VERDICT_SENTENCES.other;
+  return { label: "REFUSED", tone: "bad", sentence };
 }
