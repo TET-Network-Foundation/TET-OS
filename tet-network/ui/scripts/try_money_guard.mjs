@@ -158,8 +158,8 @@ await check("control: the stevenexus.org money lines are caught; the practice-un
   }
 });
 
-await check("the /future concept page is scanned (app/future/page.tsx and FutureView.tsx)", () => {
-  for (const f of ["app/future/page.tsx", "app/future/FutureView.tsx"]) assert.ok(files.some(([p]) => p === f), `${f} is not scanned`);
+await check("the /future concept page is scanned (app/future/page.tsx, FutureView.tsx and wallet_model.ts)", () => {
+  for (const f of ["app/future/page.tsx", "app/future/FutureView.tsx", "app/future/wallet_model.ts"]) assert.ok(files.some(([p]) => p === f), `${f} is not scanned`);
 });
 await check("control: a money word put into the /future page is caught", () => {
   const view = files.find(([p]) => p === "app/future/FutureView.tsx");
