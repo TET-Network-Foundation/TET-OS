@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 420" role="img" aria-labelledby="t">
+  <title id="t">A generic phone with a secure chip inside: the key is locked in the chip and does not leave it</title>
+  <style>
+    .bg{fill:#f0fdfa}.body{fill:#1e293b}.screen{fill:#ffffff}.card{fill:#ffffff;stroke:#cbd5e1}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}
+    .soft{fill:#ccfbf1}.mute{fill:#94a3b8}.mutes{stroke:#94a3b8}.no{stroke:#e11d48}.line{fill:#e2e8f0}.chip{fill:#e2e8f0;stroke:#475569}.on{fill:#ffffff}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0b1f1e}.body{fill:#334155}.screen{fill:#0f172a}.card{fill:#0f172a;stroke:#334155}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#99f6e4}
+      .soft{fill:#134e4a}.mute{fill:#64748b}.mutes{stroke:#64748b}.no{stroke:#fb7185}.line{fill:#1e293b}.chip{fill:#1e293b;stroke:#94a3b8}.on{fill:#042f2e}
+    }
+  </style>
+  <rect class="bg" width="320" height="420" rx="24"/>
+  <rect class="body" x="70" y="24" width="180" height="372" rx="30"/>
+  <rect class="screen" x="80" y="44" width="160" height="332" rx="20"/>
+  <rect class="mute" x="140" y="32" width="40" height="5" rx="2.5"/>
+  <!-- the secure chip, with pins -->
+  <g class="mutes" stroke-width="4" stroke-linecap="round">
+    <line x1="120" y1="150" x2="120" y2="134"/><line x1="146" y1="150" x2="146" y2="134"/><line x1="172" y1="150" x2="172" y2="134"/><line x1="198" y1="150" x2="198" y2="134"/>
+    <line x1="120" y1="250" x2="120" y2="266"/><line x1="146" y1="250" x2="146" y2="266"/><line x1="172" y1="250" x2="172" y2="266"/><line x1="198" y1="250" x2="198" y2="266"/>
+  </g>
+  <rect class="chip" x="104" y="150" width="112" height="100" rx="14" stroke-width="3"/>
+  <!-- the key, inside the chip -->
+  <g transform="translate(118 180)">
+    <circle class="inks" cx="20" cy="20" r="14" fill="none" stroke-width="7"/>
+    <rect class="ink" x="32" y="16" width="50" height="8" rx="4"/>
+    <rect class="ink" x="64" y="24" width="6" height="12"/><rect class="ink" x="74" y="24" width="6" height="8"/>
+  </g>
+  <!-- a padlock: the phone's own lock -->
+  <g transform="translate(146 286)">
+    <path class="inks" d="M6 16 v-6 a8 8 0 0 1 16 0 v6" fill="none" stroke-width="4"/>
+    <rect class="ink" x="0" y="16" width="28" height="22" rx="5"/>
+  </g>
+  <!-- the key does not leave: an arrow outward, crossed -->
+  <path class="mutes" d="M220 176 l50 -56" stroke-width="4" stroke-linecap="round" stroke-dasharray="6 6"/>
+  <circle class="no" cx="284" cy="104" r="16" fill="none" stroke-width="4"/>
+  <line class="no" x1="273" y1="93" x2="295" y2="115" stroke-width="4"/>
+</svg>

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 240" role="img" aria-labelledby="t">
+  <title id="t">A machine's log: each record is signed by the machine's key and linked to the one before</title>
+  <style>.bg{fill:#f0fdfa}.pr{fill:#0f766e}.prs{stroke:#0f766e}.ink{fill:#134e4a}.inks{stroke:#134e4a}.lt{fill:#5eead4}.paper{fill:#ffffff}.mu{stroke:#94a3b8}.muf{fill:#94a3b8}.no{fill:#be123c}.nos{stroke:#be123c}.ok{fill:#047857}.oks{stroke:#047857}@media (prefers-color-scheme: dark){.bg{fill:#042f2e}.pr{fill:#2dd4bf}.prs{stroke:#2dd4bf}.ink{fill:#ccfbf1}.inks{stroke:#ccfbf1}.lt{fill:#99f6e4}.paper{fill:#0f172a}.mu{stroke:#64748b}.muf{fill:#64748b}.no{fill:#fb7185}.nos{stroke:#fb7185}.ok{fill:#34d399}.oks{stroke:#34d399}}</style>
+  <rect class="bg" width="480" height="240" rx="24"/>
+  <!-- a small sensor box with its key -->
+  <g transform="translate(24 70)">
+    <rect class="pr" x="0" y="20" width="64" height="64" rx="12"/>
+    <circle class="paper" cx="32" cy="46" r="10"/><circle class="ink" cx="32" cy="46" r="4"/>
+    <rect class="ink" x="28" y="0" width="8" height="22"/><circle class="lt" cx="32" cy="0" r="7"/>
+    <rect class="paper" x="14" y="66" width="36" height="8" rx="4"/>
+  </g>
+  <path class="mu" d="M96 122 h20" stroke-width="3" stroke-dasharray="5 5" fill="none"/>
+  <!-- three records, each with a seal; a link from each to the next -->
+  <g id="rec">
+    <rect class="paper prs" x="120" y="64" width="92" height="116" rx="12" stroke-width="3"/>
+    <text class="ink" x="138" y="92" font-family="ui-monospace, monospace" font-size="16" font-weight="700">1</text>
+    <rect class="muf" x="138" y="104" width="56" height="6" rx="3"/><rect class="muf" x="138" y="118" width="40" height="6" rx="3"/>
+    <circle class="pr" cx="184" cy="156" r="14"/><path class="inks" d="M178 156 l5 5 l9 -10" stroke-width="3" fill="none" stroke-linecap="round"/>
+  </g>
+  <use href="#rec" x="112"/>
+  <use href="#rec" x="224"/>
+  <rect class="paper" x="246" y="78" width="20" height="20"/><text class="ink" x="250" y="92" font-family="ui-monospace, monospace" font-size="16" font-weight="700">2</text>
+  <rect class="paper" x="358" y="78" width="20" height="20"/><text class="ink" x="362" y="92" font-family="ui-monospace, monospace" font-size="16" font-weight="700">3</text>
+  <g class="prs" stroke-width="5" fill="none" stroke-linecap="round">
+    <path d="M206 122 h18"/><path d="M318 122 h18"/>
+  </g>
+  <g class="prs" stroke-width="4" fill="none">
+    <rect x="200" y="114" width="16" height="16" rx="8"/><rect x="214" y="114" width="16" height="16" rx="8"/>
+    <rect x="312" y="114" width="16" height="16" rx="8"/><rect x="326" y="114" width="16" height="16" rx="8"/>
+  </g>
+  <path class="mu" d="M120 200 h316" stroke-width="2" fill="none"/>
+  <path class="mu" d="M428 194 l8 6 l-8 6" stroke-width="2" fill="none"/>
+</svg>

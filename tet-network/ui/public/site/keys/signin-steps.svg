@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 260" role="img" aria-labelledby="t">
+  <title id="t">Three steps: the site asks a one-time question, your key answers, the site checks the answer</title>
+  <style>
+    .bg{fill:#f8fafc}.card{fill:#ffffff;stroke:#cbd5e1}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}
+    .soft{fill:#ccfbf1}.mute{fill:#94a3b8}.mutes{stroke:#94a3b8}.no{stroke:#e11d48}.line{fill:#e2e8f0}.num{fill:#ffffff}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#020617}.card{fill:#0f172a;stroke:#334155}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#99f6e4}
+      .soft{fill:#134e4a}.mute{fill:#64748b}.mutes{stroke:#64748b}.no{stroke:#fb7185}.line{fill:#1e293b}.num{fill:#042f2e}
+    }
+  </style>
+  <rect class="bg" width="720" height="260" rx="24"/>
+  <!-- 1: the site asks -->
+  <rect class="card" x="20" y="30" width="200" height="200" rx="18" stroke-width="2"/>
+  <circle class="ink" cx="52" cy="58" r="16"/><text class="num" x="52" y="64" font-family="system-ui, sans-serif" font-size="17" font-weight="700" text-anchor="middle">1</text>
+  <rect class="line" x="48" y="96" width="152" height="10" rx="5"/>
+  <path class="soft" d="M64 122 h112 a10 10 0 0 1 10 10 v36 a10 10 0 0 1 -10 10 h-70 l-14 12 v-12 h-28 a10 10 0 0 1 -10 -10 v-36 a10 10 0 0 1 10 -10 z"/>
+  <text class="deep" x="120" y="164" font-family="system-ui, sans-serif" font-size="34" font-weight="700" text-anchor="middle">?</text>
+  <!-- one-time: a small ticket with one punch -->
+  <rect class="inks" x="156" y="194" width="44" height="22" rx="5" fill="none" stroke-width="3"/>
+  <circle class="ink" cx="178" cy="205" r="4"/>
+  <path class="mutes" d="M226 130 h18" stroke-width="4" stroke-linecap="round"/><path class="mute" d="M244 121 l12 9 l-12 9 z"/>
+  <!-- 2: your key answers -->
+  <rect class="card" x="260" y="30" width="200" height="200" rx="18" stroke-width="2"/>
+  <circle class="ink" cx="288" cy="58" r="16"/><text class="num" x="288" y="64" font-family="system-ui, sans-serif" font-size="17" font-weight="700" text-anchor="middle">2</text>
+  <g transform="translate(302 98)">
+    <circle class="inks" cx="30" cy="30" r="21" fill="none" stroke-width="9"/>
+    <rect class="ink" x="49" y="25" width="56" height="10" rx="5"/>
+    <rect class="ink" x="85" y="35" width="7" height="14"/><rect class="ink" x="96" y="35" width="7" height="10"/>
+  </g>
+  <!-- a signature: two strokes, for the two halves -->
+  <path class="inks" d="M296 190 q16 -22 32 0 t32 0 t32 0" fill="none" stroke-width="5" stroke-linecap="round"/>
+  <path class="inks" d="M296 206 q16 -14 32 0 t32 0 t32 0" fill="none" stroke-width="3" stroke-linecap="round" opacity="0.6"/>
+  <path class="mutes" d="M466 130 h18" stroke-width="4" stroke-linecap="round"/><path class="mute" d="M484 121 l12 9 l-12 9 z"/>
+  <!-- 3: the site checks -->
+  <rect class="card" x="500" y="30" width="200" height="200" rx="18" stroke-width="2"/>
+  <circle class="ink" cx="528" cy="58" r="16"/><text class="num" x="528" y="64" font-family="system-ui, sans-serif" font-size="17" font-weight="700" text-anchor="middle">3</text>
+  <path class="inks" d="M554 130 l22 22 l44 -48" fill="none" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(532 180) scale(0.45)">
+    <circle class="inks" cx="30" cy="30" r="21" fill="none" stroke-width="12"/>
+    <rect class="ink" x="49" y="24" width="56" height="12" rx="6"/>
+  </g>
+  <rect class="line" x="588" y="190" width="40" height="8" rx="4"/>
+  <g transform="translate(644 172)">
+    <circle class="mute" cx="16" cy="10" r="7"/>
+    <path class="mute" d="M3 34 q13 -26 26 0 z"/>
+    <circle class="no" cx="16" cy="20" r="18" fill="none" stroke-width="3"/>
+    <line class="no" x1="4" y1="8" x2="28" y2="32" stroke-width="3"/>
+  </g>
+</svg>

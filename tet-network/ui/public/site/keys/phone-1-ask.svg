@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 420" role="img" aria-labelledby="t">
+  <title id="t">A generic phone: a site asks a one-time question, with a yes and a no button</title>
+  <style>
+    .bg{fill:#f0fdfa}.body{fill:#1e293b}.screen{fill:#ffffff}.card{fill:#ffffff;stroke:#cbd5e1}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}
+    .soft{fill:#ccfbf1}.mute{fill:#94a3b8}.mutes{stroke:#94a3b8}.no{stroke:#e11d48}.line{fill:#e2e8f0}.chip{fill:#e2e8f0;stroke:#475569}.on{fill:#ffffff}.onl{stroke:#ffffff}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#0b1f1e}.body{fill:#334155}.screen{fill:#0f172a}.card{fill:#0f172a;stroke:#334155}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#99f6e4}
+      .soft{fill:#134e4a}.mute{fill:#64748b}.mutes{stroke:#64748b}.no{stroke:#fb7185}.line{fill:#1e293b}.chip{fill:#1e293b;stroke:#94a3b8}.on{fill:#042f2e}.onl{stroke:#042f2e}
+    }
+  </style>
+  <rect class="bg" width="320" height="420" rx="24"/>
+  <rect class="body" x="70" y="24" width="180" height="372" rx="30"/>
+  <rect class="screen" x="80" y="44" width="160" height="332" rx="20"/>
+  <rect class="mute" x="140" y="32" width="40" height="5" rx="2.5"/>
+  <!-- the site that asks: a globe and its name bar -->
+  <circle class="inks" cx="108" cy="80" r="14" fill="none" stroke-width="3"/>
+  <ellipse class="inks" cx="108" cy="80" rx="6" ry="14" fill="none" stroke-width="2"/>
+  <line class="inks" x1="94" y1="80" x2="122" y2="80" stroke-width="2"/>
+  <rect class="line" x="132" y="74" width="90" height="12" rx="6"/>
+  <!-- the question, large -->
+  <path class="soft" d="M102 116 h116 a12 12 0 0 1 12 12 v74 a12 12 0 0 1 -12 12 h-76 l-16 14 v-14 h-24 a12 12 0 0 1 -12 -12 v-74 a12 12 0 0 1 12 -12 z"/>
+  <text class="deep" x="160" y="186" font-family="system-ui, sans-serif" font-size="56" font-weight="700" text-anchor="middle">?</text>
+  <rect class="line" x="98" y="250" width="124" height="9" rx="4.5"/>
+  <rect class="line" x="98" y="266" width="96" height="9" rx="4.5"/>
+  <!-- answer / do not answer -->
+  <rect class="ink" x="96" y="298" width="128" height="30" rx="10"/>
+  <path class="onl" d="M148 313 l7 7 l14 -15" fill="none" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect class="card" x="96" y="336" width="128" height="28" rx="10" stroke-width="2"/>
+  <path class="mutes" d="M152 343 l14 14 M166 343 l-14 14" stroke-width="3" stroke-linecap="round"/>
+</svg>

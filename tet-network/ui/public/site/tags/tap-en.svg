@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 520" role="img" aria-labelledby="t" font-family="system-ui, sans-serif">
+  <title id="t">A tap in four steps: tag, phone, check, page</title>
+  <style>
+    .bg{fill:#f8fafc}.card{fill:#ffffff;stroke:#cbd5e1;stroke-width:2}.ink{fill:#0f172a}.sub{fill:#475569}.mid{fill:#0f766e}.mid-s{stroke:#0f766e}.paper{fill:#ffffff;stroke:#0f766e}.wv{stroke:#0f766e}.screen{fill:#ccfbf1}.gray{fill:#cbd5e1}.gray-s{stroke:#94a3b8}.arrow{stroke:#0f766e}.head{fill:#0f766e}
+    @media (prefers-color-scheme: dark){.bg{fill:#020617}.card{fill:#0f172a;stroke:#334155}.ink{fill:#f1f5f9}.sub{fill:#cbd5e1}.mid{fill:#2dd4bf}.mid-s{stroke:#2dd4bf}.paper{fill:#1e293b;stroke:#2dd4bf}.wv{stroke:#5eead4}.screen{fill:#134e4a}.gray{fill:#475569}.gray-s{stroke:#64748b}.arrow{stroke:#5eead4}.head{fill:#5eead4}}
+  </style>
+  <rect class="bg" width="640" height="520" rx="24"/>
+  <rect class="card" x="20" y="20" width="280" height="230" rx="20"/>
+  <g transform="translate(160 110)"><circle class="paper" cx="0" cy="0" r="44" stroke-width="6" class2=""/><rect class="mid" x="-12" y="-12" width="24" height="24" rx="3"/><circle fill="none" class="wv" stroke-width="3" r="30"/></g>
+  <text class="ink" x="160" y="202" font-size="22" font-weight="700" text-anchor="middle">1  Tap the tag</text>
+  <text class="sub" x="160" y="230" font-size="19" text-anchor="middle">with a phone</text>
+  <rect class="card" x="340" y="20" width="280" height="230" rx="20"/>
+  <g transform="translate(480 110)"><rect class="ink" x="-34" y="-58" width="68" height="116" rx="14"/><rect class="screen" x="-26" y="-46" width="52" height="88" rx="6"/><path fill="none" class="wv" stroke-width="4" stroke-linecap="round" d="M-14 -6 q14 -14 28 0 M-8 6 q8 -8 16 0"/></g>
+  <text class="ink" x="480" y="202" font-size="22" font-weight="700" text-anchor="middle">2  The phone opens</text>
+  <text class="sub" x="480" y="230" font-size="19" text-anchor="middle">the tag's fresh link</text>
+  <rect class="card" x="20" y="280" width="280" height="230" rx="20"/>
+  <g transform="translate(160 370)"><circle fill="none" class="mid-s" stroke-width="9" cx="-24" cy="-14" r="18"/><rect class="mid" x="-8" y="-18" width="54" height="9" rx="4"/><rect class="mid" x="30" y="-9" width="7" height="14"/><rect class="paper" x="-44" y="18" width="88" height="34" rx="8" stroke-width="3"/><text class="ink" x="0" y="42" font-size="20" font-weight="700" text-anchor="middle" font-family="ui-monospace, monospace">41 &gt; 40</text></g>
+  <text class="ink" x="160" y="462" font-size="22" font-weight="700" text-anchor="middle">3  A checker tests</text>
+  <text class="sub" x="160" y="490" font-size="19" text-anchor="middle">the key and the counter</text>
+  <rect class="card" x="340" y="280" width="280" height="230" rx="20"/>
+  <g transform="translate(480 370)"><rect class="paper" x="-40" y="-54" width="80" height="108" rx="10" stroke-width="4"/><path fill="none" class="mid-s" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" d="M-26 -30 l6 6 l10 -12"/><rect class="mid" x="-2" y="-32" width="30" height="6" rx="3"/><path fill="none" class="gray-s" stroke-width="5" stroke-linecap="round" d="M-26 4 h12"/><rect class="gray" x="-2" y="2" width="30" height="6" rx="3"/><path fill="none" class="gray-s" stroke-width="5" stroke-linecap="round" d="M-26 32 h12"/><rect class="gray" x="-2" y="30" width="24" height="6" rx="3"/></g>
+  <text class="ink" x="480" y="462" font-size="22" font-weight="700" text-anchor="middle">4  A page says what</text>
+  <text class="sub" x="480" y="490" font-size="19" text-anchor="middle">it shows and does not</text>
+  <path fill="none" class="arrow" stroke-width="4" d="M302 120 h32"/><path class="head" d="M342 120 l-12 -8 v16 z"/>
+  <path fill="none" class="arrow" stroke-width="4" d="M480 232 v18 q0 10 -10 10 h-300 q-10 0 -10 10 v4"/><path class="head" d="M160 282 l-8 -12 h16 z"/>
+  <path fill="none" class="arrow" stroke-width="4" d="M302 380 h32"/><path class="head" d="M342 380 l-12 -8 v16 z"/>
+</svg>

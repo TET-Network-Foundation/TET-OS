@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">A small drone carries its own key and a one-time permission</title>
+  <style>.bg{fill:#f0fdfa}.pr{fill:#0f766e}.prs{stroke:#0f766e}.ink{fill:#134e4a}.inks{stroke:#134e4a}.lt{fill:#5eead4}.paper{fill:#ffffff}.mu{stroke:#94a3b8}.muf{fill:#94a3b8}.no{fill:#be123c}.nos{stroke:#be123c}.ok{fill:#047857}.oks{stroke:#047857}@media (prefers-color-scheme: dark){.bg{fill:#042f2e}.pr{fill:#2dd4bf}.prs{stroke:#2dd4bf}.ink{fill:#ccfbf1}.inks{stroke:#ccfbf1}.lt{fill:#99f6e4}.paper{fill:#0f172a}.mu{stroke:#64748b}.muf{fill:#64748b}.no{fill:#fb7185}.nos{stroke:#fb7185}.ok{fill:#34d399}.oks{stroke:#34d399}}</style>
+  <rect class="bg" width="400" height="300" rx="24"/>
+  <!-- drone: four rotors on two arms, a body in the middle -->
+  <g>
+    <rect class="ink" x="70" y="62" width="180" height="8" rx="4"/>
+    <ellipse class="lt" cx="78" cy="52" rx="38" ry="7"/><ellipse class="lt" cx="242" cy="52" rx="38" ry="7"/>
+    <rect class="ink" x="74" y="52" width="8" height="16"/><rect class="ink" x="238" y="52" width="8" height="16"/>
+    <rect class="pr" x="120" y="56" width="80" height="40" rx="14"/>
+    <circle class="paper" cx="160" cy="76" r="9"/><circle class="ink" cx="160" cy="76" r="4"/>
+    <path class="inks" d="M140 96 l-10 14 M180 96 l10 14" stroke-width="5" stroke-linecap="round" fill="none"/>
+  </g>
+  <!-- the key it holds, on a short line -->
+  <path class="mu" d="M160 98 v34" stroke-width="3" stroke-dasharray="5 5" fill="none"/>
+  <g transform="translate(132 134)">
+    <circle class="prs" cx="20" cy="22" r="15" fill="none" stroke-width="8"/>
+    <rect class="pr" x="33" y="18" width="46" height="8" rx="4"/>
+    <rect class="pr" x="62" y="26" width="7" height="12"/><rect class="pr" x="72" y="26" width="7" height="9"/>
+  </g>
+  <!-- the one-time permission: a ticket with a single box, ticked once -->
+  <g transform="translate(228 150)">
+    <path class="paper prs" d="M0 0 h140 v28 a10 10 0 0 0 0 20 v28 h-140 v-28 a10 10 0 0 0 0 -20 z" stroke-width="3"/>
+    <path class="mu" d="M100 6 v64" stroke-width="2" stroke-dasharray="4 4" fill="none"/>
+    <rect class="prs" x="18" y="22" width="32" height="32" rx="6" fill="none" stroke-width="4"/>
+    <path class="oks" d="M24 38 l8 8 l14 -16" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="pr" x="120" y="47" font-family="system-ui, sans-serif" font-size="20" font-weight="700" text-anchor="middle">1×</text>
+  </g>
+  <!-- ground: a row of plants the drone looks after -->
+  <path class="mu" d="M30 262 h340" stroke-width="3" fill="none"/>
+  <g class="ok">
+    <path d="M70 262 q-14 -24 0 -34 q14 10 0 34 z"/><path d="M130 262 q-14 -24 0 -34 q14 10 0 34 z"/>
+    <path d="M190 262 q-14 -24 0 -34 q14 10 0 34 z"/><path d="M250 262 q-14 -24 0 -34 q14 10 0 34 z"/>
+    <path d="M310 262 q-14 -24 0 -34 q14 10 0 34 z"/>
+  </g>
+</svg>

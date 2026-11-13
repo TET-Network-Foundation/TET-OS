@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { APP_ROUTES, APP_URL, PROJECT_ROUTES, PROJECT_URL } from "./app/site/split";
 
 /**
  * Page integrity for the public pages (docs/THREAT_MODEL.md rule 6). Guarded by
@@ -33,7 +34,10 @@ const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "no-referrer" },
 ];
-export const PUBLIC_PAGES = ["/", "/try", "/try/:path*", "/whitepaper", "/whitepaper/:path*", "/verify/:path*", "/paper/:path*", "/tags", "/machines", "/keys", "/services", "/research"];
+export const PUBLIC_PAGES = ["/", "/try", "/try/:path*", "/whitepaper", "/whitepaper/:path*", "/verify/:path*", "/paper/:path*", "/tags", "/machines", "/keys", "/services", "/research", "/about", "/changelog"];
+
+/** project | app | all (default). See app/site/split.ts. */
+export const SITE_ROLE = process.env.TET_SITE_ROLE || "all";
 
 const nextConfig: NextConfig = {
   // Next.js v16+: set to `false` to hide the bottom-left dev indicator badge.
@@ -55,6 +59,24 @@ const nextConfig: NextConfig = {
 
   async headers() {
     return PUBLIC_PAGES.map((source) => ({ source, headers: SECURITY_HEADERS }));
+  },
+
+  // The site split (app/site/split.ts): a project build sends app routes to APP_URL, an app build sends
+  // project routes to PROJECT_URL; "all" serves everything. Temporary redirects, path and query kept.
+  async redirects() {
+    if (SITE_ROLE === "project") {
+      return APP_ROUTES.flatMap((r) => [
+        { source: r, destination: `${APP_URL}${r}`, permanent: false },
+        { source: `${r}/:path*`, destination: `${APP_URL}${r}/:path*`, permanent: false },
+      ]);
+    }
+    if (SITE_ROLE === "app") {
+      return [
+        { source: "/", destination: "/try", permanent: false },
+        ...PROJECT_ROUTES.filter((r) => r !== "/").map((r) => ({ source: r, destination: `${PROJECT_URL}${r}`, permanent: false })),
+      ];
+    }
+    return [];
   },
 };
 

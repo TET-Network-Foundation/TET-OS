@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260" role="img" aria-labelledby="t">
+  <title id="t">A signed parcel tag, a one-time permit for one courier, and a handover both sides sign at the door</title>
+  <style>
+    .bg{fill:#f0fdfa}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}.card{fill:#ffffff}.cards{stroke:#cbd5e1}
+    .line{stroke:#94a3b8}.slate{fill:#334155}.amber{fill:#d97706}.ambers{stroke:#d97706}.red{stroke:#b91c1c}.redf{fill:#b91c1c}
+    .soft{fill:#ccfbf1}.badge{fill:#0f172a}.badget{fill:#ffffff;font:700 14px system-ui,sans-serif}.star{fill:#f59e0b}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#042f2e}.ink{fill:#5eead4}.inks{stroke:#5eead4}.deep{fill:#99f6e4}.card{fill:#0f172a}.cards{stroke:#334155}
+      .line{stroke:#64748b}.slate{fill:#cbd5e1}.amber{fill:#fbbf24}.ambers{stroke:#fbbf24}.red{stroke:#f87171}.redf{fill:#f87171}
+      .soft{fill:#115e59}.badge{fill:#f8fafc}.badget{fill:#0f172a}.star{fill:#fbbf24}
+    }
+    .checks{stroke:#ffffff}@media (prefers-color-scheme: dark){.checks{stroke:#042f2e}}
+  </style>
+  <defs><g id="seal"><circle r="11" class="ink"/><path d="M-5 0 l3.5 4 l7 -8" fill="none" class="checks" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g></defs>
+  <rect width="400" height="260" rx="24" class="bg"/>
+  <path d="M120 170 C140 200 150 200 160 196 M230 196 C250 200 258 196 262 190" fill="none" class="line" stroke-width="3" stroke-dasharray="6 6"/>
+  <!-- 1 the parcel and its signed tag -->
+  <rect x="30" y="130" width="90" height="70" rx="6" class="soft"/>
+  <rect x="30" y="130" width="90" height="70" rx="6" fill="none" class="inks" stroke-width="3"/>
+  <path d="M75 130 V200" class="inks" stroke-width="3"/>
+  <path d="M112 132 L118 112" class="line" stroke-width="2"/>
+  <rect x="96" y="88" width="52" height="28" rx="6" class="card inks" stroke-width="2.5"/>
+  <use href="#seal" x="112" y="102" transform="scale(1)"/>
+  <rect x="126" y="98" width="16" height="3" rx="1.5" class="slate"/><rect x="126" y="104" width="12" height="3" rx="1.5" class="slate"/>
+  <!-- 2 the courier service gives one permit, good once -->
+  <rect x="165" y="34" width="70" height="52" rx="6" class="slate"/>
+  <rect x="173" y="44" width="14" height="12" class="card"/><rect x="193" y="44" width="14" height="12" class="card"/><rect x="213" y="44" width="14" height="12" class="card"/>
+  <rect x="193" y="66" width="14" height="20" class="card"/>
+  <path d="M200 88 V106" class="line" stroke-width="3"/><path d="M194 100 l6 8 l6 -8" fill="none" class="line" stroke-width="3"/>
+  <rect x="168" y="112" width="64" height="32" rx="6" class="card ambers" stroke-width="2.5" stroke-dasharray="0"/>
+  <circle cx="168" cy="128" r="6" class="bg"/><circle cx="232" cy="128" r="6" class="bg"/>
+  <text x="200" y="134" text-anchor="middle" class="amber" style="font:700 17px system-ui,sans-serif">1×</text>
+  <!-- the courier's van -->
+  <rect x="160" y="170" width="52" height="36" rx="6" class="ink"/>
+  <path d="M212 180 h14 l8 12 v14 h-22 z" class="ink"/>
+  <rect x="216" y="184" width="10" height="8" rx="1" class="card"/>
+  <circle cx="176" cy="210" r="8" class="deep"/><circle cx="222" cy="210" r="8" class="deep"/>
+  <!-- 3 at the door: courier and receiver both sign the handover -->
+  <rect x="300" y="44" width="70" height="170" rx="4" class="card cards" stroke-width="3"/>
+  <circle cx="358" cy="132" r="4" class="slate"/>
+  <rect x="262" y="132" width="86" height="80" rx="8" class="card inks" stroke-width="2.5"/>
+  <rect x="274" y="146" width="62" height="4" rx="2" class="slate"/><rect x="274" y="156" width="46" height="4" rx="2" class="slate"/>
+  <use href="#seal" x="286" y="188"/>
+  <circle cx="322" cy="188" r="11" class="amber"/><path d="M317 188 l3.5 4 l7 -8" fill="none" class="checks" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <g transform="translate(30 120)"><circle r="12" class="badge"/><text y="5" text-anchor="middle" class="badget">1</text></g>
+  <g transform="translate(156 30)"><circle r="12" class="badge"/><text y="5" text-anchor="middle" class="badget">2</text></g>
+  <g transform="translate(260 124)"><circle r="12" class="badge"/><text y="5" text-anchor="middle" class="badget">3</text></g>
+</svg>

@@ -1,0 +1,206 @@
+{
+ "_what": "merged pull requests of TET-Network-Foundation/TET-OS, newest first, as GitHub listed them",
+ "_taken": "2026-11-13, gh pr list --state merged --limit 40 --json number,title,mergedAt",
+ "prs": [
+  {
+   "number": 188,
+   "merged": "2026-11-13",
+   "title": "ci: nightly checks, a weekly tidy report and Dependabot, report only"
+  },
+  {
+   "number": 187,
+   "merged": "2026-11-13",
+   "title": "gitignore: Python bytecode (__pycache__/, *.pyc)"
+  },
+  {
+   "number": 186,
+   "merged": "2026-11-13",
+   "title": "sign-in README: Shows / Does not show in everyday words"
+  },
+  {
+   "number": 185,
+   "merged": "2026-11-13",
+   "title": "notebook: Shows / Does not show in shorter, everyday words"
+  },
+  {
+   "number": 184,
+   "merged": "2026-11-12",
+   "title": "run_guards: refuse to run with untracked files; NOT_CLAIMS only lists guard scripts"
+  },
+  {
+   "number": 180,
+   "merged": "2026-11-12",
+   "title": "docs: README footer, \"No token. No company. Open source.\""
+  },
+  {
+   "number": 175,
+   "merged": "2026-11-12",
+   "title": "docs: research note \"One-shot TET\" (status: idea)"
+  },
+  {
+   "number": 174,
+   "merged": "2026-11-12",
+   "title": "tools: Sign in with TET, a local-only prototype (design not reviewed)"
+  },
+  {
+   "number": 173,
+   "merged": "2026-11-12",
+   "title": "sdk examples: an agent action allowed once, with the notebook's permits"
+  },
+  {
+   "number": 172,
+   "merged": "2026-11-12",
+   "title": "machine notebook: one-time permits (v1)"
+  },
+  {
+   "number": 166,
+   "merged": "2026-11-08",
+   "title": "machine notebook: anchoring is not possible from the notebook yet"
+  },
+  {
+   "number": 165,
+   "merged": "2026-11-08",
+   "title": "docs: wording audit of \"prove\", \"proof\" and 証明 in the UI (read-only)"
+  },
+  {
+   "number": 158,
+   "merged": "2026-11-08",
+   "title": "machine notebook: the record field local_clock is clock_utc"
+  },
+  {
+   "number": 157,
+   "merged": "2026-11-08",
+   "title": "docs: the demo is 167.233.239.82; run_guards.sh needs a built tet-cli"
+  },
+  {
+   "number": 156,
+   "merged": "2026-11-08",
+   "title": "machine notebook: works against a real tet-core (local dev node)"
+  },
+  {
+   "number": 155,
+   "merged": "2026-11-08",
+   "title": "tools: machine notebook v0, a device keeps its own signed log (prototype)"
+  },
+  {
+   "number": 154,
+   "merged": "2026-11-07",
+   "title": "try: start-page headline follows the wording rule"
+  },
+  {
+   "number": 153,
+   "merged": "2026-10-30",
+   "title": "README: what TET is, is not, runs today, in design"
+  },
+  {
+   "number": 152,
+   "merged": "2026-10-27",
+   "title": "deps: next 16.4.3, sharp, source-map-js, zod, handlebars, tsx/esbuild"
+  },
+  {
+   "number": 148,
+   "merged": "2026-10-15",
+   "title": "Hash-only stamp: anchor a Mark-as-genuine record on chain, without the file"
+  },
+  {
+   "number": 147,
+   "merged": "2026-10-14",
+   "title": "SECURITY.md: the shared request limit is fixed (34e78a6, deployed 2026-10-14)"
+  },
+  {
+   "number": 146,
+   "merged": "2026-10-14",
+   "title": "Review notes (part A): My ID in one place, a busy node never reads as closed, a scannable genuine list"
+  },
+  {
+   "number": 145,
+   "merged": "2026-10-14",
+   "title": "Wording guards: close the ML-KEM, money and 'first' gaps (also fixes tetnet.org's own text)"
+  },
+  {
+   "number": 143,
+   "merged": "2026-10-14",
+   "title": "Per-address request limit; the shared counter stays as a ceiling"
+  },
+  {
+   "number": 141,
+   "merged": "2026-10-13",
+   "title": "Fix workflow-lint (#130 was never running): pin checkout; refuse empty or unpinned uses:"
+  },
+  {
+   "number": 142,
+   "merged": "2026-10-13",
+   "title": "SECURITY.md: founder-signed route fix deployed (7e909cb, 2026-10-13)"
+  },
+  {
+   "number": 139,
+   "merged": "2026-10-13",
+   "title": "CLAUDE.md: no new things on the hosts without a go; no push while any guard is red (+ run_guards.sh)"
+  },
+  {
+   "number": 140,
+   "merged": "2026-10-13",
+   "title": "Test: widen the worker-vest window (CI flake)"
+  },
+  {
+   "number": 121,
+   "merged": "2026-10-13",
+   "title": "Testnet rewards: welcome grant (option B, stated weak) and thread grants"
+  },
+  {
+   "number": 127,
+   "merged": "2026-10-13",
+   "title": "TetSearch v1: vouched members list their signed sites; search runs on the member's device"
+  },
+  {
+   "number": 138,
+   "merged": "2026-10-13",
+   "title": "Technical paper: Hong Kong Chinese draft (unmarked, for review); no language exception left"
+  },
+  {
+   "number": 133,
+   "merged": "2026-10-13",
+   "title": "Remove the genesis_bridge route (balance write outside a block)"
+  },
+  {
+   "number": 132,
+   "merged": "2026-10-13",
+   "title": "Chain label, FAQ lines (founder lock, airdrop), Phase 1 note on block rewards"
+  },
+  {
+   "number": 131,
+   "merged": "2026-10-13",
+   "title": "libp2p: config page, py-libp2p interop probe, demo sponsor state"
+  },
+  {
+   "number": 129,
+   "merged": "2026-10-13",
+   "title": "Plan: TETtalk"
+  },
+  {
+   "number": 128,
+   "merged": "2026-10-13",
+   "title": "Community: GOVERNANCE, run-your-own-node guide, good-first-issue drafts"
+  },
+  {
+   "number": 123,
+   "merged": "2026-10-13",
+   "title": "Plan: browser nodes (Phase 8)"
+  },
+  {
+   "number": 124,
+   "merged": "2026-10-13",
+   "title": "SECURITY.md: message times held to the node's clock (class level)"
+  },
+  {
+   "number": 130,
+   "merged": "2026-10-13",
+   "title": "CI: refuse duplicate keys in workflow files (separate workflow)"
+  },
+  {
+   "number": 122,
+   "merged": "2026-10-10",
+   "title": "Tmail: hold a post's time to the node's clock (±5 min); anonymous posts stay in their UTC day; NTP health check"
+  }
+ ]
+}

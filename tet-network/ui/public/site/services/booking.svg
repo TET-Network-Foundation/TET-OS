@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 260" role="img" aria-labelledby="t">
+  <title id="t">One device, a different key for each shop; each shop sees only its own record for its key</title>
+  <style>
+    .bg{fill:#f0fdfa}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}.card{fill:#ffffff}.cards{stroke:#cbd5e1}
+    .line{stroke:#94a3b8}.slate{fill:#334155}.amber{fill:#d97706}.ambers{stroke:#d97706}.red{stroke:#b91c1c}.redf{fill:#b91c1c}
+    .soft{fill:#ccfbf1}.badge{fill:#0f172a}.badget{fill:#ffffff;font:700 14px system-ui,sans-serif}.star{fill:#f59e0b}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#042f2e}.ink{fill:#5eead4}.inks{stroke:#5eead4}.deep{fill:#99f6e4}.card{fill:#0f172a}.cards{stroke:#334155}
+      .line{stroke:#64748b}.slate{fill:#cbd5e1}.amber{fill:#fbbf24}.ambers{stroke:#fbbf24}.red{stroke:#f87171}.redf{fill:#f87171}
+      .soft{fill:#115e59}.badge{fill:#f8fafc}.badget{fill:#0f172a}.star{fill:#fbbf24}
+    }
+    .checks{stroke:#ffffff}@media (prefers-color-scheme: dark){.checks{stroke:#042f2e}}
+  </style>
+  <defs><g id="key"><circle cx="0" cy="0" r="7" fill="none" stroke-width="4"/><rect x="6" y="-2" width="18" height="4"/><rect x="18" y="2" width="3" height="6"/><rect x="12" y="2" width="3" height="4"/></g></defs>
+  <rect width="400" height="260" rx="24" class="bg"/>
+  <!-- the two shops cannot match the two keys -->
+  <path d="M75 44 H325" fill="none" class="line" stroke-width="3" stroke-dasharray="6 6"/>
+  <circle cx="200" cy="44" r="16" class="card cards" stroke-width="2"/>
+  <path d="M192 40 h16 M192 48 h16 M205 34 l-10 20" fill="none" class="red" stroke-width="3" stroke-linecap="round"/>
+  <g transform="translate(30 58)"><rect x="0" y="0" width="90" height="18" rx="4" class="ink"/><path d="M0 18 h90 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 z" class="ink"/><rect x="6" y="26" width="78" height="52" class="card cards" stroke-width="2"/><rect x="34" y="44" width="22" height="34" class="soft"/><rect x="12" y="36" width="16" height="16" rx="2" class="soft"/><rect x="62" y="36" width="16" height="16" rx="2" class="soft"/></g>
+  <g transform="translate(280 58)"><rect x="0" y="0" width="90" height="18" rx="4" class="ink"/><path d="M0 18 h90 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 l-7.5 -8 l-7.5 8 z" class="ink"/><rect x="6" y="26" width="78" height="52" class="card cards" stroke-width="2"/><rect x="34" y="44" width="22" height="34" class="soft"/><rect x="12" y="36" width="16" height="16" rx="2" class="soft"/><rect x="62" y="36" width="16" height="16" rx="2" class="soft"/></g>
+  <!-- the device, holding two keys -->
+  <rect x="170" y="92" width="60" height="108" rx="10" class="slate"/>
+  <rect x="176" y="102" width="48" height="84" rx="4" class="card"/>
+  <use href="#key" x="188" y="126" class="ink inks"/>
+  <use href="#key" x="188" y="162" class="amber ambers"/>
+  <path d="M170 126 C150 126 140 120 124 112" fill="none" class="inks" stroke-width="3" stroke-dasharray="5 5"/>
+  <path d="M230 162 C250 162 262 150 276 112" fill="none" class="ambers" stroke-width="3" stroke-dasharray="5 5"/>
+  <!-- each shop's own record for its key: bookings, and one "did not come" -->
+  <rect x="30" y="160" width="90" height="74" rx="10" class="card cards" stroke-width="2"/>
+  <use href="#key" x="48" y="178" class="ink inks"/>
+  <g transform="translate(40 198)">
+    <rect width="18" height="18" rx="3" class="soft"/><path d="M4 9 l4 4 l7 -8" fill="none" class="inks" stroke-width="2.5"/>
+    <rect x="24" width="18" height="18" rx="3" class="soft"/><path d="M28 9 l4 4 l7 -8" fill="none" class="inks" stroke-width="2.5"/>
+    <rect x="48" width="18" height="18" rx="3" class="soft"/><path d="M52 4 l10 10 M62 4 l-10 10" fill="none" class="red" stroke-width="2.5"/>
+  </g>
+  <rect x="280" y="160" width="90" height="74" rx="10" class="card cards" stroke-width="2"/>
+  <use href="#key" x="298" y="178" class="amber ambers"/>
+  <g transform="translate(290 198)">
+    <rect width="18" height="18" rx="3" class="soft"/><path d="M4 9 l4 4 l7 -8" fill="none" class="inks" stroke-width="2.5"/>
+  </g>
+  <g transform="translate(240 92)"><circle r="12" class="badge"/><text y="5" text-anchor="middle" class="badget">1</text></g>
+  <g transform="translate(22 160)"><circle r="12" class="badge"/><text y="5" text-anchor="middle" class="badget">2</text></g>
+  <g transform="translate(226 36)"><circle r="12" class="badge"/><text y="5" text-anchor="middle" class="badget">3</text></g>
+</svg>
