@@ -2,6 +2,9 @@
 
 Read-only. Every user-facing string in `tet-network/ui/app` that says *prove*, *proves*, *proven*, *proving*, *proof(s)*, 証明 or 證明, with file and line, as of `cd60e58` (2026-11-08). Nothing here changes code; the owner decides what changes.
 
+> **Update 2026-11-08:** `app/i18n/translations.ts` has since been deleted, with the `/understand`,
+> `/participate` and `/setup` pages that used it. Its rows below no longer apply.
+
 The wording rule this checks against: a mark shows which key signed and before which block. It never proves, never names a date, never says who.
 
 | Group | Rows (a page translation sits under its English row; the paper's translations are rows of their own) | Decision |

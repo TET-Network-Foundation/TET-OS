@@ -5,6 +5,11 @@
 **Backend reference commit:** `68a4b94` (Phase 2B + 2C on `main`).  
 **Related:** [`RUNNING_A_NODE.md`](./RUNNING_A_NODE.md), [`CODEBASE_OVERVIEW.md`](./CODEBASE_OVERVIEW.md), [`WHITEPAPER_v1.0_GAPS.md`](./WHITEPAPER_v1.0_GAPS.md)
 
+> **Update 2026-11-08:** this is a snapshot from 2026-05-19. Since then `/understand`,
+> `/participate` and `/setup` have been removed, together with `app/components/TopNav.tsx`,
+> `app/i18n/` and `app/context/LanguageContext.tsx`. The tree and the route table below still
+> show them as they were.
+
 ---
 
 ## 1. UI overview

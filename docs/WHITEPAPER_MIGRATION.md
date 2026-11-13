@@ -86,7 +86,7 @@
 | `tet-network/ui/app/os/OsClient.tsx` | `amount_stevemon` | **要判断**（API 互換） |
 | `tet-network/ui/app/page.tsx` | `amount_stevemon` | **要判断** |
 | `tet-network/ui/app/lib/tx_store.ts` | `amount_stevemon` | **要判断** |
-| `tet-network/ui/app/setup/page.tsx` | `stevemon` 表示 | **要判断** |
+| ~~`tet-network/ui/app/setup/page.tsx`~~ | `stevemon` 表示 | **解決済み** — 2026-11-08 にページごと削除（`/setup` はデモで配信されていなかった） |
 | `tet-agent-sdk/src/agent_client.ts` | `max_stevemon` | **要判断** |
 | `archive/cursor_nexus_project_2026-04.md` | micro-stevemon | **要判断** |
 | `archive/WHITEPAPER_v0_economic.md` | 全文 B 版 | **残してOK**（archive） |
