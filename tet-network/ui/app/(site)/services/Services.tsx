@@ -18,7 +18,7 @@ const BOOKING: Benefit[] = [
 const DELIVERY: Benefit[] = [
   { title: "Both sides sign", text: "The handover is signed by the courier and by the receiver, not taken on one side's word." },
   { title: "The right parcel", text: "The tag on the parcel must be the one the sender signed. Any other tag fails the check." },
-  { title: "One permit, one handover", text: "A second handover with the same permit is refused by the record keeper that saw the first." },
+  { title: "One permit, one handover", text: "A second handover with the same permit is refused by the record keeper that saw the earlier one." },
 ];
 const REVIEWS: Benefit[] = [
   { title: "Reviews come with a receipt", text: "A review without a receipt the shop signed does not count." },
@@ -31,9 +31,9 @@ function Benefits(props: { items: Benefit[] }) {
   return (
     <ul className="flex flex-col gap-4">
       {props.items.map((b) => (
-        <li key={b.title} className="rounded-2xl bg-teal-50 p-5 dark:bg-teal-950">
-          <p className="text-lg font-semibold">{t(b.title)}</p>
-          <p className="mt-1 text-base leading-relaxed text-slate-700 dark:text-slate-300">{t(b.text)}</p>
+        <li key={b.title} className="rounded-2xl bg-teal-50 p-6 dark:bg-teal-950">
+          <p className="font-semibold">{t(b.title)}</p>
+          <p className="mt-2 text-base leading-relaxed text-slate-700 dark:text-slate-300">{t(b.text)}</p>
         </li>
       ))}
     </ul>
@@ -49,7 +49,7 @@ function Service(props: { diagram: ReactNode; items: Benefit[]; card: ReactNode 
         {props.diagram}
         <Benefits items={props.items} />
       </div>
-      <p className="text-lg font-medium">{t("Settling up happens outside TET (cash, bank, …).")}</p>
+      <p className="max-w-prose font-semibold">{t("Settling up happens outside TET (cash, bank, …).")}</p>
       {props.card}
     </div>
   );
@@ -58,7 +58,7 @@ function Service(props: { diagram: ReactNode; items: Benefit[]; card: ReactNode 
 function SettleUp() {
   const { t } = useSite();
   return (
-    <p className="max-w-3xl text-lg leading-relaxed text-slate-700 dark:text-slate-300">
+    <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
       {t("No record here carries an amount. The records say who signed what, and settling up happens outside TET (cash, bank, …).")}
     </p>
   );
