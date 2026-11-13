@@ -191,3 +191,27 @@ export function DropZone(props: { label: string; onDrop: (dt: DataTransfer) => v
     </div>
   );
 }
+
+/** A labelled one-line text field. `mono` for values typed as code (a folder, a name, a number). */
+export function TextField(props: { label: ReactNode; value: string; onChange: (v: string) => void; placeholder?: string; mono?: boolean; inputMode?: "text" | "numeric" }) {
+  return (
+    <label className="flex flex-col gap-1.5">
+      <span className="text-base font-medium">{props.label}</span>
+      <input
+        type="text"
+        autoComplete="off"
+        spellCheck={props.mono ? false : undefined}
+        translate={props.mono ? "no" : undefined}
+        inputMode={props.inputMode}
+        value={props.value}
+        placeholder={props.placeholder}
+        onChange={(e) => props.onChange(e.target.value)}
+        className={cx(
+          "min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base text-slate-900 placeholder:text-slate-400 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100",
+          props.mono && "font-mono",
+          PLAIN.focus,
+        )}
+      />
+    </label>
+  );
+}
