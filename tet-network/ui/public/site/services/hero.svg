@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">A booking, a parcel and a review, each resting on a signed record</title>
+  <style>
+    .bg{fill:#f0fdfa}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}.card{fill:#ffffff}.cards{stroke:#cbd5e1}
+    .line{stroke:#94a3b8}.slate{fill:#334155}.amber{fill:#d97706}.ambers{stroke:#d97706}.red{stroke:#b91c1c}.redf{fill:#b91c1c}
+    .soft{fill:#ccfbf1}.badge{fill:#0f172a}.badget{fill:#ffffff;font:700 14px system-ui,sans-serif}.star{fill:#f59e0b}
+    @media (prefers-color-scheme: dark){
+      .bg{fill:#042f2e}.ink{fill:#5eead4}.inks{stroke:#5eead4}.deep{fill:#99f6e4}.card{fill:#0f172a}.cards{stroke:#334155}
+      .line{stroke:#64748b}.slate{fill:#cbd5e1}.amber{fill:#fbbf24}.ambers{stroke:#fbbf24}.red{stroke:#f87171}.redf{fill:#f87171}
+      .soft{fill:#115e59}.badge{fill:#f8fafc}.badget{fill:#0f172a}.star{fill:#fbbf24}
+    }
+    .checks{stroke:#ffffff}@media (prefers-color-scheme: dark){.checks{stroke:#042f2e}}
+  </style>
+  <defs><g id="seal"><circle r="11" class="ink"/><path d="M-5 0 l3.5 4 l7 -8" fill="none" class="checks" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></g> <polygon id="star" points="0,-7 1.76,-2.43 6.66,-2.16 2.85,0.93 4.11,5.66 0,3 -4.11,5.66 -2.85,0.93 -6.66,-2.16 -1.76,-2.43"/> <g id="key"><circle cx="0" cy="0" r="7" fill="none" stroke-width="4"/><rect x="6" y="-2" width="18" height="4"/><rect x="18" y="2" width="3" height="6"/><rect x="12" y="2" width="3" height="4"/></g></defs>
+  <rect width="400" height="300" rx="24" class="bg"/>
+  <path d="M130 110 L176 140 M270 110 L224 140 M200 196 V214" fill="none" class="line" stroke-width="3" stroke-dasharray="6 6"/>
+  <!-- a booking -->
+  <g transform="translate(36 34)">
+    <rect width="104" height="92" rx="12" class="card cards" stroke-width="2"/>
+    <rect width="104" height="24" rx="12" class="ink"/><rect y="12" width="104" height="12" class="ink"/>
+    <g class="soft"><rect x="12" y="34" width="18" height="14" rx="3"/><rect x="36" y="34" width="18" height="14" rx="3"/><rect x="60" y="34" width="18" height="14" rx="3"/><rect x="12" y="54" width="18" height="14" rx="3"/><rect x="60" y="54" width="18" height="14" rx="3"/><rect x="12" y="74" width="18" height="10" rx="3"/></g>
+    <rect x="36" y="54" width="18" height="14" rx="3" class="amber"/>
+    <use href="#key" x="70" y="80" class="amber ambers" transform="scale(1)"/>
+  </g>
+  <!-- a parcel -->
+  <g transform="translate(262 40)">
+    <rect width="100" height="78" rx="8" class="soft"/>
+    <rect width="100" height="78" rx="8" fill="none" class="inks" stroke-width="3"/>
+    <path d="M50 0 V78" class="inks" stroke-width="3"/>
+    <rect x="58" y="44" width="34" height="22" rx="4" class="card inks" stroke-width="2"/>
+  </g>
+  <!-- the signed record in the middle -->
+  <circle cx="200" cy="160" r="38" class="ink"/>
+  <path d="M182 160 l12 13 l24 -27" fill="none" class="checks" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- a review -->
+  <g transform="translate(130 214)">
+    <rect width="140" height="60" rx="12" class="card cards" stroke-width="2"/>
+    <g class="star"><use href="#star" x="22" y="22"/><use href="#star" x="42" y="22"/><use href="#star" x="62" y="22"/><use href="#star" x="82" y="22"/><use href="#star" x="102" y="22"/></g>
+    <rect x="14" y="38" width="80" height="5" rx="2.5" class="slate"/><rect x="14" y="48" width="56" height="5" rx="2.5" class="slate"/>
+    <path d="M104 34 h24 v20 l-4 -3 l-4 3 l-4 -3 l-4 3 l-4 -3 l-4 3 z" class="soft"/>
+  </g>
+</svg>
