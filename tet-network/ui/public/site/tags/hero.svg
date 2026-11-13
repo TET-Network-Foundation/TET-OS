@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">A handmade cup with a small round chip tag tied to it, and a phone tapping the tag</title>
+  <style>
+    .bg{fill:#f0fdfa}.ink{fill:#134e4a}.mid{fill:#0f766e}.soft{fill:#99f6e4}.paper{fill:#ffffff}.line{stroke:#134e4a}.wave{stroke:#0f766e}.screen{fill:#ccfbf1}
+    @media (prefers-color-scheme: dark){.bg{fill:#042f2e}.ink{fill:#99f6e4}.mid{fill:#2dd4bf}.soft{fill:#115e59}.paper{fill:#0f172a}.line{stroke:#99f6e4}.wave{stroke:#5eead4}.screen{fill:#134e4a}}
+  </style>
+  <rect class="bg" width="400" height="300" rx="24"/>
+  <!-- the cup, thrown by hand: slightly uneven rim -->
+  <path class="mid" d="M58 120 q52 -10 104 0 l-10 110 q-42 14 -84 0 z"/>
+  <path class="soft" d="M66 150 q44 -6 88 0 l-2 14 q-42 -6 -84 0 z"/>
+  <path fill="none" class="line" stroke-width="10" stroke-linecap="round" d="M160 140 q34 4 26 38 q-6 22 -30 24"/>
+  <!-- string from the handle to the tag -->
+  <path fill="none" class="line" stroke-width="2.5" d="M180 186 q10 30 22 44"/>
+  <!-- the tag: a round chip with a coil inside -->
+  <circle class="paper" cx="214" cy="244" r="26" stroke="#0f766e" stroke-width="4"/>
+  <rect class="mid" x="207" y="237" width="14" height="14" rx="2"/>
+  <circle fill="none" class="wave" stroke-width="2" cx="214" cy="244" r="17"/>
+  <!-- the phone, tilted toward the tag -->
+  <g transform="rotate(-18 320 150)">
+    <rect class="ink" x="280" y="70" width="84" height="160" rx="16"/>
+    <rect class="screen" x="288" y="84" width="68" height="128" rx="8"/>
+    <circle class="mid" cx="322" cy="128" r="18"/>
+    <path fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" d="M313 128 l7 7 l12 -14"/>
+    <rect class="mid" x="298" y="160" width="48" height="6" rx="3"/>
+    <rect class="soft" x="298" y="174" width="36" height="6" rx="3"/>
+    <rect class="soft" x="298" y="188" width="42" height="6" rx="3"/>
+  </g>
+  <!-- tap waves between the tag and the phone -->
+  <g fill="none" class="wave" stroke-width="3" stroke-linecap="round">
+    <path d="M246 228 q10 -10 6 -24"/>
+    <path d="M256 238 q18 -18 10 -42"/>
+    <path d="M266 248 q26 -26 14 -60"/>
+  </g>
+</svg>
