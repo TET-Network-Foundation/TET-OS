@@ -24,6 +24,10 @@ One-time permits (a permit the device key signs; a record may cite its id):
   (l) a cited permit that is not in the notebook  -> INVALID, "is not in this notebook"
   (m) the permit's bytes signed as a log record   -> INVALID, the permit's payload type
   (n) `record --permit` on a used permit          -> refused (exit 2), nothing written, log still VALID
+
+The Shows / Does not show lists verify prints are pinned word for word, in notebook.py and in the
+README (the try page and /agents show the same words); a changed word, a dropped or swapped item and
+swapped lists are each caught.
 (g) to (m) build the bad log by hand, because `record` refuses a bad citation before writing it. In
 each, the permit passes every check except the one the case is named for, and the case asserts that
 verify reports exactly that one problem: a record that is INVALID for two reasons proves neither check.
@@ -160,6 +164,77 @@ class Notebook(unittest.TestCase):
         self.assertIn("stamp: not checked (no node)", out)
         for line in notebook.SHOWS + notebook.DOES_NOT_SHOW:
             self.assertIn(line, out)
+
+    # The two lists are the claim the tool makes; the try page and /agents show them word for word.
+    # PINNED here so a change to the wording is a reviewed change to this file too.
+    PINNED_SHOWS = [
+        "which key signed each record",
+        "that the records are in this order",
+        "that each record was written before the next one",
+        "that no one-time permission was used twice in this log, or after it ran out",
+    ]
+    PINNED_DOES_NOT_SHOW = [
+        "that the reading is true",
+        "that the machine's clock was right",
+        "where the machine was",
+        "who runs the machine",
+        "that the key was not copied",
+        "that a copied key did not use the same permission in another log",
+    ]
+
+    @staticmethod
+    def printed_lists(text, shows_head, does_not_head, bullet):
+        """The bullets under each heading, in order, from verify's stdout or the README."""
+        lines = text.splitlines()
+
+        def block(head):
+            if head not in lines:
+                return None
+            out = []
+            for ln in lines[lines.index(head) + 1:]:
+                if not ln.startswith(bullet):
+                    break
+                out.append(ln[len(bullet):])
+            return out
+
+        return block(shows_head), block(does_not_head)
+
+    def lists_problems(self, verify_out, readme):
+        """Every place the printed lists or the README's lists differ from the pinned ones."""
+        want = (self.PINNED_SHOWS, self.PINNED_DOES_NOT_SHOW)
+        out = []
+        if (notebook.SHOWS, notebook.DOES_NOT_SHOW) != want:
+            out.append("notebook.py's SHOWS / DOES_NOT_SHOW differ from the pinned lists")
+        if self.printed_lists(verify_out, "Shows:", "Does not show:", "  - ") != want:
+            out.append("verify printed other lists")
+        if self.printed_lists(readme, "Shows:", "Does not show:", "- ") != want:
+            out.append("README.md quotes other lists")
+        return out
+
+    def test_verify_prints_exactly_the_two_lists_and_the_readme_quotes_them(self):
+        rc, out = nb("verify", "--dir", self.copy())
+        self.assertEqual(rc, 0, out)
+        with open(os.path.join(HERE, "README.md")) as f:
+            readme = f.read()
+        self.assertEqual(self.lists_problems(out, readme), [])
+        # Control: a changed word, a dropped item, swapped items and swapped lists are each caught,
+        # in the printed output and in the README.
+        s, d = self.PINNED_SHOWS, self.PINNED_DOES_NOT_SHOW
+        changed = out.replace(s[2], s[2].replace("before", "after"))
+        dropped = out.replace(f"  - {d[-1]}\n", "")
+        swapped_items = out.replace(f"  - {s[0]}\n  - {s[1]}\n", f"  - {s[1]}\n  - {s[0]}\n")
+        swapped_lists = out.replace("Shows:", "X:").replace("Does not show:", "Shows:").replace("X:", "Does not show:")
+        for name, bad in (("changed", changed), ("dropped", dropped), ("swapped items", swapped_items), ("swapped lists", swapped_lists)):
+            self.assertNotEqual(bad, out, f"control {name} did not take")
+            self.assertTrue(self.lists_problems(bad, readme), f"control {name} passed")
+            bad_readme = {
+                "changed": readme.replace(s[2], s[2].replace("before", "after")),
+                "dropped": readme.replace(f"- {d[-1]}\n", ""),
+                "swapped items": readme.replace(f"- {s[0]}\n- {s[1]}\n", f"- {s[1]}\n- {s[0]}\n"),
+                "swapped lists": readme.replace("Shows:", "X:").replace("Does not show:", "Shows:").replace("X:", "Does not show:"),
+            }[name]
+            self.assertNotEqual(bad_readme, readme, f"README control {name} did not take")
+            self.assertTrue(self.lists_problems(out, bad_readme), f"README control {name} passed")
 
     def test_b_one_flipped_byte_in_record_2_is_invalid(self):
         d = self.copy()

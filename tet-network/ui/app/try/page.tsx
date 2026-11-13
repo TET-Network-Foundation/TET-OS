@@ -28,6 +28,7 @@ import MailPanel from "./MailPanel";
 import NewBoardPanel from "./NewBoardPanel";
 import QuestionsPanel from "./QuestionsPanel";
 import VerifyPanel from "./VerifyPanel";
+import MachineLogPanel from "./MachineLogPanel";
 import { VerifyThisPage } from "./VerifyThisPage";
 import { Button, FOCUS, INK, MONO, cx } from "./ui";
 import { BASE, WalletProvider, useTryWallet } from "./wallet";
@@ -59,6 +60,7 @@ const TOOLS = [
   { id: "shelter", label: "Shelter", group: "boards" },
   { id: "search", label: "TetSearch", group: "boards" },
   { id: "verify", label: "verify", group: "tools" },
+  { id: "machine-log", label: "check a machine's log", group: "tools" },
   { id: "sign", label: "sign", group: "tools" },
   { id: "genuine", label: "mark as genuine", group: "tools" },
   { id: "seal", label: "sealed prediction", group: "tools" },
@@ -291,6 +293,7 @@ function PageFooter(props: { node: ReturnType<typeof useNode>; go: (v: View) => 
     ...(props.shelter ? ([[{ tool: "shelter" }, t("Shelter")], [{ tool: "search" }, "TetSearch"]] as [View, string][]) : []),
     [{ tool: "new" }, t("start or open a board")],
     [{ tool: "verify" }, t("verify")],
+    [{ tool: "machine-log" }, t("check a machine's log")],
     [{ tool: "sign" }, t("sign")],
     [{ tool: "qr" }, t("qr")],
     [{ tool: "files" }, t("files")],
@@ -480,6 +483,7 @@ function TryApp() {
     shelter: t("Shelter"),
     search: "TetSearch",
     verify: t("verify"),
+    "machine-log": t("check a machine's log"),
     sign: t("sign"),
     genuine: t("Mark as genuine"),
     seal: t("Sealed prediction"),
@@ -573,6 +577,7 @@ function TryApp() {
           {panel({ tool: "shelter" }, <ShelterPanel active={"tool" in view && view.tool === "shelter"} />)}
           {panel({ tool: "search" }, <SearchPanel active={"tool" in view && view.tool === "search"} />)}
           {panel({ tool: "verify" }, <VerifyPanel baseUrl={BASE} />)}
+          {panel({ tool: "machine-log" }, <MachineLogPanel />)}
           {panel({ tool: "sign" }, <SignPanel hint={signHint} />)}
           {panel({ tool: "genuine" }, <GenuinePanel />)}
           {panel({ tool: "seal" }, <SealPanel />)}
