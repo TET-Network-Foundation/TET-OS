@@ -28,18 +28,18 @@ const ZERO = "0".repeat(64);
 export const SHOWS = [
   "which key signed each record",
   "that the records are in this order",
-  "that each record existed before the next one in the same chain",
-  "that a permit limits how often this key's log accepts an action: no permit is cited twice, or after it expires",
+  "that each record was written before the next one",
+  "that no one-time permission was used twice in this log, or after it ran out",
 ];
 
 /** Word for word notebook.py's DOES_NOT_SHOW (scripts/try_machine_log_guard.mjs pins it). */
 export const DOES_NOT_SHOW = [
   "that the reading is true",
-  "that the device clock was right",
-  "where the device was",
-  "who operates the device",
+  "that the machine's clock was right",
+  "where the machine was",
+  "who runs the machine",
   "that the key was not copied",
-  "that a permit was used only here: it does not stop a copied key from writing a second log",
+  "that a copied key did not use the same permission in another log",
 ];
 
 /**
@@ -484,4 +484,33 @@ export function problemLine(p) {
 /** notebook.py verify's line for a permit used in a VALID log. */
 export function useLine(u) {
   return `permit ${u.permit.permitId} (${u.permit.action}): used once, by record ${u.seq}; open until seq ${u.permit.expiresSeq}`;
+}
+
+/**
+ * The one short sentence a result leads with, as a kind (the page words it):
+ *   consistent       VALID;
+ *   reused           INVALID, and every problem is a one-time permission cited again;
+ *   expired          INVALID, and every problem is a permission cited after it ran out;
+ *   inconsistent     INVALID for any other reason, or a mix (the specific sentences are used only
+ *                    when they are the whole story; the reasons are behind "Show details");
+ *   not_checked      notebook.py verify would stop with an error (no chain.json, or too long here).
+ */
+export function verdictKind(r) {
+  if (r.kind !== "verdict") return "not_checked";
+  if (r.valid) return "consistent";
+  const all = (re) => r.problems.length > 0 && r.problems.every((p) => re.test(p.why));
+  if (all(/^permit: [0-9a-f]{32} was already used by record \d+$/)) return "reused";
+  if (all(/^permit: [0-9a-f]{32} expired after seq \d+$/)) return "expired";
+  return "inconsistent";
+}
+
+/** A folder held as { path: base64 } (the bundled samples), as checkMachineLog's paths and read. */
+export function base64Folder(files) {
+  const paths = Object.keys(files);
+  const read = async (p) => {
+    if (!(p in files)) throw new Error(`not in the folder: ${p}`);
+    const bin = atob(files[p]);
+    return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  };
+  return { paths, read };
 }
