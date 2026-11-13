@@ -74,7 +74,10 @@ function featureProblems(list, trackedSet = tracked) {
 
 await check(`F1 every feature has a status, Shows / Does not show, and evidence that matches the repository (${ALL.length} features)`, () => {
   assert.deepEqual(featureProblems(ALL), []);
-  for (const f of ALL) for (const e of f.evidence) if ("pr" in e) console.log(`     note: ${f.id} cites PR #${e.pr} (${e.what}); checked once it merges`);
+  for (const f of ALL) for (const e of f.evidence) {
+    if ("pr" in e) console.log(`     note: ${f.id} cites PR #${e.pr} (${e.what}); checked once it merges`);
+    if ("branch" in e) console.log(`     note: ${f.id} cites branch ${e.branch} (${e.what}); no PR yet`);
+  }
 });
 await check("F control: a feature without a status, an uncommitted path, a bare prototype and a false \"running\" are each caught", () => {
   const ok = { id: "x", section: "/t", title: "T", summary: "S", status: "idea", evidence: [], shows: ["a"], doesNot: ["b"] };

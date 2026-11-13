@@ -10,9 +10,10 @@ export const STATUSES: readonly Status[] = ["running", "prototype", "planned", "
 /**
  * Where the repository shows a feature exists. `path` must be a committed file in this tree.
  * `pr` names an open pull request when the code is not on main yet; the guard prints it, and the
- * status is only fully checked once that PR merges.
+ * status is only fully checked once that PR merges. `branch` names a branch that has no PR yet
+ * (replace it with the PR number once it is pushed); the guard prints it the same way.
  */
-export type Evidence = { path: string } | { pr: number; what: string };
+export type Evidence = { path: string } | { pr: number; what: string } | { branch: string; what: string };
 
 export type Feature = {
   /** Stable id, unique across the site. */
