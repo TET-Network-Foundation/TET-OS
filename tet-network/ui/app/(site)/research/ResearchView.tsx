@@ -5,7 +5,7 @@
  * docs/research/ONE_SHOT_TET.md (and its fuller version on branch docs/one-shot-research) and says
  * nothing beyond it. The papers are linked, not described.
  */
-import { FeatureCard, Figure, Hero, Notice, ShowsDoesNot, SiteSection } from "../../site/kit";
+import { CardGrid, FeatureCard, Figure, Hero, Notice, ShowsDoesNot, SiteSection } from "../../site/kit";
 import { useSite } from "../../site/i18n";
 
 const LINK = "underline underline-offset-4 hover:text-teal-700 dark:hover:text-teal-300 outline-none focus-visible:ring-4 focus-visible:ring-teal-500/50 rounded";
@@ -97,7 +97,7 @@ export default function ResearchView() {
 
       <SiteSection title="The catch: a trusted setup" lead="The note read the papers and found a cost.">
         <div className="grid items-start gap-6 md:grid-cols-2">
-          <div className="flex flex-col gap-4 text-lg leading-relaxed">
+          <div className="flex flex-col gap-4 leading-relaxed">
             <p className="font-semibold">
               {t("In the standard model, the one-shot scheme of Shmueli and Zhandry (IACR ePrint 2025/486) needs a common reference string made by a trusted setup, and practical indistinguishability obfuscation does not exist. A trusted setup is the same kind of trust TET rejected Groth16 for.")}
             </p>
@@ -146,24 +146,24 @@ export default function ResearchView() {
       </SiteSection>
 
       <SiteSection title="A learning model">
-        <div className="max-w-xl">
+        <CardGrid>
           <FeatureCard id="learning-model" />
-        </div>
+        </CardGrid>
       </SiteSection>
 
       <SiteSection title="Papers" lead="Links only. The research note says how much of each one was read.">
-        <ul className="flex flex-col gap-4 text-lg">
+        <ul className="flex flex-col gap-4">
           {PAPERS.map((p) => (
-            <li key={p.label} className="rounded-2xl border border-slate-200 p-5 dark:border-slate-700">
+            <li key={p.label} className="rounded-2xl border border-slate-200 p-6 dark:border-slate-700">
               <p className="font-semibold">{t(p.label)}</p>
-              <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+              <p className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
                 {p.links.map((l) => (
                   <a key={l.href} href={l.href} className={LINK}>
                     {t(l.label)}
                   </a>
                 ))}
               </p>
-              {p.text ? <p className="mt-2 text-base text-slate-700 dark:text-slate-300">{t(p.text)}</p> : null}
+              {p.text ? <p className="mt-2 text-slate-700 dark:text-slate-300">{t(p.text)}</p> : null}
             </li>
           ))}
         </ul>
