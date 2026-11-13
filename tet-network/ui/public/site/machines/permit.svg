@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 280" role="img" aria-labelledby="t">
+  <title id="t">A one-time permission: the first use is accepted, a second use of the same permission is refused</title>
+  <style>.bg{fill:#f0fdfa}.pr{fill:#0f766e}.prs{stroke:#0f766e}.ink{fill:#134e4a}.inks{stroke:#134e4a}.lt{fill:#5eead4}.paper{fill:#ffffff}.mu{stroke:#94a3b8}.muf{fill:#94a3b8}.no{fill:#be123c}.nos{stroke:#be123c}.ok{fill:#047857}.oks{stroke:#047857}@media (prefers-color-scheme: dark){.bg{fill:#042f2e}.pr{fill:#2dd4bf}.prs{stroke:#2dd4bf}.ink{fill:#ccfbf1}.inks{stroke:#ccfbf1}.lt{fill:#99f6e4}.paper{fill:#0f172a}.mu{stroke:#64748b}.muf{fill:#64748b}.no{fill:#fb7185}.nos{stroke:#fb7185}.ok{fill:#34d399}.oks{stroke:#34d399}}</style>
+  <rect class="bg" width="480" height="280" rx="24"/>
+  <!-- a small robot arm on a base -->
+  <g transform="translate(28 40)">
+    <rect class="ink" x="0" y="176" width="96" height="20" rx="8"/>
+    <rect class="pr" x="36" y="120" width="24" height="58" rx="8"/>
+    <circle class="ink" cx="48" cy="120" r="14"/>
+    <rect class="pr" x="44" y="56" width="20" height="70" rx="8" transform="rotate(30 48 120)"/>
+    <circle class="ink" cx="82" cy="64" r="11"/>
+    <path class="inks" d="M86 66 l20 -6 M86 70 l20 8" stroke-width="6" stroke-linecap="round" fill="none"/>
+    <circle class="lt" cx="48" cy="120" r="5"/>
+  </g>
+  <!-- the ticket -->
+  <g transform="translate(150 30)">
+    <path class="paper prs" d="M0 0 h96 v22 a8 8 0 0 0 0 16 v22 h-96 v-22 a8 8 0 0 0 0 -16 z" stroke-width="3"/>
+    <text class="pr" x="48" y="38" font-family="system-ui, sans-serif" font-size="20" font-weight="700" text-anchor="middle">1×</text>
+  </g>
+  <!-- first use: accepted -->
+  <g transform="translate(150 118)">
+    <path class="mu" d="M0 26 h120" stroke-width="3" stroke-dasharray="6 6" fill="none"/>
+    <path class="mu" d="M112 18 l10 8 l-10 8" stroke-width="3" fill="none"/>
+    <text class="ink" x="0" y="12" font-family="ui-monospace, monospace" font-size="14" font-weight="700">1</text>
+    <circle class="ok" cx="166" cy="26" r="26"/>
+    <path d="M152 26 l10 10 l18 -20" stroke="#ffffff" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <!-- second use of the same ticket: refused -->
+  <g transform="translate(150 196)">
+    <path class="mu" d="M0 26 h120" stroke-width="3" stroke-dasharray="6 6" fill="none"/>
+    <path class="mu" d="M112 18 l10 8 l-10 8" stroke-width="3" fill="none"/>
+    <text class="ink" x="0" y="12" font-family="ui-monospace, monospace" font-size="14" font-weight="700">2</text>
+    <circle class="no" cx="166" cy="26" r="26"/>
+    <path d="M154 14 l24 24 M178 14 l-24 24" stroke="#ffffff" stroke-width="6" fill="none" stroke-linecap="round"/>
+  </g>
+  <!-- the ticket, used: a stamped copy beside each row -->
+  <g transform="translate(370 120)">
+    <path class="paper prs" d="M0 0 h80 v18 a7 7 0 0 0 0 14 v18 h-80 v-18 a7 7 0 0 0 0 -14 z" stroke-width="3"/>
+    <path class="oks" d="M24 26 l10 10 l20 -22" stroke-width="5" fill="none" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(370 198)">
+    <path class="paper nos" d="M0 0 h80 v18 a7 7 0 0 0 0 14 v18 h-80 v-18 a7 7 0 0 0 0 -14 z" stroke-width="3" stroke-dasharray="6 4"/>
+    <path class="nos" d="M28 12 l24 24 M52 12 l-24 24" stroke-width="5" fill="none" stroke-linecap="round"/>
+  </g>
+</svg>
