@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "verify:genesis": "node scripts/verify-genesis-hash.mjs",
+    "verify:genesis": "node --experimental-strip-types scripts/verify-genesis-hash.mjs",
     "verify:ed25519": "node scripts/verify-ed25519-tet-parity.mjs",
     "verify:tmail-burn": "node scripts/tmail_burn_preimage_golden.mjs"
   },

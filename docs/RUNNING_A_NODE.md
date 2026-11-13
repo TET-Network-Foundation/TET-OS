@@ -194,7 +194,7 @@ toolchain and builds the guests. A deployment that does not pass `docker-compose
 unaffected by anything in it.
 
 No `.env` is required — `env_file` is marked `required: false` and the compose file carries local
-dev defaults (`TET_CHAIN_ID=tet-local-dev`, dev founder, dev treasury, P2P off, auto-mine on). An
+dev defaults (`TET_CHAIN_ID=tet-dev-local`, dev founder, dev treasury, P2P off, auto-mine on). An
 `.env` in the repo root, if present, overrides all of them.
 
 > **The PQC WASM is baked into the UI image.** Stage 1 of `tet-network/ui/Dockerfile` runs the
@@ -631,7 +631,9 @@ There is **no** `TET_FOUNDER_ADDRESS` env var in code; use **`TET_FOUNDER_WALLET
 
 `deterministic_genesis_hash(founder, treasury)` includes:
 
-- `chain_id` (`TET_CHAIN_ID`, default `tet-local-dev` or `tet-mainnet-1`)
+- `chain_id` (`TET_CHAIN_ID`, default `tet-dev-local` or `tet-mainnet-1`)
+- for the default `tet-dev-local` only, a `|dev=1` marker at the end, so a fresh dev node never computes
+  a public chain's genesis hash
 - Founder wallet + micro-amounts
 - Worker pool sentinel + micro-amounts
 - **Treasury address** + 25% micro-amount
@@ -714,9 +716,23 @@ node scripts/verify-genesis-hash.mjs
   2. Set **`NEXT_PUBLIC_TET_GENESIS_HASH`** explicitly to the node’s stored hash (advanced; skips local computation).
   3. Trigger a hybrid-signed dev call (e.g. initial airdrop): node rejects with `chain_id/genesis_hash` mismatch if UI env is wrong.
 
-**Dev golden vector** (default founder `57e0b29d…`, treasury `fedcba09…`, `chain_id=tet-local-dev`):
+**Dev golden vector** (default founder `57e0b29d…`, treasury `fedcba09…`, default `chain_id=tet-dev-local`, with the dev marker):
 
-`0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36`
+`0xeeafc25ed5fd12f5b504dea4b237ece707aa97656874bb79417b6b02b45e3ed5`
+
+**The first public testnet** ran as `chain_id=tet-local-dev` with the same dev founder and treasury, so
+its genesis was `0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36`, the hash every
+fresh dev node computed until the default changed. Records signed for it (paper marks, the devlog,
+the offline verifier) name that pair explicitly and still check offline.
+
+**A public chain names itself.** With `TET_ENV=testnet` the node refuses to start unless
+`TET_CHAIN_ID` is set and is neither `tet-dev-local` nor `tet-local-dev`, and `TET_GENESIS_FILE` names
+a JSON file `{"chain_id", "founder_wallet_id", "treasury_address", "genesis_hash"}` for that chain,
+with a founder and treasury that are not the dev ones and a `genesis_hash` equal to the one the node
+recomputes. The founder (`TET_GENESIS_FOUNDER_WALLET_ID`) and `TET_TREASURY_ADDRESS` must be set and
+equal the file; `TET_GENESIS_HASH`, when set, must agree. A public node also never trusts every peer
+for chain sync: a follower must set `TET_PRODUCER_PEERS=local-wallet=<PeerId>` or
+`TET_SYNC_TRUSTED_PEERS`, and a producer must set `TET_VALIDATOR_IDS` to itself.
 
 ---
 

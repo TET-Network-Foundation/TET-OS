@@ -43,9 +43,19 @@ if [ "$pushed" = 1 ]; then pass "a loop stops at the first branch with a red gua
 TET_GUARDS_LIST="$W/empty" bash "$RUNNER" > "$W/o3" 2>&1; rc=$?
 if [ "$rc" = 2 ]; then pass "no guards found: exit 2, not 0"; else flunk "no guards found: exit 2, not 0" "rc=$rc"; fi
 
-# The real list is read from ci.yml and is not empty.
-n=$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) } job == "ui" && /^[[:space:]]+run: node .*scripts\/[A-Za-z0-9_]+\.mjs/' .github/workflows/ci.yml | wc -l | tr -d ' ')
+# The real list is read from ci.yml and is not empty. The parser is taken out of run_guards.sh
+# itself (the awk program between `list=$(awk '` and `' "$CI")`), so this test can't drift from it.
+PARSER=$(awk "/list=\\\$\\(awk '/{f=1; next} f && /' \"\\\$CI\"\\)/{f=0} f" scripts/run_guards.sh)
+[ -n "$PARSER" ] || flunk "the parser could be read out of run_guards.sh"
+listed=$(awk "$PARSER" .github/workflows/ci.yml)
+n=$(grep -c '^tet-network/ui' <<<"$listed")
 if [ "$n" -gt 0 ]; then pass "ci.yml's ui job has $n guard steps for the runner"; else flunk "ci.yml's ui job has guard steps for the runner"; fi
+
+# Every `node … scripts/<name>.mjs` step of the ui job reaches the runner, whatever its name: a
+# guard named with a hyphen (verify-genesis-hash.mjs) was once silently left out locally.
+missing=$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) } job == "ui" && /^[[:space:]]+run: node .*scripts\/[^ \/]+\.mjs/ { sub(/^[[:space:]]+run: /, ""); print }' .github/workflows/ci.yml \
+  | while IFS= read -r step; do grep -qxF "tet-network/ui	$step" <<<"$listed" || echo "$step"; done)
+if [ -z "$missing" ]; then pass "every ui-job guard step reaches the runner"; else flunk "every ui-job guard step reaches the runner" "left out: $missing"; fi
 
 # The rust job's Python guard is picked up too (the machine notebook), and run from the root.
 nb=$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) } job == "rust" && /^[[:space:]]+run: python3 tools\/[A-Za-z0-9_\/-]+\/test_[A-Za-z0-9_]+\.py[[:space:]]*$/' .github/workflows/ci.yml | grep -c 'tools/machine-notebook/test_notebook.py')

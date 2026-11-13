@@ -1,88 +1,73 @@
 #!/usr/bin/env node
 /**
- * Static cross-check: UI genesis payload + SHA-256 vs tet-core `deterministic_genesis_hash`.
- * Run from tet-network/ui: node scripts/verify-genesis-hash.mjs
+ * Guard: the UI's genesis binding (app/lib/chain_binding.ts, the copy the browser signs with) computes
+ * the same genesis hashes as tet-core (src/genesis.rs).
+ *
+ *   cd tet-network/ui && node --experimental-strip-types scripts/verify-genesis-hash.mjs
+ *
+ * It imports the shipped module, not a replica, and reads the vectors and dev constants out of
+ * genesis.rs, so neither side can move without the other:
+ *   0. the dev founder is genesis.rs GENESIS_FOUNDER_DEV_PUBLIC_HEX;
+ *   1. with no NEXT_PUBLIC_TET_CHAIN_ID, publicChainId() is genesis.rs DEV_CHAIN_ID;
+ *   2. the dev default (DEV_CHAIN_ID, dev founder, dev treasury) hashes to the vector that
+ *      `a_fresh_dev_node_is_clearly_local_and_not_the_old_public_chain` pins, and carries `|dev=1`;
+ *   3. the legacy public chain (LEGACY_PUBLIC_CHAIN_ID, same keys) hashes to OLD_PUBLIC_GENESIS, the
+ *      hash paper marks, the devlog pin and the offline verifier name, with no marker;
+ *   4. any other named chain carries no marker.
  */
-import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 
-const STEVEMON = 1_000_000n;
-const MAX_SUPPLY_MICRO = 10_000_000_000n * STEVEMON;
-const GENESIS_FOUNDER_SHARE_MICRO = 2_500_000_000n * STEVEMON;
-const GENESIS_WORKER_POOL_SHARE_MICRO = 5_000_000_000n * STEVEMON;
-const GENESIS_TREASURY_SHARE_MICRO = 2_500_000_000n * STEVEMON;
-const GENESIS_PROTOCOL_RESERVE_SHARE_MICRO = 0n;
-const WALLET_WORKER_POOL =
-  "0000000000000000000000000000000000000000000000000000000000000001";
-const WALLET_PROTOCOL_RESERVE =
-  "0000000000000000000000000000000000000000000000000000000000000003";
-const GENESIS_FOUNDER_DEV_PUBLIC_HEX =
-  "57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0";
-const TREASURY_DEV =
-  "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
-
-function buildGenesisPayloadV1({ chainId, founderWalletId, treasuryWalletId }) {
-  const founder = founderWalletId.trim().toLowerCase();
-  const treasury = treasuryWalletId.trim().toLowerCase();
-  return (
-    `tet-genesis-v1|chain_id=${chainId}` +
-    `|founder=${founder}` +
-    `|founder_micro=${GENESIS_FOUNDER_SHARE_MICRO}` +
-    `|worker_pool=${WALLET_WORKER_POOL}` +
-    `|worker_pool_micro=${GENESIS_WORKER_POOL_SHARE_MICRO}` +
-    `|treasury=${treasury}` +
-    `|treasury_micro=${GENESIS_TREASURY_SHARE_MICRO}` +
-    `|reserve=${WALLET_PROTOCOL_RESERVE}` +
-    `|reserve_micro=${GENESIS_PROTOCOL_RESERVE_SHARE_MICRO}` +
-    `|max_supply_micro=${MAX_SUPPLY_MICRO}`
-  );
+const RUST = readFileSync(new URL("../../../tet-core/src/genesis.rs", import.meta.url), "utf8");
+function rust(re, what) {
+  const m = RUST.match(re);
+  if (!m) {
+    console.error(`FAIL: could not find ${what} in tet-core/src/genesis.rs`);
+    process.exit(1);
+  }
+  return m[1];
 }
-
-function deterministicGenesisHashHex(inputs) {
-  const payload = buildGenesisPayloadV1(inputs);
-  const hex = createHash("sha256").update(payload, "utf8").digest("hex");
-  return { payload, hash: `0x${hex}` };
-}
-
-const inputs = {
-  chainId: "tet-local-dev",
-  founderWalletId: GENESIS_FOUNDER_DEV_PUBLIC_HEX,
-  treasuryWalletId: TREASURY_DEV,
-};
-
-const { payload, hash } = deterministicGenesisHashHex(inputs);
-
-console.log("=== Genesis binding verify (dev defaults) ===\n");
-console.log("inputs:", JSON.stringify(inputs, null, 2));
-console.log("\n--- payload (UTF-8, must match tet-core format!()) ---\n");
-console.log(payload);
-console.log("\n--- SHA-256 → genesis_hash ---\n");
-console.log(hash);
-console.log(
-  "\nCompare with tet-core:\n" +
-    "  cd tet-core && cargo test --lib ledger:: -- --nocapture 2>/dev/null ||\n" +
-    "  RUST_LOG=off cargo run --quiet --example …  # or startup log / fresh DB meta\n" +
-    "\nManual: same TET_TREASURY_ADDRESS + founder + TET_CHAIN_ID on node, then:\n" +
-    "  curl -s http://127.0.0.1:5010/status | jq .   # founder_wallet_id if set\n" +
-    "  # genesis_hash is NOT in /ledger/me — see docs/RUNNING_A_NODE.md § UI\n",
+const R_DEV_CHAIN_ID = rust(/pub const DEV_CHAIN_ID: &str = "([^"]+)";/, "DEV_CHAIN_ID");
+const R_LEGACY_CHAIN_ID = rust(/pub const LEGACY_PUBLIC_CHAIN_ID: &str = "([^"]+)";/, "LEGACY_PUBLIC_CHAIN_ID");
+const R_TREASURY_DEV = rust(/pub const TREASURY_DEV_HEX: &str = "([0-9a-f]{64})";/, "TREASURY_DEV_HEX");
+const R_FOUNDER_DEV = rust(/pub const GENESIS_FOUNDER_DEV_PUBLIC_HEX: &str =\s*"([0-9a-f]{64})";/, "GENESIS_FOUNDER_DEV_PUBLIC_HEX");
+const R_OLD_PUBLIC = rust(/const OLD_PUBLIC_GENESIS: &str = "(0x[0-9a-f]{64})";/, "OLD_PUBLIC_GENESIS");
+const R_DEV_VECTOR = rust(
+  /fn a_fresh_dev_node_is_clearly_local_and_not_the_old_public_chain\(\)[\s\S]*?assert_eq!\(h, "(0x[0-9a-f]{64})"\)/,
+  "the dev golden vector",
 );
 
-// Golden vector: run `cd tet-core && cargo test genesis_hash_vector -- --exact` if added later.
-const EXPECTED_PAYLOAD_PREFIX = "tet-genesis-v1|chain_id=tet-local-dev|founder=";
-if (!payload.startsWith(EXPECTED_PAYLOAD_PREFIX)) {
-  console.error("FAIL: unexpected payload prefix");
-  process.exit(1);
-}
-if (!payload.includes("|treasury=") || payload.includes("|ecosystem=")) {
-  console.error("FAIL: treasury field missing or legacy ecosystem field present");
-  process.exit(1);
-}
-const GOLDEN_DEV =
-  "0x9d6ccb1354b31419ade378aef68de58e854938df795b69cf76777e3483efbb36";
-if (hash !== GOLDEN_DEV) {
-  console.error(`FAIL: hash ${hash} !== golden ${GOLDEN_DEV}`);
-  process.exit(1);
+delete process.env.NEXT_PUBLIC_TET_CHAIN_ID;
+delete process.env.NEXT_PUBLIC_TET_MAINNET;
+const cb = await import("../app/lib/chain_binding.ts");
+
+let failed = 0;
+function check(ok, msg) {
+  console.log(`${ok ? "ok  " : "FAIL"} ${msg}`);
+  if (!ok) failed++;
 }
 
-console.log("\nOK: payload uses treasury= (Phase 2B), not ecosystem= / system:worker_pool");
-console.log("OK: SHA-256 matches dev golden vector (cross-checked with shasum -a 256)");
-process.exit(0);
+const dev = { founderWalletId: cb.GENESIS_FOUNDER_DEV_PUBLIC_HEX, treasuryWalletId: R_TREASURY_DEV };
+
+check(cb.GENESIS_FOUNDER_DEV_PUBLIC_HEX === R_FOUNDER_DEV, `the dev founder is the same on both sides (Rust ${R_FOUNDER_DEV}, UI ${cb.GENESIS_FOUNDER_DEV_PUBLIC_HEX})`);
+check(cb.DEV_CHAIN_ID === R_DEV_CHAIN_ID, `DEV_CHAIN_ID is ${R_DEV_CHAIN_ID} on both sides (UI: ${cb.DEV_CHAIN_ID})`);
+check(cb.publicChainId() === R_DEV_CHAIN_ID, `no NEXT_PUBLIC_TET_CHAIN_ID -> ${R_DEV_CHAIN_ID} (UI: ${cb.publicChainId()})`);
+
+const devPayload = cb.buildGenesisPayloadV1({ chainId: cb.publicChainId(), ...dev });
+const devHash = await cb.deterministicGenesisHashHex({ chainId: cb.publicChainId(), ...dev });
+check(devPayload.endsWith("|dev=1"), "the dev default's payload ends in |dev=1");
+check(devHash === R_DEV_VECTOR, `dev default hashes to the Rust vector ${R_DEV_VECTOR} (UI: ${devHash})`);
+check(devHash !== R_OLD_PUBLIC, "a fresh dev build does not compute the old public chain's genesis");
+
+const legacyPayload = cb.buildGenesisPayloadV1({ chainId: R_LEGACY_CHAIN_ID, ...dev });
+const legacyHash = await cb.deterministicGenesisHashHex({ chainId: R_LEGACY_CHAIN_ID, ...dev });
+check(!legacyPayload.includes("dev=1"), `${R_LEGACY_CHAIN_ID} carries no marker`);
+check(legacyHash === R_OLD_PUBLIC, `${R_LEGACY_CHAIN_ID} hashes to OLD_PUBLIC_GENESIS ${R_OLD_PUBLIC} (UI: ${legacyHash})`);
+
+const named = cb.buildGenesisPayloadV1({ chainId: "tet-testnet-2", founderWalletId: "11".repeat(32), treasuryWalletId: "22".repeat(32) });
+check(!named.includes("dev=1"), "a named public chain carries no marker");
+
+if (failed) {
+  console.error(`verify-genesis-hash: ${failed} check(s) failed`);
+  process.exit(1);
+}
+console.log("verify-genesis-hash: the UI genesis binding matches tet-core");
