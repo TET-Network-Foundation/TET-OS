@@ -54,16 +54,18 @@ refusal itself would not.
 
 ## What it shows
 
-- **This key answered this challenge for this domain**, once, before it expired.
+In the everyday words the `/signin` page uses: a "question" is the server's challenge, "the site" is
+the server's domain, and "a key" is the signer's key id. The page shows these lines word for word,
+and `tet-network/ui/scripts/signin_demo_guard.mjs` compares them.
+
+- **This key answered this site's question**, once, before it expired.
 
 ## What it does not show
 
-- **Who holds the key.** Anyone with the 12 words can answer. The server learns a key id, not a
-  person.
-- That the user meant to sign in to this domain: the client signs whatever challenge it is given.
-  The design's signer would refuse a challenge whose origin is not the page that sent the user, and
-  show the site's name before signing; neither is here.
-- Anything across a restart: issued and used nonces live in memory.
+- **Who holds the key.** Anyone with the 12 words can answer. The site learns a key, not a person.
+- That you meant to sign in to this site: the prototype signs any question it is given. The full
+  design would check where the question came from and show the site's name first; neither is built.
+- Anything after a restart: the server keeps its questions in memory only.
 
 ## Not in the prototype (from the design)
 
