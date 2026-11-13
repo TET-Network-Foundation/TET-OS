@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">Top: a second signature is caught by a record book. Bottom: a one-shot key signs once and is used up.</title>
+  <style>.bg{fill:#f0fdfa}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}.soft{fill:#ccfbf1}.paper{fill:#ffffff}.line{stroke:#94a3b8}.mute{fill:#94a3b8}.red{stroke:#dc2626}.redf{fill:#dc2626}@media (prefers-color-scheme: dark){.bg{fill:#0f172a}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#5eead4}.soft{fill:#134e4a}.paper{fill:#1e293b}.line{stroke:#64748b}.mute{fill:#64748b}.red{stroke:#f87171}.redf{fill:#f87171}}</style>
+  <rect width="400" height="300" rx="24" class="bg"/>
+  <line x1="24" y1="150" x2="376" y2="150" class="line" stroke-width="2" stroke-dasharray="6 6"/>
+  <!-- top row: ordinary key, two signatures, record book crosses the second out -->
+  <g transform="translate(28 46)"><circle cx="24" cy="24" r="16" fill="none" class="inks" stroke-width="8"/><rect x="38" y="20" width="56" height="8" rx="4" class="ink"/><rect x="76" y="28" width="7" height="13" class="ink"/><rect x="87" y="28" width="7" height="9" class="ink"/></g>
+  <path d="M130 70 h30" class="line" stroke-width="3"/><path d="M154 64 l8 6 l-8 6" fill="none" class="line" stroke-width="3"/>
+  <g transform="translate(170 44)">
+    <rect width="54" height="52" rx="8" class="paper"/><rect width="54" height="52" rx="8" fill="none" class="line" stroke-width="2"/>
+    <path d="M10 34 q8 -16 16 0 t16 0" fill="none" class="inks" stroke-width="3"/>
+  </g>
+  <g transform="translate(236 44)">
+    <rect width="54" height="52" rx="8" class="paper"/><rect width="54" height="52" rx="8" fill="none" class="line" stroke-width="2"/>
+    <path d="M10 34 q8 -16 16 0 t16 0" fill="none" class="inks" stroke-width="3"/>
+  </g>
+  <!-- record book -->
+  <g transform="translate(306 36)">
+    <rect width="64" height="72" rx="6" class="ink"/><rect x="8" y="8" width="48" height="56" rx="3" class="paper"/>
+    <g class="line" stroke-width="3"><line x1="16" y1="22" x2="48" y2="22"/><line x1="16" y1="34" x2="48" y2="34"/><line x1="16" y1="46" x2="40" y2="46"/></g>
+  </g>
+  <g class="red" stroke-width="6" stroke-linecap="round"><line x1="240" y1="48" x2="286" y2="92"/><line x1="286" y1="48" x2="240" y2="92"/></g>
+  <!-- bottom row: one-shot key, one signature, then the key is gone -->
+  <g transform="translate(28 196)"><circle cx="24" cy="24" r="16" fill="none" class="inks" stroke-width="8"/><rect x="38" y="20" width="56" height="8" rx="4" class="ink"/><rect x="76" y="28" width="7" height="13" class="ink"/><rect x="87" y="28" width="7" height="9" class="ink"/></g>
+  <circle cx="52" cy="220" r="11" class="ink"/>
+  <text x="52" y="226" font-family="system-ui, sans-serif" font-size="15" font-weight="700" text-anchor="middle" class="bg">1</text>
+  <path d="M130 220 h30" class="line" stroke-width="3"/><path d="M154 214 l8 6 l-8 6" fill="none" class="line" stroke-width="3"/>
+  <g transform="translate(170 194)">
+    <rect width="54" height="52" rx="8" class="paper"/><rect width="54" height="52" rx="8" fill="none" class="line" stroke-width="2"/>
+    <path d="M10 34 q8 -16 16 0 t16 0" fill="none" class="inks" stroke-width="3"/>
+  </g>
+  <!-- the used-up key: an outline only -->
+  <g transform="translate(250 196)" fill="none" class="line" stroke-width="3" stroke-dasharray="5 5">
+    <circle cx="24" cy="24" r="16"/><rect x="38" y="20" width="56" height="8" rx="4"/>
+  </g>
+</svg>
