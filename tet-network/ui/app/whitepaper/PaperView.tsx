@@ -79,7 +79,7 @@ function Body({ block }: { block: Block }) {
 export function PaperView() {
   const { lang, t } = useLang();
   const TR = lang === "ja" ? JA : lang === "zh-HK" ? ZH : null;
-  const P: { TITLE: string; SUBTITLE: string; DATE: string; ABSTRACT: string; SECTIONS: Section[] } = TR ?? EN;
+  const P: { TITLE: string; SUBTITLE: string; DATE: string; ERRATA?: string; ABSTRACT: string; SECTIONS: Section[] } = TR ?? EN;
   const translated = TR !== null;
   // A language without a translation shows the English text, marked (lang_render_guard allows none today).
   const pending = lang !== "en" && !translated;
@@ -110,6 +110,7 @@ export function PaperView() {
       <div data-pending-translation={pending ? lang : undefined} lang={pending ? "en" : undefined}>
       <h1 className="text-[30px] font-bold">{P.TITLE}</h1>
       <p className="text-[17px] text-[#3d434a]">{P.SUBTITLE}</p>
+      {P.ERRATA ? <p className="mt-2 text-[14px] text-[#5d646d]">{P.ERRATA}</p> : null}
       <p className="mt-2 text-[14px] text-[#5d646d]">
         {t("{date} · written against commit {commit} · the public seeds run {seeds} · this is a testnet; data may be reset", {
           date: P.DATE,
@@ -130,6 +131,17 @@ export function PaperView() {
             · {t("proof code {code} (marks this PDF file)", { code: MARKS.pdf.code })}
           </>
         ) : null}
+      </p>
+      <p className="mt-1 text-[13px] text-[#5d646d]">
+        {t("Version 2 (2026-10-10, superseded, kept):")}{" "}
+        <a className={link} href="/paper/tet-technical-paper-v2.html">
+          {t("text")}
+        </a>{" "}
+        ·{" "}
+        <a className={link} href="/paper/tet-technical-paper-v2.pdf" download>
+          PDF
+        </a>{" "}
+        · {t("proof codes {a} and {b}", { a: "TET-03ZE-2DVW", b: "TET-WF10-23HM" })}
       </p>
       <p className="mt-1 text-[13px] text-[#5d646d]">
         {t("Version 1 (2026-10-09, superseded, kept):")}{" "}

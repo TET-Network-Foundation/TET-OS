@@ -11,29 +11,33 @@ export type Block = { p: string } | { ul: string[] } | { table: { head: string[]
 export type Section = { id: string; title: string; body: Block[]; sources: string[] };
 
 export const TITLE = "TET technical paper";
-export const SUBTITLE = "Version 2 · testnet v0.2, as the code stands";
-export const DATE = "2026-10-10";
+export const SUBTITLE = "Version 2.1 · testnet v0.2, as the code stands";
+export const DATE = "2026-11-09";
+/** What this version changed from the one before, shown at the top of the paper. */
+export const ERRATA =
+  "Errata, version 2.1: three sentences of version 2 are replaced; apart from the version lines, nothing else changed. “for checking who signed something, and when” is now “for checking which key signed something, and before which block”; “proofs of who, when and what that anyone can check” is now “records of which key signed, before which block, and what, that anyone can check”; “Who signed, not only when; anonymous membership” is now “Which key signed, and before which block; anonymous membership”. Version 2 is kept unchanged, with its codes.";
 /** The commit this paper describes (the code it cites exists at this commit). */
 export const WRITTEN_AGAINST = "504a4608c0b2249dd9aa92d16d54ee2ed05581b2";
 /** What the two public seeds run (TET-OS main), for the parts that differ only in UI. */
 export const SEEDS_RUN = "bea1e45";
 
 export const ABSTRACT =
-  "Your proofs and keys, in your hands, not a company's. TET is a public test network for checking who signed something, and when: every transaction and signed record carries two signatures, Ed25519 and ML-DSA-44; members can post anonymously with a RISC Zero membership proof; messages and files are end-to-end encrypted with X25519 and CRYSTALS-Kyber-768 (Round 3), with keys and senders checked in the browser. This paper describes what the code does at the commit named above, including what it does not protect; Sections 11 and 13 are the parts about plans.";
+  "Your proofs and keys, in your hands, not a company's. TET is a public test network for checking which key signed something, and before which block: every transaction and signed record carries two signatures, Ed25519 and ML-DSA-44; members can post anonymously with a RISC Zero membership proof; messages and files are end-to-end encrypted with X25519 and CRYSTALS-Kyber-768 (Round 3), with keys and senders checked in the browser. This paper describes what the code does at the commit named above, including what it does not protect; Sections 11 and 13 are the parts about plans.";
 
 export const SECTIONS: Section[] = [
   {
     id: "version",
     title: "0. Version and changelog",
     body: [
-      { p: "Version 2.0, dated 2026-10-10, written against the commit named at the top; scope: the public test network, v0.2. Where this commit has code the public seeds don't run yet, the text says so." },
+      { p: "Version 2.1, dated 2026-11-09 (version 2.0 of 2026-10-10 with the errata at the top), written against the commit named at the top; scope: the public test network, v0.2. Where this commit has code the public seeds don't run yet, the text says so." },
       { p: "This paper marks itself: its HTML and its PDF are each signed by TET's publisher ID, and each mark has a proof code. Every earlier version stays published with its codes, so the paper's own history can be checked, including with the offline verifier (Section 10)." },
       {
         table: {
           head: ["Version", "Date", "Text (HTML)", "PDF", "Status"],
           rows: [
             ["1", "2026-10-09", "TET-418B-CFT2", "TET-QQGQ-B5MM", "superseded by 2 (files kept: tet-technical-paper-v1.*)"],
-            ["2", "2026-10-10", "this version's code, beside the download", "this version's code, beside the download", "current"],
+            ["2", "2026-10-10", "TET-03ZE-2DVW", "TET-WF10-23HM", "superseded by 2.1 (files kept: tet-technical-paper-v2.*)"],
+            ["2.1", "2026-11-09", "this version's code, beside the download", "this version's code, beside the download", "current"],
           ],
         },
       },
@@ -47,7 +51,7 @@ export const SECTIONS: Section[] = [
       { p: "Your proofs and keys, in your hands, not a company's." },
       { p: "Why now: generated text, images and voices are cheap, so being able to check who signed what, and when, without trusting a company matters more than whether something looks real." },
       { p: "The honest limit: lose your passphrase (12 words) and nobody can recover it; and today TET still runs on one operator and one block producer (Sections 7 and 13)." },
-      { p: "What TET is for: proofs of who, when and what that anyone can check without trusting a company, and that stay checkable if TET itself disappears. What each neighbouring system is for, and what TET adds or leaves to it:" },
+      { p: "What TET is for: records of which key signed, before which block, and what, that anyone can check without trusting a company, and that stay checkable if TET itself disappears. What each neighbouring system is for, and what TET adds or leaves to it:" },
       {
         table: {
           head: ["", "What it's for", "What TET adds", "What TET leaves to it"],
@@ -55,7 +59,7 @@ export const SECTIONS: Section[] = [
             ["Bitcoin", "Money; a very hard-to-rewrite ledger", "Signed records of who, when and what, with hybrid post-quantum signatures", "Money, and timestamps far harder to rewrite than TET's today"],
             ["Ethereum", "Programs that run on a chain", "Records, membership proofs and messaging, not programs", "Smart contracts"],
             ["C2PA", "Credentials embedded by cameras and editing tools", "Marks a person chooses to make on any file's hash, checkable offline", "Provenance from the capture device itself"],
-            ["OpenTimestamps", "Free timestamps anchored in Bitcoin", "Who signed, not only when; anonymous membership", "Stronger timestamps (Bitcoin-anchored)"],
+            ["OpenTimestamps", "Free timestamps anchored in Bitcoin", "Which key signed, and before which block; anonymous membership", "Stronger timestamps (Bitcoin-anchored)"],
             ["Passkeys", "Phishing-resistant sign-in", "Per-site keys from words you hold; a membership-only mode (design, Section 11)", "Platform sync and recovery"],
             ["Signal", "Mature end-to-end messaging", "Messaging tied to the same keys as records; safety numbers", "Metadata protection, and a mature, audited protocol"],
             ["Tor", "Hiding where network traffic comes from", "Hiding which member posted, among members", "Hiding the network address: TET doesn't"],

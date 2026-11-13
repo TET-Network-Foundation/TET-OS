@@ -1057,6 +1057,7 @@ export const JA: Record<string, string> = {
   "(the code)": "（コード）",
   "Download the PDF (English)": "PDF をダウンロード（英語）",
   "proof code {code} (marks this PDF file)": "証明コード {code}（この PDF ファイルの印）",
+  "Version 2 (2026-10-10, superseded, kept):": "第2版（2026-10-10、置き換え済み、保存しています）:",
   "Version 1 (2026-10-09, superseded, kept):": "第1版（2026-10-09、置き換え済み、保存しています）:",
   "proof codes {a} and {b}": "証明コード {a} と {b}",
   "Contents": "目次",
