@@ -62,7 +62,7 @@ export function StatusBanner(props: { t: T }) {
   const { t } = props;
   return (
     <p role="status" className="rounded-md border border-[#e6d39a] bg-[#fdf8e7] px-3 py-2 text-[14px] text-[#6b4e00]">
-      <strong>{t("prototype, local only")}</strong> · {t("Sample keys made in this tab. Nothing is sent anywhere, and nothing moves money.")}
+      <strong>{t("prototype, local only")}</strong> · {t("Sample keys made in this tab. Nothing is sent anywhere, and nothing here moves value.")}
     </p>
   );
 }
@@ -118,7 +118,7 @@ function Field(props: { label: string; children: ReactNode }) {
 }
 
 function Payment(props: { t: T }) {
-  return <Field label={props.t("Payment:")}>{props.t(PAYMENT)}</Field>;
+  return <Field label={props.t("Settled:")}>{props.t(PAYMENT)}</Field>;
 }
 
 // ── 1. Delivery ─────────────────────────────────────────────────────────────────────────────────

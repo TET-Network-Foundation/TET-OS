@@ -8,7 +8,7 @@
  * verifyEnvelope, the page's own verifier. A one-time permit is the machine notebook's idea
  * (tools/machine-notebook, "One-time permits"): a signed id that a check accepts once.
  *
- * Nothing moves money: no record carries an amount, and payment is always "outside TET".
+ * Nothing here moves value: no record carries an amount, and payment is always "outside TET".
  * Everything stays in the tab; nothing is sent anywhere. scripts/market_guard.mjs pins the checks.
  */
 import { sha256 } from "@noble/hashes/sha2";
@@ -301,7 +301,7 @@ export const DOES_NOT_SHOW = {
     "What is inside the parcel: the contents line is what the sender wrote.",
     "Who holds each key.",
     "That nobody with a copy of the courier's key used the permit somewhere else: only this record keeper's list is checked.",
-    "Anything about payment, which happens outside TET.",
+    "How the customer settles up: that happens outside TET.",
   ],
   booking: [
     "Who the customer is.",
@@ -310,7 +310,7 @@ export const DOES_NOT_SHOW = {
     "That the shop marked \"did not come\" fairly: these are the shop's own records.",
   ],
   listing: [
-    "That the customer paid: payment happens outside TET, and the receipt says only that the shop issued it.",
+    "That the customer settled up: that happens outside TET, and the receipt says only that the shop issued it.",
     "That the shop did not give receipts to friends.",
     "That a review is true, or who wrote it.",
   ],

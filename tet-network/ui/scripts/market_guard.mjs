@@ -27,7 +27,7 @@
 // T. The status banner "prototype, local only" is the first thing on the page (English, Japanese).
 // N. Nothing is sent: no fetch / XMLHttpRequest / sendBeacon / WebSocket / EventSource / form / node
 //    API in app/market, and every flow above ran with those stubbed to record calls: none.
-// P. Nothing moves money: every record that has a payment field says "outside TET (cash, bank, …)",
+// P. Nothing here moves value: every record that has a payment field says "outside TET (cash, bank, …)",
 //    no record has an amount, and the rendered payment line says the same.
 // W. Every string the page shows has Japanese and Hong Kong Chinese, with the same {placeholders};
 //    no "prove"/"proof"/"untraceable"/"guarantee" and no "pay with TET" wording in any language.
@@ -290,7 +290,7 @@ await check("N nothing in app/market can send, and no flow above called anything
   assert.deepEqual(calls, []);
 });
 
-// ── P. Nothing moves money ──────────────────────────────────────────────────────────────────────
+// ── P. Nothing here moves value ──────────────────────────────────────────────────────────────────────
 
 await check("P payment is always outside TET, and no record carries an amount", async () => {
   assert.equal(m.PAYMENT, "outside TET (cash, bank, …)");
@@ -302,7 +302,7 @@ await check("P payment is always outside TET, and no record carries an amount", 
   for (const kind of ["parcel", "listing", "receipt"]) assert.ok(records.some((r) => r.kind === `tet_market_${kind}_v1` && r.payment === m.PAYMENT), kind);
   for (const lang of ["en", "ja", "zh-HK"]) {
     const html = renderToStaticMarkup(h(page.ListingView, { t: T[lang], title: m.SAMPLE.listingTitle, text: m.SAMPLE.listingText, shop: SHOP.id }));
-    assert.ok(html.includes(T[lang]("Payment:")) && html.includes(esc(T[lang](m.PAYMENT))), lang);
+    assert.ok(html.includes(T[lang]("Settled:")) && html.includes(esc(T[lang](m.PAYMENT))), lang);
   }
 });
 
