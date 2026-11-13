@@ -1102,7 +1102,7 @@ jobs:
       # this. Compose still defaults to the full zk build for deployments.
       - if: needs.gate.outputs.code == 'true'
         name: Build tet-core image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: Dockerfile
@@ -1117,7 +1117,7 @@ jobs:
       # tet-pqc-wasm from the Rust workspace and bakes it into public/pqc.
       - if: needs.gate.outputs.code == 'true'
         name: Build ui image
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: tet-network/ui/Dockerfile
