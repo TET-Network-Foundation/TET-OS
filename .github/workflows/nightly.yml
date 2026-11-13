@@ -1,0 +1,173 @@
+# Nightly: the full checks once a night on main, on GitHub's runners, never on a laptop. It only
+# REPORTS: no step pushes, commits, tags or opens a pull request. A failed check opens an issue
+# titled "nightly: <step> failed" (or comments on the open one) with the commit, the run and the
+# tail of the log.
+#
+#   cargo test --workspace         a failure opens an issue
+#   cargo clippy -- -D warnings    REPORT ONLY for now: shown in the run summary, never fails the run,
+#                                  never opens an issue (the backlog is not known yet)
+#   scripts/run_guards.sh          a failure opens an issue
+#   cargo audit                    a failure opens an issue
+#   npm audit --omit=dev           (tet-network/ui) a failure opens an issue
+#
+# Every check runs even when an earlier one failed (continue-on-error), and the run as a whole fails
+# when any non-clippy check failed, so the run list shows it too.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+# A literal group, never github.workflow (scripts/lint_workflows.py; CLAUDE.md).
+concurrency:
+  group: nightly-checks
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  CARGO_TERM_COLOR: never
+  RISC0_SKIP_BUILD: "1"
+
+jobs:
+  nightly:
+    name: nightly checks (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          toolchain: stable
+          components: clippy
+
+      # Same as ci.yml: the workspace does not fit in ubuntu-latest's free space otherwise.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h / --output=avail | tail -1
+
+      - name: Cache cargo + target
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: nightly-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      # Logs go to RUNNER_TEMP, outside the checkout: scripts/run_guards.sh refuses to run while the
+      # checkout has untracked files.
+      - name: cargo test --workspace
+        id: test
+        continue-on-error: true
+        env:
+          CARGO_PROFILE_DEV_DEBUG: line-tables-only
+          CARGO_PROFILE_TEST_DEBUG: line-tables-only
+        run: |
+          set -o pipefail
+          cargo test --workspace 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      - name: cargo clippy -- -D warnings (report only)
+        id: clippy
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo clippy -- -D warnings 2>&1 | tee "$RUNNER_TEMP/clippy.log"
+
+      - name: scripts/run_guards.sh
+        id: guards
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            cargo build --release -p tet-cli
+            (cd tet-network/ui && npm ci --ignore-scripts --no-audit --no-fund)
+            TET_CLI=target/release/tet-cli bash scripts/run_guards.sh
+          } 2>&1 | tee "$RUNNER_TEMP/guards.log"
+
+      - name: cargo audit
+        id: audit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          {
+            cargo install cargo-audit --locked
+            cargo audit
+          } 2>&1 | tee "$RUNNER_TEMP/audit.log"
+
+      - name: npm audit --omit=dev (tet-network/ui)
+        id: npmaudit
+        continue-on-error: true
+        working-directory: tet-network/ui
+        run: |
+          set -o pipefail
+          npm audit --omit=dev 2>&1 | tee "$RUNNER_TEMP/npmaudit.log"
+
+      # Opens or comments on one issue per failed step. Reads only the step outcomes and the logs;
+      # writes only issues. Clippy is listed in the summary and never reported as an issue.
+      - name: Report failures as issues
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          OUT_TEST: ${{ steps.test.outcome }}
+          OUT_CLIPPY: ${{ steps.clippy.outcome }}
+          OUT_GUARDS: ${{ steps.guards.outcome }}
+          OUT_AUDIT: ${{ steps.audit.outcome }}
+          OUT_NPMAUDIT: ${{ steps.npmaudit.outcome }}
+        run: |
+          set -uo pipefail
+          {
+            echo "## nightly at ${SHA:0:12}"
+            echo "| check | result |"
+            echo "|---|---|"
+            echo "| cargo test --workspace | $OUT_TEST |"
+            echo "| cargo clippy -- -D warnings (report only) | $OUT_CLIPPY |"
+            echo "| scripts/run_guards.sh | $OUT_GUARDS |"
+            echo "| cargo audit | $OUT_AUDIT |"
+            echo "| npm audit --omit=dev | $OUT_NPMAUDIT |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          report() { # $1 step label, $2 outcome, $3 log file
+            [ "$2" = failure ] || return 0
+            failed=1
+            title="nightly: $1 failed"
+            body="$RUNNER_TEMP/body-$RANDOM.md"
+            {
+              echo "**$1** failed in the nightly run."
+              echo
+              echo "- commit: \`$SHA\`"
+              echo "- run: $RUN_URL"
+              echo
+              echo "Last 80 lines of the log:"
+              echo
+              echo '```'
+              # shellcheck disable=SC2016  # literal backticks: a fence in the log must not end the block
+              tail -n 80 "$3" 2>/dev/null | sed 's/```/` ` `/g' || echo "(no log)"
+              echo '```'
+            } > "$body"
+            num=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title \
+                  --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+            if [ -n "$num" ]; then
+              gh issue comment "$num" --repo "$REPO" --body-file "$body"
+            else
+              gh issue create --repo "$REPO" --title "$title" --body-file "$body"
+            fi
+          }
+          report "cargo test --workspace" "$OUT_TEST" "$RUNNER_TEMP/test.log"
+          report "scripts/run_guards.sh" "$OUT_GUARDS" "$RUNNER_TEMP/guards.log"
+          report "cargo audit" "$OUT_AUDIT" "$RUNNER_TEMP/audit.log"
+          report "npm audit --omit=dev" "$OUT_NPMAUDIT" "$RUNNER_TEMP/npmaudit.log"
+          exit "$failed"
