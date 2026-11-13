@@ -103,8 +103,8 @@ export const JA: Record<string, string> = {
     "答えの署名の両方の半分、Ed25519 と ML-DSA-44 が、TET の既存の検証プログラムで確かめられたこと。",
   "Who holds the key. Anyone with the 12 words can answer. The site learns a key, not a person.":
     "誰が鍵を持っているか。12語を持つ人なら誰でも答えられます。サイトが知るのは鍵であって、人ではありません。",
-  "That you meant to sign in to this site: the prototype signs any question it is given. The full design would check where the question came from and show the site's name first; neither is built.":
-    "あなたがこのサイトにサインインするつもりだったこと。試作品は渡された質問を何でも署名します。完全な設計では、質問がどこから来たかを確かめ、先にサイト名を表示しますが、どちらもまだ作られていません。",
+  "That you meant to sign in to this site: the prototype signs any question it is given. The full design would check where the question came from and show you the site's name before signing; neither is built.":
+    "あなたがこのサイトにサインインするつもりだったこと。試作品は渡された質問を何でも署名します。完全な設計では、質問がどこから来たかを確かめ、署名する前にサイト名を表示しますが、どちらもまだ作られていません。",
   "Anything after a restart: the server keeps its questions in memory only.":
     "再起動の後のことは何も。サーバーは質問をメモリーにしか保持しません。",
   "A different key for each site: that is in the design, not in the prototype.":

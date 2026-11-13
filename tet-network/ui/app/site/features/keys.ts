@@ -28,7 +28,7 @@ export const FEATURES: Feature[] = [
     ],
     doesNot: [
       "Who holds the key. Anyone with the 12 words can answer. The site learns a key, not a person.",
-      "That you meant to sign in to this site: the prototype signs any question it is given. The full design would check where the question came from and show the site's name first; neither is built.",
+      "That you meant to sign in to this site: the prototype signs any question it is given. The full design would check where the question came from and show you the site's name before signing; neither is built.",
       "Anything after a restart: the server keeps its questions in memory only.",
       "A different key for each site: that is in the design, not in the prototype.",
       "That it is ready for real logins: the design has not been reviewed.",

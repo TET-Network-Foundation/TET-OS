@@ -161,11 +161,11 @@ export default function KeysView() {
       >
         <div className="flex flex-col gap-4">
           {ROWS.map((row) => (
-            <section key={row.title} className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-              <h3 className="text-lg font-semibold">{t(row.title)}</h3>
-              <dl className="mt-3 grid gap-4 sm:grid-cols-3">
+            <section key={row.title} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+              <h3 className="text-xl font-semibold">{t(row.title)}</h3>
+              <dl className="mt-4 grid gap-4 sm:grid-cols-3">
                 {row.cells.map((c, i) => (
-                  <div key={COLUMNS[i]} className="flex flex-col gap-1">
+                  <div key={COLUMNS[i]} className="flex flex-col gap-2">
                     <dt className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{t(COLUMNS[i])}</dt>
                     <dd className="text-base leading-relaxed text-slate-700 dark:text-slate-300">{t(c.text)}</dd>
                   </div>
@@ -173,7 +173,7 @@ export default function KeysView() {
               </dl>
             </section>
           ))}
-          <p className="max-w-3xl text-lg leading-relaxed text-slate-700 dark:text-slate-300">
+          <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
             {t("Where the design differs: two signatures on every answer, one of them designed to resist quantum computers, and a key that can also sign records. What it does not do yet: run for anyone, work in a browser or on a phone, or protect against fake sites.")}
           </p>
         </div>
