@@ -151,6 +151,7 @@ const BANNED = [
   [/\b(?:compan(?:y|ies)|teams?|customers?|pricing)\b|会社|企業|チーム|顧客/i, "company / team / customers / pricing"],
   [MONEY, "money wording"],
   [MONEY_WORDS, "money words"],
+  [/\bfirst\b|世界初|業界初|初の/i, "\"first\""],
   [/testimonial|お客様の声|利用者の声|[“"「][^”"」]{8,}[”"」]\s*[—–-]{1,2}\s*[A-Z][a-z]+/i, "a testimonial or a quoted user"],
   [/\b(?:soon|coming soon|next (?:week|month|quarter|year)|later this year|by (?:the )?(?:end of )?20\d\d|in 20[2-9]\d|(?:Q[1-4]|H[12]) 20\d\d)\b|まもなく|近日|来年|来月|今年中|年内|20[2-9]\d年(?:に|まで)/i, "a promised date"],
 ];
@@ -179,7 +180,7 @@ await check(`W1 no company/team/customers/pricing, money, testimonial or promise
   assert.deepEqual(bad, []);
 });
 await check("W control: each kind of banned wording is caught, in English and Japanese", () => {
-  for (const s of ["Built by a small team.", "Our customers love it.", "See pricing.", "Earn TET by posting.", "Pay with TET.", "“It changed my life,” — Maria", "Coming soon.", "Ships in 2027.", "会社について", "お金", "まもなく公開"]) {
+  for (const s of ["The first chain for machines.", "世界初の仕組み", "Built by a small team.", "Our customers love it.", "See pricing.", "Earn TET by posting.", "Pay with TET.", "“It changed my life,” — Maria", "Coming soon.", "Ships in 2027.", "会社について", "お金", "まもなく公開"]) {
     assert.ok(wordingProblems([["x", s]]).length > 0, s);
   }
   assert.deepEqual(wordingProblems([["x", "Keys for machines and agents: what each key may do, and how many times."]]), []);
@@ -211,6 +212,57 @@ await check("W2 control: \"customer\" and 配送会社 put back into /market are
     ["app/market/i18n_market.ts", '"the permit is not signed by the courier service": "許可が配送会社の署名ではありません",'],
   ];
   assert.equal(wordingProblems(marketShown(planted)).length, 2, wordingProblems(marketShown(planted)).join(" | "));
+});
+
+// ── L. Layout (owner, 2026-11-13): checked on the class names of every site file ──────────────────
+const ALLOWED_SIZES = new Set(["sm", "base", "xl", "2xl", "4xl"]);
+const ALLOWED_WIDTHS = new Set(["3xl", "prose", "xl"]);
+const SPACING = /(?<![\w-])-?(?:p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|gap-x|gap-y|space-x|space-y)-(\d+(?:\.\d+)?)(?![\w.])/g;
+const OTHER_HUES = /(?<![\w-])(?:bg|text|border|ring|from|via|to|fill|stroke|outline|decoration|divide|shadow|accent|caret)-(?:red|orange|amber|yellow|lime|green|emerald|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|gray|zinc|neutral|stone)-\d/g;
+/** Every class-name string in a file: className="…", cx("…", "…") arguments, and the kit's tone tables. */
+const classStrings = (src) => [...stripComments(src).matchAll(/className=\{?["'`]([^"'`]+)["'`]|\b(?:cx|tone|COLUMN|CARD|FOCUS)\b[^\n]*?["'`]([^"'`]*\b(?:text|p[xytblr]?|m[xytblr]?|gap|bg|font|max-w)-[^"'`]*)["'`]/g)].map((m) => m[1] ?? m[2]);
+function layoutProblems(src) {
+  const out = [];
+  for (const [p, s] of Object.entries(src)) {
+    const classes = classStrings(s).join(" ");
+    const tokens = classes.split(/\s+/).map((c) => c.replace(/^(?:[a-z0-9-]+:)+/, ""));
+    for (const c of tokens) {
+      const size = /^text-(xs|sm|base|lg|xl|[2-9]xl)$/.exec(c)?.[1];
+      if (size && !ALLOWED_SIZES.has(size)) out.push(`${p}: type size text-${size} (allowed: ${[...ALLOWED_SIZES].join(", ")})`);
+      if (/^font-(?:thin|extralight|light|medium|bold|extrabold|black)$/.test(c)) out.push(`${p}: weight ${c} (allowed: font-normal, font-semibold)`);
+      const w = /^max-w-([\w[\]().-]+)$/.exec(c)?.[1];
+      if (w && !ALLOWED_WIDTHS.has(w)) out.push(`${p}: width max-w-${w} (allowed: ${[...ALLOWED_WIDTHS].join(", ")})`);
+      if (/^text-(?:center|right|justify)$/.test(c)) out.push(`${p}: ${c} (body text is left-aligned)`);
+    }
+    for (const m of classes.matchAll(SPACING)) {
+      const n = Number(m[1]);
+      if (!Number.isInteger(n) || n % 2) out.push(`${p}: spacing ${m[0].trim()} is off the 8 px grid`);
+    }
+    for (const m of classes.matchAll(OTHER_HUES)) out.push(`${p}: colour ${m[0]}… (one accent: teal, with slate)`);
+    const primaries = (stripComments(s).match(/<PrimaryLink\b/g) ?? []).length;
+    if (primaries > 1) out.push(`${p}: ${primaries} primary buttons (at most one a page)`);
+    if (!p.endsWith("app/site/kit.tsx") && /\bbg-teal-[67]00\b/.test(classes)) out.push(`${p}: a hand-made primary button (use <PrimaryLink>)`);
+  }
+  return out;
+}
+await check(`L1 layout: five type sizes, two weights, the 8 px grid, one column, one accent, left-aligned, one primary button (${PAGES.length} files)`, () => {
+  assert.deepEqual(layoutProblems(SRC), []);
+});
+await check("L control: each layout rule is caught", () => {
+  const cases = {
+    'className="text-5xl"': /type size text-5xl/,
+    'className="text-lg"': /type size text-lg/,
+    'className="font-bold"': /weight font-bold/,
+    'className="mt-3"': /mt-3 is off the 8 px grid/,
+    'className="gap-1.5"': /gap-1\.5 is off the 8 px grid/,
+    'className="max-w-5xl"': /width max-w-5xl/,
+    'className="bg-amber-100"': /colour bg-amber-1/,
+    'className="text-center"': /text-center/,
+    '<PrimaryLink href="#a" label="A" /><PrimaryLink href="#b" label="B" />': /2 primary buttons/,
+    'className="bg-teal-700 px-4"': /hand-made primary button/,
+  };
+  for (const [src, re] of Object.entries(cases)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
+  assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 'className="mt-4 gap-2 px-6 text-xl font-semibold max-w-prose text-teal-800 dark:text-slate-300 sm:text-4xl"' }), []);
 });
 
 // ── J. Japanese ─────────────────────────────────────────────────────────────────────────────────

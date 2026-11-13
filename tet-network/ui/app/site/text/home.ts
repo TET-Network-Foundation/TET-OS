@@ -20,6 +20,7 @@ export const JA: Record<string, string> = {
   "not decided; being studied": "まだ決めていない。調べているところ",
   "The code on GitHub": "GitHub のコード",
   Shows: "示すこと",
+  "Try it": "試してみる",
   "Does not show": "示さないこと",
   "A guess, not a plan": "予定ではなく、予想です",
   "Status of each feature": "それぞれの機能の状態",
