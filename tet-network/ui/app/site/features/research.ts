@@ -68,6 +68,6 @@ export const FEATURES: Feature[] = [
       "Any FN-DSA code. Nothing is built, and nothing is decided.",
       "When the standard will be final. It has no date here.",
     ],
-    link: { href: "https://groups.google.com/a/list.nist.gov/g/pqc-forum", label: "Source: the pqc-forum discussion of the FIPS 206 plan" },
+    link: { href: "https://groups.google.com/a/list.nist.gov/g/pqc-forum/c/CsWPP35LJWw", label: "Source: the pqc-forum discussion of the FIPS 206 plan" },
   },
 ];
