@@ -37,7 +37,7 @@ export default function MachinesView() {
               alt="The page Check a machine's log, with a sample greenhouse sensor log that reads VALID."
               caption="Screenshot of our own page, /try?tab=machine-log, with a sample log."
             />
-            <div className="mx-auto w-full max-w-[260px]">
+            <div className="w-1/2 md:w-full">
               <Figure
                 src="/site/machines/try-machine-log-phone-dark.png"
                 alt="The same check on a phone, in dark mode: the sample log reads VALID, with its Shows and Does not show lists."
@@ -45,7 +45,7 @@ export default function MachinesView() {
               />
             </div>
           </div>
-          <p className="max-w-3xl text-base leading-relaxed text-slate-700 dark:text-slate-300">
+          <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
             {t("The machine's key is new and its own: it is never the owner's key. The log program is not for military or dual-use systems.")}
           </p>
         </div>
@@ -54,16 +54,16 @@ export default function MachinesView() {
       <SiteSection
         id="permits"
         title="Permission for one thing, once"
-        lead="A permit names one action and the last record that may use it. The first use is accepted. A second use of the same permit is refused."
+        lead="A permit names one action and the last record that may use it. Using it once is accepted. A second use of the same permit is refused."
       >
         <div className="flex flex-col gap-8">
-          <Figure src="/site/machines/permit.svg" alt="A robot arm with a ticket marked 1×. The first use of the ticket gets a tick; a second use of the same ticket gets a cross." wide />
+          <Figure src="/site/machines/permit.svg" alt="A robot arm with a ticket marked 1×. Using the ticket once gets a tick; a second use of the same ticket gets a cross." wide />
           <CardGrid>
             <FeatureCard id="one-time-permits" />
             <FeatureCard id="agent-permit-once" />
             <FeatureCard id="once-in-the-world" />
           </CardGrid>
-          <p className="max-w-3xl text-base leading-relaxed text-slate-700 dark:text-slate-300">
+          <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
             {t("One-time means once per log, not once in the world. Someone who copies the key could start a second log and use the same permit there.")}
           </p>
         </div>
@@ -80,19 +80,17 @@ export default function MachinesView() {
             <FeatureCard id="agent-signatures" />
             <FeatureCard id="agents-control" />
           </CardGrid>
-          <div className="mx-auto w-full max-w-md">
-            <Figure
-              src="/site/machines/agents-control.png"
-              alt="The page Agent and machine control, with a sample machine whose log reads VALID and whose one-time permit open-vent is used."
-              caption="Screenshot of our own page, /agents, with a sample machine."
-            />
-          </div>
+          <Figure
+            src="/site/machines/agents-control.png"
+            alt="The page Agent and machine control, with a sample machine whose log reads VALID and whose one-time permit open-vent is used."
+            caption="Screenshot of our own page, /agents, with a sample machine."
+          />
         </div>
       </SiteSection>
 
       <SiteSection id="guess" title="Where we think this goes">
         <Guess title="Machines that keep their own notebooks">
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-4">
             <p>
               {t(
                 "Looking about ten years out, our guess is this: many machines that work on their own, such as farm drones, robots in warehouses and sensors in buildings, would keep a signed log of what they did.",

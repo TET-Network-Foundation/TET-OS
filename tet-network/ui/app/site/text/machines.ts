@@ -23,9 +23,9 @@ export const JA: Record<string, string> = {
   "The machine's key is new and its own: it is never the owner's key. The log program is not for military or dual-use systems.":
     "機械の鍵は新しく作った機械専用の鍵で、持ち主の鍵ではありません。このログのプログラムは、軍事用や軍民両用のシステム向けではありません。",
   "Permission for one thing, once": "1つのことを、1回だけ許す",
-  "A permit names one action and the last record that may use it. The first use is accepted. A second use of the same permit is refused.":
+  "A permit names one action and the last record that may use it. Using it once is accepted. A second use of the same permit is refused.":
     "許可証には、1つの動作と、それを使ってよい最後の記録番号が書かれています。1回目は受け付けられ、同じ許可証の2回目は拒否されます。",
-  "A robot arm with a ticket marked 1×. The first use of the ticket gets a tick; a second use of the same ticket gets a cross.":
+  "A robot arm with a ticket marked 1×. Using the ticket once gets a tick; a second use of the same ticket gets a cross.":
     "「1×」と書かれたチケットを持つロボットアーム。チケットの1回目の使用には丸、同じチケットの2回目にはバツがつきます。",
   "One-time means once per log, not once in the world. Someone who copies the key could start a second log and use the same permit there.":
     "「1回限り」とは、1つのログの中で1回という意味で、世界中で1回という意味ではありません。鍵をコピーした人は、2つ目のログを始めて、そこで同じ許可証を使えてしまいます。",
@@ -62,7 +62,7 @@ export const JA: Record<string, string> = {
   "The machine signs a short note: one named action may be recorded once, up to a given record number. A record cites the note. A second use, or a late one, makes the log fail its check.":
     "機械が短いメモに署名します。名前のついた1つの動作を、決めた記録番号までに1回だけ記録してよい、というものです。記録がそのメモを引用します。2回目の使用や期限後の使用があると、ログは確認で不合格になります。",
   "An agent action allowed once": "1回だけ許されたエージェントの動作",
-  "An example in which a software agent first claims a permit, and acts only if the claim is accepted. A second claim is refused, so the agent does not act again.":
+  "An example in which a software agent claims a permit before it acts, and acts only if the claim is accepted. A second claim is refused, so the agent does not act again.":
     "ソフトウェアのエージェントが、まず許可証の使用を申し出て、それが受け付けられたときだけ動く例です。2回目の申し出は拒否されるので、エージェントは再び動きません。",
   "Agent signatures": "エージェントの署名",
   "An agent, such as a bot or a script, holds its own key and signs what it sends (tet-cli agent sign). Anyone can check the signature (tet-cli agent verify). Each signature names the chain it was made for.":

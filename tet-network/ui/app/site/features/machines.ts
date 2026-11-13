@@ -72,7 +72,7 @@ export const FEATURES: Feature[] = [
     id: "agent-permit-once",
     title: "An agent action allowed once",
     summary:
-      "An example in which a software agent first claims a permit, and acts only if the claim is accepted. A second claim is refused, so the agent does not act again.",
+      "An example in which a software agent claims a permit before it acts, and acts only if the claim is accepted. A second claim is refused, so the agent does not act again.",
     status: "prototype",
     evidence: [{ path: "tet-agent-sdk/examples/agent_permit_once.mjs" }, { path: "tet-agent-sdk/examples/AGENT_PERMITS.md" }],
     shows: [
