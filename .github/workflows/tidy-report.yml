@@ -1,0 +1,50 @@
+# Weekly tidy report: unused exports, dead files and the longest functions (scripts/tidy_report.mjs),
+# kept in ONE issue titled "weekly tidy report" whose body is replaced each week. Report only: no
+# step pushes, commits or opens a pull request.
+name: weekly tidy report
+
+on:
+  schedule:
+    - cron: "41 3 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: weekly-tidy-report
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  tidy:
+    name: tidy report (report only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Write the report
+        run: node scripts/tidy_report.mjs --top 25 > "$RUNNER_TEMP/tidy.md"
+
+      - name: Update the "weekly tidy report" issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          cat "$RUNNER_TEMP/tidy.md" >> "$GITHUB_STEP_SUMMARY"
+          title="weekly tidy report"
+          num=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title \
+                --jq "map(select(.title == \"$title\")) | .[0].number // empty")
+          if [ -n "$num" ]; then
+            gh issue edit "$num" --repo "$REPO" --body-file "$RUNNER_TEMP/tidy.md"
+          else
+            gh issue create --repo "$REPO" --title "$title" --body-file "$RUNNER_TEMP/tidy.md"
+          fi

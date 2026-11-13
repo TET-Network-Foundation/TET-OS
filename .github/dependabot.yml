@@ -1,0 +1,21 @@
+# Weekly dependency updates. Every one arrives as a pull request a person reviews (CODEOWNERS covers
+# /.github/, the manifests and the lockfiles; docs/THREAT_MODEL.md rule 9). Actions stay pinned by
+# commit SHA: Dependabot updates the SHA and the version comment together.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: "/tet-network/ui"
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: "/tet-agent-sdk"
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
