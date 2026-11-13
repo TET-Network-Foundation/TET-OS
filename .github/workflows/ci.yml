@@ -579,6 +579,13 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — no price / earn / invest wording
         run: node --experimental-strip-types scripts/try_money_guard.mjs
+
+      # /market (prototype, local only): delivery, booking and listing checks, each refusal for its
+      # own reason with every record really signed; Shows / Does not show under every result; the
+      # status banner; nothing sent; payment only "outside TET"; ja / zh-HK complete. Controls.
+      - if: needs.gate.outputs.code == 'true'
+        name: market — each record checked for its own reason, nothing sent, nothing moves money
+        run: node --experimental-strip-types scripts/market_guard.mjs
       # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
       # case, encoding); ordinary routes still pass. Control.
       - if: needs.gate.outputs.code == 'true'

@@ -33,7 +33,7 @@ const SECURITY_HEADERS = [
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "no-referrer" },
 ];
-export const PUBLIC_PAGES = ["/", "/try", "/try/:path*", "/whitepaper", "/whitepaper/:path*", "/verify/:path*", "/paper/:path*"];
+export const PUBLIC_PAGES = ["/", "/try", "/try/:path*", "/whitepaper", "/whitepaper/:path*", "/verify/:path*", "/paper/:path*", "/market"];
 
 const nextConfig: NextConfig = {
   // Next.js v16+: set to `false` to hide the bottom-left dev indicator badge.
