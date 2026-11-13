@@ -99,10 +99,10 @@ function pageProblems(src) {
   const out = [];
   for (const [p, raw] of Object.entries(src)) {
     const s = stripComments(raw);
-    for (const m of s.matchAll(/<FeatureCard\b([^>]*)>/g)) {
-      const id = /\bid="([^"]+)"/.exec(m[1])?.[1];
-      if (!id) out.push(`${p}: <FeatureCard> without a literal id="…"`);
-      else if (!IDS.has(id)) out.push(`${p}: <FeatureCard id="${id}"> is not a registered feature`);
+    for (const m of s.matchAll(/<(FeatureCard|FeatureMini)\b([^>]*)>/g)) {
+      const id = /\bid="([^"]+)"/.exec(m[2])?.[1];
+      if (!id) out.push(`${p}: <${m[1]}> without a literal id="…"`);
+      else if (!IDS.has(id)) out.push(`${p}: <${m[1]} id="${id}"> is not a registered feature`);
     }
     for (const m of s.matchAll(/\bsrc=(?:\{`|")([^"`]+)/g)) if (!m[1].startsWith("/site/")) out.push(`${p}: image ${m[1]} is not under /site/`);
     if (/<img\b[^>]*src=\{(?!`\/site\/)/.test(s) && !p.endsWith("app/site/kit.tsx")) out.push(`${p}: an <img> with a computed src`);
@@ -110,7 +110,7 @@ function pageProblems(src) {
   }
   return out;
 }
-await check(`P1 features only through <FeatureCard id>, images only from /site/ (${PAGES.length} files)`, () => {
+await check(`P1 features only through <FeatureCard id> / <FeatureMini id>, images only from /site/ (${PAGES.length} files)`, () => {
   assert.deepEqual(pageProblems(SRC), []);
   const photos = walk("public/site").filter((p) => /\.(?:jpe?g|webp)$/i.test(p));
   assert.deepEqual(photos, [], "photographs under public/site (the site uses drawings and screenshots of our own pages)");
@@ -137,6 +137,7 @@ await check("P2 control: a feature registered but never shown through <FeatureCa
 await check("P control: an unregistered or id-less FeatureCard and a remote or off-site image are caught", () => {
   assert.match(pageProblems({ "x.tsx": '<FeatureCard id="no-such-feature" />' }).join(), /not a registered feature/);
   assert.match(pageProblems({ "x.tsx": "<FeatureCard {...f} />" }).join(), /without a literal id/);
+  assert.match(pageProblems({ "x.tsx": '<FeatureMini id="no-such-feature" />' }).join(), /FeatureMini id="no-such-feature"> is not a registered feature/);
   assert.match(pageProblems({ "x.tsx": '<Figure src="/images/team.png" alt="x" />' }).join(), /not under \/site\//);
   assert.match(pageProblems({ "x.tsx": 'const u = "https://example.org/people.jpg";' }).join(), /remote image/);
 });
