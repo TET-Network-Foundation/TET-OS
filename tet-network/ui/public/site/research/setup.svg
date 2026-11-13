@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">A setup makes a shared string from a secret key; a kept copy of that key makes two signatures</title>
+  <style>.bg{fill:#f0fdfa}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}.soft{fill:#ccfbf1}.paper{fill:#ffffff}.line{stroke:#94a3b8}.mute{fill:#94a3b8}.red{stroke:#dc2626}.redf{fill:#dc2626}@media (prefers-color-scheme: dark){.bg{fill:#0f172a}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#5eead4}.soft{fill:#134e4a}.paper{fill:#1e293b}.line{stroke:#64748b}.mute{fill:#64748b}.red{stroke:#f87171}.redf{fill:#f87171}}</style>
+  <rect width="400" height="300" rx="24" class="bg"/>
+  <!-- the setup box with a secret key inside -->
+  <rect x="30" y="40" width="130" height="100" rx="14" class="ink"/>
+  <g transform="translate(46 70) scale(0.9)" >
+    <circle cx="24" cy="24" r="16" fill="none" stroke="#ffffff" stroke-width="8"/><rect x="38" y="20" width="56" height="8" rx="4" fill="#ffffff"/><rect x="76" y="28" width="7" height="13" fill="#ffffff"/><rect x="87" y="28" width="7" height="9" fill="#ffffff"/>
+  </g>
+  <!-- the shared string -->
+  <path d="M160 90 h30" class="line" stroke-width="3"/>
+  <g transform="translate(196 76)">
+    <rect width="176" height="28" rx="8" class="soft"/>
+    <g class="ink"><rect x="10" y="10" width="12" height="8" rx="2"/><rect x="28" y="10" width="20" height="8" rx="2"/><rect x="54" y="10" width="10" height="8" rx="2"/><rect x="70" y="10" width="24" height="8" rx="2"/><rect x="100" y="10" width="14" height="8" rx="2"/><rect x="120" y="10" width="18" height="8" rx="2"/><rect x="144" y="10" width="22" height="8" rx="2"/></g>
+  </g>
+  <!-- everyone's keys use the string -->
+  <g class="line" stroke-width="3"><line x1="230" y1="104" x2="230" y2="132"/><line x1="284" y1="104" x2="284" y2="132"/><line x1="338" y1="104" x2="338" y2="132"/></g>
+  <g class="deep"><circle cx="230" cy="146" r="12"/><circle cx="284" cy="146" r="12"/><circle cx="338" cy="146" r="12"/></g>
+  <!-- a kept copy of the secret key, drawn dashed, making two signatures -->
+  <path d="M95 140 v40" class="red" stroke-width="3" stroke-dasharray="6 6"/>
+  <g transform="translate(40 190)" fill="none" class="red" stroke-width="5" stroke-dasharray="7 5">
+    <circle cx="24" cy="24" r="16"/><rect x="38" y="20" width="56" height="8" rx="4"/>
+  </g>
+  <path d="M144 214 h24" class="line" stroke-width="3"/><path d="M162 208 l8 6 l-8 6" fill="none" class="line" stroke-width="3"/>
+  <g transform="translate(180 188)">
+    <rect width="54" height="52" rx="8" class="paper"/><rect width="54" height="52" rx="8" fill="none" class="line" stroke-width="2"/>
+    <path d="M10 34 q8 -16 16 0 t16 0" fill="none" class="inks" stroke-width="3"/>
+  </g>
+  <g transform="translate(246 188)">
+    <rect width="54" height="52" rx="8" class="paper"/><rect width="54" height="52" rx="8" fill="none" class="line" stroke-width="2"/>
+    <path d="M10 34 q8 -16 16 0 t16 0" fill="none" class="inks" stroke-width="3"/>
+  </g>
+  <circle cx="330" cy="214" r="18" fill="none" class="red" stroke-width="4"/>
+  <text x="330" y="222" font-family="system-ui, sans-serif" font-size="22" font-weight="700" text-anchor="middle" class="redf">!</text>
+</svg>

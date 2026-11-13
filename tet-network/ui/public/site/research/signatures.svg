@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">Two solid seals joined together, and a third dashed seal with a pause mark</title>
+  <style>.bg{fill:#f0fdfa}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}.soft{fill:#ccfbf1}.paper{fill:#ffffff}.line{stroke:#94a3b8}.mute{fill:#94a3b8}.red{stroke:#dc2626}.redf{fill:#dc2626}@media (prefers-color-scheme: dark){.bg{fill:#0f172a}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#5eead4}.soft{fill:#134e4a}.paper{fill:#1e293b}.line{stroke:#64748b}.mute{fill:#64748b}.red{stroke:#f87171}.redf{fill:#f87171}}</style>
+  <rect width="400" height="300" rx="24" class="bg"/>
+  <!-- a signed page -->
+  <rect x="150" y="30" width="100" height="70" rx="8" class="paper"/><rect x="150" y="30" width="100" height="70" rx="8" fill="none" class="line" stroke-width="2"/>
+  <g class="line" stroke-width="4" stroke-linecap="round"><line x1="166" y1="50" x2="234" y2="50"/><line x1="166" y1="66" x2="224" y2="66"/><line x1="166" y1="82" x2="210" y2="82"/></g>
+  <g class="line" stroke-width="3"><line x1="180" y1="100" x2="110" y2="150"/><line x1="220" y1="100" x2="190" y2="150"/></g>
+  <!-- two solid seals, joined -->
+  <rect x="96" y="186" width="96" height="10" rx="5" class="ink"/>
+  <circle cx="100" cy="190" r="40" class="ink"/>
+  <circle cx="100" cy="190" r="24" fill="none" stroke="#ffffff" stroke-width="4"/>
+  <circle cx="190" cy="190" r="40" class="deep"/>
+  <circle cx="190" cy="190" r="24" fill="none" stroke="#ffffff" stroke-width="4"/>
+  <!-- a third seal, dashed, waiting -->
+  <circle cx="310" cy="190" r="40" fill="none" class="inks" stroke-width="4" stroke-dasharray="8 7"/>
+  <g class="mute"><rect x="298" y="174" width="8" height="32" rx="3"/><rect x="314" y="174" width="8" height="32" rx="3"/></g>
+</svg>
