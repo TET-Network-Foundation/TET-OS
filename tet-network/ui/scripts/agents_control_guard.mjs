@@ -22,6 +22,12 @@
 // L. The status line "prototype, local only" is at the top of the page, in English and in Japanese.
 // W. Wording: no money words, no "prove"/"proof" claim, no "untraceable", no AI claim, in English,
 //    Japanese and Chinese; every string has Japanese and Hong Kong Chinese with the same placeholders.
+// V. Plain reading: one lead sentence (en/ja/zh-HK); "Try with a sample" is the one primary button
+//    and adds the two bundled samples; every machine leads with VALID / INVALID and one sentence, with
+//    key id, reasons, permission ids and chain only behind "Show details"; no envelope / nullifier /
+//    permit_id / canonical outside the fold; "1 record", never "1 records"; the copy button copies
+//    exactly the command shown, falls back to the selection, and says when it could not.
+// Permit ids in P are read from the fixture, which each regeneration re-keys.
 
 import { register, createRequire } from "node:module";
 import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, readdirSync, rmSync, existsSync } from "node:fs";
@@ -113,8 +119,18 @@ async function verdict(files) {
 }
 const statesOf = (r, impl = ac.permitStates) =>
   impl({ records: r.records, permits: r.permits.flatMap((p) => (p.permit ? [p.permit] : [])), citations: r.citations });
-const PID = "9c48f5a23f758c15a7029e2042c6e6d1"; // the base log's permit: open-valve, open until seq 3
-const EXPIRED_PID = "1cf598b1bd5fed8e97c9c5720808b272"; // permit_expired: close-valve, until seq 2, cited by record 3
+// Permit ids are read from the fixture (each regeneration makes new keys, so new ids).
+/** The one permit file a case adds to the base log. */
+const addedPermit = (name) => {
+  const ids = Object.keys(FIX.cases.find((c) => c.name === name).files).map((p) => /^permits\/([0-9a-f]{32})\.json$/.exec(p)?.[1]).filter((x) => x && !(`permits/${x}.json` in FIX.base));
+  assert.equal(ids.length, 1, `${name}: ${ids.length} added permits`);
+  return ids[0];
+};
+const BASE_PIDS = Object.keys(FIX.base).map((p) => /^permits\/([0-9a-f]{32})\.json$/.exec(p)?.[1]).filter(Boolean);
+assert.equal(BASE_PIDS.length, 1, "the base log holds one permit");
+const PID = BASE_PIDS[0]; // the base log's permit: open-valve, open until seq 3
+const EXPIRED_PID = addedPermit("permit_expired"); // permit_expired: close-valve, until seq 2, cited by record 3
+const FOREIGN_PID = addedPermit("permit_other_key"); // permit_other_key: signed by another device's key
 
 // ── P. permit states ────────────────────────────────────────────────────────────────────────────
 
@@ -175,10 +191,10 @@ await check("P2 control: wrong implementations are each caught", () => {
 });
 
 await check("P3 a permit signed by another key is listed as not this device's, with notebook.py's reason", () => {
-  const f = V.otherKey.r.permits.find((p) => p.permitId === "196cd1a5a44688d2749d1dac755548bd");
+  const f = V.otherKey.r.permits.find((p) => p.permitId === FOREIGN_PID);
   assert.ok(f, "not listed");
   assert.equal(f.permit, null);
-  assert.match(f.why, /^permit: 196cd1a5a44688d2749d1dac755548bd is signed by tet-ed25519:[0-9a-f]{64}, not this device's tet-ed25519:[0-9a-f]{64}$/);
+  assert.match(f.why, new RegExp(`^permit: ${FOREIGN_PID} is signed by tet-ed25519:[0-9a-f]{64}, not this device's tet-ed25519:[0-9a-f]{64}$`));
   assert.ok(!statesOf(V.otherKey.r).some((s) => s.permitId === f.permitId), "it has a state");
 });
 
@@ -330,7 +346,7 @@ const tEn = (en, v) => translate("en", en, v);
 const tJa = (en, v) => translate("ja", en, v);
 const html = (el) => renderToStaticMarkup(el);
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
-const card = (r, t = tEn) => html(React.createElement(page.DeviceCard, { device: { key: 1, label: "nb", files: 9, result: r, error: "" }, t }));
+const card = (r, t = tEn) => html(React.createElement(page.DeviceCard, { device: { key: 1, name: "nb", files: 9, sample: null, result: r, error: "" }, t }));
 
 /** Problems with one rendered card: both lists, every item once, after the verdict, in order. */
 function listsProblems(h, t) {
@@ -358,8 +374,8 @@ await check("S1 every verdict, VALID and INVALID, is followed by Shows / Does no
 });
 
 await check("S2 the lists come from machine_log.mjs through t(); the page spells out none of the items", () => {
-  assert.match(PAGE, /SHOWS\.map\(\(s\) => \(\s*<li key=\{s\}>\{t\(s\)\}<\/li>/);
-  assert.match(PAGE, /DOES_NOT_SHOW\.map\(\(s\) => \(\s*<li key=\{s\}>\{t\(s\)\}<\/li>/);
+  // Into the kit's ShowsBlock, in order: Shows, SHOWS, Does not show, DOES_NOT_SHOW (S1 renders it).
+  assert.match(PAGE, /<ShowsBlock showsTitle=\{t\("Shows"\)\} shows=\{SHOWS\.map\(\(s\) => t\(s\)\)\} doesNotTitle=\{t\("Does not show"\)\} doesNot=\{DOES_NOT_SHOW\.map\(\(s\) => t\(s\)\)\} \/>/);
   for (const s of [...ml.SHOWS, ...ml.DOES_NOT_SHOW]) assert.ok(!PAGE.includes(s), `the page spells out ${JSON.stringify(s)}`);
 });
 
@@ -378,7 +394,7 @@ await check("S control: a card missing an item, or with the lists swapped, is ca
 const NET = /\bfetch\s*\(|XMLHttpRequest|sendBeacon|\bWebSocket\b|\bEventSource\b|<form\b|\.submit\(\)|navigator\.share\b/;
 const netLines = (files) =>
   files.flatMap(([f, src]) => src.split("\n").map((l, i) => [f, i + 1, l]).filter(([, , l]) => !/^\s*(\/\/|\*|\/\*)/.test(l) && NET.test(l)).map(([ff, n, l]) => `${ff}:${n}: ${l.trim()}`));
-const FOLDER_READERS = ["app/agents/AgentsControl.tsx", "app/agents/page.tsx", "app/lib/agents_control.mjs", "app/lib/machine_log.mjs", "app/lib/verify_anything.mjs", "app/try/MachineLogPanel.tsx"];
+const FOLDER_READERS = ["app/agents/AgentsControl.tsx", "app/agents/page.tsx", "app/lib/agents_control.mjs", "app/lib/machine_log.mjs", "app/lib/verify_anything.mjs", "app/try/MachineLogPanel.tsx", "app/lib/dropped_folder.ts"];
 
 await check("N1 the page and the modules that read the folder have no fetch / XMLHttpRequest / sendBeacon / socket / form", () => {
   const bad = netLines(FOLDER_READERS.map((f) => [f, read(f)]));
@@ -423,15 +439,34 @@ await check("L1 the status line says \"prototype, local only\", in English and i
   assert.ok(en.includes(STATUS), en);
   assert.ok(typeof JA[STATUS] === "string" && JA[STATUS] !== STATUS, "no Japanese");
   assert.ok(ja.includes(esc(JA[STATUS])) && !ja.includes(STATUS), ja);
-  // At the top: in the header, under the title, before the drop zone and the device list.
-  const h = PAGE.indexOf("<header");
-  const s = PAGE.indexOf("<StatusLine t={t} />");
-  assert.ok(h > 0 && s > h && s < PAGE.indexOf("</header>") && s < PAGE.indexOf("onDrop="), "the status line is not in the page's header");
+  // At the top: the kit's header (PlainLead's status pill, above the title), before the drop zone.
+  for (const t of [tEn, tJa]) {
+    const bad = statusProblems(html(React.createElement(page.AgentsBody, { t })), t);
+    assert.deepEqual(bad, [], bad.join("; "));
+  }
+  assert.match(PAGE, /status=\{<StatusLine t=\{t\} \/>\}/, "the status line is not PlainLead's status");
 });
 
-await check("L control: a dictionary without the Japanese line shows English, and is caught", () => {
+/** Problems with the status line's place in a rendered page: inside <header>, before <h1>, before the drop zone. */
+function statusProblems(h, t) {
+  const out = [];
+  const header = h.indexOf("<header");
+  const s = h.indexOf(esc(t(STATUS)));
+  const h1 = h.indexOf("<h1");
+  const zone = h.indexOf("data-dropzone");
+  if (header < 0 || s < header || s > h.indexOf("</header>")) out.push("the status line is not in the header");
+  if (!(s < h1)) out.push("the status line is not above the title");
+  if (!(zone > s)) out.push("the status line is not before the drop zone");
+  return out;
+}
+
+await check("L control: a dictionary without the Japanese line shows English, and is caught; a status line moved below the drop zone is caught", () => {
   const ja = html(React.createElement(page.StatusLine, { t: (en, v) => (en === STATUS ? en : translate("ja", en, v)) }));
   assert.ok(ja.includes(STATUS), "control did not take");
+  const h = html(React.createElement(page.AgentsBody, { t: tEn }));
+  const st = html(React.createElement(page.StatusLine, { t: tEn }));
+  assert.ok(h.includes(st), "control anchor");
+  assert.ok(statusProblems(h.replace(st, "") + st, tEn).length > 0, "moved to the end");
 });
 
 // ── W. wording and languages ────────────────────────────────────────────────────────────────────
@@ -470,7 +505,7 @@ await check("W1b no banned wording written straight into the page's source (JSX 
   assert.deepEqual(bad, [], bad.join("\n     "));
 });
 await check("W1b control: a sentence written as JSX text is caught", () => {
-  const planted = PAGE.replace("<header", "<p>This proves the reading.</p>\n<header");
+  const planted = PAGE.replace("<AgentsLead t={t} />", "<p>This proves the reading.</p>\n<AgentsLead t={t} />");
   assert.notEqual(planted, PAGE, "the control's anchor is gone");
   assert.ok(wordingProblems(SOURCE_TEXT(planted)).length > wordingProblems(SOURCE_TEXT(PAGE)).length, "JSX text is not scanned");
 });
@@ -493,9 +528,153 @@ await check(`W2 every string on /agents (${KEYS.length}) has Japanese and Hong K
 
 await check("W2 control: a missing translation and a dropped placeholder are caught", () => {
   const ja = { ...JA };
-  delete ja["Give a one-time permit"];
+  delete ja["Give a machine a new one-time permission"];
   assert.ok(dictProblems(ja, "ja").length > 0, "missing");
   assert.ok(dictProblems({ ...JA, "{n} records": "記録" }, "ja").length > 0, "placeholder");
+});
+
+// ── V. the page reads plainly ───────────────────────────────────────────────────────────────────
+// One lead sentence; "Try with a sample" (the bundled samples) as the one primary button; each machine's
+// result leads with VALID / INVALID and one sentence, details behind the fold; no jargon outside it;
+// "1 record", not "1 records"; the copy button copies exactly the command shown.
+
+const panel = await import("../app/try/MachineLogPanel.tsx");
+const tZh = (en, v) => translate("zh-HK", en, v);
+const LANGS = { en: tEn, ja: tJa, "zh-HK": tZh };
+
+function leadProblems(h, t, lang) {
+  const out = [];
+  const title = h.indexOf(`>${esc(t("Agent and machine control"))}</h1>`);
+  const lead = h.indexOf(`>${esc(t(page.LEAD))}</p>`);
+  if (title < 0) out.push("no title");
+  if (lead < 0) out.push("no lead sentence");
+  if (lead >= 0 && lead < title) out.push("lead before the title");
+  if (lang !== "en" && h.includes(esc(page.LEAD))) out.push(`${lang}: the lead is in English`);
+  return out;
+}
+
+await check("V1 one plain lead sentence under the title, in English, Japanese and Hong Kong Chinese", () => {
+  assert.ok(PAGE.includes(`t(${JSON.stringify(page.LEAD)})`), "the page does not render LEAD through t()");
+  for (const [lang, t] of Object.entries(LANGS)) {
+    const bad = leadProblems(html(React.createElement(page.AgentsLead, { t })), t, lang);
+    assert.deepEqual(bad, [], `${lang}: ${bad.join("; ")}`);
+  }
+});
+await check("V1 control: a dictionary without the Japanese lead is caught", () => {
+  const noJa = (en, v) => (en === page.LEAD ? en : tJa(en, v));
+  assert.ok(leadProblems(html(React.createElement(page.AgentsLead, { t: noJa })), noJa, "ja").length > 0);
+});
+
+const SAMPLES = (await panel.checkSamples(mldsa44Verify)).map((c, i) => ({ ...c, key: i + 1 }));
+const DEVICES = [
+  ...SAMPLES,
+  ...(await Promise.all(FIX.cases.map(async (c, i) => ({ key: 100 + i, name: `nb-${i}`, files: 9, sample: null, result: (await verdict(folder(c.name))).r, error: "" })))),
+];
+
+await check("V2 \"Try with a sample\" is the one primary button and adds the two bundled samples: VALID with its permission used, INVALID for the permission used twice", () => {
+  assert.match(PAGE, /<PrimaryButton onClick=\{\(\) => void add\(\(\) => checkSamples\(\)\)\}[^>]*>\s*\{t\("Try with a sample"\)\}\s*<\/PrimaryButton>/);
+  assert.equal([...PAGE.matchAll(/<PrimaryButton\b/g)].length, 1, "more than one primary button");
+  const h = html(React.createElement(page.AgentsBody, { t: tEn, initial: SAMPLES }));
+  const a = h.indexOf(">VALID<");
+  const b = h.indexOf(">INVALID<");
+  assert.ok(a > 0 && b > a, "VALID then INVALID");
+  assert.ok(h.includes(esc("This log is consistent, and its one-time permission was used once.")), "sample 1 sentence");
+  assert.ok(h.includes(esc("A one-time permission in this log was used twice.")), "sample 2 sentence");
+  const st = SAMPLES.map((d) => statesOf(d.result).map((s) => `${s.action}:${s.state}:${s.by}`));
+  assert.deepEqual(st, [["open-vent:used:2"], ["open-vent:used:2"]], JSON.stringify(st));
+});
+
+function layoutProblems(d, t, h = html(React.createElement(page.DeviceCard, { device: d, t }))) {
+  const out = [];
+  const head = panel.headline(d.result, t);
+  const label = h.indexOf(`>${head.label}<`);
+  const sentence = h.indexOf(`>${esc(head.sentence)}<`);
+  const fold = h.indexOf(`>${esc(t("Show details"))}</button>`);
+  if (label < 0 || sentence < 0 || fold < 0) out.push(`missing: label ${label}, sentence ${sentence}, fold ${fold}`);
+  if (!(label < sentence && sentence < fold)) out.push("label and sentence do not come first");
+  const r = d.result;
+  const hidden = r.kind === "verdict" ? [...(r.keyid ? [r.keyid] : []), ...r.problems.map(ml.problemLine), ...r.permits.map((p) => p.permitId), ...(r.chain ? [r.chain.chainId] : [])] : [];
+  for (const s of hidden) if (h.includes(esc(s))) out.push(`outside the fold: ${s.slice(0, 50)}`);
+  const det = html(React.createElement(page.DeviceDetails, { device: d, t }));
+  for (const s of hidden) if (!det.includes(esc(s))) out.push(`not in the details: ${s.slice(0, 50)}`);
+  return out;
+}
+
+await check(`V3 every machine (${DEVICES.length}, en/ja/zh-HK) leads with VALID / INVALID and one sentence; key id, reasons, permission ids, chain only behind the fold`, () => {
+  const bad = [];
+  for (const d of DEVICES) for (const [lang, t] of Object.entries(LANGS)) for (const p of layoutProblems(d, t)) bad.push(`${d.sample ?? d.name} (${lang}): ${p}`);
+  assert.deepEqual(bad, [], bad.slice(0, 8).join("\n     "));
+});
+await check("V3 control: details in the open, or the sentence after the fold, are caught", () => {
+  const d = SAMPLES[1];
+  const h = html(React.createElement(page.DeviceCard, { device: d, t: tEn }));
+  const open = h + html(React.createElement(page.DeviceDetails, { device: d, t: tEn }));
+  assert.ok(layoutProblems(d, tEn, open).some((p) => p.startsWith("outside the fold")), "details in the open");
+  const s = esc(panel.headline(d.result, tEn).sentence);
+  assert.ok(layoutProblems(d, tEn, h.replace(`>${s}<`, "><") + `<p>${s}</p>`).length > 0, "sentence late");
+});
+
+const JARGON = /envelope|nullifier|permit_id|canonical|エンベロープ|ナリファイア|正規化|封套|信封|規範化/i;
+const jargonIn = (h) => h.replace(/<[^>]+>/g, " ").match(JARGON) ?? [];
+await check("V4 no envelope / nullifier / permit_id / canonical outside the fold, on the page and every machine, en/ja/zh-HK", () => {
+  const bad = [];
+  for (const [lang, t] of Object.entries(LANGS)) {
+    for (const w of jargonIn(html(React.createElement(page.AgentsBody, { t, initial: DEVICES })))) bad.push(`${lang}: ${w}`);
+  }
+  assert.deepEqual(bad, [], bad.join("; "));
+});
+await check("V4 control: a planted jargon word is caught; attributes are not text", () => {
+  for (const w of ["envelope", "nullifier", "permit_id", "canonical"]) assert.ok(jargonIn(`<p>a ${w}</p>`).length > 0, w);
+  assert.deepEqual(jargonIn(`<p class="canonical">x</p>`), []);
+});
+
+const oneRecord = (() => {
+  const files = firstRecordOnly();
+  return verdict(files);
+})();
+await check("V5 one record reads \"1 record\" (en), never \"1 records\"; other counts plural; ja and zh-HK have it", async () => {
+  const { r } = await oneRecord;
+  assert.equal(r.records, 1);
+  for (const [lang, t] of Object.entries(LANGS)) {
+    const h = html(React.createElement(page.DeviceCard, { device: { key: 1, name: "nb", files: 3, sample: null, result: r, error: "" }, t }));
+    assert.ok(h.includes(esc(` · ${t("1 record")}`)), `${lang}: no "1 record"`);
+    assert.ok(!h.includes("1 records"), `${lang}: "1 records"`);
+  }
+  assert.equal(page.recordsLabel(1, tEn), "1 record");
+  assert.equal(page.recordsLabel(3, tEn), "3 records");
+  assert.equal(page.recordsLabel(0, tEn), "0 records");
+});
+await check("V5 control: a label without the singular is caught", () => {
+  const noSingular = (n, t) => t("{n} records", { n });
+  assert.equal(noSingular(1, tEn), "1 records", "control did not take");
+  assert.notEqual(noSingular(1, tEn), page.recordsLabel(1, tEn));
+});
+
+/** Problems with a copy function: it must put exactly the text on the clipboard, or say it could not. */
+async function copyProblems(copy) {
+  const out = [];
+  const cmd = ac.permitCommand({ dir: "my sensor", action: "open-vent", expiresSeq: "6" }).command;
+  let got = null;
+  const ok1 = await copy(cmd, { clipboard: { writeText: async (s) => { got = s; } } });
+  if (!ok1 || got !== cmd) out.push(`clipboard: ${ok1} ${JSON.stringify(got)}`);
+  let viaSel = null;
+  const ok2 = await copy(cmd, { clipboard: { writeText: async () => { throw new Error("denied"); } }, execCopy: (s) => { viaSel = s; return true; } });
+  if (!ok2 || viaSel !== cmd) out.push(`fallback: ${ok2} ${JSON.stringify(viaSel)}`);
+  const ok3 = await copy(cmd, { execCopy: () => false });
+  if (ok3 !== false) out.push("reports a copy that did not happen");
+  return out;
+}
+await check("V6 the copy button copies exactly the command shown (Clipboard API, else the selection), and says when it could not", async () => {
+  assert.deepEqual(await copyProblems(page.copyText), []);
+  assert.match(PAGE, /copyText\(c\.command, \{ clipboard: navigator\.clipboard, execCopy \}\)/, "the button does not copy c.command");
+  assert.match(PAGE, /\{c\.command\}\s*<\/pre>/, "the command shown is not c.command");
+  assert.match(PAGE, /copied === "no" \? <p role="alert">\{t\("This browser did not let the page copy\./);
+});
+await check("V6 control: a copy that trims, one that never falls back, and one that always says yes, are caught", async () => {
+  const trims = (s, e) => page.copyText(s.slice(0, -1), e);
+  const noFallback = (s, e) => page.copyText(s, { clipboard: e.clipboard });
+  const alwaysYes = async (s, e) => (await page.copyText(s, e), true);
+  for (const [n, f] of Object.entries({ trims, noFallback, alwaysYes })) assert.ok((await copyProblems(f)).length > 0, n);
 });
 
 rmSync(TMP, { recursive: true, force: true });
