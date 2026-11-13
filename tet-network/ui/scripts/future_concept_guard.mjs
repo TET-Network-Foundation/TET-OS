@@ -549,7 +549,7 @@ await check("no key is defined twice in the ja or zh-HK dictionary", () => {
 });
 await check("control: a key defined twice is caught", async () => {
   await failsWith(() => duplicateKeys(JA_SRC.replace("};\n", '  "Start again": "もう一度",\n};\n')), /defined twice: "Start again"/, "ja duplicate");
-  await failsWith(() => duplicateKeys(ZH_SRC.replace("};\n", '  "Show details": "詳情",\n};\n')), /defined twice: "Show details"/, "zh duplicate");
+  await failsWith(() => duplicateKeys(ZH_SRC.replace("};\n", '  "Start again": "再來",\n};\n')), /defined twice: "Start again"/, "zh duplicate");
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
