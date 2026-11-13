@@ -185,6 +185,34 @@ await check("W control: each kind of banned wording is caught, in English and Ja
   assert.deepEqual(wordingProblems([["x", "Keys for machines and agents: what each key may do, and how many times."]]), []);
 });
 
+// W2. /market (W2's prototype, linked from /services) uses the site's words too: no customer, no
+// company (配送会社), no money or promised dates, in English, Japanese and Hong Kong Chinese. It merges
+// from its own branch, so in a tree without app/market this check says so and has nothing to read.
+const MARKET = walk("app/market").filter((p) => /\.(?:tsx?|mjs)$/.test(p)).map((p) => [p, read(p)]);
+function marketShown(files) {
+  const out = [];
+  for (const [p, s] of files) {
+    const code = stripComments(s);
+    for (const m of code.matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) out.push([p, JSON.parse(`"${m[1]}"`)]);
+    // Sentences in the checks (Shows / Does not show, reasons) and every key and value of its dictionaries.
+    if (/market_checks\.ts$|i18n_market\.ts$/.test(p)) for (const m of code.matchAll(/"((?:[^"\\\n]|\\.)*)"/g)) if (/\s|[^\x00-\x7f]/.test(m[1])) out.push([p, JSON.parse(`"${m[1]}"`)]);
+  }
+  return out;
+}
+await check(`W2 /market uses the site's words, EN, JA and zh-HK (${MARKET.length ? `${MARKET.length} files` : "not in this tree"})`, () => {
+  if (!MARKET.length) return;
+  for (const f of ["app/market/Market.tsx", "app/market/i18n_market.ts", "app/market/market_checks.ts"]) assert.ok(MARKET.some(([q]) => q === f), `${f} is not scanned`);
+  const bad = wordingProblems(marketShown(MARKET));
+  assert.deepEqual(bad, []);
+});
+await check("W2 control: \"customer\" and 配送会社 put back into /market are caught", () => {
+  const planted = [
+    ["app/market/Market.tsx", 't("This customer\'s pseudonym here:")'],
+    ["app/market/i18n_market.ts", '"the permit is not signed by the courier service": "許可が配送会社の署名ではありません",'],
+  ];
+  assert.equal(wordingProblems(marketShown(planted)).length, 2, wordingProblems(marketShown(planted)).join(" | "));
+});
+
 // ── J. Japanese ─────────────────────────────────────────────────────────────────────────────────
 const jaProblems = (list, dict) => [...new Set(list.map(([, s]) => s))].filter((s) => /[A-Za-z]{3,}/.test(s) && !(s in dict));
 await check("J1 every string the site shows has Japanese", () => {
