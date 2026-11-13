@@ -19,7 +19,7 @@ hex.workspace = true
 risc0-zkvm = { workspace = true, default-features = false, features = ["prove", "std"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 # The anonymous-membership guest (mode 3) lives in tet-core's `methods` crate, not prover/methods.
 methods = { path = "../../methods" }
 tet-prover-methods = { path = "../methods" }

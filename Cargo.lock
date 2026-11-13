@@ -4894,7 +4894,7 @@ version = "0.1.0"
 dependencies = [
  "hkdf 0.12.4",
  "serde",
- "sha2 0.10.9",
+ "sha2 0.11.0",
 ]
 
 [[package]]
@@ -7539,7 +7539,7 @@ dependencies = [
  "methods",
  "reqwest",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tet-core",
  "tokio",
 ]
@@ -7587,7 +7587,7 @@ dependencies = [
  "security-framework-sys",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "sled",
  "sysinfo",
  "tempfile",
@@ -7615,7 +7615,7 @@ dependencies = [
  "dilithium-rs",
  "hkdf 0.12.4",
  "js-sys",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "wasm-bindgen",
  "zeroize",
 ]
@@ -7634,7 +7634,7 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "tet-prover-methods",
  "tokio",
  "tower-http",
