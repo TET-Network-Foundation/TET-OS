@@ -1,0 +1,15 @@
+# One host as both the demo and the chain's only producer (TET_NODE_ROLE=demo-producer). Layered
+# AFTER deploy/demo/docker-compose.demo.yml, whose own rule stays: a plain demo node never produces.
+#
+#     docker compose -f docker-compose.yml [-f docker-compose.dev.yml] \
+#       -f deploy/demo/docker-compose.demo.yml -f deploy/demo/docker-compose.producer.yml up -d ...
+#
+# The delta: this node produces blocks, pins no producer (it is the producer), and is the chain's
+# sole validator BY EXPLICIT CONFIGURATION (TET_VALIDATOR_IDS names its own node id, local-wallet),
+# so chain sync trusts no unsolicited peer (consensus::is_explicit_sole_validator, p2p SyncTrust).
+services:
+  tet-core:
+    environment:
+      TET_AUTO_MINE: "1"
+      TET_PRODUCER_PEERS: ""
+      TET_VALIDATOR_IDS: "local-wallet"

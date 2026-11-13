@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
-# provision-seed.sh — turn a bare Ubuntu 24.04 host into a TET public seed.
+# provision-seed.sh — turn a plain Ubuntu 24.04 host, at any provider, into a TET node.
 #
-#   scp deploy/provision-seed.sh root@<host>:/root/
-#   ssh root@<host> 'bash /root/provision-seed.sh'
+#   scp genesis.json root@<host>:/etc/tet/genesis.json      # the chain's genesis file (see below)
+#   ssh root@<host> 'cd /opt/TET-OS && TET_CHAIN_ID=<id> TET_NODE_ROLE=demo-producer … bash deploy/provision-seed.sh'
+#
+# Nothing here assumes a provider. What the provider must do is short and is printed as text at the
+# end of every run (and listed in deploy/demo/README.md): an Ubuntu 24.04 host with a public IPv4 and
+# IPv6 address, your SSH key, and a firewall in front of it that allows exactly the ports printed.
 #
 # Idempotent: every step checks before it acts, so re-running after a failure
 # resumes rather than redoes. Safe to run twice.
@@ -30,7 +34,7 @@
 # never transmitted), registered against the one repository:
 #
 #   gh repo deploy-key add <pubkey> --repo TET-Network-Foundation/TET-OS \
-#     --title 'helsinki-seed (ro)'
+#     --title '<host>-seed (ro)'
 #
 # Use this if you want the seed to self-update. It needs deploy keys enabled
 # for the repository — as of 2026-09-22 they are DISABLED org-wide on
@@ -53,9 +57,13 @@ REPO_BRANCH="${TET_SEED_REPO_BRANCH:-main}"
 SEED_DIR="${TET_SEED_DIR:-/opt/TET-OS}"
 DEPLOY_KEY="${TET_SEED_DEPLOY_KEY:-/root/.ssh/tet_os_deploy}"
 SOURCE_MODE="${TET_SEED_SOURCE:-push}"   # push | clone — see header
-SSH_PORT="${TET_SEED_SSH_PORT:-22}"
-# Extra SSH ports (space-separated), for networks that block outbound 22. The demo default is 8443.
+# SSH listens on a non-default port (8443, also reachable from networks that block outbound 22).
+# Port 22 stays open too until you have logged in on the new port once; then run this again with
+# TET_SSH_KEEP_22=0 to close it. Closing 22 first, behind a provider firewall that doesn't allow
+# 8443 yet, would lock you out.
+SSH_PORT="${TET_SSH_PORT:-${TET_SEED_SSH_PORT:-8443}}"
 SSH_EXTRA_PORTS="${TET_SSH_EXTRA_PORTS:-}"
+if [ "${TET_SSH_KEEP_22:-1}" = 1 ] && [ "$SSH_PORT" != 22 ]; then SSH_EXTRA_PORTS="22 $SSH_EXTRA_PORTS"; fi
 P2P_PORT="${TET_SEED_P2P_PORT:-8002}"
 SWAP_GB="${TET_SEED_SWAP_GB:-4}"
 
@@ -64,16 +72,17 @@ SWAP_GB="${TET_SEED_SWAP_GB:-4}"
 # See README block at the bottom of this file for the fit measurement.
 PROFILE="${TET_SEED_PROFILE:-quickstart}"
 
-# Genesis identity. These are the committed dev defaults from docker-compose.yml
-# and they are deliberately NOT changed here: the genesis hash is derived from
-# (treasury, founder wallet, chain id), so a seed that invents its own values
-# forks away from every client built against the compose defaults, including
-# the UI image, whose build args bake the same three in. Phase 1 cuts real
-# values at the genesis ceremony; until then the seed and the laptops must
-# agree, and the committed defaults are the only values both already have.
-TREASURY="${TET_TREASURY_ADDRESS:-fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321}"
-FOUNDER="${TET_GENESIS_FOUNDER_WALLET_ID:-57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0}"
-CHAIN_ID="${TET_CHAIN_ID:-tet-local-dev}"
+# Genesis identity: a public chain names itself, so there are no defaults. The first public testnet
+# ran on the dev values (chain id tet-local-dev, the dev founder and treasury), so every fresh dev node
+# computed its genesis hash. Now the chain comes from its genesis file, {"chain_id",
+# "founder_wallet_id", "treasury_address", "genesis_hash"}, made once by the owner, and TET_CHAIN_ID
+# must name the same chain. The node itself refuses to start with TET_ENV=testnet unless the file
+# matches (tet-core genesis::check_public_chain); this script refuses earlier, before it touches the
+# host. The UI image's build args bake the same values in from .env.
+GENESIS_FILE="${TET_GENESIS_FILE:-/etc/tet/genesis.json}"
+CHAIN_ID="${TET_CHAIN_ID:-}"
+DEV_FOUNDER=57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0
+DEV_TREASURY=fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321
 
 # Joining an existing chain vs starting one. The .env template below was written for the FIRST
 # seed: a producer with no bootnode to dial. A SECOND seed is the opposite and neither of these
@@ -90,13 +99,18 @@ if [ -n "$BOOTNODES" ]; then
 else
   AUTO_MINE="${TET_AUTO_MINE:-1}"
 fi
-# A follower pins the producer's PeerId (Helsinki's, as producer "local-wallet") so it accepts gossiped
-# blocks only from it. The producer writes the variable EMPTY: docker-compose.yml would otherwise fill
-# in the follower default.
+# A follower pins the producer's PeerId (as producer "local-wallet") so it accepts gossiped blocks
+# only from it. There is no default: the producer's PeerId is printed when it is provisioned. The
+# producer writes the variable EMPTY: docker-compose.yml would otherwise fill in a follower default.
+# A producer is the chain's sole validator by explicit configuration (its own node id, local-wallet):
+# without it, chain sync would trust every peer (p2p SyncTrust), and the node refuses to start that
+# way with TET_ENV=testnet.
 if [ "$AUTO_MINE" = 1 ]; then
   PRODUCER_PEERS=""
+  VALIDATOR_IDS="${TET_VALIDATOR_IDS:-local-wallet}"
 else
   PRODUCER_PEERS="${TET_PRODUCER_PEERS:-local-wallet=12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC}"
+  VALIDATOR_IDS="${TET_VALIDATOR_IDS:-}"
 fi
 
 log()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -104,21 +118,44 @@ ok()   { printf '    \033[32mok\033[0m %s\n' "$*"; }
 warn() { printf '    \033[33mwarn\033[0m %s\n' "$*"; }
 die()  { printf '\n\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 
-# Node role (docs/DEMO_NODE.md). `seed` is the default and changes nothing below. `demo` is a
-# follower that also serves the /try page: REST in public mode behind Caddy on 443. It shares
-# nothing with the seeds; it only dials them. Checked before anything touches the host.
+# Node role (docs/DEMO_NODE.md). Checked before anything touches the host.
+#   seed           a P2P node: the producer when no bootnode is given, else a follower.
+#   demo           a follower that also serves the /try page: REST in public mode behind Caddy on 443.
+#   demo-producer  one host as both: the chain's only producer AND the /try page (testnet-2 runs
+#                  this way, one host and no second seed yet).
 ROLE="${TET_NODE_ROLE:-seed}"
 DEMO_DOMAIN="${TET_DEMO_DOMAIN:-}"
 case "$ROLE" in
   seed) ;;
-  demo)
-    [ -n "$BOOTNODES" ]   || die "a demo node follows the seeds: set TET_BOOTNODES"
+  demo|demo-producer)
     [ -n "$DEMO_DOMAIN" ] || die "set TET_DEMO_DOMAIN (the name Caddy gets a certificate for)"
     [ -n "${TET_DEMO_ACME_EMAIL:-}" ] || die "set TET_DEMO_ACME_EMAIL (Let's Encrypt contact; Caddy will not start without it)"
-    [ "$AUTO_MINE" = 0 ]  || die "a demo node never produces blocks: TET_AUTO_MINE must be 0"
+    if [ "$ROLE" = demo ]; then
+      [ -n "$BOOTNODES" ]  || die "a demo node follows a producer: set TET_BOOTNODES (or use TET_NODE_ROLE=demo-producer)"
+      [ "$AUTO_MINE" = 0 ] || die "a demo node never produces blocks: TET_AUTO_MINE must be 0"
+    else
+      [ -z "$BOOTNODES" ]  || die "a demo-producer is the chain's producer: it dials no bootnode (unset TET_BOOTNODES)"
+      [ "$AUTO_MINE" = 1 ] || die "a demo-producer produces blocks: TET_AUTO_MINE must be 1"
+    fi
     ;;
-  *) die "TET_NODE_ROLE must be seed or demo (got '$ROLE')" ;;
+  *) die "TET_NODE_ROLE must be seed, demo or demo-producer (got '$ROLE')" ;;
 esac
+[ "$AUTO_MINE" = 1 ] || [ -n "$PRODUCER_PEERS" ] || die "a follower pins its producer: set TET_PRODUCER_PEERS=local-wallet=<producer PeerId>"
+
+# The genesis file, read with python3 (in every Ubuntu image; jq comes later, with Docker).
+[ -n "$CHAIN_ID" ] || die "set TET_CHAIN_ID: the public chain this node runs (not a dev id)"
+case "$CHAIN_ID" in tet-dev-local|tet-local-dev) die "TET_CHAIN_ID=$CHAIN_ID is a dev chain id; a public chain names itself" ;; esac
+[ -f "$GENESIS_FILE" ] || die "no genesis file at $GENESIS_FILE (copy the chain's genesis.json there first)"
+GENESIS_FIELDS=$(python3 -c '
+import json, sys
+g = json.load(open(sys.argv[1]))
+assert set(g) == {"chain_id", "founder_wallet_id", "treasury_address", "genesis_hash"}, "unexpected fields"
+print(g["chain_id"], g["founder_wallet_id"].lower(), g["treasury_address"].lower(), g["genesis_hash"].lower())
+' "$GENESIS_FILE") || die "$GENESIS_FILE is not a genesis file {chain_id, founder_wallet_id, treasury_address, genesis_hash}"
+read -r G_CHAIN FOUNDER TREASURY GENESIS_HASH <<<"$GENESIS_FIELDS"
+[ "$G_CHAIN" = "$CHAIN_ID" ] || die "$GENESIS_FILE is for chain $G_CHAIN, TET_CHAIN_ID is $CHAIN_ID"
+[ "$FOUNDER" != "$DEV_FOUNDER" ] || die "$GENESIS_FILE names the dev founder wallet"
+[ "$TREASURY" != "$DEV_TREASURY" ] || die "$GENESIS_FILE names the dev treasury"
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 
@@ -213,7 +250,7 @@ EOF
   This key is not registered on the repository yet. Register it READ-ONLY:
 
     gh repo deploy-key add - --repo TET-Network-Foundation/TET-OS \\
-      --title 'helsinki-seed (ro)' <<'KEY'
+      --title '$(hostname)-seed (ro)' <<'KEY'
 $(cat "${DEPLOY_KEY}.pub")
 KEY
 
@@ -254,10 +291,14 @@ cat > "$SEED_DIR/.env" <<EOF
 # Generated by deploy/provision-seed.sh on $(date -u +%Y-%m-%dT%H:%M:%SZ). Edit
 # here, not in docker-compose.yml — this file wins.
 
-# --- genesis identity (committed dev defaults; see script header) -----------
-TET_TREASURY_ADDRESS=$TREASURY
-TET_GENESIS_FOUNDER_WALLET_ID=$FOUNDER
+# --- genesis identity (from $GENESIS_FILE; see script header) ----------------
+# TET_ENV=testnet makes the node check all of these against the genesis file when it starts.
+TET_ENV=testnet
 TET_CHAIN_ID=$CHAIN_ID
+TET_GENESIS_FILE=/etc/tet/genesis.json
+TET_GENESIS_FOUNDER_WALLET_ID=$FOUNDER
+TET_TREASURY_ADDRESS=$TREASURY
+TET_GENESIS_HASH=$GENESIS_HASH
 
 # --- seed role --------------------------------------------------------------
 # The compose default is TET_ENABLE_P2P=0 (isolated single node). A seed is the
@@ -268,13 +309,14 @@ TET_AUTO_MINE=$AUTO_MINE
 TET_BLOCK_TIME_SEC=12
 ${BOOTNODES:+TET_BOOTNODES=$BOOTNODES}
 TET_PRODUCER_PEERS=$PRODUCER_PEERS
+${VALIDATOR_IDS:+TET_VALIDATOR_IDS=$VALIDATOR_IDS}
 RUST_LOG=info
 
 # --- build profile ($PROFILE) -----------------------------------------------
 RISC0_SKIP_BUILD=$RISC0_SKIP
 TET_BUILD_FEATURES=$BUILD_FEATURES
 EOF
-if [ "$ROLE" = demo ]; then
+if [ "$ROLE" != seed ]; then
   {
     echo
     echo "# --- demo node (docs/DEMO_NODE.md) ------------------------------------------"
@@ -285,13 +327,14 @@ if [ "$ROLE" = demo ]; then
   } >> "$SEED_DIR/.env"
 fi
 chmod 600 "$SEED_DIR/.env"
-ok "profile=$PROFILE  p2p=$P2P_PORT  chain=$CHAIN_ID"
+ok "profile=$PROFILE  p2p=$P2P_PORT  chain=$CHAIN_ID  genesis=$GENESIS_HASH"
+# The containers read the genesis file at this path (the seed and demo overlays mount it).
+if [ "$GENESIS_FILE" != /etc/tet/genesis.json ]; then install -D -m 0644 "$GENESIS_FILE" /etc/tet/genesis.json; fi
 
 # --- 6b. SSH listeners --------------------------------------------------------
 # Ubuntu 24.04 starts sshd from ssh.socket. Enable it explicitly and list every port on both IPv4
 # and IPv6 (an [::] listener alone depends on bindv6only), then check each one really listens:
 # a port the firewall allows but nothing serves looks exactly like a firewall problem from outside.
-[ "$ROLE" = demo ] && [ -z "$SSH_EXTRA_PORTS" ] && SSH_EXTRA_PORTS=8443
 log "ssh.socket: ports $SSH_PORT $SSH_EXTRA_PORTS"
 if systemctl list-unit-files ssh.socket >/dev/null 2>&1; then
   mkdir -p /etc/systemd/system/ssh.socket.d
@@ -321,12 +364,13 @@ fi
 # --- 7. firewall ------------------------------------------------------------
 # Never add nftables reject rules of our own: a REJECT answers a connection with a reset, which
 # reads from outside as "nothing listening" and hides the real problem. ufw is the only host
-# firewall here (plus the Hetzner cloud firewall). Anything else that rejects is reported.
+# firewall here (plus the provider's firewall, printed as text at the end). Anything else that
+# rejects is reported.
 if command -v nft >/dev/null 2>&1; then
   other=$(nft list ruleset 2>/dev/null | awk '/^table /{t=$2" "$3} /reject/ && t !~ /ufw/ {print t": "$0}' | head -5)
   [ -z "$other" ] || warn "nftables reject rules outside ufw (from cloud-config or elsewhere?): $other"
 fi
-# Mirrors the Hetzner cloud firewall so the host is not defenceless if that
+# Mirrors the provider's firewall so the host is not defenceless if that
 # firewall is ever relaxed. READ THIS BEFORE TRUSTING IT: ufw does not filter
 # container-published ports. Docker inserts DNAT rules into the nat table's
 # DOCKER chain, which runs before ufw's filter rules, so a published 0.0.0.0
@@ -340,7 +384,7 @@ ufw default allow outgoing >/dev/null
 ufw allow "${SSH_PORT}/tcp"  >/dev/null   # keep this first — enabling without it locks you out
 for p in $SSH_EXTRA_PORTS; do ufw allow "${p}/tcp" >/dev/null; done
 ufw allow "${P2P_PORT}/tcp"  >/dev/null   # block plane; all swarms are TCP-only
-if [ "$ROLE" = demo ]; then
+if [ "$ROLE" != seed ]; then
   ufw allow 80/tcp  >/dev/null   # ACME challenge and the redirect to 443
   ufw allow 443/tcp >/dev/null   # Caddy: the /try page
 fi
@@ -354,8 +398,10 @@ cd "$SEED_DIR"
 COMPOSE=(docker compose -f docker-compose.yml)
 [ "$PROFILE" = quickstart ] && COMPOSE+=(-f docker-compose.dev.yml)
 SERVICES=(tet-core)
-if [ "$ROLE" = demo ]; then
+if [ "$ROLE" != seed ]; then
   COMPOSE+=(-f deploy/demo/docker-compose.demo.yml)
+  # One host as demo AND producer: the overlay that lets this demo node produce blocks.
+  if [ "$ROLE" = demo-producer ]; then COMPOSE+=(-f deploy/demo/docker-compose.producer.yml); fi
   SERVICES+=(ui)
   # The file-fee sponsor's words go here later (deploy/demo/README.md, section 6). Root only; the
   # demo overlay mounts it read-only. Nothing in it comes from, or goes to, the seeds.
@@ -369,7 +415,7 @@ printf '    %s\n' "${COMPOSE[*]} up -d --build ${SERVICES[*]}"
 # A demo node faces the internet only through Caddy, and Caddy starts only once tet-core has
 # PROVED it is in public mode: a route off the allow-list must come back as the gate's own 404.
 # An image without public mode would otherwise sit behind Caddy with every route open.
-if [ "$ROLE" = demo ]; then
+if [ "$ROLE" != seed ]; then
   log "Public mode check (before Caddy)"
   gate=""
   for _ in $(seq 1 60); do
@@ -417,6 +463,16 @@ systemctl daemon-reload
 systemctl enable --now tet-healthcheck.timer >/dev/null 2>&1
 ok "tet-healthcheck.timer active ($(systemctl is-active tet-healthcheck.timer))"
 
+# --- 8c. weekly backup --------------------------------------------------------
+# scripts/backup-node-data.sh, every week, into /var/backups/tet (it stops nothing). A backup that
+# stays on this host is lost with it: pull it weekly to a machine outside (docs/OPS_CHECKLIST.md).
+log "Weekly backup (systemd timer)"
+install -m 0755 "$SEED_DIR/scripts/backup-node-data.sh" /usr/local/bin/tet-backup-node-data
+install -m 0644 "$SEED_DIR/deploy/systemd/tet-backup.service" "$SEED_DIR/deploy/systemd/tet-backup.timer" /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now tet-backup.timer >/dev/null 2>&1
+ok "tet-backup.timer active ($(systemctl is-active tet-backup.timer)); tarballs in /var/backups/tet"
+
 # --- 9. verify --------------------------------------------------------------
 log "Waiting for health"
 for _ in $(seq 1 60); do
@@ -427,6 +483,12 @@ done
 [ "$s" = healthy ] || die "container health = $s; docker compose logs tet-core"
 ok "container healthy"
 
+WEB_RULES=""
+if [ "$ROLE" != seed ]; then
+  WEB_RULES="      allow 80/tcp     ACME and the redirect to 443
+      allow 443/tcp    the /try page (Caddy)
+"
+fi
 PEER_ID=$(docker logs tet-core-mainnet 2>&1 | grep -m1 'libp2p PeerId:' | awk '{print $NF}' || true)
 PUBLIC_IP=$(curl -fsS --max-time 5 https://api.ipify.org || hostname -I | awk '{print $1}')
 
@@ -441,6 +503,12 @@ cat <<EOF
     ---------------------------------------------------------------
 
     Put that multiaddr in docs/RUNNING_A_NODE.md and in TET_BOOTNODES on
-    every node that should join.
+    every node that should join (with TET_PRODUCER_PEERS=local-wallet=<PeerId>
+    when this node is the producer).
+
+    Provider firewall: set this in the provider's console (inbound, TCP only)
+      allow ${SSH_PORT}/tcp   SSH${SSH_EXTRA_PORTS:+ (and ${SSH_EXTRA_PORTS% } until closed with TET_SSH_KEEP_22=0)}
+      allow ${P2P_PORT}/tcp   P2P
+${WEB_RULES}      deny everything else (5010, the node API, stays on 127.0.0.1)
 
 EOF

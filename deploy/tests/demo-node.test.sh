@@ -24,12 +24,66 @@ refuses() {  # NAME EXPECTED-MESSAGE ENV...
   if [ "$rc" -ne 0 ] && grep -q -- "$want" <<<"$out"; then pass "provision refuses: $name"
   else flunk "provision refuses: $name" "rc=$rc out=$(tail -1 <<<"$out")"; fi
 }
-BOOT=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC
-refuses "demo without bootnodes" "a demo node follows the seeds" TET_NODE_ROLE=demo TET_DEMO_DOMAIN=try.example.org
+BOOT=/ip4/192.0.2.1/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC   # a documentation address
+WEB=(TET_DEMO_DOMAIN=try.example.org TET_DEMO_ACME_EMAIL=ops@example.org)
+refuses "demo without bootnodes" "a demo node follows a producer" TET_NODE_ROLE=demo "${WEB[@]}"
 refuses "demo without a domain"  "set TET_DEMO_DOMAIN"          TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT"
 refuses "demo without an email"  "set TET_DEMO_ACME_EMAIL"      TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT" TET_DEMO_DOMAIN=try.example.org
-refuses "demo that would mine"   "never produces blocks"        TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT" TET_DEMO_DOMAIN=try.example.org TET_DEMO_ACME_EMAIL=ops@example.org TET_AUTO_MINE=1
-refuses "an unknown role"        "must be seed or demo"         TET_NODE_ROLE=validator
+refuses "demo that would mine"   "never produces blocks"        TET_NODE_ROLE=demo TET_BOOTNODES="$BOOT" "${WEB[@]}" TET_AUTO_MINE=1
+refuses "an unknown role"        "must be seed, demo or demo-producer" TET_NODE_ROLE=validator
+# One host as demo and producer (testnet-2).
+refuses "demo-producer with a bootnode" "dials no bootnode"     TET_NODE_ROLE=demo-producer "${WEB[@]}" TET_BOOTNODES="$BOOT"
+refuses "demo-producer that won't mine" "produces blocks"       TET_NODE_ROLE=demo-producer "${WEB[@]}" TET_AUTO_MINE=0
+# A follower that sets no TET_PRODUCER_PEERS gets the compose default pin (owner, 2026-11-13: the pin
+# stays), so provision-seed.sh's default must be exactly docker-compose.yml's. Control: either side
+# emptied or changed is caught.
+# shellcheck disable=SC2016  # literal script text
+follower_pin() { # $1 compose text, $2 provision text: prints the problem, nothing if they agree
+  local pin; pin=$(sed -n 's/.*TET_PRODUCER_PEERS: "${TET_PRODUCER_PEERS-\(.*\)}".*/\1/p' <<<"$1")
+  [ -n "$pin" ] || { echo "compose has no default producer pin"; return; }
+  grep -qF "PRODUCER_PEERS=\"\${TET_PRODUCER_PEERS:-$pin}\"" <<<"$2" || echo "provision's follower default is not the compose pin ($pin)"
+}
+C=$(cat docker-compose.yml); P=$(cat deploy/provision-seed.sh)
+check_pin() { # $1 name, $2 "agree" or "differ", $3 compose text, $4 provision text
+  local p; p=$(follower_pin "$3" "$4")
+  if { [ "$2" = agree ] && [ -z "$p" ]; } || { [ "$2" = differ ] && [ -n "$p" ]; }; then pass "$1"; else flunk "$1" "${p:-no problem found}"; fi
+}
+check_pin "a follower without TET_PRODUCER_PEERS gets the compose default pin" agree "$C" "$P"
+# shellcheck disable=SC2001  # a sed regex: ${var//…} cannot match [^}]*
+check_pin "control: compose without its default pin is caught" differ "$(sed 's/TET_PRODUCER_PEERS-local-wallet=[^}]*}/TET_PRODUCER_PEERS-}/' <<<"$C")" "$P"
+# shellcheck disable=SC2001  # a sed regex: ${var//…} cannot match [^}]*
+check_pin "control: a provision default other than the compose pin is caught" differ "$C" "$(sed 's/TET_PRODUCER_PEERS:-local-wallet=/TET_PRODUCER_PEERS:-x/' <<<"$P")"
+# The genesis: a public chain names itself (no dev defaults).
+G=$(mktemp -d); trap 'rm -rf "$G"' EXIT
+gfile() { # $1 name, $2 chain, $3 founder, $4 treasury
+  printf '{"chain_id":"%s","founder_wallet_id":"%s","treasury_address":"%s","genesis_hash":"0x%s"}' "$2" "$3" "$4" "$(printf '%064d' 0)" > "$G/$1"
+}
+F1=1111111111111111111111111111111111111111111111111111111111111111
+T1=2222222222222222222222222222222222222222222222222222222222222222
+gfile ok.json tet-testnet-2 "$F1" "$T1"
+gfile devfounder.json tet-testnet-2 57e0b29d233917a619d0f335dfc1135add3359c49590720cfb0f9f70d71f36a0 "$T1"
+gfile devtreasury.json tet-testnet-2 "$F1" fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321
+refuses "no chain id"            "set TET_CHAIN_ID"             TET_NODE_ROLE=seed
+refuses "the dev chain id"       "is a dev chain id"            TET_NODE_ROLE=seed TET_CHAIN_ID=tet-dev-local
+refuses "the old public chain id" "is a dev chain id"           TET_NODE_ROLE=seed TET_CHAIN_ID=tet-local-dev
+refuses "no genesis file"        "no genesis file"              TET_NODE_ROLE=seed TET_CHAIN_ID=tet-testnet-2 TET_GENESIS_FILE="$G/missing.json"
+refuses "a file for another chain" "is for chain"               TET_NODE_ROLE=seed TET_CHAIN_ID=tet-testnet-3 TET_GENESIS_FILE="$G/ok.json"
+refuses "the dev founder"        "dev founder"                  TET_NODE_ROLE=seed TET_CHAIN_ID=tet-testnet-2 TET_GENESIS_FILE="$G/devfounder.json"
+refuses "the dev treasury"       "dev treasury"                 TET_NODE_ROLE=seed TET_CHAIN_ID=tet-testnet-2 TET_GENESIS_FILE="$G/devtreasury.json"
+
+# A producer is the sole validator by explicit configuration, so chain sync trusts no unsolicited
+# peer: the demo-producer overlay sets it, and provision-seed.sh writes it for every producer.
+# Text checks (no Docker needed); control: the overlay without the line is caught.
+# shellcheck disable=SC2016  # literal script text
+producer_trust() { # $1 overlay text, $2 provision text
+  grep -qE '^\s+TET_VALIDATOR_IDS: "local-wallet"' <<<"$1" || echo "overlay: no TET_VALIDATOR_IDS"
+  grep -q 'VALIDATOR_IDS="${TET_VALIDATOR_IDS:-local-wallet}"' <<<"$2" || echo "provision: producers get no validator id"
+  grep -q '^${VALIDATOR_IDS:+TET_VALIDATOR_IDS=$VALIDATOR_IDS}$' <<<"$2" || echo "provision: .env does not carry TET_VALIDATOR_IDS"
+}
+PO=$(cat deploy/demo/docker-compose.producer.yml); PS=$(cat deploy/provision-seed.sh)
+p=$(producer_trust "$PO" "$PS")
+if [ -z "$p" ]; then pass "a producer is the explicit sole validator"; else flunk "a producer is the explicit sole validator" "$p"; fi
+if [ -n "$(producer_trust "$(grep -v TET_VALIDATOR_IDS <<<"$PO")" "$PS")" ]; then pass "control: an overlay without it is caught"; else flunk "control: an overlay without it is caught" "not caught"; fi
 
 compose_json() { docker compose -f docker-compose.yml -f "$1" config --format json 2>&1; }
 

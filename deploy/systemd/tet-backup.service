@@ -1,0 +1,7 @@
+[Unit]
+Description=Snapshot the TET node's database into /var/backups/tet (stops nothing)
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tet-backup-node-data

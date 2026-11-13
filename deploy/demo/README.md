@@ -1,62 +1,93 @@
-# Provisioning the "Try TET" demo node
+# Provisioning the "Try TET" host
 
-Design: [`docs/DEMO_NODE.md`](../../docs/DEMO_NODE.md). Needs tet-core with public-API mode
-(PR #36) on the commit you deploy.
+Design: [`docs/DEMO_NODE.md`](../../docs/DEMO_NODE.md). Nothing here depends on a hosting provider:
+any plain Ubuntu 24.04 host works. For testnet-2 **one host is both the demo and the chain's only
+producer** (`TET_NODE_ROLE=demo-producer`); a separate `seed` or `demo` follower can join later.
 
-## 1. Hetzner
+## 1. The host (any provider)
 
-- **Server:** Hetzner Cloud → the project → **Add Server**.
-  - **Location: Falkenstein (`fsn1`)**, a different datacentre from Helsinki (`hel1`) and
-    Nuremberg (`nbg1`).
-  - **Image:** Ubuntu 24.04. **Type:** CX22 (2 vCPU, 4 GB), the same class as the seeds.
-  - **Networking:** public IPv4 and IPv6. **SSH key:** yours. **Name:** `ubuntu-4gb-fsn1-demo`.
-- **Firewall:** a new one for this server only, inbound:
-  - `22/tcp`, restricted to your own IP if you can. **The seeds use SSH on 443; here 443 belongs to
-    Caddy.**
-  - `80/tcp` (ACME and the redirect), `443/tcp` (the page), `8002/tcp` (P2P, like any node).
-- **DNS:** create `A` and `AAAA` records for the demo name pointing at the server, **before**
-  provisioning, so Caddy can get its certificate. Today: `tetnet.org` (the main name), plus
-  `www.tetnet.org` and `try.stevenexus.org`, which redirect to it (`TET_DEMO_REDIRECTS`). Point them
-  at the demo server's own addresses, as the Hetzner console shows them for `ubuntu-4gb-fsn1-demo`.
-- **SSH on 8443 too** (some networks block outbound 22): add `8443/tcp` to the Hetzner firewall, and
-  once, from a network that allows 22:
-  ```bash
-  ssh root@<demo-ip> 'mkdir -p /etc/systemd/system/ssh.socket.d && printf "[Socket]\nListenStream=\nListenStream=0.0.0.0:22\nListenStream=[::]:22\nListenStream=0.0.0.0:8443\nListenStream=[::]:8443\n" > /etc/systemd/system/ssh.socket.d/ports.conf && systemctl daemon-reload && systemctl restart ssh.socket && ss -ltn | grep -E ":(22|8443) "'
-  ```
-  The empty `ListenStream=` clears Ubuntu's default before listing both ports. Afterwards every
-  command below works with `ssh -p 8443`.
+- **Machine:** Ubuntu 24.04, 2 vCPU, 4 GB RAM, 40 GB disk or more; public IPv4 and IPv6; **your SSH
+  key** at creation (no password login).
+- **Account:** in an adult's name, with **two payment methods** on file and the billing email read
+  every week (`docs/OPS_CHECKLIST.md`). A host lost to a missed payment is lost with its data.
+- **Provider firewall** (in the provider's console; inbound, TCP only). `provision-seed.sh` prints
+  the same list at the end of its run:
 
-- **Cloud config (optional):** `deploy/demo/cloud-config.yaml` enables `ssh.socket` on 22 and
-  8443 and adds **no** firewall rules. Don't put nftables/iptables reject rules in a cloud-config:
-  a reject answers with a reset, which looks from outside like sshd isn't listening.
-  `provision-seed.sh` also sets the SSH ports (`TET_SSH_EXTRA_PORTS`, 8443 by default on the demo),
-  checks they listen, and warns about reject rules outside ufw.
+  | Port | For | Note |
+  |---|---|---|
+  | `8443/tcp` | SSH | The host's SSH port (also works from networks that block outbound 22). |
+  | `22/tcp` | SSH | Only until you have logged in on 8443 once; then close it here and run the script again with `TET_SSH_KEEP_22=0`. |
+  | `8002/tcp` | P2P | Like any node. |
+  | `80/tcp` | ACME, redirect | Caddy gets its certificate here. |
+  | `443/tcp` | The /try page | Caddy. |
+  | anything else | deny | `5010` (the node API) is bound to 127.0.0.1 and never published. |
+
+- **DNS:** `A` and `AAAA` records for the demo name pointing at the host, **before** provisioning,
+  so Caddy can get its certificate. Names that redirect to it (`TET_DEMO_REDIRECTS`) need records
+  too. No TET name may keep pointing at an address that is no longer ours.
+- **Cloud config (optional):** `deploy/demo/cloud-config.yaml` enables `ssh.socket` on 8443 and 22
+  and adds **no** firewall rules. Don't put nftables/iptables reject rules in a cloud-config: a
+  reject answers with a reset, which looks from outside like sshd isn't listening.
 
 ## 2. healthchecks.io
 
 A new check, `tet-demo`:
 - **Period 2 minutes, grace 5 minutes.**
-- **Integrations:** Discord, as on the seeds' checks.
+- **Integrations:** Discord, as before.
 - Copy its ping URL.
 
 ## 3. Provision
 
+The chain's genesis file is made once by the owner for the new chain: `{"chain_id",
+"founder_wallet_id", "treasury_address", "genesis_hash"}`. It never holds the dev values; the node
+refuses them with `TET_ENV=testnet`.
+
 ```bash
-# from the repository root, on your machine
+# from the repository root, on your machine (first login: port 22, until 8443 is confirmed)
+scp genesis.json root@<host>:/etc/tet/genesis.json
 COPYFILE_DISABLE=1 git archive --format=tar <commit> \
-  | ssh root@<demo-ip> 'mkdir -p /opt/TET-OS && tar -x -C /opt/TET-OS'
-ssh root@<demo-ip> 'cd /opt/TET-OS && \
-  TET_NODE_ROLE=demo \
-  TET_DEMO_DOMAIN=tetnet.org TET_DEMO_ACME_EMAIL=<you@…> \
-  TET_DEMO_REDIRECTS="www.tetnet.org, try.stevenexus.org" \
-  TET_BOOTNODES=/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM \
+  | ssh root@<host> 'mkdir -p /opt/TET-OS && tar -x -C /opt/TET-OS'
+ssh root@<host> 'cd /opt/TET-OS && \
+  TET_NODE_ROLE=demo-producer TET_CHAIN_ID=<chain id> \
+  TET_DEMO_DOMAIN=<name> TET_DEMO_ACME_EMAIL=<you@…> \
+  TET_DEMO_REDIRECTS="<other names>" \
   TET_HC_URL=<ping url> \
   bash deploy/provision-seed.sh'
+ssh -p 8443 root@<host> true && echo "8443 works"      # then close 22 in the provider firewall and:
+ssh -p 8443 root@<host> 'cd /opt/TET-OS && TET_SSH_KEEP_22=0 TET_NODE_ROLE=demo-producer TET_CHAIN_ID=<chain id> TET_DEMO_DOMAIN=<name> TET_DEMO_ACME_EMAIL=<you@…> bash deploy/provision-seed.sh'
 ```
 
-`provision-seed.sh` refuses a demo role without bootnodes or a domain, or with `TET_AUTO_MINE=1`. It
-generates the node's **own** libp2p key, writes its own `.env` (`TET_PUBLIC_API=1`), opens 80 and 443,
-starts `tet-core`, `ui` and `caddy`, and sets the probe to follower mode (no self-restart).
+Before it touches the host, `provision-seed.sh` refuses:
+- a missing or dev chain id;
+- a genesis file for another chain, or with the dev founder or treasury;
+- a demo-producer with a bootnode, or without mining;
+- a demo follower without bootnodes;
+- a follower with no `TET_PRODUCER_PEERS`.
+
+Then it:
+- writes `.env` with `TET_ENV=testnet` and the genesis values;
+- generates the node's **own** libp2p key;
+- sets SSH to 8443 (and 22 until closed);
+- applies ufw;
+- starts `tet-core`, `ui` and `caddy` (Caddy only after tet-core proves public mode);
+- installs the liveness probe and a **weekly backup** (`scripts/backup-node-data.sh`, into
+  `/var/backups/tet`);
+- prints the PeerId, the bootnode line and the provider firewall rules.
+
+A follower joining later uses `TET_NODE_ROLE=demo` or `seed` with `TET_BOOTNODES=<that line>` and
+`TET_PRODUCER_PEERS=local-wallet=<PeerId>`.
+
+## 3b. Backups leave the host every week
+
+```bash
+ssh -p 8443 root@<host> 'ls -1t /var/backups/tet/*.tar.gz | head -1'           # the newest
+scp -P 8443 root@<host>:/var/backups/tet/tet-node-data-<stamp>.tar.gz* .       # tarball + .sha256
+shasum -a 256 -c tet-node-data-<stamp>.tar.gz.sha256
+```
+
+Keep them on a machine that isn't the host, and isn't at the same provider. To restore, unpack into
+an empty data directory (or volume) and start the node there; `tools/node-backup/test_backup_restore.py`
+does exactly that against a local node.
 
 ## 4. Updating it later
 
@@ -64,8 +95,8 @@ The same as the seeds' update line (`docs/RUNNING_A_NODE.md`), with the **demo**
 the seed overlay:
 
 ```bash
-COPYFILE_DISABLE=1 git archive --format=tar <commit> | ssh root@<demo-ip> 'tar -x -C /opt/TET-OS'
-ssh root@<demo-ip> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0_SKIP_BUILD=1" .env && f="$f -f docker-compose.dev.yml"; TET_GIT_SHA=<commit> docker compose $f -f deploy/demo/docker-compose.demo.yml up -d --build tet-core ui caddy && install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck && install -m 0644 deploy/systemd/tet-healthcheck.service deploy/systemd/tet-healthcheck.timer /etc/systemd/system/ && systemctl daemon-reload && systemctl restart tet-healthcheck.timer && echo MONITOR-REFRESHED'
+COPYFILE_DISABLE=1 git archive --format=tar <commit> | ssh -p 8443 root@<host> 'tar -x -C /opt/TET-OS'
+ssh -p 8443 root@<host> 'cd /opt/TET-OS && f="-f docker-compose.yml"; grep -q "^RISC0_SKIP_BUILD=1" .env && f="$f -f docker-compose.dev.yml"; f="$f -f deploy/demo/docker-compose.demo.yml"; grep -q "^TET_AUTO_MINE=1" .env && f="$f -f deploy/demo/docker-compose.producer.yml"; TET_GIT_SHA=<commit> docker compose $f up -d --build tet-core ui caddy && install -m 0755 deploy/seed-healthcheck.sh /usr/local/bin/tet-healthcheck && install -m 0644 deploy/systemd/tet-healthcheck.service deploy/systemd/tet-healthcheck.timer /etc/systemd/system/ && systemctl daemon-reload && systemctl restart tet-healthcheck.timer && echo MONITOR-REFRESHED'
 ```
 
 `TET_GIT_SHA=<commit>` (the same full commit as the `git archive`) is compiled into both images: the
@@ -82,7 +113,7 @@ the served manifest is byte-identical to yours.
 
 ```bash
 cd tet-network/ui
-TET_PAPER_CHAIN_ID=tet-local-dev TET_PAPER_GENESIS_HASH=<genesis> \
+TET_PAPER_CHAIN_ID=<chain id> TET_PAPER_GENESIS_HASH=<genesis_hash from genesis.json> \
   node --experimental-strip-types scripts/sign_build_manifest.mjs https://tetnet.org --local mine.json --publish
 node --experimental-strip-types scripts/verify_site.mjs https://tetnet.org --commit <deployed sha>   # VERIFIED
 ```
@@ -113,8 +144,8 @@ Optional, and off until you do this. The sponsor pays visitors' file fees under 
    (50,000 fees). The sponsor stops at 10 TET.
 3. **Put its 12 words on the demo host only,** readable by root only:
    ```bash
-   ssh -p 8443 root@<demo-ip> 'umask 077 && cat > /etc/tet-demo/sponsor.mnemonic'   # paste the words, Enter, Ctrl-D
-   ssh -p 8443 root@<demo-ip> 'cd /opt/TET-OS && docker compose restart tet-core && sleep 10 && docker logs tet-core-mainnet 2>&1 | grep demo-sponsor | tail -1'
+   ssh -p 8443 root@<host> 'umask 077 && cat > /etc/tet-demo/sponsor.mnemonic'   # paste the words, Enter, Ctrl-D
+   ssh -p 8443 root@<host> 'cd /opt/TET-OS && docker compose restart tet-core && sleep 10 && docker logs tet-core-mainnet 2>&1 | grep demo-sponsor | tail -1'
    ```
    The log line should read `[demo-sponsor] on; sponsor wallet <id>`, with the wallet you funded.
 4. **To turn it off,** delete the file and restart tet-core.

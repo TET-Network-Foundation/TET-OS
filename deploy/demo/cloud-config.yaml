@@ -1,14 +1,15 @@
 #cloud-config
-# Optional cloud-config for the demo host (Hetzner: "Cloud config" when creating the server).
-# Deliberately NO firewall rules: no nftables/iptables, no reject rules. The Hetzner cloud firewall
-# and the ufw rules deploy/provision-seed.sh writes are the only filters; a reject rule here answers
-# connections with a reset, which looks from outside like sshd isn't listening.
+# Optional cloud-config for a TET host, at any provider that takes one ("user data" / "cloud config"
+# when creating the server). Deliberately NO firewall rules: no nftables/iptables, no reject rules.
+# The provider's firewall and the ufw rules deploy/provision-seed.sh writes are the only filters; a
+# reject rule here answers connections with a reset, which looks from outside like sshd isn't listening.
 package_update: true
 packages:
   - ca-certificates
   - curl
 write_files:
-  # SSH on 22 and 8443 (some networks block outbound 22), IPv4 and IPv6 explicitly.
+  # SSH on 8443 (the host's SSH port; some networks block outbound 22) and on 22 until
+  # provision-seed.sh closes it (TET_SSH_KEEP_22=0). IPv4 and IPv6 explicitly.
   - path: /etc/systemd/system/ssh.socket.d/tet-ports.conf
     content: |
       [Socket]

@@ -31,6 +31,8 @@ services:
       TET_DEMO_SPONSOR_MNEMONIC_FILE: "/run/tet-demo/sponsor.mnemonic"
     volumes:
       - /etc/tet-demo:/run/tet-demo:ro
+      # The chain's genesis file: with TET_ENV=testnet the node checks its chain against it.
+      - /etc/tet/genesis.json:/etc/tet/genesis.json:ro
 
   ui:
     ports: !reset []

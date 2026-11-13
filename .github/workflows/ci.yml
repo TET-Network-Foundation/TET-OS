@@ -228,6 +228,13 @@ jobs:
           TET_CLI: target/debug/tet-cli
         run: python3 tools/sign-in/test_signin.py
 
+      # Node backups (scripts/backup-node-data.sh): a local node, loopback only, is backed up while it
+      # runs, and a second node comes back up from the tarball with the same block at that height.
+      # Runs on the release TET-Core built above; scripts/run_guards.sh picks this line up too.
+      - if: needs.gate.outputs.code == 'true'
+        name: node backup — a node comes back up from the tarball
+        run: python3 tools/node-backup/test_backup_restore.py
+
       # Node lives in this job rather than a new one: the end-to-end check below needs BOTH the Rust
       # binaries and the SDK, and installing Node here is far cheaper than installing Rust in the ui
       # job. No new job, so the five required check names stay exactly as the ruleset lists them.
@@ -830,7 +837,7 @@ jobs:
           shellcheck --version
           # Every script, and the run fails on ANY finding. All are clean as of this commit, so
           # there is no backlog to normalise and a new finding is always new.
-          shellcheck deploy/*.sh deploy/tests/*.sh tet-cli/scripts/*.sh
+          shellcheck deploy/*.sh deploy/tests/*.sh tet-cli/scripts/*.sh scripts/backup-node-data.sh
 
       # The seed monitor's guarantees, against stubbed docker/curl/df/date: a dead node is red,
       # success means the height advanced, a rejected ping is logged, a stale install reports itself.

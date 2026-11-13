@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly TET node data backup (pull it off the host: docs/OPS_CHECKLIST.md)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
