@@ -29,7 +29,7 @@ export const FEATURES: Feature[] = [
     summary:
       "A small program checks the link a secure NFC chip (NXP NTAG 424 DNA) writes each time it is tapped, using that tag's key, and refuses a counter it has already seen. It runs on your own computer. No phone page uses it yet, and it has been tested on published examples, not on a physical tag.",
     status: "prototype",
-    evidence: [{ branch: "tag-verify-core", what: "tet-tag-verify: the tap check, its tests, and a local-only serve prototype" }],
+    evidence: [{ pr: 150, what: "tet-tag-verify: the tap check, its tests, and a local-only serve prototype" }],
     shows: [
       "The chip that made this link knew the tag's key when it was tapped.",
       "The tap's counter was higher than any this checker had accepted for that tag before.",
@@ -49,8 +49,8 @@ export const FEATURES: Feature[] = [
       "A maker would sign a short record naming the tag, the product as the maker describes it, and the maker's checker, and publish it on TET. The record's format is written and tested; signing and publishing it are not built.",
     status: "planned",
     evidence: [
-      { branch: "plan-genuine-tag", what: "docs/plans/GENUINE_TAG.md, the design" },
-      { branch: "tag-verify-core", what: "the registration record's format, without signing or publishing" },
+      { pr: 149, what: "docs/plans/GENUINE_TAG.md, the design" },
+      { pr: 150, what: "the registration record's format, without signing or publishing" },
     ],
     shows: ["That the maker's ID registered this tag, and before which block."],
     doesNot: ["That the maker's description of the product is accurate.", "Who the person behind the maker's ID is."],
@@ -61,7 +61,7 @@ export const FEATURES: Feature[] = [
     summary:
       "Tapping a tag would open a page that asks the maker's checker about this tap, then shows the maker's ID, the product as it was registered, and the result. Not built.",
     status: "planned",
-    evidence: [{ branch: "plan-genuine-tag", what: "docs/plans/GENUINE_TAG.md, the scan page" }],
+    evidence: [{ pr: 149, what: "docs/plans/GENUINE_TAG.md, the scan page" }],
     shows: ["Whether this tap was valid, as the maker's checker said just now.", "The maker's ID and the product as the maker registered it."],
     doesNot: [
       "That a QR code or a copied link is genuine: only a fresh tap counts.",
@@ -74,7 +74,7 @@ export const FEATURES: Feature[] = [
     summary:
       "Whoever taps the tag earliest after registration could record themselves as the owner. To pass it on, the owner signs a release and the next person taps the tag in person. Not built.",
     status: "planned",
-    evidence: [{ branch: "plan-genuine-tag", what: "docs/plans/GENUINE_TAG.md, claims and transfers" }],
+    evidence: [{ pr: 149, what: "docs/plans/GENUINE_TAG.md, claims and transfers" }],
     shows: ["The order of owner records, each with the block it is in."],
     doesNot: ["Legal ownership: this is a record on TET, not a title.", "Who physically holds the object today."],
   },
