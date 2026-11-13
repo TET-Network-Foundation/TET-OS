@@ -32,7 +32,11 @@ const walk = (dir) => (existsSync(join(UI, dir)) ? readdirSync(join(UI, dir)).fl
 
 const { SECTIONS } = await import("../app/site/features/index.ts");
 const { STATUSES } = await import("../app/site/types.ts");
-const TEXT = ["home", "tags", "machines", "keys", "services", "research"];
+const { NUMBERS } = await import("../app/site/numbers.ts");
+const { CHANGES } = await import("../app/site/changelog.ts");
+const { AGENT_VERIFY } = await import("../app/site/data/agent_verify.ts");
+const SNAPSHOT = JSON.parse(readFileSync(join(UI, "app/site/data/merged_prs.json"), "utf8"));
+const TEXT = ["home", "tags", "machines", "keys", "services", "research", "about", "changelog", "numbers"];
 const JA = Object.assign({}, ...(await Promise.all(TEXT.map((s) => import(`../app/site/text/${s}.ts`)))).map((m) => m.JA));
 
 /** Ids allowed to say "running". Empty on purpose: since the hosting account closed (2026-11-10) nothing runs for anyone. */
@@ -166,6 +170,8 @@ function shown() {
     for (const m of code.matchAll(/\b(?:title|sentence|lead|alt|caption|text|label|means)[=:]\s*"((?:[^"\\]|\\.)*)"/g)) out.push([p, JSON.parse(`"${m[1]}"`)]);
     for (const m of code.matchAll(/>([^<>{}\n;=()]*[A-Za-z]{3,}[^<>{}\n;=()]*)</g)) if (m[1].trim()) out.push([p, m[1].trim()]);
   }
+  for (const c of CHANGES) out.push([`/changelog #${c.pr}`, c.summary]);
+  for (const [id, n] of Object.entries(NUMBERS)) out.push([`numbers ${id}`, n.value], [`numbers ${id}`, n.what], [`numbers ${id}`, n.source.label]);
   for (const s of SECTIONS) {
     out.push([s.section.href, s.section.title], [s.section.href, s.section.sentence]);
     for (const f of s.features) for (const x of [f.title, f.summary, ...f.shows, ...f.doesNot, f.link?.label].filter(Boolean)) out.push([`${s.section.href} ${f.id}`, x]);
@@ -173,8 +179,14 @@ function shown() {
   return out;
 }
 const SHOWN = shown();
+/** The one sentence that may say "company" (owner, 2026-11-13), exactly, in EN and JA. */
+const PINNED = ["Open source. No token. No company.", "オープンソース。トークンなし。会社なし。"];
+const unpinned = (s) => PINNED.reduce((x, p) => x.split(p).join(""), s);
 const wordingProblems = (list) =>
-  list.flatMap(([where, s]) => BANNED.filter(([re]) => re.test(s)).map(([, why]) => `${where}: ${why}: ${s.slice(0, 90)}`));
+  list.flatMap(([where, s0]) => {
+    const s = unpinned(s0);
+    return BANNED.filter(([re]) => re.test(s)).map(([, why]) => `${where}: ${why}: ${s0.slice(0, 90)}`);
+  });
 await check(`W1 no company/team/customers/pricing, money, testimonial or promised-date wording, EN and JA (${SHOWN.length} strings)`, () => {
   const all = [...SHOWN, ...SHOWN.filter(([, s]) => JA[s]).map(([w, s]) => [`${w} (ja)`, JA[s]])];
   const bad = wordingProblems(all);
@@ -185,6 +197,10 @@ await check("W control: each kind of banned wording is caught, in English and Ja
     assert.ok(wordingProblems([["x", s]]).length > 0, s);
   }
   assert.deepEqual(wordingProblems([["x", "Keys for machines and agents: what each key may do, and how many times."]]), []);
+  // The pinned sentence passes; any other "company" still fails, including a near copy.
+  assert.deepEqual(wordingProblems([["x", "Open source. No token. No company."], ["x", "オープンソース。トークンなし。会社なし。"]]), []);
+  assert.ok(wordingProblems([["x", "Open source. No token. No company at all."]]).length > 0, "a near copy of the pinned sentence");
+  assert.ok(wordingProblems([["x", "No company. Open source."]]).length > 0, "the words in another order");
 });
 
 // W2. /market (W2's prototype, linked from /services) uses the site's words too: no customer, no
@@ -264,6 +280,149 @@ await check("L control: each layout rule is caught", () => {
   };
   for (const [src, re] of Object.entries(cases)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
   assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 'className="mt-4 gap-2 px-6 text-xl font-semibold max-w-prose text-teal-800 dark:text-slate-300 sm:text-4xl"' }), []);
+});
+
+// ── O. No off-site requests: nothing the site loads comes from another origin ────────────────────
+const SITE_FILES = { ...SRC, "app/(site)/layout.tsx": read("app/(site)/layout.tsx") };
+function offsiteProblems(src) {
+  const out = [];
+  const rules = [
+    [/\bsrc=\{?["'`]https?:/, "a remote src"],
+    [/\bfetch\(\s*["'`]https?:/, "a fetch to another origin"],
+    [/\bnew (?:WebSocket|EventSource)\(/, "a socket or event stream"],
+    [/navigator\.sendBeacon|XMLHttpRequest/, "a beacon or XHR"],
+    [/next\/font\/google/, "a font from Google (fonts are self-hosted)"],
+    [/@import\s+url\(\s*["']?https?:/, "a remote stylesheet import"],
+    [/<link\b[^>]*\bhref=["']https?:/, "a remote <link>"],
+    [/<script\b[^>]*\bsrc=/, "a <script src>"],
+  ];
+  for (const [p, s0] of Object.entries(src)) {
+    const s = stripComments(s0);
+    for (const [re, why] of rules) if (re.test(s)) out.push(`${p}: ${why}`);
+  }
+  return out;
+}
+await check(`O1 no off-site requests: no remote script, image, font, stylesheet, fetch, socket or beacon (${Object.keys(SITE_FILES).length} files)`, () => {
+  assert.deepEqual(offsiteProblems(SITE_FILES), []);
+  assert.match(SITE_FILES["app/(site)/layout.tsx"], /next\/font\/local/, "the fonts are not self-hosted through next/font/local");
+});
+await check("O control: each kind of off-site request is caught", () => {
+  for (const [src, re] of [
+    ['<img src="https://example.org/a.png" />', /remote src/],
+    ['fetch("https://api.example.org/x")', /fetch to another origin/],
+    ["new WebSocket(u)", /socket/],
+    ["navigator.sendBeacon(u, b)", /beacon/],
+    ['import { Inter } from "next/font/google";', /Google/],
+    ['<link rel="stylesheet" href="https://cdn.example.org/x.css" />', /remote <link>/],
+  ]) assert.match(offsiteProblems({ "x.tsx": src }).join(), re, src);
+  assert.deepEqual(offsiteProblems({ "x.tsx": '<a href="https://github.com/x">GitHub</a>' }), [], "a link is not a request");
+});
+
+// ── N. Every number on a page has a source note (app/site/numbers.ts) ─────────────────────────────
+/** Names and references that contain digits but are not quantities. */
+const NAMES = /Ed25519|ed25519|X25519|ML-DSA-\d+|ML-KEM-\d+|FN-DSA|FIPS\s?20\d|SHA-\d+|NTAG\s?\d+(?:\s?DNA)?|P-256|BIP-?39|ePrint\s?\d{4}\/\d+|arXiv\s?\d{4}\.\d{4,5}(?:v\d+)?|\b\d{4}\/\d{3,5}\b|\b\d{4}\.\d{5}(?:v\d+)?\b|\(EU\)\s?\d{4}\/\d+|#\d+|\b\d{4}-\d{2}-\d{2}\b|\bS8-1\b|\b(?:AGKZ|SZ|HV|CS|HSVZ)\d{2}\b|\b0x[0-9a-f]+|\b[0-9a-f]{16,}\b|\bv\d+(?:\.\d+)*\b|\{\w+\}/g;
+/**
+ * What counts as a measurement: a number with a unit (size, time, a share, a count of tests or words),
+ * or any number of three or more digits that is not a year. Counting words in a sentence ("one key",
+ * "step 3", 1回だけ) are part of the wording, not measurements, and are left to the wording guards.
+ */
+const MEASURE = /\d[\d.,]*\s?(?:%|ms\b|s\b|秒|分|min(?:utes?)?\b|seconds?\b|hours?\b|時間|bytes?\b|バイト|[KMGT]i?B\b|tests?\b|テスト|words?\b|語)|(?<![-\d.:])(?!(?:19|20)\d{2}(?!\d))\d{3,}/g;
+const quantities = (s) => (s.replace(NAMES, " ").match(MEASURE) ?? []);
+/** Which files make up each page: its route folder, its feature and text file, and (home) app/site/home. */
+function pageGroups() {
+  const groups = { "/": ["app/site/Home.tsx", ...walk("app/site/home"), "app/site/text/home.ts"] };
+  for (const d of walk("app/(site)").map((p) => /^app\/\(site\)\/([a-z-]+)\//.exec(p)?.[1]).filter(Boolean)) {
+    groups[`/${d}`] = [...new Set([...(groups[`/${d}`] ?? []), ...walk(`app/(site)/${d}`), ...[`app/site/features/${d}.ts`, `app/site/text/${d}.ts`].filter((f) => existsSync(join(UI, f)))])];
+  }
+  return groups;
+}
+function numberProblems(groups, readFile = read) {
+  const out = [];
+  for (const [route, files] of Object.entries(groups)) {
+    const texts = files.map((f) => [f, readFile(f)]);
+    const all = texts.map(([, s]) => s).join("\n");
+    for (const [f, s] of texts) {
+      const strings = [...stripComments(s).replace(/className=(?:"[^"]*"|\{cx\([^)]*\)\})/g, "").matchAll(/"((?:[^"\\\n]|\\.)*)"|`((?:[^`\\]|\\.)*)`/g)].map((m) => m[1] ?? m[2]).filter((x) => /[\sぁ-んァ-ン一-龯]/.test(x));
+      for (const str of strings) {
+        if (!quantities(str).length) continue;
+        const ids = Object.entries(NUMBERS).filter(([, n]) => n.matches.test(str)).map(([id]) => id);
+        if (!ids.length) { out.push(`${route} ${f}: a number with no source: ${str.slice(0, 80)}`); continue; }
+        for (const id of ids) if (!new RegExp(`<(?:SourceNote|Measured)\\b[^>]*\\bid="${id}"`).test(all)) out.push(`${route} ${f}: "${id}" is used but its source is not on the page`);
+      }
+    }
+  }
+  return out;
+}
+await check("N1 every number on a page has a source note on that page", () => {
+  assert.deepEqual(numberProblems(pageGroups()), []);
+});
+await check("N control: an unsourced number, and a sourced number whose note is missing, are caught", () => {
+  const files = { "a.tsx": 't("One run takes 37 s.")', "b.tsx": 't("All 424 tests passed.")', "c.tsx": 't("All 424 tests passed.") <SourceNote id="ci-tests" />', "d.tsx": 't("Signed with Ed25519 and ML-DSA-44, see #172.")' };
+  const r = (f) => numberProblems({ "/x": [f] }, (p) => files[p]);
+  assert.match(r("a.tsx").join(), /a number with no source/);
+  assert.match(r("b.tsx").join(), /"ci-tests" is used but its source is not on the page/);
+  assert.deepEqual(r("c.tsx"), []);
+  assert.deepEqual(r("d.tsx"), [], "names with digits are not quantities");
+  files["e.tsx"] = 't("Proving took 9 s.")'; files["f.tsx"] = 't("証明に12秒かかりました。")'; files["g.tsx"] = 't("Each key may do one thing 1 time, in step 3, since 2025.")';
+  assert.match(r("e.tsx").join(), /a number with no source/, "a time in seconds");
+  assert.match(r("f.tsx").join(), /a number with no source/, "a time in Japanese");
+  assert.deepEqual(r("g.tsx"), [], "counting words and a year are not measurements");
+});
+
+// ── C. The contact block on /about ──────────────────────────────────────────────────────────────
+const WANT_CONTACT = { x: "https://x.com/stevenexusz", email: "tetsteve@proton.me", github: "https://github.com/TET-Network-Foundation" };
+function contactProblems(kitSrc, aboutSrc) {
+  const out = [];
+  for (const [k, v] of Object.entries(WANT_CONTACT)) if (!new RegExp(`\\b${k}: "${v.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}"`).test(kitSrc)) out.push(`the contact block has no ${k} ${v}`);
+  if (!/<Contact\s*\/>/.test(stripComments(aboutSrc))) out.push("/about does not render <Contact />");
+  return out;
+}
+const ABOUT = walk("app/(site)/about").map((p) => read(p)).join("\n");
+await check("C1 /about shows the contact block: X, email and the GitHub organisation", () => {
+  assert.deepEqual(contactProblems(read("app/site/kit.tsx"), ABOUT), []);
+});
+await check("C control: a missing contact or a page without the block is caught", () => {
+  const kit = read("app/site/kit.tsx");
+  assert.match(contactProblems(kit.replace("tetsteve@proton.me", "someone@example.org"), ABOUT).join(), /no email/);
+  assert.match(contactProblems(kit, ABOUT.replace(/<Contact\s*\/>/g, "")).join(), /does not render <Contact/);
+});
+
+// ── A. Every link to the app goes through APP_URL (app/site/split.ts) ───────────────────────────
+const APP_PATH = /\b(?:href|to)=\{?["'`]\/(?:try|agents|signin|future|market)(?=[?/#"'`])/;
+function appLinkProblems(src) {
+  const out = [];
+  for (const [p, s] of Object.entries(src)) if (!p.endsWith("app/site/split.ts") && APP_PATH.test(stripComments(s))) out.push(`${p}: a raw link to the app (use appHref / the kit's links)`);
+  const kit = src["app/site/kit.tsx"] ?? "";
+  if ((kit.match(/appHref\(props\.href\)/g) ?? []).length < 2) out.push("app/site/kit.tsx: PrimaryLink and SecondaryLink must both go through appHref");
+  return out;
+}
+await check("A1 project pages link to the app only through APP_URL", () => {
+  assert.deepEqual(appLinkProblems(SRC), []);
+});
+await check("A control: a raw app link, and a kit link without appHref, are caught", () => {
+  assert.match(appLinkProblems({ ...SRC, "app/(site)/x/page.tsx": '<a href="/try?tab=verify">Try</a>' }).join(), /raw link to the app/);
+  assert.match(appLinkProblems({ ...SRC, "app/site/kit.tsx": SRC["app/site/kit.tsx"].replace(/appHref\(props\.href\)/g, "props.href") }).join(), /must both go through appHref/);
+});
+
+// ── T. The terminal shows captured output only; the changelog names real merged PRs ─────────────
+await check("T1 a terminal block appears only through the kit, and its text is the capture", () => {
+  const pre = Object.entries(SRC).filter(([p, s]) => !p.endsWith("app/site/kit.tsx") && /<pre\b/.test(stripComments(s))).map(([p]) => p);
+  assert.deepEqual(pre, [], "a <pre> outside the kit's Terminal");
+  assert.match(SRC["app/site/kit.tsx"], /<code translate="no">\{AGENT_VERIFY\.text\}<\/code>/);
+  assert.match(AGENT_VERIFY.text, /^\$ tet-cli agent verify /m);
+});
+const changelogProblems = (changes, snap) =>
+  changes.flatMap((c) => {
+    const pr = snap.prs.find((p) => p.number === c.pr);
+    return !pr ? [`#${c.pr} is not a merged PR in the snapshot`] : pr.merged !== c.merged ? [`#${c.pr} merged ${pr.merged}, not ${c.merged}`] : [];
+  });
+await check(`CHG1 every changelog entry is a real merged PR, with its merge date (${CHANGES.length} entries)`, () => {
+  assert.ok(CHANGES.length >= 5);
+  assert.deepEqual(changelogProblems(CHANGES, SNAPSHOT), []);
+});
+await check("CHG control: an unknown PR number and a wrong date are caught", () => {
+  assert.match(changelogProblems([{ pr: 99999, merged: "2026-11-13", summary: "x" }], SNAPSHOT).join(), /not a merged PR/);
+  assert.match(changelogProblems([{ pr: CHANGES[0].pr, merged: "2020-01-01", summary: "x" }], SNAPSHOT).join(), /merged \d{4}-\d{2}-\d{2}, not 2020-01-01/);
 });
 
 // ── J. Japanese ─────────────────────────────────────────────────────────────────────────────────

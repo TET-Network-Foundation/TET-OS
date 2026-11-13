@@ -4,7 +4,7 @@
  * plain comparison with passwords and passkeys. Every feature goes through <FeatureCard id>; every
  * string through t(); every image is under /site/keys/.
  */
-import { CardGrid, FeatureCard, Figure, Guess, Hero, Notice, SiteSection } from "../../site/kit";
+import { CardGrid, FeatureCard, Figure, Guess, Hero, Notice, SiteSection, SourceNote } from "../../site/kit";
 import { SECTION } from "../../site/features/keys";
 import { useSite } from "../../site/i18n";
 
@@ -126,6 +126,7 @@ export default function KeysView() {
         lead="Today the prototype makes your key from 12 words you give it. One idea is to keep the key in a phone's secure hardware instead, where it never leaves the phone."
       >
         <div className="flex flex-col gap-8">
+          <SourceNote id="recovery-words" />
           <CardGrid>
             <FeatureCard id="key-on-device" />
           </CardGrid>

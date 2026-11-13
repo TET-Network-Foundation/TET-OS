@@ -4,10 +4,10 @@
  * steps, what a tap tells a buyer and what it does not, the check you can try today (files and text,
  * in /try), and the status of each part. Every feature comes from app/site/features/tags.ts.
  */
-import Link from "next/link";
 import { CardGrid, FeatureCard, Figure, Hero, Notice, ShowsDoesNot, SiteSection } from "../../site/kit";
 import { SECTION } from "../../site/features/tags";
 import { useSite } from "../../site/i18n";
+import { appHref } from "../../site/split";
 
 const LINK = "underline underline-offset-4 outline-none focus-visible:ring-4 focus-visible:ring-teal-500/50 rounded-sm";
 
@@ -120,9 +120,9 @@ export default function TagsView() {
             />
           </div>
           <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
-            <Link href="/try" className={LINK}>
+            <a href={appHref("/try")} className={LINK}>
               {t("Check a code in /try")}
-            </Link>
+            </a>
           </p>
         </div>
       </SiteSection>
