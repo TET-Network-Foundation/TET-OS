@@ -233,7 +233,7 @@ jobs:
       # job. No new job, so the five required check names stay exactly as the ruleset lists them.
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
 
@@ -411,7 +411,7 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           cache: npm
@@ -934,7 +934,7 @@ jobs:
 
       - if: needs.gate.outputs.code == 'true'
         name: Install Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "20"
 
