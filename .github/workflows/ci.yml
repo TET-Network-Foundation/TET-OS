@@ -579,6 +579,13 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — no price / earn / invest wording
         run: node --experimental-strip-types scripts/try_money_guard.mjs
+      # The public site (home, /tags, /machines, /keys, /services, /research): every feature has a status
+      # that matches the repository and is shown with Shows / Does not show; no company / team /
+      # customers / pricing, money, testimonial or promised-date wording; drawings and screenshots of
+      # our own pages only; Japanese for every string. Controls for each.
+      - if: needs.gate.outputs.code == 'true'
+        name: public site — every feature has a status that matches the repository
+        run: node --experimental-strip-types scripts/site_guard.mjs
       # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
       # case, encoding); ordinary routes still pass. Control.
       - if: needs.gate.outputs.code == 'true'
