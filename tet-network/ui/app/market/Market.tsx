@@ -253,7 +253,7 @@ export function ShopView(props: { t: T; shop: Pick<Shop, "name" | "pseudonym">; 
   const { t, shop, count } = props;
   return (
     <div className="space-y-1">
-      <Field label={t("This customer's pseudonym here:")}>
+      <Field label={t("This buyer's pseudonym here:")}>
         <span className={MONO}>{short(shop.pseudonym.id)}</span>
       </Field>
       <Field label={t("Bookings here:")}>{count.bookings}</Field>
@@ -298,7 +298,7 @@ function BookingTab(props: { t: T }) {
   return (
     <div className="space-y-4">
       <p className="text-[15px] leading-relaxed text-[#3d434a]">
-        {t("The customer's device makes a different key for each shop, a pseudonym. A shop sees how many times that pseudonym booked and did not come, at that shop only.")}
+        {t("The buyer's device makes a different key for each shop, a pseudonym. A shop sees how many times that pseudonym booked and did not come, at that shop only.")}
       </p>
       <Button onClick={start} disabled={busy}>
         {t("Try with a sample")}
@@ -378,7 +378,7 @@ function ListingTab(props: { t: T }) {
       const rid = as === "holder" ? String(JSON.parse(atob(s.receipt.payload)).receipt_id) : "";
       const review = await signRecord(signer, TYPE.review, reviewRecord(s.listingId, rid, Number(stars), text.trim()));
       const r = await checkReview({ listing: s.listing, review, receipt: as === "holder" ? s.receipt : null, used: s.used });
-      const title = as === "holder" ? t("A review from the customer with a receipt") : t("A review from someone without a receipt");
+      const title = as === "holder" ? t("A review from the buyer with a receipt") : t("A review from someone without a receipt");
       setResults((old) => [{ title, ok: r.ok, why: r.ok ? undefined : r.why, vars: r.ok ? undefined : r.vars, review: r.ok ? `${"★".repeat(r.stars)} ${r.text}` : undefined }, ...old]);
     } finally {
       setBusy(false);
@@ -388,7 +388,7 @@ function ListingTab(props: { t: T }) {
   return (
     <div className="space-y-4">
       <p className="text-[15px] leading-relaxed text-[#3d434a]">
-        {t("The shop signs its listing. A review counts only if it comes from a customer holding a receipt the shop signed, one review per receipt.")}
+        {t("The shop signs its listing. A review counts only if it comes from a buyer holding a receipt the shop signed, one review per receipt.")}
       </p>
       <Button onClick={start} disabled={busy}>
         {t("Try with a sample")}
@@ -403,7 +403,7 @@ function ListingTab(props: { t: T }) {
             <div className="flex flex-wrap gap-4 text-[14.5px]">
               <label className="flex items-center gap-1.5">
                 <input type="radio" checked={as === "holder"} onChange={() => setAs("holder")} />
-                {t("as the customer with a receipt")}
+                {t("as the buyer with a receipt")}
               </label>
               <label className="flex items-center gap-1.5">
                 <input type="radio" checked={as === "stranger"} onChange={() => setAs("stranger")} />
@@ -429,7 +429,7 @@ function ListingTab(props: { t: T }) {
         <ResultCard key={results.length - i} t={t} kind="listing" title={r.title} ok={r.ok} why={r.why} vars={r.vars}>
           {r.review ? (
             <p className="text-[14.5px]">
-              {r.review} <span className="text-[#5d646d]">· {t("a customer with a receipt")}</span>
+              {r.review} <span className="text-[#5d646d]">· {t("a buyer with a receipt")}</span>
             </p>
           ) : null}
         </ResultCard>
