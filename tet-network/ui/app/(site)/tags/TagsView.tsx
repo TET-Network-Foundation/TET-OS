@@ -14,9 +14,9 @@ const LINK = "underline underline-offset-4 outline-none focus-visible:ring-4 foc
 function Path(props: { title: string; steps: { text: string; href: string }[] }) {
   const { t } = useSite();
   return (
-    <div className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+    <div className="flex h-full flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-900">
       <h3 className="text-xl font-semibold">{t(props.title)}</h3>
-      <ol className="flex list-decimal flex-col gap-3 pl-6 text-lg leading-relaxed text-slate-700 dark:text-slate-300">
+      <ol className="flex list-decimal flex-col gap-2 pl-6 leading-relaxed text-slate-700 dark:text-slate-300">
         {props.steps.map((s) => (
           <li key={s.text}>
             <a href={s.href} className={LINK}>
@@ -41,7 +41,7 @@ export default function TagsView() {
       />
 
       <SiteSection title="Two paths" lead="Each step links to the part that does it, with how far that part has come.">
-        <div className="grid gap-5 md:grid-cols-2">
+        <CardGrid>
           <Path
             title="I make things"
             steps={[
@@ -58,7 +58,7 @@ export default function TagsView() {
               { text: "Record yourself as the one who holds it now.", href: "#tags-owner-record" },
             ]}
           />
-        </div>
+        </CardGrid>
       </SiteSection>
 
       <SiteSection title="What happens in a tap" lead="The tag holds a secret key that never leaves the chip. Each tap, it writes a fresh link with a number that only goes up.">
@@ -91,9 +91,9 @@ export default function TagsView() {
       <SiteSection
         id="who-holds-the-key"
         title="Who holds the tag's key"
-        lead="In the design, the maker does, and TET never holds it. A buyer trusts the maker's checker to say a tap was valid. TET would make that statement signed, public and in order, so it can be checked later. It does not remove the trust."
+        lead="In the design, the maker does, and TET never holds it. A buyer trusts the maker's checker to say a tap was valid. TET would make that statement signed, public and in order, so it can be checked later, but that does not remove the trust."
       >
-        <p className="text-lg leading-relaxed text-slate-700 dark:text-slate-300">
+        <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
           <a href="https://github.com/TET-Network-Foundation/TET-OS/blob/plan-genuine-tag/docs/plans/GENUINE_TAG.md" className={LINK}>
             {t("Read the design")}
           </a>
@@ -119,7 +119,7 @@ export default function TagsView() {
               caption="One letter changed: it does not match."
             />
           </div>
-          <p className="text-lg leading-relaxed text-slate-700 dark:text-slate-300">
+          <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
             <Link href="/try" className={LINK}>
               {t("Check a code in /try")}
             </Link>
