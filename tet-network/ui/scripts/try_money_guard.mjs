@@ -133,6 +133,24 @@ await check(`no money words in what /try and /agents show (${files.length + agen
   const found = moneyWords([...files, ...agentFiles]);
   assert.equal(found.length, 0, found.join("\n     "));
 });
+
+// /market (prototype, local only): its page, checks and own dictionaries (i18n_market.ts, ja and zh-HK)
+// are held to both lists, money wording and money words, with no exception. Payment happens outside
+// TET and the page says so without money words ("Settled: outside TET (cash, bank, …)").
+const marketDir = new URL("app/market/", UI);
+const marketFiles = existsSync(marketDir) ? readdirSync(marketDir).filter((n) => /\.tsx?$/.test(n)).map((n) => [`app/market/${n}`, read(new URL(n, marketDir))]) : [];
+await check("the /market files are scanned (Market.tsx, page.tsx, market_checks.ts, i18n_market.ts)", () => {
+  for (const f of ["Market.tsx", "page.tsx", "market_checks.ts", "i18n_market.ts"]) assert.ok(marketFiles.some(([q]) => q === `app/market/${f}`), `app/market/${f} is not scanned`);
+});
+await check(`no money wording or money words in what /market shows (${marketFiles.length} files)`, () => {
+  const found = [...moneyWording(marketFiles), ...moneyWords(marketFiles)];
+  assert.equal(found.length, 0, found.join("\n     "));
+});
+await check("control: the old /market banner and payment lines are caught", () => {
+  for (const s of ["Sample keys made in this tab. Nothing is sent anywhere, and nothing moves money.", "Payment:", "Anything about payment, which happens outside TET.", "That the customer paid: payment happens outside TET.", "どこにも送信されず、お金も動きません。", "支払い：", "也不會轉移任何金錢。", "付款："]) {
+    assert.equal(moneyWords([["app/market/Market.tsx", `t("${s}")`]]).length, 1, s);
+  }
+});
 await check("control: the stevenexus.org money lines are caught; the practice-unit phrases aren't", () => {
   for (const s of [
     "with a small desktop on top where you send money, send messages and send files, all with one key.",
