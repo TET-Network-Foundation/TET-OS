@@ -132,6 +132,12 @@ export function PaperView() {
         ) : null}
       </p>
       <p className="mt-1 text-[13px] text-[#5d646d]">
+        {t("Version 1.1 (errata to version 1, not marked):")}{" "}
+        <a className={link} href="/paper/tet-technical-paper-v1.1.html">
+          {t("text")}
+        </a>
+      </p>
+      <p className="mt-1 text-[13px] text-[#5d646d]">
         {t("Version 1 (2026-10-09, superseded, kept):")}{" "}
         <a className={link} href="/paper/tet-technical-paper-v1.html">
           {t("text")}
