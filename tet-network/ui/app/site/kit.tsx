@@ -19,7 +19,10 @@
  */
 import Link from "next/link";
 import type { ReactNode } from "react";
+import { AGENT_VERIFY } from "./data/agent_verify";
 import { feature, SECTIONS } from "./features";
+import { NUMBERS, type NumberId } from "./numbers";
+import { appHref } from "./split";
 import { useSite, type SiteT } from "./i18n";
 import type { Status } from "./types";
 
@@ -53,6 +56,8 @@ const NAV = [
   { href: "/keys", label: "Keys" },
   { href: "/services", label: "Services" },
   { href: "/research", label: "Research" },
+  { href: "/about", label: "About" },
+  { href: "/changelog", label: "Changelog" },
 ];
 
 /** Header, language switch and footer around every page of the site. */
@@ -90,6 +95,7 @@ export function SiteFrame(props: { children: ReactNode }) {
       <main>{props.children}</main>
       <footer className="mt-20 border-t border-slate-200 dark:border-slate-800">
         <div className={cx(COLUMN, "flex flex-col gap-4 py-10 text-slate-600 dark:text-slate-400")}>
+          <p className="max-w-prose font-semibold text-slate-900 dark:text-slate-100">{t("Open source. No token. No company.")}</p>
           <p className="max-w-prose">{t("Open source. Every feature on this site carries a status, and the status matches the repository.")}</p>
           <ul className="flex flex-col gap-2 text-sm">
             {(["running", "prototype", "planned", "idea"] as const).map((s) => (
@@ -111,7 +117,7 @@ export function SiteFrame(props: { children: ReactNode }) {
 export function PrimaryLink(props: { href: string; label: string }) {
   const { t } = useSite();
   return (
-    <a href={props.href} className={cx("inline-flex w-fit rounded-xl bg-teal-700 px-6 py-4 font-semibold text-white hover:bg-teal-800 dark:bg-teal-400 dark:text-slate-950 dark:hover:bg-teal-300", FOCUS)}>
+    <a href={appHref(props.href)} className={cx("inline-flex w-fit rounded-md bg-teal-700 px-6 py-4 font-semibold text-white hover:bg-teal-800 dark:bg-teal-400 dark:text-slate-950 dark:hover:bg-teal-300", FOCUS)}>
       {t(props.label)}
     </a>
   );
@@ -120,14 +126,15 @@ export function PrimaryLink(props: { href: string; label: string }) {
 /** Every other action: an outlined link. */
 export function SecondaryLink(props: { href: string; label: string }) {
   const { t } = useSite();
-  const external = /^https?:/.test(props.href);
-  const cls = cx("inline-flex w-fit rounded-xl border border-slate-300 px-4 py-2 font-semibold text-slate-900 hover:border-teal-700 hover:text-teal-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-teal-400 dark:hover:text-teal-200", FOCUS);
+  const href = appHref(props.href);
+  const external = /^https?:/.test(href);
+  const cls = cx("inline-flex w-fit rounded-md border border-slate-300 px-4 py-2 font-semibold text-slate-900 hover:border-teal-700 hover:text-teal-800 dark:border-slate-600 dark:text-slate-100 dark:hover:border-teal-400 dark:hover:text-teal-200", FOCUS);
   return external ? (
-    <a href={props.href} className={cls}>
+    <a href={href} className={cls}>
       {t(props.label)}
     </a>
   ) : (
-    <Link href={props.href} className={cls}>
+    <Link href={href} className={cls}>
       {t(props.label)}
     </Link>
   );
@@ -150,7 +157,7 @@ export function Hero(props: { title: string; sentence: string; art?: ReactNode; 
 export function SiteSection(props: { title: string; id?: string; lead?: string; children?: ReactNode }) {
   const { t } = useSite();
   return (
-    <section id={props.id} className={cx(COLUMN, "scroll-mt-20 py-10")}>
+    <section id={props.id} className={cx(COLUMN, "scroll-mt-20 border-t border-slate-200 py-10 dark:border-slate-800")}>
       <h2 className="text-2xl font-semibold">{t(props.title)}</h2>
       {props.lead ? <p className="mt-4 max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">{t(props.lead)}</p> : null}
       {props.children ? <div className="mt-6">{props.children}</div> : null}
@@ -163,15 +170,23 @@ export function CardGrid(props: { children: ReactNode }) {
   return <div className="grid auto-rows-fr gap-4 sm:grid-cols-2">{props.children}</div>;
 }
 
-const CARD = "flex h-full flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-900";
+/** Cards: a thin rule, a small radius, no shadow. */
+const CARD = "flex h-full flex-col gap-4 rounded-md border border-slate-300 bg-white p-6 dark:border-slate-700 dark:bg-slate-950";
 
-/** Shows / Does not show: two short lists, side by side on a wide screen, stacked on a phone. */
+/**
+ * Shows / Does not show: the site's signature pair. Two columns side by side (stacked on a phone): a
+ * solid teal rule and a check for what a check shows, a dashed slate rule and a cross for what it
+ * does not.
+ */
 export function ShowsDoesNot(props: { shows: string[]; doesNot: string[] }) {
   const { t } = useSite();
-  const list = (title: string, items: string[]) => (
-    <div>
-      <h4 className="font-semibold">{t(title)}</h4>
-      <ul className="mt-2 flex list-disc flex-col gap-2 pl-6 leading-relaxed">
+  const list = (title: string, mark: string, rule: string, items: string[]) => (
+    <div className={cx("border-l-2 pl-4", rule)}>
+      <h4 className="flex items-center gap-2 font-semibold">
+        <span aria-hidden="true" className="font-mono">{mark}</span>
+        {t(title)}
+      </h4>
+      <ul className="mt-2 flex flex-col gap-2 leading-relaxed">
         {items.map((s) => (
           <li key={s}>{t(s)}</li>
         ))}
@@ -179,9 +194,9 @@ export function ShowsDoesNot(props: { shows: string[]; doesNot: string[] }) {
     </div>
   );
   return (
-    <div className="grid gap-4 rounded-xl bg-slate-50 p-4 sm:grid-cols-2 dark:bg-slate-800">
-      {list("Shows", props.shows)}
-      {list("Does not show", props.doesNot)}
+    <div className="grid gap-6 sm:grid-cols-2">
+      {list("Shows", "✓", "border-teal-700 dark:border-teal-400", props.shows)}
+      {list("Does not show", "✗", "border-dashed border-slate-400 dark:border-slate-500", props.doesNot)}
     </div>
   );
 }
@@ -237,7 +252,7 @@ export function Figure(props: { src: `/site/${string}`; alt: string; caption?: s
   return (
     <figure className={cx("flex flex-col gap-2", props.wide ? "" : "max-w-xl")}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={props.src} alt={t(props.alt)} className="w-full rounded-2xl border border-slate-200 dark:border-slate-700" />
+      <img src={props.src} alt={t(props.alt)} className="w-full rounded-md border border-slate-300 dark:border-slate-700" />
       {props.caption ? <figcaption className="max-w-prose text-sm text-slate-600 dark:text-slate-400">{t(props.caption)}</figcaption> : null}
     </figure>
   );
@@ -247,7 +262,7 @@ export function Figure(props: { src: `/site/${string}`; alt: string; caption?: s
 export function Guess(props: { title: string; children: ReactNode }) {
   const { t } = useSite();
   return (
-    <aside className="rounded-2xl border-2 border-dashed border-slate-300 p-6 dark:border-slate-600">
+    <aside className="rounded-md border border-dashed border-slate-400 p-6 dark:border-slate-600">
       <p className="text-sm font-semibold text-slate-600 dark:text-slate-400">{t("A guess, not a plan")}</p>
       <h3 className="mt-2 text-xl font-semibold">{t(props.title)}</h3>
       <div className="mt-4 max-w-prose leading-relaxed">{props.children}</div>
@@ -282,6 +297,76 @@ export function SectionCard(props: { index: number }) {
         ))}
       </ul>
     </Link>
+  );
+}
+
+/** Where a number on the page comes from: one short line, linked. Every number on a page has one. */
+export function SourceNote(props: { id: NumberId }) {
+  const { t } = useSite();
+  const n = NUMBERS[props.id];
+  return (
+    <p className="text-sm text-slate-600 dark:text-slate-400">
+      {t("Source")}: {/^https?:|^#/.test(n.source.href) ? <a href={n.source.href} className={cx("underline underline-offset-4", FOCUS)}>{t(n.source.label)}</a> : t(n.source.label)}
+    </p>
+  );
+}
+
+/** One measured number: the value large, what it measures, and its source. */
+export function Measured(props: { id: NumberId }) {
+  const { t } = useSite();
+  const n = NUMBERS[props.id];
+  return (
+    <div className="flex flex-col gap-2 border-t border-slate-300 pt-4 dark:border-slate-700">
+      <p className="font-mono text-2xl font-semibold">{t(n.value)}</p>
+      <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">{t(n.what)}</p>
+      <SourceNote id={props.id} />
+    </div>
+  );
+}
+
+/**
+ * The terminal block: real tet-cli output, captured (app/site/data/agent_verify.ts), never typed in.
+ * It takes no text of its own; a plain sentence above it says what it shows.
+ */
+export function Terminal(props: { lead: string }) {
+  const { t } = useSite();
+  return (
+    <figure id="terminal" className="flex flex-col gap-2 scroll-mt-20">
+      <p className="max-w-prose leading-relaxed">{t(props.lead)}</p>
+      <pre className="overflow-x-auto rounded-md border border-slate-300 bg-slate-950 p-4 font-mono text-sm leading-relaxed text-slate-100 dark:border-slate-700">
+        <code translate="no">{AGENT_VERIFY.text}</code>
+      </pre>
+      <figcaption className="text-sm text-slate-600 dark:text-slate-400">
+        {t("Captured from {tool} on {date}. Not edited, except that colour codes were removed.", { tool: AGENT_VERIFY.tool, date: AGENT_VERIFY.taken })}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** The contact block (/about): X, email and the GitHub organisation. site_guard checks it is there. */
+export const CONTACT = {
+  x: "https://x.com/stevenexusz",
+  email: "tetsteve@proton.me",
+  github: "https://github.com/TET-Network-Foundation",
+} as const;
+export function Contact() {
+  const { t } = useSite();
+  const row = (label: string, href: string, text: string) => (
+    <div className="flex flex-wrap gap-x-4 gap-y-2 border-t border-slate-300 py-4 dark:border-slate-700">
+      <dt className="w-24 font-semibold">{t(label)}</dt>
+      <dd>
+        <a href={href} className={cx("font-mono underline underline-offset-4", FOCUS)}>
+          {text}
+        </a>
+      </dd>
+    </div>
+  );
+  return (
+    <dl data-contact="" className="flex flex-col">
+      {row("X", CONTACT.x, "x.com/stevenexusz")}
+      {row("Email", `mailto:${CONTACT.email}`, CONTACT.email)}
+      {row("The code", CONTACT.github, "github.com/TET-Network-Foundation")}
+    </dl>
   );
 }
 

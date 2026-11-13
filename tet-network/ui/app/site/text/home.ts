@@ -20,6 +20,34 @@ export const JA: Record<string, string> = {
   "not decided; being studied": "まだ決めていない。調べているところ",
   "The code on GitHub": "GitHub のコード",
   Shows: "示すこと",
+  About: "このプロジェクトについて",
+  Changelog: "変更履歴",
+  Source: "出典",
+  "What a check looks like": "確認はこう見えます",
+  "This is a real run of TET's command-line tool. It checks a machine's signed record, then a copy where one reading was changed. The original passes; the edited copy is refused.":
+    "これは TET のコマンドラインツールを実際に動かした出力です。機械が署名した記録を確かめ、次に測定値を一つ変えたコピーを確かめます。元の記録は通り、変えたコピーは断られます。",
+  Measured: "計測した数字",
+  "A few numbers, each measured and each with where it comes from. A zero-knowledge receipt is the proof TET's anonymous features attach; it is large, and making one takes time.":
+    "いくつかの数字です。どれも計測したもので、出どころを書いています。ゼロ知識レシートは、TET の匿名の機能が付ける証明です。大きく、作るのに時間がかかります。",
+  "Why this matters later": "これから必要になる理由",
+  "Three reasons we think keys with limits will be needed. They are our reasoning, not a promise, and each links to what it rests on.":
+    "制限つきの鍵が必要になると私たちが考える三つの理由です。私たちの推論であって約束ではありません。それぞれ、根拠にしているものへのリンクがあります。",
+  "Products will carry a record of where they came from": "製品が、どこから来たかの記録を持つようになる",
+  "The EU's ecodesign rules bring in a digital product passport: data about a product that travels with it. A record is only useful if you can tell who wrote it. A signed record says which key wrote each entry.":
+    "EU のエコデザインの規則は、デジタル製品パスポートを導入します。製品と一緒に移動する、その製品についてのデータです。記録は、誰が書いたかが分かってはじめて役に立ちます。署名された記録は、それぞれの項目をどの鍵が書いたかを示します。",
+  "Regulation (EU) 2024/1781, on EUR-Lex": "規則 (EU) 2024/1781（EUR-Lex）",
+  "Software agents will act for people": "ソフトウェアのエージェントが人の代わりに動くようになる",
+  "NIST has started an initiative on standards for AI agents, including how an agent is identified and what it is allowed to do. A key with written limits is one way to say what an agent may do and check it afterwards.":
+    "NIST は AI エージェントの標準づくりの取り組みを始めました。エージェントをどう識別するか、何をしてよいかも含まれます。制限を書いた鍵は、エージェントに何が許されるかを示し、あとで確かめる方法の一つです。",
+  "NIST, AI Agent Standards Initiative": "NIST、AI Agent Standards Initiative",
+  "Signatures are moving to post-quantum schemes": "署名は量子コンピューターに耐える方式へ移りつつある",
+  "NIST has published ML-DSA as a standard signature scheme designed to resist quantum computers. Records signed today may need to be checked for many years, so every TET signature already carries an ML-DSA-44 half next to Ed25519.":
+    "NIST は、量子コンピューターに耐えるよう作られた署名方式 ML-DSA を標準として公開しました。今日署名した記録は、何年も先まで確かめる必要があるかもしれません。そのため TET の署名にはすべて、Ed25519 と並んで ML-DSA-44 の半分がすでに付いています。",
+  "NIST FIPS 204 (ML-DSA)": "NIST FIPS 204（ML-DSA）",
+  "Our reasoning, not a promise": "私たちの推論で、約束ではありません",
+  X: "X",
+  "Captured from {tool} on {date}. Not edited, except that colour codes were removed.":
+    "{date} に {tool} から取り込んだ出力です。色の制御コードを除いて、手を加えていません。",
   "Try it": "試してみる",
   "Does not show": "示さないこと",
   "A guess, not a plan": "予定ではなく、予想です",
@@ -154,4 +182,9 @@ export const JA: Record<string, string> = {
     "どうすれば試せますか？",
   "Open a Try it link under What exists today; those pages run in your browser. The five sections say what each part does and how far it has come.":
     "「いまあるもの」の「試してみる」リンクを開いてください。そのページはブラウザの中で動きます。五つのセクションには、それぞれの部分が何をするのか、どこまで進んでいるかが書いてあります。",
+  "A key with a counter beside a small machine and a person: each key may do one named thing a set number of times.":
+    "回数が書かれた鍵と、小さな機械と人。それぞれの鍵は、決められた一つのことを決められた回数だけできます。",
+  "Five places to start": "はじめに見る五つの場所",
+  "Each card says what is built and what is not. A label on every feature tells you how far it has come.":
+    "どのカードにも、できていることとできていないことが書いてあります。それぞれの機能のラベルが、どこまで進んでいるかを示します。",
 };
