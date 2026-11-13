@@ -189,7 +189,7 @@ async function b4(count) {
 await check("B1 a shop counts its own no-shows for its pseudonym", async () => {
   assert.deepEqual(await m.noShows(SHOP_A.id, PA.id, atA), { bookings: 3, noShows: 2 });
 });
-await check("B2 the customer's pseudonyms at the two shops are different keys", async () => {
+await check("B2 the buyer's pseudonyms at the two shops are different keys", async () => {
   assert.notEqual(PA.id, PB.id);
 });
 await check("B3 given every record of both shops, a shop counts only its own, for its own pseudonym", async () => {
