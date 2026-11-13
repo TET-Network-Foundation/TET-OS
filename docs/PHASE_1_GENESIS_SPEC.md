@@ -228,9 +228,31 @@ Where the implementation differs from the text above, or the text left a choice 
 
 **Open, for whoever reviews this:**
 
-- **The by-id backfill site has no network-level guard.** The type-state covers it, but it lacks a
-  two-swarm test like gossip's.
+- ~~**The by-id backfill site has no network-level guard.**~~ Closed by item 11 (2026-10-07), see
+  below.
 - **Leader mode is still a per-node setting** (item 6).
+
+### As built — item 11, the by-id backfill guard (2026-10-07)
+
+`block_sync::by_id_backfill_refuses_a_block_without_a_valid_producer_signature` is the two-swarm
+guard for the third acceptance site. The producer's ledger holds a block 3 with honest contents
+naming `alice` but signed by `mallory`, recorded **off** its canonical chain, and gossips an honest,
+validly signed block 4 on top of it. The follower buffers 4, asks the producer for 3 by id, and must
+never record it. Two choices the row left open:
+
+- **Why the forged block is non-canonical on the producer.** Height-range catch-up serves only
+  canonical blocks. With block 3 canonical there, catch-up would deliver it too and refuse it at its
+  own site, so the guard would stay green with the by-id check removed. Off-chain, the `BlockSync`
+  response handler is the only path it can arrive by; gossip never carries it.
+- **A companion, not just a guard.** `block_sync::by_id_backfill_accepts_a_validly_signed_parent`
+  runs the same scenario with block 3 signed by `alice` and requires the follower to reorg onto
+  `3 -> 4` within the same 10 s window. Without it, "never recorded" would also hold if the by-id
+  request were never sent or never answered. Block 4's state root is computed on a scratch ledger
+  that applied block 3, so the reorg is real.
+
+Negative control: replace `verify_block_producer` at the by-id site only with an unchecked
+constructor. The guard fails ("the follower recorded a by-id backfilled block signed outside the
+genesis set"); the companion still passes.
 
 ### Migration — this is a new genesis
 

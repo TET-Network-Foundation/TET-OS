@@ -283,6 +283,9 @@ jobs:
             valid_signature_over_a_tampered_ts_is_refused
             catch_up_refuses_a_block_without_a_valid_producer_signature
             block_sync::gossip_refuses_a_block_without_a_valid_producer_signature
+            block_sync::by_id_backfill_refuses_a_block_without_a_valid_producer_signature
+            # Companion: the by-id path is reached and applied inside the guard's window.
+            block_sync::by_id_backfill_accepts_a_validly_signed_parent
             ts_altered_after_signing_breaks_block_id
             block_id_has_no_field_boundary_collision
             block_id_v3_golden_vector
