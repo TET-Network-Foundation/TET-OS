@@ -61,7 +61,7 @@ export const JA: Record<string, string> = {
   "The tag on the parcel must be the one the sender signed. Any other tag fails the check.":
     "荷物のタグは、送り主が署名したものでなければなりません。ほかのタグでは確認が通りません。",
   "One permit, one handover": "1つの許可で1回の受け渡し",
-  "A second handover with the same permit is refused by the record keeper that saw the first.":
+  "A second handover with the same permit is refused by the record keeper that saw the earlier one.":
     "同じ許可での2回目の受け渡しは、1回目を見た記録係が断ります。",
   "The sender signs the parcel's tag. The courier service gives a courier a one-time permit for this one parcel. At the door, the courier and the receiver both sign the handover.":
     "送り主が荷物のタグに署名します。配送サービスは配達員に、この荷物1つだけに使える1回限りの許可を出します。玄関先で、配達員と受取人の両方が受け渡しに署名します。",
