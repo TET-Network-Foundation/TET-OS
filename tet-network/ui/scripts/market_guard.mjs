@@ -330,11 +330,29 @@ await check("W1 every string the page shows has ja and zh-HK, with the same plac
     for (const s of STRINGS) assert.equal(placeholders(MARKET_DICTS[lang][s]), placeholders(s), `${lang}: ${s}`);
   }
 });
+const BAD_WORDING = /\bprove|\bproof|untraceable|guarantee|pay (?:with|in) TET|send TET|TET payment|証明|保証|追跡不能|證明|保證|用 ?TET ?(?:付|支付)|TETで(?:支払|払)/i;
 await check("W2 no prove/proof/untraceable/guarantee and no pay-with-TET wording, in any language", async () => {
-  const bad = /\bprove|\bproof|untraceable|guarantee|pay (?:with|in) TET|send TET|TET payment|証明|保証|追跡不能|證明|保證|用 ?TET ?(?:付|支付)|TETで(?:支払|払)/i;
+  const bad = BAD_WORDING;
   for (const s of STRINGS) {
     for (const text of [s, MARKET_DICTS.ja[s] ?? "", MARKET_DICTS["zh-HK"][s] ?? ""]) assert.ok(!bad.test(text), text);
   }
+});
+
+// W2 reads the strings the page passes to t() and the sample data. Text written straight into the
+// page (a JSX text node, or a literal outside t()) would not be among them, so every literal and text
+// fragment of /market's own source is checked against the same wording too.
+const sourceText = (src) => {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  return [...code.matchAll(/"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`|>([^<>{}]+)</g)].map((x) => x[1] ?? x[2] ?? x[3] ?? x[4]);
+};
+await check("W2b no such wording written straight into /market's source (JSX text and literals outside t())", async () => {
+  const bad = [SRC.page, SRC.route, SRC.checks].flatMap(sourceText).filter((x) => BAD_WORDING.test(x));
+  assert.deepEqual(bad, []);
+});
+await check("W2b control: a sentence written as JSX text is caught", async () => {
+  const planted = SRC.page.replace("<h3 ", "<p>This proves the parcel arrived.</p>\n<h3 ");
+  assert.notEqual(planted, SRC.page, "the control's anchor is gone");
+  assert.ok(sourceText(planted).some((x) => BAD_WORDING.test(x)), "JSX text is not scanned");
 });
 
 console.log(failed ? `\nmarket_guard: ${failed} FAILED` : "\nmarket_guard: all green");
