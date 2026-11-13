@@ -153,3 +153,41 @@ export function ShowsBlock(props: { showsTitle: ReactNode; doesNotTitle: ReactNo
     </div>
   );
 }
+
+/**
+ * A place to drop files or a folder. It highlights while something is dragged over it (children
+ * included, so the highlight does not flicker over its buttons) and hands the drop's DataTransfer to
+ * the page, read synchronously inside the event (its items are gone once the handler returns).
+ */
+export function DropZone(props: { label: string; onDrop: (dt: DataTransfer) => void; children: ReactNode }) {
+  const [depth, setDepth] = useState(0);
+  return (
+    <div
+      role="group"
+      aria-label={props.label}
+      data-dropzone=""
+      onDragEnter={(e) => {
+        e.preventDefault();
+        setDepth((d) => d + 1);
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={() => setDepth((d) => Math.max(0, d - 1))}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDepth(0);
+        props.onDrop(e.dataTransfer);
+      }}
+      className={cx(
+        "rounded-2xl border-2 border-dashed p-5 text-center transition sm:p-6",
+        depth > 0
+          ? "border-teal-600 bg-teal-50 dark:border-teal-400 dark:bg-teal-950"
+          : "border-slate-300 bg-slate-50 dark:border-slate-600 dark:bg-slate-800/50",
+      )}
+    >
+      {props.children}
+    </div>
+  );
+}
