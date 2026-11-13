@@ -16,6 +16,8 @@
 //    "Testnet TET is a practice unit. It has no monetary value and cannot be bought."
 //    Control: the line itself doesn't trip check 1; a plan without it is caught.
 //
+// Also scanned: the /future concept page (app/future), which uses the /try dictionaries.
+//
 // Not covered, on purpose: the older home, "participate" and /os pages (app/i18n/translations.ts,
 // app/os). The demo serves only /try (deploy/demo/Caddyfile), and their wording is a separate
 // decision; see the PR.
@@ -83,7 +85,14 @@ for (const n of panels) {
     }
   }
 }
-const files = [...panels.map((n) => [`app/try/${n}`, read(new URL(n, tryDir))]), ...[...libs].map((p) => [p, read(new URL(p, UI))])];
+// The /future concept page (app/future) uses the same dictionaries; its own files are scanned too.
+const futureDir = new URL("app/future/", UI);
+const futurePages = existsSync(futureDir) ? readdirSync(futureDir).filter((n) => /\.(?:tsx?|mjs)$/.test(n)) : [];
+const files = [
+  ...panels.map((n) => [`app/try/${n}`, read(new URL(n, tryDir))]),
+  ...futurePages.map((n) => [`app/future/${n}`, read(new URL(n, futureDir))]),
+  ...[...libs].map((p) => [p, read(new URL(p, UI))]),
+];
 
 await check(`no money wording in what /try shows (${files.length} files)`, () => {
   const found = moneyWording(files);
@@ -149,6 +158,17 @@ await check("control: the stevenexus.org money lines are caught; the practice-un
   }
 });
 
+await check("the /future concept page is scanned (app/future/page.tsx, FutureView.tsx and wallet_model.ts)", () => {
+  for (const f of ["app/future/page.tsx", "app/future/FutureView.tsx", "app/future/wallet_model.ts"]) assert.ok(files.some(([p]) => p === f), `${f} is not scanned`);
+});
+await check("control: a money word put into the /future page is caught", () => {
+  const view = files.find(([p]) => p === "app/future/FutureView.tsx");
+  assert.ok(view, "app/future/FutureView.tsx is not scanned");
+  const planted = view[1].replace('t("Total")', 't("Total you earn")').replace('t("Holds")', 't("Holds money")');
+  assert.notEqual(planted, view[1], "the control's anchors are gone from FutureView.tsx");
+  assert.equal(moneyWording([[view[0], planted]]).length, moneyWording([view]).length + 1, "\"earn\" planted in /future is not caught");
+  assert.equal(moneyWords([[view[0], planted]]).length, moneyWords([view]).length + 1, "\"money\" planted in /future is not caught");
+});
 await check("control: each kind of money wording is caught; the FAQ line isn't", () => {
   for (const s of ["Earn TET by posting.", "Prices start at 1 TET.", "A good investment.", "Buy TET now.", "Daily yield 5%.", "TETで稼ぐ", "価格は1 TET", "投資ではありません", "儲かる", "賺取 TET", "價格"]) {
     assert.equal(moneyWording([["x.tsx", `t("${s}")`]]).length, 1, s);

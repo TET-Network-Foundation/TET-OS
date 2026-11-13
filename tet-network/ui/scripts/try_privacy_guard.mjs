@@ -63,6 +63,7 @@ const NOT_CLAIMS = new Set([
   "tet-network/ui/scripts/try_privacy_guard.mjs",
   "tet-network/ui/scripts/try_ai_wording_guard.mjs",
   "tet-network/ui/scripts/paper_guard.mjs",
+  "tet-network/ui/scripts/future_concept_guard.mjs",
 ]);
 // Statements that *deny* a claim are fine ("doesn't hide your IP"): only the claim itself counts. The
 // denial must be in the same sentence, so "No signup. Your posts are untraceable." is still a claim.
