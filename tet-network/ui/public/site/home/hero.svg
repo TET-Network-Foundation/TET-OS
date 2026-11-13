@@ -1,21 +1,27 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
-  <title id="t">A key with a counter beside a small machine and a person</title>
-  <rect width="400" height="300" rx="24" fill="#f0fdfa"/>
-  <!-- the machine: a small rover -->
-  <rect x="40" y="170" width="120" height="60" rx="12" fill="#0f766e"/>
-  <circle cx="70" cy="238" r="16" fill="#134e4a"/><circle cx="130" cy="238" r="16" fill="#134e4a"/>
-  <rect x="88" y="140" width="10" height="32" fill="#134e4a"/><circle cx="93" cy="134" r="10" fill="#5eead4"/>
-  <!-- the person -->
-  <circle cx="320" cy="150" r="22" fill="#334155"/>
-  <path d="M286 240 q34 -70 68 0 z" fill="#334155"/>
-  <!-- the key in the middle, with its permission tag -->
-  <g transform="translate(160 70)">
-    <circle cx="30" cy="40" r="24" fill="none" stroke="#0f766e" stroke-width="10"/>
-    <rect x="52" y="35" width="70" height="10" rx="5" fill="#0f766e"/>
-    <rect x="100" y="45" width="8" height="16" fill="#0f766e"/><rect x="114" y="45" width="8" height="12" fill="#0f766e"/>
-    <rect x="28" y="86" width="76" height="44" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="3"/>
-    <text x="66" y="116" font-family="system-ui, sans-serif" font-size="22" font-weight="700" text-anchor="middle" fill="#0f766e">1 ×</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" role="img" aria-labelledby="t">
+  <title id="t">A key with three use marks, linked to a small machine</title>
+  <style>.bg{fill:#f0fdfa}.pr{fill:#0f766e}.prs{stroke:#0f766e}.ink{fill:#134e4a}.inks{stroke:#134e4a}.lt{fill:#5eead4}.lts{stroke:#5eead4}.paper{fill:#ffffff}.mu{stroke:#94a3b8}.muf{fill:#94a3b8}.sl{fill:#cbd5e1}@media (prefers-color-scheme: dark){.bg{fill:#042f2e}.pr{fill:#2dd4bf}.prs{stroke:#2dd4bf}.ink{fill:#ccfbf1}.inks{stroke:#ccfbf1}.lt{fill:#115e59}.lts{stroke:#115e59}.paper{fill:#0f172a}.mu{stroke:#64748b}.muf{fill:#64748b}.sl{fill:#334155}}</style>
+  <rect class="bg" width="480" height="260" rx="24"/>
+  <!-- the key -->
+  <g transform="translate(48 70)">
+    <circle class="prs" cx="36" cy="40" r="26" fill="none" stroke-width="12"/>
+    <rect class="pr" x="60" y="34" width="96" height="12" rx="6"/>
+    <rect class="pr" x="124" y="44" width="10" height="20" rx="3"/>
+    <rect class="pr" x="142" y="44" width="10" height="14" rx="3"/>
+    <!-- three uses: one spent, two left -->
+    <rect class="pr" x="8" y="104" width="32" height="32" rx="8"/>
+    <rect class="paper prs" x="56" y="104" width="32" height="32" rx="8" stroke-width="4"/>
+    <rect class="paper prs" x="104" y="104" width="32" height="32" rx="8" stroke-width="4"/>
   </g>
-  <path d="M160 200 q-10 -40 20 -70" fill="none" stroke="#94a3b8" stroke-width="3" stroke-dasharray="6 6"/>
-  <path d="M300 130 q-10 -40 -40 -40" fill="none" stroke="#94a3b8" stroke-width="3" stroke-dasharray="6 6"/>
+  <!-- the link -->
+  <path class="mu" d="M220 110 C 260 110, 270 150, 300 150" fill="none" stroke-width="4" stroke-dasharray="8 8"/>
+  <!-- a small machine: a rover with a sensor -->
+  <g transform="translate(300 96)">
+    <rect class="pr" x="12" y="40" width="132" height="64" rx="14"/>
+    <rect class="lt" x="32" y="56" width="40" height="24" rx="6"/>
+    <circle class="ink" cx="44" cy="112" r="18"/><circle class="ink" cx="112" cy="112" r="18"/>
+    <circle class="paper" cx="44" cy="112" r="6"/><circle class="paper" cx="112" cy="112" r="6"/>
+    <rect class="ink" x="104" y="12" width="10" height="30" rx="4"/>
+    <circle class="lt" cx="109" cy="10" r="10"/>
+  </g>
 </svg>

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" role="img" aria-labelledby="t">
+  <title id="t">A public node drawn in dashed outline, not running; beside it, a laptop where the prototypes run</title>
+  <style>.bg{fill:#f0fdfa}.pr{fill:#0f766e}.prs{stroke:#0f766e}.ink{fill:#134e4a}.inks{stroke:#134e4a}.lt{fill:#5eead4}.lts{stroke:#5eead4}.paper{fill:#ffffff}.mu{stroke:#94a3b8}.muf{fill:#94a3b8}.sl{fill:#cbd5e1}@media (prefers-color-scheme: dark){.bg{fill:#042f2e}.pr{fill:#2dd4bf}.prs{stroke:#2dd4bf}.ink{fill:#ccfbf1}.inks{stroke:#ccfbf1}.lt{fill:#115e59}.lts{stroke:#115e59}.paper{fill:#0f172a}.mu{stroke:#64748b}.muf{fill:#64748b}.sl{fill:#334155}}</style>
+  <rect class="bg" width="480" height="260" rx="24"/>
+  <!-- the public node: outline only -->
+  <g transform="translate(64 40)" class="mu" fill="none" stroke-width="4" stroke-dasharray="10 8">
+    <rect x="0" y="0" width="128" height="180" rx="12"/>
+    <path d="M0 60 H128 M0 120 H128"/>
+  </g>
+  <g transform="translate(64 40)">
+    <circle class="muf" cx="24" cy="30" r="6"/><circle class="muf" cx="24" cy="90" r="6"/><circle class="muf" cx="24" cy="150" r="6"/>
+  </g>
+  <!-- a wrench: being rebuilt -->
+  <g transform="translate(200 52) rotate(40)">
+    <rect class="ink" x="0" y="-6" width="64" height="12" rx="6"/>
+    <path class="ink" d="M64 -18 a20 20 0 1 1 0 36 l0 -10 l10 0 l0 -16 l-10 0 z"/>
+  </g>
+  <!-- a laptop: runs on your own computer -->
+  <g transform="translate(272 92)">
+    <rect class="pr" x="12" y="0" width="144" height="92" rx="10"/>
+    <rect class="lt" x="24" y="12" width="120" height="68" rx="4"/>
+    <rect class="ink" x="0" y="96" width="168" height="14" rx="7"/>
+    <path class="prs" d="M60 46 l14 14 l30 -30" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

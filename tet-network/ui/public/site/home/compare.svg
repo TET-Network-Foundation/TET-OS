@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 260" role="img" aria-labelledby="t">
+  <title id="t">Left, many nodes joined in a ring; right, one key with its use marks</title>
+  <style>.bg{fill:#f0fdfa}.pr{fill:#0f766e}.prs{stroke:#0f766e}.ink{fill:#134e4a}.inks{stroke:#134e4a}.lt{fill:#5eead4}.lts{stroke:#5eead4}.paper{fill:#ffffff}.mu{stroke:#94a3b8}.muf{fill:#94a3b8}.sl{fill:#cbd5e1}@media (prefers-color-scheme: dark){.bg{fill:#042f2e}.pr{fill:#2dd4bf}.prs{stroke:#2dd4bf}.ink{fill:#ccfbf1}.inks{stroke:#ccfbf1}.lt{fill:#115e59}.lts{stroke:#115e59}.paper{fill:#0f172a}.mu{stroke:#64748b}.muf{fill:#64748b}.sl{fill:#334155}}</style>
+  <rect class="bg" width="480" height="260" rx="24"/>
+  <!-- many nodes agreeing on one order -->
+  <g transform="translate(120 130)" class="mu" stroke-width="3" fill="none">
+    <path d="M0 -80 L69 -40 L69 40 L0 80 L-69 40 L-69 -40 Z"/>
+    <path d="M0 -80 L0 80 M69 -40 L-69 40 M69 40 L-69 -40"/>
+  </g>
+  <g transform="translate(120 130)">
+    <circle class="pr" cx="0" cy="-80" r="16"/><circle class="pr" cx="69" cy="-40" r="16"/>
+    <circle class="pr" cx="69" cy="40" r="16"/><circle class="pr" cx="0" cy="80" r="16"/>
+    <circle class="pr" cx="-69" cy="40" r="16"/><circle class="pr" cx="-69" cy="-40" r="16"/>
+    <rect class="paper prs" x="-20" y="-14" width="40" height="28" rx="6" stroke-width="4"/>
+  </g>
+  <path class="mu" d="M240 40 V220" stroke-width="2" stroke-dasharray="4 8"/>
+  <!-- one key, what it may do, how many times -->
+  <g transform="translate(282 70)">
+    <circle class="prs" cx="30" cy="34" r="22" fill="none" stroke-width="10"/>
+    <rect class="pr" x="50" y="29" width="88" height="10" rx="5"/>
+    <rect class="pr" x="112" y="38" width="8" height="18" rx="3"/>
+    <rect class="pr" x="126" y="38" width="8" height="12" rx="3"/>
+    <rect class="pr" x="8" y="90" width="28" height="28" rx="7"/>
+    <rect class="paper prs" x="48" y="90" width="28" height="28" rx="7" stroke-width="4"/>
+    <rect class="paper prs" x="88" y="90" width="28" height="28" rx="7" stroke-width="4"/>
+  </g>
+</svg>
