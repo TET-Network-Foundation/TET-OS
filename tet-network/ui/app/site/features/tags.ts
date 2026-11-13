@@ -38,7 +38,7 @@ export const FEATURES: Feature[] = [
       "Anything about the object the tag is on.",
       "Who made the object.",
       "Whether the tag was moved from another object.",
-      "Which tap was real, if a copied link reached the checker first.",
+      "Which tap was real, if a copied link reached the checker before the real tap did.",
       "That TET's chain checked anything: this check ran on one computer.",
     ],
   },
@@ -72,7 +72,7 @@ export const FEATURES: Feature[] = [
     id: "tags-owner-record",
     title: "Who holds it now",
     summary:
-      "The first person to tap after registration could record themselves as the owner. To pass it on, the owner signs a release and the next person taps the tag in person. Not built.",
+      "Whoever taps the tag earliest after registration could record themselves as the owner. To pass it on, the owner signs a release and the next person taps the tag in person. Not built.",
     status: "planned",
     evidence: [{ branch: "plan-genuine-tag", what: "docs/plans/GENUINE_TAG.md, claims and transfers" }],
     shows: ["The order of owner records, each with the block it is in."],

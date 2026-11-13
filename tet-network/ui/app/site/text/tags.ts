@@ -41,8 +41,8 @@ export const JA: Record<string, string> = {
     "一つのかばんからはがしたタグを、別のかばんに付けたところ。チップの確認は通り、かばんが変わったことはタップではわかりません。",
   "A tag can be moved. The chip still checks on the new object.": "タグは付け替えられます。新しい物の上でも、チップの確認は通ります。",
   "Who holds the tag's key": "タグの鍵を持つのは誰か",
-  "In the design, the maker does, and TET never holds it. A buyer trusts the maker's checker to say a tap was valid. TET would make that statement signed, public and in order, so it can be checked later. It does not remove the trust.":
-    "設計では作り手が持ち、TET は持ちません。買った人は、タップが正しかったという作り手の確認プログラムの言葉を信じることになります。TET はその言葉を、署名付きで、公開され、順番のわかる形にして、あとから確かめられるようにします。信じる必要がなくなるわけではありません。",
+  "In the design, the maker does, and TET never holds it. A buyer trusts the maker's checker to say a tap was valid. TET would make that statement signed, public and in order, so it can be checked later, but that does not remove the trust.":
+    "設計では作り手が持ち、TET は持ちません。買った人は、タップが正しかったという作り手の確認プログラムの言葉を信じることになります。TET はその言葉を、署名付きで、公開され、順番のわかる形にして、あとから確かめられるようにします。ただし、信じる必要がなくなるわけではありません。",
   "Read the design": "設計を読む",
   "The check you can try": "試せる確認",
   "It checks files and text, not tags. A maker marks a photo or a description; a buyer checks their copy. One changed letter is enough to say it does not match.":
@@ -76,7 +76,7 @@ export const JA: Record<string, string> = {
   "The chip that made this link knew the tag's key when it was tapped.": "このリンクを作ったチップは、タップされたときにタグの鍵を知っていたこと。",
   "The tap's counter was higher than any this checker had accepted for that tag before.":
     "このタップのカウンターが、この確認プログラムがそのタグについて受け付けてきたどれよりも大きかったこと。",
-  "Which tap was real, if a copied link reached the checker first.": "コピーされたリンクが先に届いた場合、どちらのタップが本当のものか。",
+  "Which tap was real, if a copied link reached the checker before the real tap did.": "コピーされたリンクが本物のタップより先に届いた場合、どちらのタップが本当のものか。",
   "That TET's chain checked anything: this check ran on one computer.": "TET のチェーンが何かを確かめたこと。この確認は1台のパソコンの中で行われました。",
 
   "Register a tag under a maker's ID": "作り手の ID でタグを登録する",
@@ -95,8 +95,8 @@ export const JA: Record<string, string> = {
     "TET のチェーンがタグを確かめたこと。チェーンが記録するのは、作り手の確認プログラムが言ったことです。",
 
   "Who holds it now": "今持っているのは誰か",
-  "The first person to tap after registration could record themselves as the owner. To pass it on, the owner signs a release and the next person taps the tag in person. Not built.":
-    "登録のあと最初にタップした人が、自分を持ち主として記録できる仕組みです。譲るときは、持ち主が手放すことに署名し、次の人がその場でタグにタップします。まだ作っていません。",
+  "Whoever taps the tag earliest after registration could record themselves as the owner. To pass it on, the owner signs a release and the next person taps the tag in person. Not built.":
+    "登録のあと一番早くタップした人が、自分を持ち主として記録できる仕組みです。譲るときは、持ち主が手放すことに署名し、次の人がその場でタグにタップします。まだ作っていません。",
   "The order of owner records, each with the block it is in.": "持ち主の記録の順番と、それぞれが入っているブロック。",
   "Legal ownership: this is a record on TET, not a title.": "法的な所有。これは TET 上の記録で、権利書ではありません。",
   "Who physically holds the object today.": "今その物を実際に手にしているのは誰か。",
