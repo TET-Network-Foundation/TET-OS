@@ -34,7 +34,25 @@ refuses "an unknown role"        "must be seed, demo or demo-producer" TET_NODE_
 # One host as demo and producer (testnet-2).
 refuses "demo-producer with a bootnode" "dials no bootnode"     TET_NODE_ROLE=demo-producer "${WEB[@]}" TET_BOOTNODES="$BOOT"
 refuses "demo-producer that won't mine" "produces blocks"       TET_NODE_ROLE=demo-producer "${WEB[@]}" TET_AUTO_MINE=0
-refuses "a follower with no producer pin" "pins its producer"   TET_NODE_ROLE=seed TET_BOOTNODES="$BOOT"
+# A follower that sets no TET_PRODUCER_PEERS gets the compose default pin (owner, 2026-11-13: the pin
+# stays), so provision-seed.sh's default must be exactly docker-compose.yml's. Control: either side
+# emptied or changed is caught.
+# shellcheck disable=SC2016  # literal script text
+follower_pin() { # $1 compose text, $2 provision text: prints the problem, nothing if they agree
+  local pin; pin=$(sed -n 's/.*TET_PRODUCER_PEERS: "${TET_PRODUCER_PEERS-\(.*\)}".*/\1/p' <<<"$1")
+  [ -n "$pin" ] || { echo "compose has no default producer pin"; return; }
+  grep -qF "PRODUCER_PEERS=\"\${TET_PRODUCER_PEERS:-$pin}\"" <<<"$2" || echo "provision's follower default is not the compose pin ($pin)"
+}
+C=$(cat docker-compose.yml); P=$(cat deploy/provision-seed.sh)
+check_pin() { # $1 name, $2 "agree" or "differ", $3 compose text, $4 provision text
+  local p; p=$(follower_pin "$3" "$4")
+  if { [ "$2" = agree ] && [ -z "$p" ]; } || { [ "$2" = differ ] && [ -n "$p" ]; }; then pass "$1"; else flunk "$1" "${p:-no problem found}"; fi
+}
+check_pin "a follower without TET_PRODUCER_PEERS gets the compose default pin" agree "$C" "$P"
+# shellcheck disable=SC2001  # a sed regex: ${var//…} cannot match [^}]*
+check_pin "control: compose without its default pin is caught" differ "$(sed 's/TET_PRODUCER_PEERS-local-wallet=[^}]*}/TET_PRODUCER_PEERS-}/' <<<"$C")" "$P"
+# shellcheck disable=SC2001  # a sed regex: ${var//…} cannot match [^}]*
+check_pin "control: a provision default other than the compose pin is caught" differ "$C" "$(sed 's/TET_PRODUCER_PEERS:-local-wallet=/TET_PRODUCER_PEERS:-x/' <<<"$P")"
 # The genesis: a public chain names itself (no dev defaults).
 G=$(mktemp -d); trap 'rm -rf "$G"' EXIT
 gfile() { # $1 name, $2 chain, $3 founder, $4 treasury

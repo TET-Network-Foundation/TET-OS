@@ -52,17 +52,20 @@ x-tet-core-common: &tet-core-common
     # Single-node quickstart: the block-plane swarm is off by default, so this
     # composes up as an isolated chain. Set TET_ENABLE_P2P=1 to join the testnet.
     TET_ENABLE_P2P: "${TET_ENABLE_P2P:-0}"
-    # No default bootnode: the first public testnet's seeds are gone. To join a network, set
-    # TET_BOOTNODES to its producer's multiaddr (the provisioner prints it) and TET_ENABLE_P2P=1.
-    # Inert while TET_ENABLE_P2P=0. Comma-separated; first reachable one wins.
-    TET_BOOTNODES: "${TET_BOOTNODES:-}"
+    # The default still names the first public testnet's two seeds. Their hosts are gone (2026-11-10),
+    # so a node that relies on it finds no peer until the new host exists and this default names it.
+    # To join another network, set TET_BOOTNODES to its producer's multiaddr (the provisioner prints
+    # it) and TET_ENABLE_P2P=1. Inert while TET_ENABLE_P2P=0. Comma-separated; first reachable wins.
+    TET_BOOTNODES: "${TET_BOOTNODES:-/ip4/95.217.158.153/tcp/8002/p2p/12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC,/ip4/46.224.223.54/tcp/8002/p2p/12D3KooWSam648Et2FXCUrqUBM6AEoZR5GAwDnoMG77JnA3ajonM}"
     TET_P2P_LISTEN: "${TET_P2P_LISTEN:-/ip4/0.0.0.0/tcp/8002}"
-    # Followers accept a gossiped block only from the producer's libp2p PeerId, pinned to the
-    # producer id "local-wallet": TET_PRODUCER_PEERS=local-wallet=<PeerId>. No default (the producer
-    # of the network you join prints its PeerId). Inert while TET_ENABLE_P2P=0. Empty means chain
-    # sync trusts every peer: fine on a local dev network, refused with TET_ENV=testnet (the node
-    # will not start as a public follower without a pin or TET_SYNC_TRUSTED_PEERS).
-    TET_PRODUCER_PEERS: "${TET_PRODUCER_PEERS-}"
+    # Followers accept a gossiped block only from the producer's libp2p PeerId, pinned to the producer
+    # id "local-wallet". The pin stays (owner, 2026-11-13): it names the first testnet's producer
+    # (Helsinki, whose host is gone), so a fresh follower accepts no gossiped block from anyone else:
+    # it fails closed until this default names the new producer. A producer sets it EMPTY
+    # (TET_PRODUCER_PEERS= in .env): note `-` not `:-`, so an empty value means off rather than
+    # falling back to this default. tet-core's tests pin this line, the README quickstart and
+    # provision-seed.sh to one value. Inert while TET_ENABLE_P2P=0.
+    TET_PRODUCER_PEERS: "${TET_PRODUCER_PEERS-local-wallet=12D3KooWNcdESJUC1uhuhrMn5anmsGEBhYgCkE8pCbXf8cD7MSEC}"
     RUST_LOG: "${RUST_LOG:-info}"
   ports:
     - "${PORT:-5010}:5010"
