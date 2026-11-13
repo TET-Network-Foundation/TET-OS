@@ -1,0 +1,47 @@
+# CodeQL for javascript-typescript and rust: on pushes to main, on pull requests, and weekly.
+# Report only: findings go to the repository's code-scanning alerts; this workflow never pushes,
+# commits or opens a pull request. Advanced setup because the default-setup API does not accept
+# "rust" as a language (2026-11-13: HTTP 422, "rust is not a possible value"). Both languages
+# need no build (build-mode: none), so nothing here compiles the workspace.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 2"
+  workflow_dispatch:
+
+# A literal group, never github.workflow (scripts/lint_workflows.py; CLAUDE.md).
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: codeql (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, rust]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          category: /language:${{ matrix.language }}
