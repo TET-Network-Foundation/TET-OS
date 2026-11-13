@@ -67,3 +67,7 @@ docs/FOUNDER_NOTES.md
 # `python3 docs/scripts/render_phrack_wp_pdf.py` (see docs/WHITEPAPER_BUILD.md).
 # Untracked because a rendered binary cannot be text-scrubbed.
 docs/WHITEPAPER_v1.1_DRAFT.pdf
+
+# Python bytecode, written by the tools/ tests on every run (never committed).
+__pycache__/
+*.pyc
