@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300" role="img" aria-labelledby="t">
+  <title id="t">A key beside an open notebook under a magnifying glass</title>
+  <style>.bg{fill:#f0fdfa}.ink{fill:#0f766e}.inks{stroke:#0f766e}.deep{fill:#134e4a}.soft{fill:#ccfbf1}.paper{fill:#ffffff}.line{stroke:#94a3b8}.mute{fill:#94a3b8}.red{stroke:#dc2626}.redf{fill:#dc2626}@media (prefers-color-scheme: dark){.bg{fill:#0f172a}.ink{fill:#2dd4bf}.inks{stroke:#2dd4bf}.deep{fill:#5eead4}.soft{fill:#134e4a}.paper{fill:#1e293b}.line{stroke:#64748b}.mute{fill:#64748b}.red{stroke:#f87171}.redf{fill:#f87171}}</style>
+  <rect width="400" height="300" rx="24" class="bg"/>
+  <!-- open notebook -->
+  <path d="M60 90 q70 -20 140 0 v150 q-70 -20 -140 0z" class="paper"/>
+  <path d="M200 90 q70 -20 140 0 v150 q-70 -20 -140 0z" class="paper"/>
+  <path d="M60 90 q70 -20 140 0 q70 -20 140 0 v150 q-70 -20 -140 0 q-70 -20 -140 0z" fill="none" class="line" stroke-width="3"/>
+  <line x1="200" y1="90" x2="200" y2="240" class="line" stroke-width="3"/>
+  <g class="line" stroke-width="4" stroke-linecap="round">
+    <line x1="80" y1="120" x2="180" y2="112"/><line x1="80" y1="145" x2="170" y2="138"/><line x1="80" y1="170" x2="180" y2="164"/>
+    <line x1="220" y1="112" x2="320" y2="120"/><line x1="220" y1="138" x2="300" y2="145"/>
+  </g>
+  <!-- a key drawn on the right page, with a "1" -->
+  <g transform="translate(222 160) scale(0.8)"><circle cx="24" cy="24" r="16" fill="none" class="inks" stroke-width="8"/><rect x="38" y="20" width="56" height="8" rx="4" class="ink"/><rect x="76" y="28" width="7" height="13" class="ink"/><rect x="87" y="28" width="7" height="9" class="ink"/></g>
+  <circle cx="318" cy="196" r="14" class="ink"/>
+  <text x="318" y="202" font-family="system-ui, sans-serif" font-size="17" font-weight="700" text-anchor="middle" class="bg">1</text>
+  <!-- magnifying glass -->
+  <circle cx="130" cy="200" r="38" class="soft" fill-opacity="0.7"/>
+  <circle cx="130" cy="200" r="38" fill="none" class="inks" stroke-width="8"/>
+  <line x1="158" y1="228" x2="190" y2="262" class="inks" stroke-width="12" stroke-linecap="round"/>
+</svg>

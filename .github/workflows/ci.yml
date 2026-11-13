@@ -579,6 +579,13 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — no price / earn / invest wording
         run: node --experimental-strip-types scripts/try_money_guard.mjs
+      # The public site (home, /tags, /machines, /keys, /services, /research): every feature has a status
+      # that matches the repository and is shown with Shows / Does not show; no company / team /
+      # customers / pricing, money, testimonial or promised-date wording; drawings and screenshots of
+      # our own pages only; Japanese for every string. Controls for each.
+      - if: needs.gate.outputs.code == 'true'
+        name: public site — every feature has a status that matches the repository
+        run: node --experimental-strip-types scripts/site_guard.mjs
       # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
       # case, encoding); ordinary routes still pass. Control.
       - if: needs.gate.outputs.code == 'true'
@@ -692,6 +699,13 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: try page — verify anything grades only what it proves
         run: node --experimental-strip-types scripts/try_verify_guard.mjs
+
+      # Try TET: check a machine's log. The Shows / Does not show lists are notebook.py verify's word
+      # for word, and the verdict on every fixture notebook (written by the real notebook.py and
+      # tet-cli) is the one notebook.py verify printed. device.key is never read.
+      - if: needs.gate.outputs.code == 'true'
+        name: try page — a machine's log is checked as notebook.py verify checks it
+        run: node --experimental-strip-types scripts/try_machine_log_guard.mjs
 
       # Try TET parts 2-3: on the try page a visitor's wallet never pays a file fee (the demo's
       # sponsor does, or it is unpaid), and every refusal is final and worded as the design says.
