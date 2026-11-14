@@ -140,24 +140,12 @@ jobs:
             echo "| npm audit --omit=dev | $OUT_NPMAUDIT |"
           } >> "$GITHUB_STEP_SUMMARY"
           failed=0
-          report() { # $1 step label, $2 outcome, $3 log file
+          report() { # $1 step label, $2 outcome, $3 log file, $4 log|counts (scripts/nightly_issue_body.sh)
             [ "$2" = failure ] || return 0
             failed=1
             title="nightly: $1 failed"
             body="$RUNNER_TEMP/body-$RANDOM.md"
-            {
-              echo "**$1** failed in the nightly run."
-              echo
-              echo "- commit: \`$SHA\`"
-              echo "- run: $RUN_URL"
-              echo
-              echo "Last 80 lines of the log:"
-              echo
-              echo '```'
-              # shellcheck disable=SC2016  # literal backticks: a fence in the log must not end the block
-              tail -n 80 "$3" 2>/dev/null | sed 's/```/` ` `/g' || echo "(no log)"
-              echo '```'
-            } > "$body"
+            bash scripts/nightly_issue_body.sh "$1" "$3" "$4" > "$body"
             num=$(gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json number,title \
                   --jq "map(select(.title == \"$title\")) | .[0].number // empty")
             if [ -n "$num" ]; then
@@ -166,8 +154,9 @@ jobs:
               gh issue create --repo "$REPO" --title "$title" --body-file "$body"
             fi
           }
-          report "cargo test --workspace" "$OUT_TEST" "$RUNNER_TEMP/test.log"
-          report "scripts/run_guards.sh" "$OUT_GUARDS" "$RUNNER_TEMP/guards.log"
-          report "cargo audit" "$OUT_AUDIT" "$RUNNER_TEMP/audit.log"
-          report "npm audit --omit=dev" "$OUT_NPMAUDIT" "$RUNNER_TEMP/npmaudit.log"
+          # Audits: counts and the run link only; advisory names stay out of public issues (CLAUDE.md).
+          report "cargo test --workspace" "$OUT_TEST" "$RUNNER_TEMP/test.log" log
+          report "scripts/run_guards.sh" "$OUT_GUARDS" "$RUNNER_TEMP/guards.log" log
+          report "cargo audit" "$OUT_AUDIT" "$RUNNER_TEMP/audit.log" counts
+          report "npm audit --omit=dev" "$OUT_NPMAUDIT" "$RUNNER_TEMP/npmaudit.log" counts
           exit "$failed"
