@@ -70,7 +70,7 @@ export function SiteFrame(props: { children: ReactNode }) {
           <Link href="/" className={cx("text-xl font-semibold", FOCUS)}>
             TET
           </Link>
-          <nav aria-label={t("Sections")} className="order-last flex w-full gap-4 overflow-x-auto sm:order-none sm:w-auto">
+          <nav aria-label={t("Sections")} className="order-last flex w-full flex-wrap gap-x-4 sm:order-none sm:w-auto">
             {NAV.map((n) => (
               <Link key={n.href} href={n.href} className={cx("whitespace-nowrap py-2 text-slate-700 hover:text-teal-700 dark:text-slate-300 dark:hover:text-teal-300", FOCUS)}>
                 {t(n.label)}
