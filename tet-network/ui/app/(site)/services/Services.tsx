@@ -71,7 +71,6 @@ export default function Services() {
       <Hero
         title={SECTION.title}
         sentence={SECTION.sentence}
-        art={<Figure src="/site/services/hero.svg" alt="A calendar, a parcel and a review, each joined to one check mark: each rests on a signed record." />}
       />
       <SiteSection
         title="Settling up stays outside TET"

@@ -138,6 +138,39 @@ await check("P2 control: a feature registered but never shown through <FeatureCa
   assert.deepEqual(missingFromOwnPage([f], {}), ["/tags x: not shown with its status on /tags"]);
   assert.deepEqual(missingFromOwnPage([f], { "app/(site)/tags/page.tsx": '<FeatureCard id="x" />' }), []);
 });
+// ── P3. Drawings only where they explain a step (owner, 2026-11-15) ─────────────────────────────
+/**
+ * Every SVG drawing in public/site, and why it stays: each shows steps in order. Scenes, heroes and
+ * status pictures were removed; a new drawing must be added here with the step it explains, and the
+ * owner reviews that line. Screenshots (.png) are not drawings and are not listed.
+ */
+const STEP_DIAGRAMS = {
+  "keys/signin-steps.svg": "sign-in in three steps",
+  "keys/phone-1-ask.svg": "phone idea, step 1",
+  "keys/phone-2-inside.svg": "phone idea, step 2",
+  "keys/phone-3-answer.svg": "phone idea, step 3",
+  "machines/notebook.svg": "records 1, 2, 3, each linked to the one before",
+  "machines/permit.svg": "a permit: first use accepted, second refused",
+  "research/once.svg": "a second signature caught, or impossible",
+  "research/setup.svg": "how a kept setup key makes a second signature",
+  "services/booking.svg": "booking in three steps",
+  "services/delivery.svg": "delivery in three steps",
+  "services/reviews.svg": "reviews in three steps",
+  "tags/tap-en.svg": "a tag tap in four steps",
+  "tags/tap-ja.svg": "a tag tap in four steps (JA)",
+};
+function drawingProblems(files) {
+  return files.filter((f) => f.endsWith(".svg") && !(f in STEP_DIAGRAMS)).map((f) => `public/site/${f}: a drawing that is not a listed step diagram`);
+}
+const SITE_SVGS = readdirSync(join(UI, "public/site"), { recursive: true }).map(String).filter((f) => f.endsWith(".svg"));
+await check(`P3 drawings only where they explain a step (${SITE_SVGS.length} listed)`, () => {
+  assert.deepEqual(drawingProblems(SITE_SVGS), []);
+  for (const f of Object.keys(STEP_DIAGRAMS)) assert.ok(SITE_SVGS.includes(f), `listed but missing: ${f}`);
+});
+await check("P3 control: a hero drawing put back is caught", () => {
+  assert.match(drawingProblems([...SITE_SVGS, "tags/hero.svg"]).join(), /tags\/hero\.svg: a drawing that is not a listed step diagram/);
+});
+
 await check("P control: an unregistered or id-less FeatureCard and a remote or off-site image are caught", () => {
   assert.match(pageProblems({ "x.tsx": '<FeatureCard id="no-such-feature" />' }).join(), /not a registered feature/);
   assert.match(pageProblems({ "x.tsx": "<FeatureCard {...f} />" }).join(), /without a literal id/);

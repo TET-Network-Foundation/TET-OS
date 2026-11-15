@@ -37,7 +37,6 @@ export default function TagsView() {
       <Hero
         title={SECTION.title}
         sentence={SECTION.sentence}
-        art={<Figure src="/site/tags/hero.svg" alt="A handmade cup with a small round chip tag tied to it, and a phone tapping the tag." />}
       />
 
       <SiteSection title="Two paths" lead="Each step links to the part that does it, with how far that part has come.">
@@ -79,11 +78,6 @@ export default function TagsView() {
               "Whether the tag was moved from another object.",
               "That a QR code or a copied link is genuine: only a fresh tap counts.",
             ]}
-          />
-          <Figure
-            src="/site/tags/moved.svg"
-            alt="A tag peeled off one bag and stuck on another. The chip still checks; the tap cannot tell that the bag changed."
-            caption="A tag can be moved. The chip still checks on the new object."
           />
         </div>
       </SiteSection>
