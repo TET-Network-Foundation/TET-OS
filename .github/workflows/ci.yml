@@ -857,6 +857,11 @@ jobs:
         name: run_guards.sh stops at the first red guard
         run: bash scripts/run_guards.test.sh && shellcheck scripts/run_guards.sh scripts/run_guards.test.sh
 
+      # Public nightly issues about audits carry counts and the run link, never advisory names.
+      - if: needs.gate.outputs.code == 'true'
+        name: nightly issues carry audit counts only
+        run: bash scripts/nightly_issue_body.test.sh && shellcheck scripts/nightly_issue_body.sh scripts/nightly_issue_body.test.sh
+
       # The demo node (docs/DEMO_NODE.md): provision refuses an unsafe demo role, and the composed
       # config exposes only Caddy on 80/443, REST on loopback, no UI port, public mode on, the
       # trusted-proxy range equal to the pinned subnet, and a Caddyfile that trusts no client XFF.
