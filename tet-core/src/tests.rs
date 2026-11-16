@@ -16965,3 +16965,86 @@ fn gossip_refuses_envelopes_dated_off_the_node_clock() {
     }
     assert_eq!(node.inbox_len(&receiver), 0);
 }
+
+/// Swarms built by `build_basic_swarm` connect over WebRTC-direct (UDP + DTLS + SCTP, the transport
+/// browsers use), and a dial that names the wrong certificate hash is refused.
+///
+/// Until 2026-11-16 nothing ran a DTLS handshake: the WebRTC transport was in every node's swarm and
+/// untested. This holds the libp2p-webrtc / dtls / p256 stack to a real handshake on loopback.
+///
+/// Two dialers, A and C, are built and set up identically; they differ only in the address they dial:
+/// A names B's real certificate hash, C a hash with one bit changed. So C's refusal can only come from
+/// the certificate check, and A's success shows the setup itself works (both dialers listen first:
+/// libp2p-webrtc dials from a listening socket, and without it every dial is refused before any
+/// handshake). They are separate swarms because a failed WebRTC dial leaves state that breaks the
+/// next dial between the same two swarms (seen on dtls 0.17.2 and 0.17.3 alike).
+#[tokio::test(flavor = "multi_thread")]
+async fn webrtc_direct_connects_and_refuses_a_wrong_certhash() {
+    use futures::StreamExt as _;
+    use libp2p::multiaddr::Protocol;
+    use libp2p::swarm::SwarmEvent;
+    use libp2p::Multiaddr;
+    use std::time::Duration;
+    type S = libp2p::Swarm<crate::p2p_network::NexusBehaviour>;
+
+    let swarm = || crate::p2p_network::build_basic_swarm(libp2p::identity::Keypair::generate_ed25519()).unwrap();
+    let local: Multiaddr = "/ip4/127.0.0.1/udp/0/webrtc-direct".parse().unwrap();
+    let (mut b, b_id) = swarm();
+    let (mut a, _) = swarm();
+    let (mut c, _) = swarm();
+    for s in [&mut b, &mut a, &mut c] {
+        s.listen_on(local.clone()).unwrap();
+    }
+    let addr: Multiaddr = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if let SwarmEvent::NewListenAddr { address, .. } = b.select_next_some().await {
+                if address.iter().any(|p| matches!(p, Protocol::Certhash(_))) {
+                    return address;
+                }
+            }
+        }
+    })
+    .await
+    .expect("b never listened on webrtc-direct");
+
+    // The same address with a different certificate hash (a valid multihash, one bit changed).
+    let wrong: Multiaddr = addr
+        .iter()
+        .map(|p| match p {
+            Protocol::Certhash(h) => {
+                let mut d = h.digest().to_vec();
+                d[0] ^= 0x01;
+                Protocol::Certhash(libp2p::multihash::Multihash::wrap(h.code(), &d).unwrap())
+            }
+            other => other,
+        })
+        .collect();
+    assert_ne!(wrong, addr);
+
+    /// Dial `to` from `from` while driving `b`: Ok once connected to `b` over WebRTC-direct.
+    async fn dial(from: &mut S, b: &mut S, b_id: libp2p::PeerId, to: Multiaddr) -> Result<(), String> {
+        from.dial(to.with(Protocol::P2p(b_id))).map_err(|e| format!("dial: {e}"))?;
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                tokio::select! {
+                    ev = from.select_next_some() => match ev {
+                        SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } if peer_id == b_id => {
+                            assert!(endpoint.get_remote_address().iter().any(|p| matches!(p, Protocol::WebRTCDirect)));
+                            return Ok(());
+                        }
+                        SwarmEvent::OutgoingConnectionError { error, .. } => return Err(format!("{error}")),
+                        _ => {}
+                    },
+                    _ = b.select_next_some() => {}
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| Err("timed out".into()))
+    }
+
+    dial(&mut a, &mut b, b_id, addr.clone()).await.expect("no WebRTC-direct connection between two local swarms");
+    let refused = dial(&mut c, &mut b, b_id, wrong).await;
+    let why = refused.expect_err("a dial naming the wrong certificate hash connected");
+    assert!(!why.contains("no active listeners"), "refused before any handshake: {why}");
+}
