@@ -599,8 +599,8 @@ jobs:
         name: public site — every feature has a status that matches the repository
         run: node --experimental-strip-types scripts/site_guard.mjs
 
-      # The offline notice page (deploy/notice/index.html), served at tetnet.org while there is no
-      # host: no scripts, nothing loaded, only repository links; both languages say what happened
+      # The offline notice page (deploy/notice/index.html), a static fallback (tetnet.org serves the
+      # project site): no scripts, nothing loaded, only repository links; both languages say what happened
       # and what still checks; the site's wording; no date promises. Controls.
       - if: needs.gate.outputs.code == 'true'
         name: offline notice page — static, honest, no date promises

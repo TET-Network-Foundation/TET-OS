@@ -1,5 +1,5 @@
-// Guard for the offline notice page (deploy/notice/index.html), served at tetnet.org while there is
-// no host. One static file, English and Japanese.
+// Guard for the offline notice page (deploy/notice/index.html), a static fallback kept in the
+// repository; tetnet.org serves the project site, not this page. One static file, English and Japanese.
 //
 //   node scripts/notice_page_guard.mjs
 //
