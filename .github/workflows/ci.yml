@@ -719,6 +719,14 @@ jobs:
         name: try page — verify anything grades only what it proves
         run: node --experimental-strip-types scripts/try_verify_guard.mjs
 
+      # The browser's Ed25519 (app/lib/ed25519_tet.ts on @noble/ed25519) derives tet-core's key from
+      # 12 words: the wallet ids and signatures in agent_sdk_hybrid_sigs.json, which the rust job
+      # checks against wallet::ed25519_signing_key_from_mnemonic
+      # (agent_sdk_derives_the_same_hybrid_identity_as_the_node). Plus RFC 8032 7.1 vectors.
+      - if: needs.gate.outputs.code == 'true'
+        name: browser signing — 12 words give tet-core's key, and Ed25519 is RFC 8032
+        run: node --experimental-strip-types scripts/browser_signing_parity_guard.mjs
+
       # Try TET: check a machine's log. The Shows / Does not show lists are notebook.py verify's word
       # for word, and the verdict on every fixture notebook (written by the real notebook.py and
       # tet-cli) is the one notebook.py verify printed. device.key is never read.
