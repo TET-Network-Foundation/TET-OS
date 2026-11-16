@@ -212,8 +212,13 @@ function shown() {
   return out;
 }
 const SHOWN = shown();
-/** The one sentence that may say "company" (owner, 2026-11-13), exactly, in EN and JA. */
-const PINNED = ["Open source. No token. No company.", "オープンソース。トークンなし。会社なし。"];
+/**
+ * Exact texts that may contain a banned word, and nothing around them: the one sentence that may say
+ * "company" (owner, 2026-11-13), in EN and JA; and the proper name of a cited spec whose title has a
+ * money word in it (owner, 2026-11-16: the home page's sources name it). The name is pinned whole, so
+ * "payment" anywhere else is still caught.
+ */
+const PINNED = ["Open source. No token. No company.", "オープンソース。トークンなし。会社なし。", "OpenAI Delegated Payment Spec"];
 const unpinned = (s) => PINNED.reduce((x, p) => x.split(p).join(""), s);
 const wordingProblems = (list) =>
   list.flatMap(([where, s0]) => {
@@ -234,6 +239,9 @@ await check("W control: each kind of banned wording is caught, in English and Ja
   assert.deepEqual(wordingProblems([["x", "Open source. No token. No company."], ["x", "オープンソース。トークンなし。会社なし。"]]), []);
   assert.ok(wordingProblems([["x", "Open source. No token. No company at all."]]).length > 0, "a near copy of the pinned sentence");
   assert.ok(wordingProblems([["x", "No company. Open source."]]).length > 0, "the words in another order");
+  // The pinned spec name passes only whole; the money word anywhere else is still caught.
+  assert.deepEqual(wordingProblems([["x", "OpenAI Delegated Payment Spec"]]), []);
+  for (const t of ["Delegated Payment Spec", "OpenAI Delegated Payment", "A payment token, as in the OpenAI Delegated Payment Spec."]) assert.ok(wordingProblems([["x", t]]).length > 0, t);
 });
 
 // W2. /market (W2's prototype, linked from /services) uses the site's words too: no customer, no
@@ -353,7 +361,7 @@ await check("O control: each kind of off-site request is caught", () => {
 
 // ── N. Every number on a page has a source note (app/site/numbers.ts) ─────────────────────────────
 /** Names and references that contain digits but are not quantities. */
-const NAMES = /Ed25519|ed25519|X25519|ML-DSA-\d+|ML-KEM-\d+|FN-DSA|FIPS\s?20\d|SHA-\d+|NTAG\s?\d+(?:\s?DNA)?|P-256|BIP-?39|ePrint\s?\d{4}\/\d+|arXiv\s?\d{4}\.\d{4,5}(?:v\d+)?|\b\d{4}\/\d{3,5}\b|\b\d{4}\.\d{5}(?:v\d+)?\b|\(EU\)\s?\d{4}\/\d+|#\d+|\b\d{4}-\d{2}-\d{2}\b|\bS8-1\b|\b(?:AGKZ|SZ|HV|CS|HSVZ)\d{2}\b|\b0x[0-9a-f]+|\b[0-9a-f]{16,}\b|\bv\d+(?:\.\d+)*\b|\{\w+\}/g;
+const NAMES = /Ed25519|ed25519|X25519|ML-DSA-\d+|ML-KEM-\d+|FN-DSA|FIPS\s?20\d|NIST\sIR\s\d{4}|SHA-\d+|NTAG\s?\d+(?:\s?DNA)?|P-256|BIP-?39|ePrint\s?\d{4}\/\d+|arXiv\s?\d{4}\.\d{4,5}(?:v\d+)?|\b\d{4}\/\d{3,5}\b|\b\d{4}\.\d{5}(?:v\d+)?\b|\(EU\)\s?\d{4}\/\d+|#\d+|\b\d{4}-\d{2}-\d{2}\b|\bS8-1\b|\b(?:AGKZ|SZ|HV|CS|HSVZ)\d{2}\b|\b0x[0-9a-f]+|\b[0-9a-f]{16,}\b|\bv\d+(?:\.\d+)*\b|\{\w+\}/g;
 /**
  * What counts as a measurement: a number with a unit (size, time, a share, a count of tests or words),
  * or any number of three or more digits that is not a year. Counting words in a sentence ("one key",
@@ -396,6 +404,9 @@ await check("N control: an unsourced number, and a sourced number whose note is 
   assert.match(r("b.tsx").join(), /"ci-tests" is used but its source is not on the page/);
   assert.deepEqual(r("c.tsx"), []);
   assert.deepEqual(r("d.tsx"), [], "names with digits are not quantities");
+  files["h.tsx"] = 't("NIST IR 8547 (final).")'; files["i.tsx"] = 't("IR 8547 has 8547 pages.")';
+  assert.deepEqual(r("h.tsx"), [], "a NIST report's number is a name");
+  assert.match(r("i.tsx").join(), /a number with no source/, "the same digits outside the name are a quantity");
   files["e.tsx"] = 't("Proving took 9 s.")'; files["f.tsx"] = 't("証明に12秒かかりました。")'; files["g.tsx"] = 't("Each key may do one thing 1 time, in step 3, since 2025.")';
   assert.match(r("e.tsx").join(), /a number with no source/, "a time in seconds");
   assert.match(r("f.tsx").join(), /a number with no source/, "a time in Japanese");
