@@ -1,12 +1,13 @@
 "use client";
 /**
- * /research: ideas being studied. Nothing on this page runs. Every feature comes from
+ * /research: ideas being studied. None is built; the two models (app/site/run) run in the visitor's tab. Every feature comes from
  * app/site/features/research.ts through <FeatureCard>; the one-shot text follows
  * docs/research/ONE_SHOT_TET.md (and its fuller version on branch docs/one-shot-research) and says
  * nothing beyond it. The papers are linked, not described.
  */
 import { CardGrid, FeatureCard, Figure, Hero, Notice, ShowsDoesNot, SiteSection } from "../../site/kit";
 import { useSite } from "../../site/i18n";
+import { OneShotDemo, PermitSketch } from "../../site/run/RunViews";
 
 const LINK = "underline underline-offset-4 hover:text-teal-700 dark:hover:text-teal-300 outline-none focus-visible:ring-4 focus-visible:ring-teal-500/50 rounded";
 
@@ -74,7 +75,7 @@ export default function ResearchView() {
   const { t } = useSite();
   return (
     <>
-      <Notice text="Nothing on this page runs." />
+      <Notice text="None of these ideas is built. The two models on this page run in your browser and send nothing." />
       <Hero
         title="Research"
         sentence="Ideas we are studying, each with what it would change and what it would not."
@@ -139,10 +140,18 @@ export default function ResearchView() {
         </CardGrid>
       </SiteSection>
 
-      <SiteSection title="A learning model">
-        <CardGrid>
+      <SiteSection title="A learning model" lead="A few simulated qubits, to show what a one-shot key would change and why a simulation cannot be one.">
+        <div className="flex flex-col gap-8">
           <FeatureCard id="learning-model" />
-        </CardGrid>
+          <OneShotDemo />
+        </div>
+      </SiteSection>
+
+      <SiteSection title="Permits written as sentences" lead="A sketch: a line of text becomes a one-time permit, and the permit check runs on it.">
+        <div className="flex flex-col gap-8">
+          <FeatureCard id="permit-language" />
+          <PermitSketch />
+        </div>
       </SiteSection>
 
       <SiteSection title="Papers" lead="Links only. The research note says how much of each one was read.">

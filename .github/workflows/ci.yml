@@ -605,6 +605,13 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: offline notice page — static, honest, no date promises
         run: node scripts/notice_page_guard.mjs
+
+      # "Run it" on the public site (app/site/run): every feature has a run or says why not; every run
+      # calls the real checker (a fake checker changes its pinned output); the agent, one-shot and
+      # permit-language demos; Shows / Does not show on each; Japanese; nothing leaves the tab.
+      - if: needs.gate.outputs.code == 'true'
+        name: public site — every Run it button runs the real check
+        run: node --experimental-strip-types scripts/site_run_guard.mjs
       # The page's node proxy never forwards tet-core's loopback-only operator routes (any method,
       # case, encoding); ordinary routes still pass. Control.
       - if: needs.gate.outputs.code == 'true'

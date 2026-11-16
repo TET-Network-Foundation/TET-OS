@@ -36,7 +36,7 @@ const { NUMBERS } = await import("../app/site/numbers.ts");
 const { CHANGES } = await import("../app/site/changelog.ts");
 const { AGENT_VERIFY } = await import("../app/site/data/agent_verify.ts");
 const SNAPSHOT = JSON.parse(readFileSync(join(UI, "app/site/data/merged_prs.json"), "utf8"));
-const TEXT = ["home", "tags", "machines", "keys", "services", "research", "about", "changelog", "numbers"];
+const TEXT = ["home", "tags", "machines", "keys", "services", "research", "about", "changelog", "numbers", "run"];
 const JA = Object.assign({}, ...(await Promise.all(TEXT.map((s) => import(`../app/site/text/${s}.ts`)))).map((m) => m.JA));
 
 /** Ids allowed to say "running". Empty on purpose: since the hosting account closed (2026-11-10) nothing runs for anyone. */

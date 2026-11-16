@@ -24,6 +24,7 @@ import { feature, SECTIONS } from "./features";
 import { NUMBERS, type NumberId } from "./numbers";
 import { appHref } from "./split";
 import { useSite, type SiteT } from "./i18n";
+import { RunSlot } from "./run/RunViews";
 import type { Status } from "./types";
 
 const cx = (...p: Array<string | false | null | undefined>) => p.filter(Boolean).join(" ");
@@ -202,8 +203,8 @@ export function ShowsDoesNot(props: { shows: string[]; doesNot: string[] }) {
 }
 
 /**
- * One feature, from the registry: title, status, summary, Shows / Does not show, and a link to the
- * real page when there is one. Together with FeatureMini, the only way to show a feature on the site.
+ * One feature, from the registry: title, status, summary, Shows / Does not show, a link to the
+ * real page when there is one, and "Run it" (app/site/run) or why there is nothing to run. Together with FeatureMini, the only way to show a feature on the site.
  */
 export function FeatureCard(props: { id: string }) {
   const { t } = useSite();
@@ -217,6 +218,7 @@ export function FeatureCard(props: { id: string }) {
       <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">{t(f.summary)}</p>
       <ShowsDoesNot shows={f.shows} doesNot={f.doesNot} />
       {f.link ? <SecondaryLink href={f.link.href} label={f.link.label} /> : null}
+      <RunSlot id={f.id} />
     </article>
   );
 }

@@ -7,12 +7,13 @@
 import { CardGrid, FeatureCard, Figure, Guess, Hero, Notice, SiteSection } from "../../site/kit";
 import { SECTION } from "../../site/features/machines";
 import { useSite } from "../../site/i18n";
+import { AgentDemo } from "../../site/run/RunViews";
 
 export default function MachinesView() {
   const { t } = useSite();
   return (
     <>
-      <Notice text="Nothing here runs on a server today. Every check on this page runs on your own computer." />
+      <Notice text="Nothing here runs on a server today. Every check on this page runs on your own computer, and each card's Run it button runs it now." />
       <Hero
         title={SECTION.title}
         sentence={SECTION.sentence}
@@ -65,6 +66,8 @@ export default function MachinesView() {
           <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
             {t("One-time means once per log, not once in the world. Someone who copies the key could start a second log and use the same permit there.")}
           </p>
+          <FeatureCard id="agent-permit-demo" />
+          <AgentDemo />
         </div>
       </SiteSection>
 
