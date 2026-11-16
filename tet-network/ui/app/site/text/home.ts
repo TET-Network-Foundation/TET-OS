@@ -192,7 +192,7 @@ export const JA: Record<string, string> = {
   "Recent sources": "最近の資料",
   "What each one is, and the TET part it is near. Near is not the same as solved.": "それぞれが何か、そして TET のどの部分に近いか。近いことは、解決したことと同じではありません。",
   "Near in TET": "TET で近い部分",
-  "OpenAI Delegated Payment Spec": "OpenAI Delegated Payment Spec",
+  "OpenAI Agentic Commerce, delegated token spec": "OpenAI Agentic Commerce の委任トークン仕様",
   "Part of OpenAI's Agentic Commerce Protocol: an agent hands a merchant a token marked one_time, tied to one checkout session and one merchant, with an expiry time. The service that holds the token checks those limits.":
     "OpenAI の Agentic Commerce Protocol の一部です。エージェントは、one_time と記されたトークンを店に渡します。トークンは 1 つのチェックアウトと 1 つの店に結びつき、期限があります。その制限を確かめるのは、トークンを預かるサービスです。",
   "IETF draft-singla-agent-identity-protocol-02": "IETF draft-singla-agent-identity-protocol-02",

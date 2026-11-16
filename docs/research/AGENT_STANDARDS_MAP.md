@@ -11,7 +11,7 @@ what was read (listed below); where something was not read, this note says so.
 | [draft-singla-agent-identity-protocol-02](https://www.ietf.org/archive/id/draft-singla-agent-identity-protocol-02.html), "Agent Identity Protocol (AIP)" | An individual Internet-Draft (author listed as Independent; not a working-group document), dated 14 May 2026, Standards Track intended. Work in progress, to be cited only as such. It expired on 15 November 2026; the Datatracker lists -03 (10 June 2026) as current. | Sections 3 to 9 in part, through a summarising reader, not line by line. **-03 was not read.** |
 | [NIST IR 8547 (final)](https://csrc.nist.gov/pubs/ir/8547/final), "Transition to Post-Quantum Cryptography Standards" | NIST's report on moving from quantum-vulnerable public-key algorithms to post-quantum ones. Final version dated 27 October 2026 (draft 12 November 2024). | The publication page only. **The PDF's text could not be extracted here**, so no date or table from the report is quoted below. |
 | [NIST AI Agent Standards Initiative](https://www.nist.gov/caisi/ai-agent-standards-initiative) | NIST's initiative on standards for AI agents, including identity and authorisation (already cited on the home page). | The page, earlier. No deliverable from it was read. |
-| [OpenAI Delegated Payment Spec](https://developers.openai.com/commerce/specs/payment), part of the Agentic Commerce Protocol | The spec for handing a merchant's processor a token an agent may use once, within an "allowance". | Through the protocol's reference page ([agenticcommerce.dev](https://agenticcommerce.dev/docs/reference/payments)) and search excerpts; OpenAI's own page was not read whole. |
+| [OpenAI Agentic Commerce, delegated token spec](https://developers.openai.com/commerce/specs/payment), part of the Agentic Commerce Protocol | The spec for handing a merchant's processor a token an agent may use once, within an "allowance". | Through the protocol's reference page ([agenticcommerce.dev](https://agenticcommerce.dev/docs/reference/payments)) and search excerpts; OpenAI's own page was not read whole. |
 
 ## The TET side, as built
 
@@ -58,7 +58,7 @@ be a design change and is not proposed here.
 
 ### Once
 
-| | TET | AIP -02 | Delegated Payment Spec |
+| | TET | AIP -02 | Agentic Commerce delegated token spec |
 |---|---|---|---|
 | What is single-use | A permit, cited by at most one record in this log | A credential token, by `(iss, jti)` (§9.6.5) | A token whose `allowance.reason` is `one_time` (the only value listed) |
 | Who refuses the second use | Anyone re-checking the log, afterwards | The relying party that keeps the replay cache; a cached result must not let a consumed `(iss, jti)` through again (§8.2.1) | The service holding the token (the merchant's processor) |
@@ -67,7 +67,7 @@ be a design change and is not proposed here.
 | What is left to check later | The signed, hash-linked log, verifiable offline | Whatever the relying party logs; the Registry keeps a signed, append-only engagement `change_log` (§5.12), kept by the Registry, not the agent | Whatever the processor keeps |
 
 **Similar:** all three make one use the default for the sensitive thing, and all three put an end on it.
-**Different:** where "once" is enforced. In AIP and the payment spec, one party that sees every use
+**Different:** where "once" is enforced. In AIP and the delegated token spec, one party that sees every use
 (the relying party, the processor) refuses the second one at the time. In TET's notebook, nobody refuses
 in advance except the device's own `record`; the second use is *caught* by whoever reads the log, and
 the evidence is in the holder's hands. That is the trade: TET's check needs no one online and leaves a
@@ -79,7 +79,7 @@ nothing outside them.
 - **AIP** has four revocation kinds (`full_revoke`, `scope_revoke`, `delegation_revoke`,
   `principal_revoke`, §5.7) checked against a registry or a cached revocation list; a token has an
   audience (`aud`) and can be bound to one HTTP request (DPoP, mandatory at its Tiers 2 and 3).
-- **The payment spec** binds the token to one merchant and one checkout session.
+- **The delegated token spec** binds the token to one merchant and one checkout session.
 - **TET's notebook** has neither: a permit cannot be withdrawn before `expires_seq`, and it names no
   audience. Both are gaps.
 
@@ -88,7 +88,7 @@ nothing outside them.
 1. Should a TET permit carry an owner's signature as well as the device's, so the log shows consent and
    not only use? (AIP's Principal Token is the comparison.)
 2. If "once" should hold beyond one log, who keeps the shared record: a node, the chain, or the party
-   that receives the action (as in AIP and the payment spec)? This is "Once in the world" on /machines.
+   that receives the action (as in AIP and the delegated token spec)? This is "Once in the world" on /machines.
 3. Could a TET permit be expressed as, or carried inside, an AIP credential (a `did:aip` agent with a
    `jti` that equals a notebook `permit_id`)? Nobody has tried.
 4. AIP fixes Ed25519. If drafts like it move forward, is there a place for a post-quantum half, and would
@@ -101,4 +101,4 @@ nothing outside them.
 - That TET follows, implements or is compatible with any of these documents. It does none of these.
 - That TET prevents fraud or impersonation. A signature shows which key signed; it does not show who
   holds the key or whether a request was honest.
-- Anything about the Delegated Payment Spec beyond its token limits: this note is about "once" only.
+- Anything about the Agentic Commerce delegated token spec beyond its token limits: this note is about "once" only.

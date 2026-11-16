@@ -212,13 +212,8 @@ function shown() {
   return out;
 }
 const SHOWN = shown();
-/**
- * Exact texts that may contain a banned word, and nothing around them: the one sentence that may say
- * "company" (owner, 2026-11-13), in EN and JA; and the proper name of a cited spec whose title has a
- * money word in it (owner, 2026-11-16: the home page's sources name it). The name is pinned whole, so
- * "payment" anywhere else is still caught.
- */
-const PINNED = ["Open source. No token. No company.", "オープンソース。トークンなし。会社なし。", "OpenAI Delegated Payment Spec"];
+/** The one sentence that may say "company" (owner, 2026-11-13), exactly, in EN and JA. */
+const PINNED = ["Open source. No token. No company.", "オープンソース。トークンなし。会社なし。"];
 const unpinned = (s) => PINNED.reduce((x, p) => x.split(p).join(""), s);
 const wordingProblems = (list) =>
   list.flatMap(([where, s0]) => {
@@ -239,9 +234,6 @@ await check("W control: each kind of banned wording is caught, in English and Ja
   assert.deepEqual(wordingProblems([["x", "Open source. No token. No company."], ["x", "オープンソース。トークンなし。会社なし。"]]), []);
   assert.ok(wordingProblems([["x", "Open source. No token. No company at all."]]).length > 0, "a near copy of the pinned sentence");
   assert.ok(wordingProblems([["x", "No company. Open source."]]).length > 0, "the words in another order");
-  // The pinned spec name passes only whole; the money word anywhere else is still caught.
-  assert.deepEqual(wordingProblems([["x", "OpenAI Delegated Payment Spec"]]), []);
-  for (const t of ["Delegated Payment Spec", "OpenAI Delegated Payment", "A payment token, as in the OpenAI Delegated Payment Spec."]) assert.ok(wordingProblems([["x", t]]).length > 0, t);
 });
 
 // W2. /market (W2's prototype, linked from /services) uses the site's words too: no customer, no

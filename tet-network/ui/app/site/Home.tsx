@@ -42,7 +42,7 @@ const LATER = [
  */
 const SOURCES: { label: string; href: string; text: string; part: string }[] = [
   {
-    label: "OpenAI Delegated Payment Spec",
+    label: "OpenAI Agentic Commerce, delegated token spec",
     href: "https://developers.openai.com/commerce/specs/payment",
     text: "Part of OpenAI's Agentic Commerce Protocol: an agent hands a merchant a token marked one_time, tied to one checkout session and one merchant, with an expiry time. The service that holds the token checks those limits.",
     part: "one-time-permits",
