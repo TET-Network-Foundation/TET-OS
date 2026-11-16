@@ -16,7 +16,6 @@ export default function MachinesView() {
       <Hero
         title={SECTION.title}
         sentence={SECTION.sentence}
-        art={<Figure src="/site/machines/hero.svg" alt="A small drone over a row of plants. It carries its own key and a ticket that allows one action, once." />}
       />
 
       <SiteSection
@@ -75,7 +74,6 @@ export default function MachinesView() {
         lead="A bot or a script gets its own key. What it sends carries its signature, and anyone can check that signature without asking us."
       >
         <div className="flex flex-col gap-8">
-          <Figure src="/site/machines/agent.svg" alt="A program window with a small face holds a key. It sends a page with a seal, and a magnifier checks the seal with a tick." wide />
           <CardGrid>
             <FeatureCard id="agent-signatures" />
             <FeatureCard id="agents-control" />

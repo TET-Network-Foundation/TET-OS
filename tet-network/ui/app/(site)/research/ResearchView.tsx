@@ -78,7 +78,6 @@ export default function ResearchView() {
       <Hero
         title="Research"
         sentence="Ideas we are studying, each with what it would change and what it would not."
-        art={<Figure src="/site/research/hero.svg" alt="A key beside an open notebook under a magnifying glass: an idea being studied, not a thing that runs." />}
       />
 
       <SiteSection
@@ -135,14 +134,9 @@ export default function ResearchView() {
       </SiteSection>
 
       <SiteSection title="Signatures" lead="Every TET signature today is two signatures made together, Ed25519 and ML-DSA-44. A second post-quantum one is an idea, waiting for the FIPS 206 standard.">
-        <div className="grid items-start gap-6 md:grid-cols-2">
-          <Figure
-            src="/site/research/signatures.svg"
-            alt="Two solid seals joined together, the two signatures used today, and a third seal drawn in dashed lines with a pause mark: it waits for its standard."
-            caption="Solid: Ed25519 and ML-DSA-44, used today. Dashed: FN-DSA, an idea waiting for the FIPS 206 standard."
-          />
+        <CardGrid>
           <FeatureCard id="fn-dsa" />
-        </div>
+        </CardGrid>
       </SiteSection>
 
       <SiteSection title="A learning model">

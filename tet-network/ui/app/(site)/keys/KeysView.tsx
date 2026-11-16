@@ -86,7 +86,6 @@ export default function KeysView() {
       <Hero
         title="Your keys"
         sentence={SECTION.sentence}
-        art={<Figure src="/site/keys/hero.svg" alt="A site asks a question, a key answers, and the site sees a key with a check mark, not a person." />}
       />
 
       <SiteSection
