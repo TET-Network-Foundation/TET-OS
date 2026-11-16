@@ -43,9 +43,9 @@ pub fn mldsa44_keypair_from_mnemonic_b64(mnemonic12: String) -> Result<JsValue, 
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = mnemonic12;
-        return Err(JsValue::from_str(
+        Err(JsValue::from_str(
             "mldsa44 wasm not available on this target",
-        ));
+        ))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -77,9 +77,9 @@ pub fn mldsa44_sign_deterministic_b64(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = (keypair_b64, msg_bytes);
-        return Err(JsValue::from_str(
+        Err(JsValue::from_str(
             "mldsa44 wasm not available on this target",
-        ));
+        ))
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -105,7 +105,7 @@ pub fn mldsa44_verify_b64(
     #[cfg(not(target_arch = "wasm32"))]
     {
         let _ = (pubkey_b64, sig_b64, msg_bytes);
-        return Ok(false);
+        Ok(false)
     }
     #[cfg(target_arch = "wasm32")]
     {
