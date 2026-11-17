@@ -169,7 +169,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                 <span aria-hidden className={h.verified ? "text-[#1f5132]" : "text-[#8a1f1f]"}>{h.verified ? "✓" : "✗"}</span>
                 <span className={cx(MONO, "font-semibold")}>{h.code}</span>
                 <span className={cx(MONO, "text-[13.5px] text-[#5d646d]")}>{h.signerEd25519.slice(0, 8)}</span>
-                <span className="text-[13.5px] text-[#5d646d]">{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>
+                <span className="text-[13.5px] text-[#5d646d]" title={t("time from this node's clock, not checked")}>{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>
                 <span aria-hidden className="ml-auto text-[#5d646d] group-open:rotate-90">›</span>
               </summary>
               <div className="space-y-2 px-3 pb-3 text-[15px]">
@@ -181,7 +181,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                   <p className="font-semibold text-[#8a1f1f]">{t("This record doesn't check out. Don't trust it.")}</p>
                 )}
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                  <dt className="text-[#5d646d]">{t("Who")}</dt>
+                  <dt className="text-[#5d646d]">{t("Marked by")}</dt>
                   <dd className="m-0">
                     {t("ID")}{" "}
                     {props.onId ? (
@@ -193,7 +193,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                     )}
                   </dd>
                   <dt className="text-[#5d646d]">{t("When")}</dt>
-                  <dd className="m-0">{t("recorded on this node at {when}", { when: new Date(h.publishedAtMs).toLocaleString(locale) })}</dd>
+                  <dd className="m-0">{t("recorded on this node at {when} (time from this node's clock, not checked)", { when: new Date(h.publishedAtMs).toLocaleString(locale) })}</dd>
                   <dt className="text-[#5d646d]">{t("What")}</dt>
                   <dd className={cx(MONO, "m-0 break-all text-[13px]")}>{t("fingerprint (SHA-256)")} {h.fileSha256}</dd>
                   {h.verified && h.anchor ? (

@@ -19,7 +19,9 @@
 //    is caught.
 // 6. Images must be PNG/JPEG/GIF/WebP whose SHA-256 matches; links must be http(s).
 // 7. The reader page says a node can serve an older version by leaving out newer edits (signatures
-//    can't prove recency), and shows the last edit's signed time. Control: the line removed.
+//    can't prove recency), and shows the last edit's time labelled as written by the signer and not
+//    checked (the signer chose it; nothing checks it). Controls: the line removed; the old unlabelled
+//    "last edit signed {when}" back; the label without its "not checked" part.
 
 import { register } from "node:module";
 import { readFileSync } from "node:fs";
@@ -226,10 +228,15 @@ await check("images need a matching SHA-256 and a raster type; links need http(s
 const VIEW = readFileSync(new URL("../app/s/[site]/page.tsx", import.meta.url), "utf8");
 const honestView = (src) => {
   assert.ok(src.includes("A node can leave out newer edits and show an older version; compare the version with the site's owner."), "the withholding line is gone");
-  assert.ok(src.includes("last edit signed {when}"), "the last signed time is gone");
+  assert.ok(src.includes(`t("${LAST_EDIT}"`), "the last edit's time is gone, or no longer says the signer wrote it and it is not checked");
+  assert.ok(!src.includes("last edit signed {when}"), "the last edit's time is shown as a signed time, without saying the signer chose it");
 };
-await check("the reader page says a node can withhold newer edits, and shows the last signed time", () => honestView(VIEW));
+// The signer writes created_at_ms into the edit; a signature can't show when it was made.
+const LAST_EDIT = "last edit {when} (time written by the signer, not checked)";
+await check("the reader page says a node can withhold newer edits, and labels the last edit's time as the signer's, not checked", () => honestView(VIEW));
 await mustThrow("a reader page without the withholding line is caught", () => honestView(VIEW.replace("A node can leave out newer edits", "Every edit is here")));
+await mustThrow("a reader page with the old unlabelled \"last edit signed {when}\" is caught", () => honestView(VIEW.replace(LAST_EDIT, "last edit signed {when}")));
+await mustThrow("a reader page whose time label drops \"not checked\" is caught", () => honestView(VIEW.replace(LAST_EDIT, "last edit {when} (time written by the signer)")));
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

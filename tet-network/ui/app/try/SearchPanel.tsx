@@ -82,7 +82,7 @@ export default function SearchPanel(props: { active: boolean }) {
                   </p>
                   <p className="text-[14.5px]">{h.snippet}</p>
                   <p className="text-[13px] text-[#5d646d]">
-                    {t("signed · version {n} · {date}", { n: h.version, date: fmtDate(h.signedAtMs, locale) })}
+                    {t("signed · version {n} · {date} (time written by the signer, not checked)", { n: h.version, date: fmtDate(h.signedAtMs, locale) })}
                   </p>
                 </li>
               ))}
