@@ -5,8 +5,8 @@
  * sources, how it works, why it may matter later (our reasoning, with sources), where things stand,
  * the five sections, and a short FAQ. Concrete over decorative: no drawn illustrations here. Every string goes through t(); the Japanese is in app/site/text/home.ts.
  */
-import { CardGrid, Figure, FeatureMini, Guess, Hero, Measured, SecondaryLink, SectionCard, SiteSection, Terminal } from "./kit";
-import { SECTIONS } from "./features";
+import { CardGrid, Figure, FeatureMini, Guess, Hero, Measured, SecondaryLink, SectionCard, SiteSection, StatusBadge, Terminal } from "./kit";
+import { feature, SECTIONS } from "./features";
 import { useSite } from "./i18n";
 import { HowDiagram } from "./home/HowDiagram";
 
@@ -31,6 +31,39 @@ const LATER = [
     title: "Signatures are moving to post-quantum schemes",
     text: "NIST has published ML-DSA as a standard signature scheme designed to resist quantum computers. Records signed today may need to be checked for many years, so every TET signature already carries an ML-DSA-44 half next to Ed25519.",
     source: { label: "NIST FIPS 204 (ML-DSA)", href: "https://csrc.nist.gov/pubs/fips/204/final" },
+  },
+];
+
+/**
+ * Recent sources near the reasons above: what each is, in one line, and the TET part it is near. The
+ * part is a registered feature, so its status label comes from app/site/features and cannot drift
+ * from the repository. Being near something is not solving it; no line says TET prevents anything.
+ * The fuller comparison is docs/research/AGENT_STANDARDS_MAP.md (idea, not reviewed).
+ */
+const SOURCES: { label: string; href: string; text: string; part: string }[] = [
+  {
+    label: "OpenAI Agentic Commerce, delegated token spec",
+    href: "https://developers.openai.com/commerce/specs/payment",
+    text: "Part of OpenAI's Agentic Commerce Protocol: an agent hands a merchant a token marked one_time, tied to one checkout session and one merchant, with an expiry time. The service that holds the token checks those limits.",
+    part: "one-time-permits",
+  },
+  {
+    label: "IETF draft-singla-agent-identity-protocol-02",
+    href: "https://www.ietf.org/archive/id/draft-singla-agent-identity-protocol-02.html",
+    text: "An individual Internet-Draft, work in progress and not a standard: agent identities from Ed25519 keys, delegation tokens with a scope and an expiry, and a replay check by the site that receives them. A newer version, -03, has replaced it.",
+    part: "agent-permit-once",
+  },
+  {
+    label: "NIST IR 8547 (final)",
+    href: "https://csrc.nist.gov/pubs/ir/8547/final",
+    text: "NIST's final report on moving from public-key algorithms a quantum computer could break, Ed25519 among them, to post-quantum standards such as ML-DSA.",
+    part: "agent-signatures",
+  },
+  {
+    label: "ABC News: three men charged over AI copies of executives' voices (US Department of Justice indictment)",
+    href: "https://abcnews.com/US/trio-ai-impersonate-corporate-execs-defrauding-companies-130/story?id=137894421",
+    text: "Prosecutors say the three used AI to copy executives' voices and gave staff orders by phone. These are charges, not findings. A TET signature shows which key signed a message; it says nothing about a phone call, and TET does not stop this kind of deception.",
+    part: "agent-signatures",
   },
 ];
 
@@ -189,6 +222,28 @@ export default function Home() {
               </li>
             ))}
           </ol>
+          <div className="flex flex-col gap-4">
+            <h3 className="text-xl font-semibold">{t("Recent sources")}</h3>
+            <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
+              {t("What each one is, and the TET part it is near. Near is not the same as solved.")}
+            </p>
+            <ul className="flex flex-col gap-4">
+              {SOURCES.map((s) => {
+                const f = feature(s.part);
+                return (
+                  <li key={s.href} className="flex flex-col gap-2 border-l-2 border-slate-300 pl-4 dark:border-slate-700">
+                    <a href={s.href} className="w-fit font-semibold underline underline-offset-4">
+                      {t(s.label)}
+                    </a>
+                    <p className="max-w-prose leading-relaxed">{t(s.text)}</p>
+                    <p className="flex flex-wrap items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+                      {t("Near in TET")}: {t(f.title)} <StatusBadge status={f.status} />
+                    </p>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
           <Guess title="Our reasoning, not a promise">
             <p>{t("We guess that many machines and agents will act for people, each with a key that carries written limits. A site or a person could then check what an agent was allowed to do before trusting what it did. This is a guess, and it may be wrong.")}</p>
           </Guess>

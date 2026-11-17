@@ -187,4 +187,21 @@ export const JA: Record<string, string> = {
   "Five places to start": "はじめに見る五つの場所",
   "Each card says what is built and what is not. A label on every feature tells you how far it has come.":
     "どのカードにも、できていることとできていないことが書いてあります。それぞれの機能のラベルが、どこまで進んでいるかを示します。",
+
+  // Recent sources (the "Why this matters later" section)
+  "Recent sources": "最近の資料",
+  "What each one is, and the TET part it is near. Near is not the same as solved.": "それぞれが何か、そして TET のどの部分に近いか。近いことは、解決したことと同じではありません。",
+  "Near in TET": "TET で近い部分",
+  "OpenAI Agentic Commerce, delegated token spec": "OpenAI Agentic Commerce の委任トークン仕様",
+  "Part of OpenAI's Agentic Commerce Protocol: an agent hands a merchant a token marked one_time, tied to one checkout session and one merchant, with an expiry time. The service that holds the token checks those limits.":
+    "OpenAI の Agentic Commerce Protocol の一部です。エージェントは、one_time と記されたトークンを店に渡します。トークンは 1 つのチェックアウトと 1 つの店に結びつき、期限があります。その制限を確かめるのは、トークンを預かるサービスです。",
+  "IETF draft-singla-agent-identity-protocol-02": "IETF draft-singla-agent-identity-protocol-02",
+  "An individual Internet-Draft, work in progress and not a standard: agent identities from Ed25519 keys, delegation tokens with a scope and an expiry, and a replay check by the site that receives them. A newer version, -03, has replaced it.":
+    "個人が出した Internet-Draft で、作業中の文書であり標準ではありません。Ed25519 の鍵から作るエージェントの ID、範囲と期限のある委任トークン、そしてそれを受け取るサイトによる使い回しのチェックを定めています。今は新しい版の -03 に置き換わっています。",
+  "NIST IR 8547 (final)": "NIST IR 8547（最終版）",
+  "NIST's final report on moving from public-key algorithms a quantum computer could break, Ed25519 among them, to post-quantum standards such as ML-DSA.":
+    "量子コンピューターで破られうる公開鍵アルゴリズム（Ed25519 を含む）から、ML-DSA などの耐量子の標準へ移るための、NIST の最終版の報告書です。",
+  "ABC News: three men charged over AI copies of executives' voices (US Department of Justice indictment)": "ABC News：AI で経営者の声をまねたとして 3 人が起訴（米司法省の起訴）",
+  "Prosecutors say the three used AI to copy executives' voices and gave staff orders by phone. These are charges, not findings. A TET signature shows which key signed a message; it says nothing about a phone call, and TET does not stop this kind of deception.":
+    "検察によると、3 人は AI で経営者の声をまね、電話で社員に指示を出しました。これは起訴の内容で、裁判で認められた事実ではありません。TET の署名が示すのは、どの鍵がメッセージに署名したかです。電話については何も示さず、TET はこの種のなりすましを防ぎません。",
 };

@@ -353,7 +353,7 @@ await check("O control: each kind of off-site request is caught", () => {
 
 // ── N. Every number on a page has a source note (app/site/numbers.ts) ─────────────────────────────
 /** Names and references that contain digits but are not quantities. */
-const NAMES = /Ed25519|ed25519|X25519|ML-DSA-\d+|ML-KEM-\d+|FN-DSA|FIPS\s?20\d|SHA-\d+|NTAG\s?\d+(?:\s?DNA)?|P-256|BIP-?39|ePrint\s?\d{4}\/\d+|arXiv\s?\d{4}\.\d{4,5}(?:v\d+)?|\b\d{4}\/\d{3,5}\b|\b\d{4}\.\d{5}(?:v\d+)?\b|\(EU\)\s?\d{4}\/\d+|#\d+|\b\d{4}-\d{2}-\d{2}\b|\bS8-1\b|\b(?:AGKZ|SZ|HV|CS|HSVZ)\d{2}\b|\b0x[0-9a-f]+|\b[0-9a-f]{16,}\b|\bv\d+(?:\.\d+)*\b|\{\w+\}/g;
+const NAMES = /Ed25519|ed25519|X25519|ML-DSA-\d+|ML-KEM-\d+|FN-DSA|FIPS\s?20\d|NIST\sIR\s\d{4}|SHA-\d+|NTAG\s?\d+(?:\s?DNA)?|P-256|BIP-?39|ePrint\s?\d{4}\/\d+|arXiv\s?\d{4}\.\d{4,5}(?:v\d+)?|\b\d{4}\/\d{3,5}\b|\b\d{4}\.\d{5}(?:v\d+)?\b|\(EU\)\s?\d{4}\/\d+|#\d+|\b\d{4}-\d{2}-\d{2}\b|\bS8-1\b|\b(?:AGKZ|SZ|HV|CS|HSVZ)\d{2}\b|\b0x[0-9a-f]+|\b[0-9a-f]{16,}\b|\bv\d+(?:\.\d+)*\b|\{\w+\}/g;
 /**
  * What counts as a measurement: a number with a unit (size, time, a share, a count of tests or words),
  * or any number of three or more digits that is not a year. Counting words in a sentence ("one key",
@@ -396,6 +396,9 @@ await check("N control: an unsourced number, and a sourced number whose note is 
   assert.match(r("b.tsx").join(), /"ci-tests" is used but its source is not on the page/);
   assert.deepEqual(r("c.tsx"), []);
   assert.deepEqual(r("d.tsx"), [], "names with digits are not quantities");
+  files["h.tsx"] = 't("NIST IR 8547 (final).")'; files["i.tsx"] = 't("IR 8547 has 8547 pages.")';
+  assert.deepEqual(r("h.tsx"), [], "a NIST report's number is a name");
+  assert.match(r("i.tsx").join(), /a number with no source/, "the same digits outside the name are a quantity");
   files["e.tsx"] = 't("Proving took 9 s.")'; files["f.tsx"] = 't("証明に12秒かかりました。")'; files["g.tsx"] = 't("Each key may do one thing 1 time, in step 3, since 2025.")';
   assert.match(r("e.tsx").join(), /a number with no source/, "a time in seconds");
   assert.match(r("f.tsx").join(), /a number with no source/, "a time in Japanese");
