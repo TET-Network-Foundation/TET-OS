@@ -9,8 +9,10 @@ the outside cryptography review, and the last section lists five questions for i
 ## Part 1: what the tools do today
 
 The commands below were run on 2026-11-17 against `main` at `6e628a4`. `tet-cli` was a release
-build from another checkout. Its `tet-cli/` sources are identical to `6e628a4`, and its `tet-core`
-differs only in REST handlers and tests. The key was a throwaway made for this note. The 12 words
+build from another checkout, built from a commit whose `tet-cli/` sources are identical to `6e628a4`.
+Its `tet-core` differs only by one added test, and its `Cargo.lock` differs in the versions of some
+dependencies. Any uncommitted changes at build time cannot be checked, so a fresh build from `main`
+is what counts. The key was a throwaway made for this note. The 12 words
 never reached the screen: below, they are replaced by a marker, and long keys are cut short. The
 chain was an example id that no node runs (`TET_CHAIN_ID=tet-example-key-ops`).
 
@@ -82,7 +84,7 @@ iterations). "Forget this device" removes them (`tet-network/ui/app/lib/device_s
 ```
 $ notebook.py init --dir nb
 tet-ed25519:09be1fa252823836...
-$ ls -l nb
+$ ls -l nb            # run with umask 077; only device.key is forced to 0600 by the tool
 -rw-------  120  chain.json
 -rw-------   69  device.key
 -rw-------   77  device.keyid
@@ -152,8 +154,9 @@ Two choices:
 1. **The same words on every device**, as today. This is simplest. It costs the ability to revoke
    one device, and a leak from any device is a leak from all of them.
 2. **Each device makes its own key** (as `notebook.py init` already does for machines), and the owner
-   key signs a statement naming it. Its shape is the machine ID / `tet_machine_permit_v2` shape from
-   `docs/research/PERMIT_ISSUER.md`:
+   key signs a statement naming it. Its shape follows the owner-signed permit in
+   `docs/research/PERMIT_ISSUER.md` and the machine ID (`tet_agent_id_v0`) in the agent identity
+   draft on branch `agent-id/v0`, which pins both of the machine's key ids:
    `{"kind":"tet_device_v0", "device":"tet-ed25519:…", "device_mldsa44":"tet-mldsa44:…", "label":"…",
    "n", "prev"}`, signed by the owner key. It pins both key ids, because a TET wallet id names only
    the Ed25519 half. The device then signs with its own key, and a checker given the owner key out of
@@ -167,8 +170,9 @@ proposed once and reverted from `main` to wait for the review, so it is not part
 
 Reuse the owner record idea from the agent identity draft (branch `agent-id/v0`, design only, held
 off `main` until the cryptography review): a record signed by the owner key, chained by `n` and
-`prev` (the SHA-256 of the previous record), saying `op: revoke`, the device's two key ids, and
-`after_seq`. Signatures by that device after position `after_seq` in its own chained log are refused
+`prev` (the SHA-256 of the previous record), saying `op: revoke`, the device, and
+`after_seq`. (The draft names the device by one key id. Naming both, as everywhere else here, is this
+note's addition.) Signatures by that device after position `after_seq` in its own chained log are refused
 by any checker that holds the record. This is an idea only here.
 
 - **Final.** A later record cannot undo a revoke. So if the owner key leaks, the thief can't
@@ -227,8 +231,10 @@ screens that says plainly what Part 1 says.
 
 ## Five questions for the reviewer
 
-1. **One seed, both halves.** Ed25519 and ML-DSA-44, and the messaging keys, all come from one BIP39
-   seed under different labels. Is HKDF-SHA256 with distinct labels enough separation? Does a
+1. **One seed, both halves.** The Ed25519 key is the first 32 bytes of the BIP39 seed, used
+   directly. The same 64-byte seed is also the input to HKDF-SHA256 for the ML-DSA-44 seed and for
+   the messaging keys, each under its own label. Is using the seed's bytes directly for one key and
+   as HKDF input for the others sound, or should every key come from HKDF? Does a
    successor statement need to name both halves of each key, as proposed, or is one half enough?
 2. **Cross-signing.** Is "old and new key sign the same canonical bytes, each under its own payload
    type" enough to stop a successor from naming a key whose holder did not agree, and to stop one
