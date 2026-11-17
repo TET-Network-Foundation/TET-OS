@@ -236,7 +236,7 @@ await check("W control: each kind of banned wording is caught, in English and Ja
   assert.ok(wordingProblems([["x", "No company. Open source."]]).length > 0, "the words in another order");
 });
 
-// W2. /market (W2's prototype, linked from /services) uses the site's words too: no customer, no
+// W2. /market (a prototype, linked from /services) uses the site's words too: no customer, no
 // company (配送会社), no money or promised dates, in English, Japanese and Hong Kong Chinese. It merges
 // from its own branch, so in a tree without app/market this check says so and has nothing to read.
 const MARKET = walk("app/market").filter((p) => /\.(?:tsx?|mjs)$/.test(p)).map((p) => [p, read(p)]);
