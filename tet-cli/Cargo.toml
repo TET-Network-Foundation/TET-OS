@@ -11,7 +11,7 @@ clap = { version = "4", features = ["derive"] }
 ed25519-dalek = "2"
 hex = "0.4"
 methods = { path = "../methods" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots"] }
 serde_json = "1"
 sha2 = "0.10"
 tet-core = { path = "../tet-core" }

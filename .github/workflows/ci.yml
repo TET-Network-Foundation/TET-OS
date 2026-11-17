@@ -235,6 +235,14 @@ jobs:
         name: node backup — a node comes back up from the tarball
         run: python3 tools/node-backup/test_backup_restore.py
 
+      # TLS stays rustls: no openssl-sys, openssl or native-tls in the workspace's normal and build
+      # dependencies on any release target, and the OS root store stays on next to the bundled one.
+      # One crate that declares reqwest with its default features is enough to bring OpenSSL back.
+      # scripts/run_guards.sh picks this line up too.
+      - if: needs.gate.outputs.code == 'true'
+        name: TLS — no OpenSSL or native-tls in the tree
+        run: python3 tools/deps/test_no_openssl.py
+
       # Node lives in this job rather than a new one: the end-to-end check below needs BOTH the Rust
       # binaries and the SDK, and installing Node here is far cheaper than installing Rust in the ui
       # job. No new job, so the five required check names stay exactly as the ruleset lists them.
