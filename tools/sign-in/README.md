@@ -2,8 +2,8 @@
 
 **Status: prototype. The design has not been reviewed. Not for real logins.** It runs on
 `127.0.0.1` only, keeps its state in memory, and is bound to an example chain id no node runs. The
-design it is a small piece of is `docs/plans/SIGN_IN_WITH_TET.md` (branch `plan-sign-in-with-tet`,
-design only, for review).
+design it is a small piece of is `docs/plans/SIGN_IN_WITH_TET.md` (on `main`; design only, for
+review).
 
 ## What it does
 
