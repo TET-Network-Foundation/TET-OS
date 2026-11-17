@@ -14,6 +14,12 @@
 //    wording or money words (the patterns of scripts/try_money_guard.mjs, read from that file); no
 //    testimonials or quoted users; no promised dates.
 // J. Every string the site shows has Japanese.
+// L1's kit check reads kit.tsx's string and template literals only. Known gaps, left open on purpose
+// (the check protects a colour rule, not a secret):
+//   - a regex literal in the kit (/bg-teal-700 …/.source) is not read;
+//   - JSX text in the kit is not read;
+//   - a page can call a kit component as a function and read .props
+//     (AccentBar({ shown: true }).props.className); name checks cannot see that.
 // Every check has a control here: the check run on a broken copy must fail.
 
 import { register, createRequire } from "node:module";
@@ -317,7 +323,10 @@ const KIT_ALLOWED = {
   STATUS_TEXT: ["const STATUS_TEXT", "export function StatusBadge", "export function SiteFrame"],
   "the accent classes": ["const ACCENT_FILL"],
 };
-const ACCENT_CLASS = /(?<![\w:-])(?:dark:)?bg-teal-(?:[67]00|400)(?![\w-])/;
+// Any variant chain may precede the class (sm:, group-hover:, [&]:, min-[0px]:, [&:hover]:, !), so
+// the class is matched wherever it starts a token or follows the last ":". hover:bg-teal-800 and
+// dark:hover:bg-teal-300 (the kit's hover shades) are other shades and do not match.
+const ACCENT_CLASS = /(?<![^\s:!])bg-teal-(?:[67]00|400)(?![\w-])/;
 const ts = createRequire(import.meta.url)("typescript");
 function kitPrivateProblems(p, s) {
   const out = [];
@@ -424,6 +433,14 @@ await check("L control: each layout rule is caught", () => {
     [`${FILL}export const BADGE = \`\${ACCENT_FILL} px-2\`;\n`]: /"export const BADGE" uses ACCENT_FILL/,
     'export const SOLID = "bg-teal-700 text-white";\n': /"export const SOLID" uses the accent classes/,
     'export const NIGHT = "dark:bg-teal-400 px-2";\n': /"export const NIGHT" uses the accent classes/,
+    // Any variant before the class is still the class.
+    'export const SM = "sm:bg-teal-700";\n': /"export const SM" uses the accent classes/,
+    'export const GH = "group-hover:bg-teal-600 px-2";\n': /"export const GH" uses the accent classes/,
+    'export const AMP = "[&]:bg-teal-700 dark:[&]:bg-teal-400";\n': /"export const AMP" uses the accent classes/,
+    'export const MIN = "px-2 min-[0px]:bg-teal-700";\n': /"export const MIN" uses the accent classes/,
+    'export const HOV = "[&:hover]:bg-teal-700";\n': /"export const HOV" uses the accent classes/,
+    'export const IMP = "!bg-teal-700 px-2";\n': /"export const IMP" uses the accent classes/,
+    'export const OP = `px-2 ${"x"} md:dark:bg-teal-400/90`;\n': /"export const OP" uses the accent classes/,
     [`${FILL}export { ACCENT_FILL };\n`]: /"ExportDeclaration" uses ACCENT_FILL/,
     [`${FILL}export function accent() { return ACCENT_FILL; }\n`]: /"export function accent" uses ACCENT_FILL/,
     [`${FILL}export const F = () => {\n  void 0;\n  return ACCENT_FILL;\n};\n`]: /"export const F" uses ACCENT_FILL/,
