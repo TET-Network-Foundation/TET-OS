@@ -24,6 +24,12 @@
 //    lines don't count. Controls, each for its own assertion: the line removed; the old
 //    "last edit signed {when}" back, or a variant; the label without "not checked"; the label only
 //    in a comment; a second unlabelled render; a ja or zh-HK value without the not-checked part.
+// 8. Every time shown as unchecked (seven renders across six panels: SealPanel, SearchPanel,
+//    ProofCode, GenuineCheck twice, GenuinePanel, the reader page) keeps "not checked" in en and
+//    its fragment in ja and zh-HK, is rendered in a live line, and has no check mark on it.
+//    Controls, per row: the label dropped; the label only in a comment; a ja or zh-HK value without
+//    the fragment. For the sealed prediction: a check mark put back on the time; the time moved
+//    into the green box.
 
 import { register } from "node:module";
 import { readFileSync } from "node:fs";
@@ -259,6 +265,50 @@ await refuses("the labelled key only in a comment, the time shown bare, is caugh
 await refuses("a second, unlabelled render of the time is caught", () => honestView(VIEW.replace(LABELLED, `${LABELLED} <span>{new Date(verdict.lastSignedAtMs).toLocaleString()}</span>`)), /more than once/);
 await refuses("a ja label without the not-checked part is caught", () => honestView(VIEW, { ...JA, [LAST_EDIT]: "最終編集の署名 {when}" }), /the ja label/);
 await refuses("a zh-HK label without the not-checked part is caught", () => honestView(VIEW, JA, { ...ZH_HK, [LAST_EDIT]: "最後一次編輯簽署於 {when}" }), /the zh-HK label/);
+
+// 8. Every time the UI shows that nothing checks carries "not checked" in en, ja and zh-HK, one row
+// per label. A row: the file, the t() key it renders, and the fragment each language must keep. The
+// key must be rendered in a live (non-comment) line of that file, and the element that opens before
+// it must carry no check mark and not be the green verified box: a check mark beside a time it calls
+// unchecked reads as "checked" (the sealed-prediction box did exactly this).
+// Known gaps: the enclosing element is found textually (the last "<p", "<span", "<dd" or "<div"
+// before the key), and the GenuineCheck summary date is labelled only by its title attribute.
+const NODE = ["time from this node's clock, not checked", "このノードの時計の時刻、未確認", "此節點時鐘的時間，未經核實"];
+const SIGNER = ["time written by the signer, not checked", "署名者が書いた時刻、未確認", "簽署者寫下的時間，未經核實"];
+const UNCHECKED_TIMES = [
+  ["app/try/SealPanel.tsx", "Written by {when} (time from this node's clock, not checked).", ...NODE],
+  ["app/try/SearchPanel.tsx", "signed · version {n} · {date} (time written by the signer, not checked)", ...SIGNER],
+  ["app/try/ProofCode.tsx", "published {when} (time from this node's clock, not checked)", ...NODE],
+  ["app/try/GenuineCheck.tsx", "time from this node's clock, not checked", ...NODE],
+  ["app/try/GenuineCheck.tsx", "recorded on this node at {when} (time from this node's clock, not checked)", ...NODE],
+  ["app/try/GenuinePanel.tsx", "This shows that your ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.", "is not checked", "確認されていません", "未經核實"],
+  ["app/s/[site]/page.tsx", "last edit {when} (time written by the signer, not checked)", ...SIGNER],
+];
+const SRC = Object.fromEntries(UNCHECKED_TIMES.map(([f]) => [f, readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
+const labelled = ([file, key, en, ja, zh], src = SRC[file], jaD = JA, zhD = ZH_HK) => {
+  assert.ok(key.includes(en), `${file}: the key lost "${en}"`);
+  const code = live(src);
+  const at = code.indexOf(`t(${JSON.stringify(key)}`);
+  assert.ok(at >= 0, `${file}: the label "${key}" is not rendered`);
+  const open = Math.max(...["<p", "<span", "<dd", "<div"].map((tag) => code.lastIndexOf(tag, at)));
+  const head = code.slice(open, at);
+  assert.ok(!head.includes("✓") && !head.includes("bg-[#e8f5ec]"), `${file}: a check mark sits on the unchecked time "${key}"`);
+  assert.ok(typeof jaD[key] === "string" && jaD[key].includes(ja), `${file}: the ja value of "${key}" lost "${ja}"`);
+  assert.ok(typeof zhD[key] === "string" && zhD[key].includes(zh), `${file}: the zh-HK value of "${key}" lost "${zh}"`);
+};
+for (const row of UNCHECKED_TIMES) await check(`${row[0]}: "${row[1].slice(0, 60)}" is labelled not checked in en, ja and zh-HK`, () => labelled(row));
+const SEAL = UNCHECKED_TIMES[0];
+const SEAL_RENDER = `{t(${JSON.stringify(SEAL[1])}`;
+await check("the controls below have the sealed-prediction render to edit", () => assert.ok(SRC[SEAL[0]].includes(SEAL_RENDER), "the sealed-prediction render is not in SealPanel as the controls expect"));
+await refuses("the old check mark on the unchecked time is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_RENDER, `✓ ${SEAL_RENDER}`)), /check mark sits on/);
+await refuses("the time moved into the green verified box is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(`✓ {t("Unchanged since it was sealed.")}`, `✓ {t("Unchanged since it was sealed.")} ${SEAL_RENDER}, { when: "" })}`).replace(/\n\s*<p className="text-\[14px\] text-\[#5d646d\]">\n\s*\{t\("Written by[^\n]*\n\s*<\/p>/, "")), /check mark sits on/);
+for (const row of UNCHECKED_TIMES) {
+  const [file, key, en, ja, zh] = row;
+  await refuses(`${file}: the label dropped from the page is caught`, () => labelled(row, SRC[file].split(`t(${JSON.stringify(key)}`).join(`t(${JSON.stringify(key.replace(en, "x"))}`)), /is not rendered/);
+  await refuses(`${file}: the label only in a comment is caught`, () => labelled(row, SRC[file].split(`t(${JSON.stringify(key)}`).join(`\n// t(${JSON.stringify(key)}\nt("x"`)), /is not rendered/);
+  await refuses(`${file}: a ja value without "${ja}" is caught`, () => labelled(row, SRC[file], { ...JA, [key]: JA[key].replace(ja, "") }), /the ja value/);
+  await refuses(`${file}: a zh-HK value without "${zh}" is caught`, () => labelled(row, SRC[file], JA, { ...ZH_HK, [key]: ZH_HK[key].replace(zh, "") }), /the zh-HK value/);
+}
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);

@@ -74,9 +74,14 @@ function Reveal(props: { bytes: Uint8Array; sealed: Sealed }) {
       {hit === undefined ? (
         <p className="text-[14px] text-[#5d646d]">{t("Checking it against the seal…")}</p>
       ) : hit ? (
-        <p role="status" className="rounded-md border border-[#1f5132] bg-[#e8f5ec] px-3 py-2 text-[16px] font-semibold text-[#1f5132]">
-          ✓ {t("Written by {when} (time from this node's clock, not checked), unchanged since.", { when: new Date(hit.publishedAtMs).toLocaleString(locale) })}
-        </p>
+        <>
+          <p role="status" className="rounded-md border border-[#1f5132] bg-[#e8f5ec] px-3 py-2 text-[16px] font-semibold text-[#1f5132]">
+            ✓ {t("Unchanged since it was sealed.")}
+          </p>
+          <p className="text-[14px] text-[#5d646d]">
+            {t("Written by {when} (time from this node's clock, not checked).", { when: new Date(hit.publishedAtMs).toLocaleString(locale) })}
+          </p>
+        </>
       ) : (
         <p role="status" className="rounded-md border border-[#8a1f1f] bg-[#fbeaea] px-3 py-2 text-[16px] font-semibold text-[#8a1f1f]">
           ✗ {t("Doesn't match any seal on this node: this text was changed, or never sealed here.")}
