@@ -59,7 +59,7 @@ function SettleUp() {
   const { t } = useSite();
   return (
     <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
-      {t("No record here carries an amount. The records say who signed what, and settling up happens outside TET (cash, bank, …).")}
+      {t("No record here carries an amount. The records say which key signed what, and settling up happens outside TET (cash, bank, …).")}
     </p>
   );
 }

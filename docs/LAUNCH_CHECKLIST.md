@@ -69,7 +69,7 @@ only when its check has passed and is written next to it with the date.
 ## The post (draft, for the founder to rewrite)
 
 > Your proofs and keys, in your hands, not a company's.
-> TET is a public test network for checking who signed something, and when — with keys you hold,
+> TET is a public test network for checking which key signed something — with keys you hold,
 > checkable without trusting us, and still checkable offline if TET disappears.
 > Try it: https://tetnet.org
 > (Testnet; one operator today; lose your 12 words and nobody can recover them.)

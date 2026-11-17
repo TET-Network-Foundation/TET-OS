@@ -19,7 +19,7 @@ export const HOME_SENTENCE = "Keys for machines and agents: what each key may do
 const LATER = [
   {
     title: "Products will carry a record of where they came from",
-    text: "The EU's ecodesign rules bring in a digital product passport: data about a product that travels with it. A record is only useful if you can tell who wrote it. A signed record says which key wrote each entry.",
+    text: "The EU's ecodesign rules bring in a digital product passport: data about a product that travels with it. A record is only useful if you can check where it came from. A signed record says which key wrote each entry.",
     source: { label: "Regulation (EU) 2024/1781, on EUR-Lex", href: "https://eur-lex.europa.eu/eli/reg/2024/1781/oj" },
   },
   {
@@ -65,7 +65,7 @@ export default function Home() {
     {
       label: t("Purpose"),
       chain: t("A shared record of accounts and transfers that many independent nodes agree on."),
-      tet: t("A shared record of keys: what each key may do, how many times, and when it signed."),
+      tet: t("A shared record of keys: what each key may do, how many times, and before which block it signed."),
     },
     { label: t("Token"), chain: t("Most have one. It rewards the nodes that keep the record."), tet: t("TET has none.") },
     {

@@ -33,8 +33,8 @@ export const JA: Record<string, string> = {
   "Three reasons we think keys with limits will be needed. They are our reasoning, not a promise, and each links to what it rests on.":
     "制限つきの鍵が必要になると私たちが考える三つの理由です。私たちの推論であって約束ではありません。それぞれ、根拠にしているものへのリンクがあります。",
   "Products will carry a record of where they came from": "製品が、どこから来たかの記録を持つようになる",
-  "The EU's ecodesign rules bring in a digital product passport: data about a product that travels with it. A record is only useful if you can tell who wrote it. A signed record says which key wrote each entry.":
-    "EU のエコデザインの規則は、デジタル製品パスポートを導入します。製品と一緒に移動する、その製品についてのデータです。記録は、誰が書いたかが分かってはじめて役に立ちます。署名された記録は、それぞれの項目をどの鍵が書いたかを示します。",
+  "The EU's ecodesign rules bring in a digital product passport: data about a product that travels with it. A record is only useful if you can check where it came from. A signed record says which key wrote each entry.":
+    "EU のエコデザインの規則は、デジタル製品パスポートを導入します。製品と一緒に移動する、その製品についてのデータです。記録は、どこから来たかを確かめられてはじめて役に立ちます。署名された記録は、それぞれの項目をどの鍵が書いたかを示します。",
   "Regulation (EU) 2024/1781, on EUR-Lex": "規則 (EU) 2024/1781（EUR-Lex）",
   "Software agents will act for people": "ソフトウェアのエージェントが人の代わりに動くようになる",
   "NIST has started an initiative on standards for AI agents, including how an agent is identified and what it is allowed to do. A key with written limits is one way to say what an agent may do and check it afterwards.":
@@ -82,8 +82,8 @@ export const JA: Record<string, string> = {
     "目的",
   "A shared record of accounts and transfers that many independent nodes agree on.":
     "独立した多くのノードが合意する、口座と送金の共有記録。",
-  "A shared record of keys: what each key may do, how many times, and when it signed.":
-    "鍵の共有記録。それぞれの鍵に何が許され、何回使えて、いつ署名したか。",
+  "A shared record of keys: what each key may do, how many times, and before which block it signed.":
+    "鍵の共有記録。それぞれの鍵に何が許され、何回使えて、どのブロックより前に署名したか。",
   "Token":
     "トークン",
   "Most have one. It rewards the nodes that keep the record.":
