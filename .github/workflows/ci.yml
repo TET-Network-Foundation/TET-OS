@@ -575,7 +575,8 @@ jobs:
 
       # What the page says about privacy: no "untraceable"/"IP hidden" claim anywhere in the repo; the
       # footer and board say the node sees the IP (not logged) and point to Tor or your own node, in
-      # every language; each feature keeps its proves / doesn't-prove line. Controls.
+      # every language; each feature keeps its proves / doesn't-prove line; no page says TET shows who
+      # signed or when (a key, and before which block; the paper sources wait for their own build). Controls.
       - if: needs.gate.outputs.code == 'true'
         name: try page — privacy wording claims no more than is true
         run: node --experimental-strip-types scripts/try_privacy_guard.mjs

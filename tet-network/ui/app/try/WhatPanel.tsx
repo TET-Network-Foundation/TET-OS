@@ -13,7 +13,7 @@ const REPO = "https://github.com/TET-Network-Foundation/TET-OS";
 
 /** Bitcoin, Ethereum and TET side by side. True claims only; never "first". */
 export const ROWS: [string, string, string, string][] = [
-  ["Purpose", "Digital currency", "A platform for smart contracts", "Checking who made something, and when"],
+  ["Purpose", "Digital currency", "A platform for smart contracts", "Checking which key signed something, and before which block"],
   ["Post-quantum signatures today", "No (proposals are under discussion)", "No (on the research roadmap)", "Partly: every transaction also carries an ML-DSA-44 signature, but the wallet ID is still the Ed25519 key until Phase 1"],
   ["Anonymous one-person-one-vote", "No", "Not built in (apps such as MACI add it)", "Built in: members-only polls, one vote per member"],
   ["Everyday interface", "Wallet apps from other projects", "Wallets and apps from other projects", "Built in: boards, signing and polls in the browser"],
@@ -52,17 +52,17 @@ export default function WhatPanel(props: { go: (tool: string) => void }) {
     <article className="px-4 pb-4 pt-2 text-[16px] leading-relaxed md:px-5">
       <h1 className="text-[26px] font-bold">{t("What is TET")}</h1>
       <p className="mt-2 text-[20px] font-semibold">{t("Your proofs and keys, in your hands, not a company's.")}</p>
-      <p className="mt-1">{t("AI makes faking text, pictures and voices easy, so being able to check who signed what, and when, without trusting a company matters more now.")}</p>
+      <p className="mt-1">{t("AI makes faking text, pictures and voices easy, so being able to check which key signed something, without trusting a company, matters more now.")}</p>
       <p className="mt-1 text-[#5d646d]">{t("The limit: lose your passphrase (12 words) and nobody can recover it. And today TET still runs on one operator; see the roadmap below.")}</p>
 
       <h2 className={H}>{t("What it is")}</h2>
-      <p>{t("TET is a public network for checking who made something, and when. Every transaction and message on it is signed twice: once with Ed25519, and once with ML-DSA-44, one of the quantum-resistant signatures (ML-DSA) standardised by NIST as FIPS 204.")}</p>
+      <p>{t("TET is a public network for checking which key signed something. A record put on the chain also shows that it existed before block N. Every transaction and message on it is signed twice: once with Ed25519, and once with ML-DSA-44, one of the quantum-resistant signatures (ML-DSA) standardised by NIST as FIPS 204.")}</p>
       <p className="mt-2">{t("Anyone can check a signature on their own device. You don't have to trust this website or this node to do it.")}</p>
       <p className="mt-2">{t("Today it runs as a testnet (v0.2): a public test version. Nothing on it has monetary value.")}</p>
       <p className="mt-2">{t("This demo shows only part of what TET can do.")}</p>
 
       <h2 className={H}>{t("Why it's needed now")}</h2>
-      <p>{t("Text, pictures and voices can now be generated in seconds, so \"who made this, and when?\" is harder to answer than it used to be. A signature answers part of it: it shows which key signed exactly these bytes.")}</p>
+      <p>{t("Text, pictures and voices can now be generated in seconds, so it is harder than it used to be to tell where something came from. A signature answers only part of it: it shows which key signed exactly these bytes, not who holds that key, and not a date.")}</p>
       <p className="mt-2">{t("The signatures most systems use today (ECDSA, Ed25519) could be forged by a large enough quantum computer, if one is ever built. Signatures are meant to be checked for years, so TET adds a quantum-resistant signature from the start.")}</p>
       <p className="mt-2">{t("Today that protection is incomplete: your ID is still your Ed25519 key, and the ML-DSA-44 key isn't bound to it until the Phase 1 genesis.")}</p>
 

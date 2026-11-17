@@ -120,7 +120,7 @@ function CheckCopy(props: { marked: { code: string; fileSha256: string }[]; samp
   );
 }
 
-/** Results for a proof code, a file fingerprint or an ID: who, when, what, and "check your copy". */
+/** Results for a proof code, a file fingerprint or an ID: which ID, the node's record, the fingerprint, and "check your copy". */
 export default function GenuineCheck(props: { query: string; fromMs?: number; toMs?: number; byFile?: boolean; sample?: { url: string }; onId?: (id: string) => void }) {
   const { t, locale } = useLang();
   const [hits, setHits] = useState<FoundSignature[] | null>(null);

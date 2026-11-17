@@ -10,8 +10,8 @@ export const JA: Record<string, string> = {
   "A calendar, a parcel and a review, each joined to one check mark: each rests on a signed record.":
     "カレンダー、荷物、レビューが、それぞれ1つのチェックマークにつながっています。どれも署名された記録に支えられています。",
   "Settling up stays outside TET": "精算はTETの外で",
-  "No record here carries an amount. The records say who signed what, and settling up happens outside TET (cash, bank, …).":
-    "ここの記録には金額が一切入りません。記録が示すのは誰が何に署名したかで、精算はTETの外で行われます（現金、銀行振込など）。",
+  "No record here carries an amount. The records say which key signed what, and settling up happens outside TET (cash, bank, …).":
+    "ここの記録には金額が一切入りません。記録が示すのはどの鍵が何に署名したかで、精算はTETの外で行われます（現金、銀行振込など）。",
   "Settling up happens outside TET (cash, bank, …).": "精算はTETの外で行われます（現金、銀行振込など）。",
 
   // booking

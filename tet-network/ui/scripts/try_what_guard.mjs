@@ -69,8 +69,8 @@ const noFirst = (src, ja, zh) => {
   assert.deepEqual(bad, [], `"first" claims: ${bad.join(" | ")}`);
 };
 await check("no \"first\" claims, in any language", () => noFirst(SRC));
-await mustThrow("a \"first\" claim is caught", () => noFirst(SRC.replace('"Checking who made something, and when"', '"The first network for checking who made something"')));
-await mustThrow("a Japanese \"first\" claim is caught", () => noFirst(SRC, { ...JA, "Checking who made something, and when": "世界初の、作者を確かめるネットワーク" }));
+await mustThrow("a \"first\" claim is caught", () => noFirst(SRC.replace('"Checking which key signed something, and before which block"', '"The first network for checking which key signed something"')));
+await mustThrow("a Japanese \"first\" claim is caught", () => noFirst(SRC, { ...JA, "Checking which key signed something, and before which block": "世界初の、作者を確かめるネットワーク" }));
 
 // 1b. No "first" CLAIM anywhere /try or /agents shows (added 2026-10-13). Until then only this page
 // was checked. A claim is "the first <blockchain|network|…>", "first-ever", "first of its kind",

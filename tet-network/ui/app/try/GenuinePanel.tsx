@@ -4,8 +4,8 @@
  * "Mark as genuine": TET's headline in one step. Pick a file or type text, press one button: the
  * fingerprint (SHA-256) is signed with your ID (made silently on first use) and published to this
  * node's public registry with your consent; you get a proof code, a QR and a share link. Anyone
- * types the code on the home page, or drops the file, and sees who, when and what — and whether
- * their copy matches exactly. The file itself never leaves this tab.
+ * types the code on the home page, or drops the file, and sees which ID signed, what the node
+ * recorded (a block only if the record was put on chain), and whether their copy matches exactly. The file itself never leaves this tab.
  *
  * Then, optionally, "Anchor on chain" (the hash-only stamp, lib/hash_stamp.ts): the record (never the
  * file) is stamped like a .sig.json, so a block holds 128 bits of its fingerprint and the proof
