@@ -23,11 +23,12 @@
 //    release). Every match on a line is checked; a denial counts only inside the same clause.
 //    Controls: each form is caught, denials and the "node sees who writes to whom" lines are not, and
 //    a paper file is caught once it leaves PAPER_PENDING.
-//    This is a first net, not a proof. Known gaps (left open on purpose; a reviewer catches these):
+//    This is a first net, not a proof. Known gaps (left open on purpose; not caught here, so review for them):
 //    - a denial earlier in the same clause hides a claim: "No account needed to check who signed it";
 //    - Japanese without かを before the verb: 「誰が作ったか確かめられます」;
 //    - "shows when it was signed", "check who actually signed", "proves who you are", "proves who
-//      sent it" ("sent" is not in the verbs), and Chinese such as 證明誰製作了這個;
+//      sent it" ("sent" is left out of the verbs on purpose, see WHO_WHEN), and Chinese such as
+//      證明誰製作了這個;
 //    - five alternatives have no case of their own, so removing one alone stays green:
 //      "proofs? of when", いつ…誰が, 由誰(簽署|製作), 何時由誰, 是誰簽署;
 //    - a date shown as a value (a signer-chosen or node-clock time) is not wording; no regex sees it;
