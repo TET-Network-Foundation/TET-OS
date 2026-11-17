@@ -269,8 +269,25 @@ const ALLOWED_SIZES = new Set(["sm", "base", "xl", "2xl", "4xl"]);
 const ALLOWED_WIDTHS = new Set(["3xl", "prose", "xl"]);
 const SPACING = /(?<![\w-])-?(?:p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|gap-x|gap-y|space-x|space-y)-(\d+(?:\.\d+)?)(?![\w.])/g;
 const OTHER_HUES = /(?<![\w-])(?:bg|text|border|ring|from|via|to|fill|stroke|outline|decoration|divide|shadow|accent|caret)-(?:red|orange|amber|yellow|lime|green|emerald|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|gray|zinc|neutral|stone)-\d/g;
-/** Every class-name string in a file: className="…", cx("…", "…") arguments, and the kit's tone tables. */
-const classStrings = (src) => [...stripComments(src).matchAll(/className=\{?["'`]([^"'`]+)["'`]|\b(?:cx|tone|COLUMN|CARD|FOCUS)\b[^\n]*?["'`]([^"'`]*\b(?:text|p[xytblr]?|m[xytblr]?|gap|bg|font|max-w)-[^"'`]*)["'`]/g)].map((m) => m[1] ?? m[2]);
+/**
+ * Every string in a file that looks like class names, wherever it is: className="…", cx("…"), a
+ * constant of any name, an entry of a table on its own line, a template literal (its ${…} parts left
+ * out). Until 2026-11-17 only className and lines naming cx / tone / COLUMN / CARD / FOCUS were read, so
+ * `const BUTTON = "… bg-amber-100 …"` or a tone-table entry on its own line was never checked (found on
+ * /fleet, ui/fleet). A string looks like class names when every word in it is class-shaped (lower case,
+ * digits and - : / [ ] ( ) . ! % #) and at least one word is a utility with a value (text-…, p-4,
+ * gap-2, bg-…, font-…, max-w-…, border-…, ring-…, and the rest below), so prose is not read as classes.
+ */
+const CLASS_WORD = /^!?[a-z0-9:[\]().\/%#_-]+$/;
+const UTILITY = /^(?:[a-z0-9-]+:)*!?-?(?:text|font|leading|tracking|p[xytblrse]?|m[xytblrse]?|gap(?:-[xy])?|space-[xy]|max-w|min-w|w|h|min-h|max-h|bg|border(?:-[xytblrse])?|rounded(?:-[a-z]+)?|ring|outline|shadow|from|via|to|fill|stroke|decoration|divide|accent|caret|grid-cols|col-span|items|justify|self|place|inset|top|left|right|bottom|z|opacity|scroll-m[xytblrse]?|underline-offset)-[a-z0-9[(.\/]/;
+const looksLikeClasses = (str) => {
+  const words = str.trim().split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => CLASS_WORD.test(w)) && words.some((w) => UTILITY.test(w));
+};
+const classStrings = (src) =>
+  [...stripComments(src).matchAll(/"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g)]
+    .map((m) => (m[1] ?? m[2] ?? m[3].replace(/\$\{[^}]*\}/g, " ")))
+    .filter(looksLikeClasses);
 function layoutProblems(src) {
   const out = [];
   for (const [p, s] of Object.entries(src)) {
@@ -312,6 +329,16 @@ await check("L control: each layout rule is caught", () => {
     'className="bg-teal-700 px-4"': /hand-made primary button/,
   };
   for (const [src, re] of Object.entries(cases)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
+  // Class names outside className and the kit's named tables are read too (the /fleet blind spot).
+  const elsewhere = {
+    'const BUTTON = "rounded-md border bg-amber-100 px-4 py-2";': /colour bg-amber-1/,
+    'const STYLE = `mt-3 ${extra}`;': /mt-3 is off the 8 px grid/,
+    'const tones = {\n  paused:\n    "border border-dashed border-rose-500",\n};': /colour border-rose-5/,
+    "const Q = 'text-lg font-semibold';": /type size text-lg/,
+  };
+  for (const [src, re] of Object.entries(elsewhere)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
+  // Prose is not read as classes, even prose that names a class or a colour.
+  assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 't("Use text-lg for nothing: the site has five sizes.") t("A red-orange glaze, 300 ml.")' }), []);
   assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 'className="mt-4 gap-2 px-6 text-xl font-semibold max-w-prose text-teal-800 dark:text-slate-300 sm:text-4xl"' }), []);
 });
 
