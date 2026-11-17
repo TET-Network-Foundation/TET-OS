@@ -29,8 +29,9 @@ import type { Status } from "./types";
 
 const cx = (...p: Array<string | false | null | undefined>) => p.filter(Boolean).join(" ");
 const FOCUS = "outline-none focus-visible:ring-4 focus-visible:ring-teal-600/40 rounded-lg";
-/** The accent fill: the one solid teal the site uses (primary button, "running" badge, diagram bars). */
-export const ACCENT_FILL = "bg-teal-700 dark:bg-teal-400";
+/** The accent fill: the one solid teal the site uses. Not exported: pages get it only through
+ * PrimaryLink, StatusBadge and AccentBar, so they cannot hand-make a button with it (site_guard L1). */
+const ACCENT_FILL = "bg-teal-700 dark:bg-teal-400";
 /** The column every page sits in. */
 export const COLUMN = "mx-auto w-full max-w-3xl px-4 sm:px-6";
 
@@ -113,6 +114,20 @@ export function SiteFrame(props: { children: ReactNode }) {
         </div>
       </footer>
     </div>
+  );
+}
+
+/** A thin vertical accent bar that grows in (HowDiagram's step connector). `shown` false keeps it
+ * collapsed, except under reduced motion. */
+export function AccentBar(props: { shown: boolean }) {
+  return (
+    <span
+      className={cx(
+        "block h-full w-1 origin-top rounded-full", ACCENT_FILL,
+        "motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-out",
+        props.shown ? "scale-y-100" : "scale-y-0 motion-reduce:scale-y-100",
+      )}
+    />
   );
 }
 

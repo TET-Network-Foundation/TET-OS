@@ -277,17 +277,33 @@ const OTHER_HUES = /(?<![\w-])(?:bg|text|border|ring|from|via|to|fill|stroke|out
  * /fleet, ui/fleet). A string looks like class names when every word in it is class-shaped (lower case,
  * digits and - : / [ ] ( ) . ! % #) and at least one word is a utility with a value (text-…, p-4,
  * gap-2, bg-…, font-…, max-w-…, border-…, ring-…, and the rest below), so prose is not read as classes.
+ * An arbitrary value in brackets ([&>svg]:h-4, w-[calc(100%+2px)], text-[#0F0]) may hold any
+ * character but a space. className="…" / className={`…`} strings are always read, whatever they hold,
+ * and before the other literals, so an apostrophe in nearby JSX text cannot swallow them.
  */
-const CLASS_WORD = /^!?[a-z0-9:[\]().\/%#_-]+$/;
+const CLASS_WORD = /^!?(?:[a-z0-9:().\/%#@_-]|\[[^\]\s]*\])+$/;
 const UTILITY = /^(?:[a-z0-9-]+:)*!?-?(?:text|font|leading|tracking|p[xytblrse]?|m[xytblrse]?|gap(?:-[xy])?|space-[xy]|max-w|min-w|w|h|min-h|max-h|bg|border(?:-[xytblrse])?|rounded(?:-[a-z]+)?|ring|outline|shadow|from|via|to|fill|stroke|decoration|divide|accent|caret|grid-cols|col-span|items|justify|self|place|inset|top|left|right|bottom|z|opacity|scroll-m[xytblrse]?|underline-offset)-[a-z0-9[(.\/]/;
 const looksLikeClasses = (str) => {
   const words = str.trim().split(/\s+/).filter(Boolean);
   return words.length > 0 && words.every((w) => CLASS_WORD.test(w)) && words.some((w) => UTILITY.test(w));
 };
-const classStrings = (src) =>
-  [...stripComments(src).matchAll(/"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g)]
-    .map((m) => (m[1] ?? m[2] ?? m[3].replace(/\$\{[^}]*\}/g, " ")))
-    .filter(looksLikeClasses);
+const LITERAL = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+const classStrings = (src) => {
+  const code = stripComments(src);
+  const out = [];
+  // 1. className values, unconditionally; their text is then blanked so pass 2 cannot re-read or
+  //    mis-pair them.
+  const rest = code.replace(/\bclassName=\{?\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, (all, lit) => {
+    out.push(lit.slice(1, -1).replace(/\$\{[^}]*\}/g, " "));
+    return " ".repeat(all.length);
+  });
+  // 2. every other literal that looks like class names.
+  for (const m of rest.matchAll(LITERAL)) {
+    const str = m[1] ?? m[2] ?? m[3].replace(/\$\{[^}]*\}/g, " ");
+    if (looksLikeClasses(str)) out.push(str);
+  }
+  return out;
+};
 function layoutProblems(src) {
   const out = [];
   for (const [p, s] of Object.entries(src)) {
@@ -309,6 +325,8 @@ function layoutProblems(src) {
     const primaries = (stripComments(s).match(/<PrimaryLink\b/g) ?? []).length;
     if (primaries > 1) out.push(`${p}: ${primaries} primary buttons (at most one a page)`);
     if (!p.endsWith("app/site/kit.tsx") && /\bbg-teal-[67]00\b/.test(classes)) out.push(`${p}: a hand-made primary button (use <PrimaryLink>)`);
+    // The kit's accent fill is private to the kit; a page that names it is drawing its own button.
+    if (!p.endsWith("app/site/kit.tsx") && /\bACCENT_FILL\b/.test(stripComments(s))) out.push(`${p}: uses the kit's ACCENT_FILL (use <PrimaryLink>, <StatusBadge> or <AccentBar>)`);
   }
   return out;
 }
@@ -335,6 +353,18 @@ await check("L control: each layout rule is caught", () => {
     'const STYLE = `mt-3 ${extra}`;': /mt-3 is off the 8 px grid/,
     'const tones = {\n  paused:\n    "border border-dashed border-rose-500",\n};': /colour border-rose-5/,
     "const Q = 'text-lg font-semibold';": /type size text-lg/,
+    // Arbitrary values and variants do not hide a string.
+    'className="text-lg [&>svg]:h-4"': /type size text-lg/,
+    'const X = "data-[state=open]:mt-3 w-[calc(100%+2px)]";': /mt-3 is off the 8 px grid/,
+    'const Y = "mt-4 text-[#0F0] bg-rose-500";': /colour bg-rose-5/,
+    // An apostrophe in JSX text before a className does not swallow it.
+    "<p>Don't <b className=\"text-lg\">x</b> it's</p>": /type size text-lg/,
+    // Container queries, uppercase arbitrary values, and a className split over lines.
+    'const Z = "text-5xl font-semibold @md:p-4";': /type size text-5xl/,
+    'className="bg-[#0F766E] text-5xl px-4"': /type size text-5xl/,
+    'className="px-4\n  text-5xl"': /type size text-5xl/,
+    // The kit's accent fill used outside the kit is a hand-made button.
+    'import { ACCENT_FILL } from "../kit"; <a className={cx("px-6 py-4", ACCENT_FILL)} />': /uses the kit's ACCENT_FILL/,
   };
   for (const [src, re] of Object.entries(elsewhere)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
   // Prose is not read as classes, even prose that names a class or a colour.
