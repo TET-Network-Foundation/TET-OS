@@ -16,7 +16,7 @@
 // J. Every string the site shows has Japanese.
 // Every check has a control here: the check run on a broken copy must fail.
 
-import { register } from "node:module";
+import { register, createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -306,6 +306,43 @@ const classStrings = (src) => {
 };
 /** Kit constants that carry the accent fill; pages reach them only through the kit's components. */
 const KIT_PRIVATE = ["ACCENT_FILL", "STATUS_TEXT"];
+/**
+ * Inside kit.tsx, the only top-level statements that may name a private constant, or hold the solid
+ * accent classes. Anything else that does (an alias, a getter, `export let`, `export default`,
+ * `export { … }`) is a way to hand the fill to a page, so it is flagged. The kit is parsed with the
+ * TypeScript compiler, not matched with a regex, so formatting cannot hide a statement.
+ */
+const KIT_ALLOWED = {
+  ACCENT_FILL: ["const ACCENT_FILL", "const STATUS_TEXT", "export function AccentBar", "export function PrimaryLink"],
+  STATUS_TEXT: ["const STATUS_TEXT", "export function StatusBadge", "export function SiteFrame"],
+  "the accent classes": ["const ACCENT_FILL"],
+};
+const ACCENT_CLASS = /(?<![\w:-])(?:dark:)?bg-teal-(?:[67]00|400)(?![\w-])/;
+const ts = createRequire(import.meta.url)("typescript");
+function kitPrivateProblems(p, s) {
+  const out = [];
+  const sf = ts.createSourceFile(p, s, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  for (const st of sf.statements) {
+    const exported = (ts.getModifiers?.(st) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ? "export " : "";
+    let label = ts.SyntaxKind[st.kind];
+    if (ts.isFunctionDeclaration(st) && st.name) label = `${exported}function ${st.name.text}`;
+    if (ts.isVariableStatement(st)) {
+      const flags = st.declarationList.flags;
+      const kw = flags & ts.NodeFlags.Const ? "const" : flags & ts.NodeFlags.Let ? "let" : "var";
+      label = `${exported}${kw} ${st.declarationList.declarations.map((d) => d.name.getText(sf)).join(", ")}`;
+    }
+    const used = new Set();
+    (function walk(n) {
+      if (ts.isIdentifier(n) && KIT_PRIVATE.includes(n.text)) used.add(n.text);
+      if ((ts.isStringLiteralLike(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) && ACCENT_CLASS.test(n.text)) used.add("the accent classes");
+      ts.forEachChild(n, walk);
+    })(st);
+    for (const what of used) {
+      if (!KIT_ALLOWED[what].includes(label)) out.push(`${p}: "${label}" uses ${what}, which is private to the kit (only ${KIT_ALLOWED[what].join("; ")})`);
+    }
+  }
+  return out;
+}
 function layoutProblems(src) {
   const out = [];
   for (const [p, s] of Object.entries(src)) {
@@ -334,14 +371,7 @@ function layoutProblems(src) {
         if (new RegExp(`\\b${name}\\b`).test(stripComments(s))) out.push(`${p}: uses the kit's ${name} (use <PrimaryLink>, <StatusBadge> or <AccentBar>)`);
       }
     } else {
-      // The kit exports nothing that carries the accent fill: no exported constant may name it or a
-      // solid teal-600/700, directly or through another private constant.
-      for (const m of stripComments(s).matchAll(/\bexport\s+const\s+(\w+)[^=]*=([\s\S]*?);\s*\n/g)) {
-        if (/\bbg-teal-[67]00\b/.test(m[2]) || KIT_PRIVATE.some((n) => new RegExp(`\\b${n}\\b`).test(m[2]))) out.push(`${p}: exports ${m[1]}, which carries the accent fill`);
-      }
-      for (const name of KIT_PRIVATE) {
-        if (new RegExp(`\\bexport\\s+(?:const\\s+${name}\\b|\\{[^}]*\\b${name}\\b)`).test(stripComments(s))) out.push(`${p}: exports ${name}, which is private to the kit`);
-      }
+      out.push(...kitPrivateProblems(p, s));
     }
   }
   return out;
@@ -386,13 +416,23 @@ await check("L control: each layout rule is caught", () => {
     'import * as kit from "../kit"; const B = kit.STATUS_TEXT["running"].tone;': /uses the kit's STATUS_TEXT/,
   };
   for (const [src, re] of Object.entries(elsewhere)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
-  // The kit itself may not export what carries the accent fill, under its own name or another.
+  // The kit itself may not hand the fill out: under its own name, an alias, a getter, or any export form.
   const KIT = "app/site/kit.tsx";
+  const FILL = 'const ACCENT_FILL = "bg-teal-700 dark:bg-teal-400";\n';
   const kitCases = {
-    'const ACCENT_FILL = "bg-teal-700";\nexport const STATUS_TEXT = {\n  running: { tone: `${ACCENT_FILL} text-white` },\n};\n': /exports STATUS_TEXT/,
-    'const ACCENT_FILL = "bg-teal-700";\nexport const BADGE = `${ACCENT_FILL} px-2`;\n': /exports BADGE, which carries the accent fill/,
-    'export const SOLID = "bg-teal-700 text-white";\n': /exports SOLID, which carries the accent fill/,
-    'const ACCENT_FILL = "bg-teal-700";\nexport { ACCENT_FILL };\n': /exports ACCENT_FILL, which is private/,
+    [`${FILL}export const STATUS_TEXT = {\n  running: { tone: \`\${ACCENT_FILL} text-white\` },\n};\n`]: /"export const STATUS_TEXT" uses ACCENT_FILL/,
+    [`${FILL}export const BADGE = \`\${ACCENT_FILL} px-2\`;\n`]: /"export const BADGE" uses ACCENT_FILL/,
+    'export const SOLID = "bg-teal-700 text-white";\n': /"export const SOLID" uses the accent classes/,
+    'export const NIGHT = "dark:bg-teal-400 px-2";\n': /"export const NIGHT" uses the accent classes/,
+    [`${FILL}export { ACCENT_FILL };\n`]: /"ExportDeclaration" uses ACCENT_FILL/,
+    [`${FILL}export function accent() { return ACCENT_FILL; }\n`]: /"export function accent" uses ACCENT_FILL/,
+    [`${FILL}export const F = () => {\n  void 0;\n  return ACCENT_FILL;\n};\n`]: /"export const F" uses ACCENT_FILL/,
+    [`${FILL}const ALIAS = ACCENT_FILL;\nexport { ALIAS };\n`]: /"const ALIAS" uses ACCENT_FILL/,
+    [`${FILL}export default ACCENT_FILL;\n`]: /"ExportAssignment" uses ACCENT_FILL/,
+    [`${FILL}export let L = ACCENT_FILL;\n`]: /"export let L" uses ACCENT_FILL/,
+    [`${FILL}export const N = ACCENT_FILL`]: /"export const N" uses ACCENT_FILL/,
+    [`${FILL}export const ACCENT_FILL2 = 1, B = ACCENT_FILL;\n`]: /"export const ACCENT_FILL2, B" uses ACCENT_FILL/,
+    [`${FILL}export const STATUS_TEXT = { running: { tone: ACCENT_FILL } };\nexport function Other() { return STATUS_TEXT.running.tone; }\n`]: /"export function Other" uses STATUS_TEXT/,
   };
   for (const [src, re] of Object.entries(kitCases)) assert.match(layoutProblems({ [KIT]: src }).join(" | "), re, src);
   assert.deepEqual(layoutProblems({ [KIT]: SRC[KIT] }), [], "the real kit exports nothing that carries the accent fill");
