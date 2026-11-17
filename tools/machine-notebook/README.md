@@ -2,6 +2,8 @@
 
 **Status: prototype.** Local only. Not for military or dual-use systems.
 
+New here? [QUICKSTART.md](QUICKSTART.md) walks through the opening half hour on your own machine.
+
 A machine keeps its own notebook: a device (a Mac today, a Raspberry Pi or Jetson later) records
 sensor readings, signs each one with its own TET key, and chains every record to the one before it.
 Anyone holding the folder can later replay the log and see whether it is intact and in order. It adds

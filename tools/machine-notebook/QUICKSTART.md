@@ -17,7 +17,10 @@ Every command below is followed by what the tool printed when it was run on 2026
 - macOS or Linux. A Raspberry Pi running Linux should work the same way, but nobody has run this
   guide on a Pi yet. Windows is not supported (the `loadavg` source does not exist there).
 - Python 3.9 or newer, standard library only. No pip packages.
-- git and a Rust toolchain (`rustup`), to build `tet-cli`.
+- git and a Rust toolchain (`rustup`), to build `tet-cli`. After installing Rust, open a new
+  shell so `cargo` is on your PATH.
+- A C compiler and linker for the build: on macOS the Xcode Command Line Tools, on Debian or
+  Raspberry Pi OS the `build-essential` package.
 
 ## Step 1: get tet-cli (this is the slow part)
 
@@ -30,13 +33,18 @@ cd TET-OS
 RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release
 ```
 
+**This block was not run for this guide**, so it has no output here. The guide was written with a
+`tet-cli` that had already been built from the same source. Cargo's own output ends with a line that
+starts `Finished`; if it ends with `error` instead, see "Where people get stuck" below.
+
 How long that takes, honestly:
 
 - On one Mac (Apple silicon, 8 cores, 16 GB), a release build of `tet-cli` was noted as taking
-  about 35 minutes, with other builds running on the machine at the same time. That is the only
-  timing on record, and it was not a careful measurement.
+  about 35 minutes, on a busy machine. Whether that build used `RISC0_SKIP_BUILD=1` was not
+  recorded. That is the only timing on record, and it was not a careful measurement.
 - A cold build on a clean machine has not been timed. On a Raspberry Pi it has not been tried; expect
-  it to be much slower than on a laptop, and to need a lot of memory.
+  it to be much slower than on a laptop, to need a lot of memory (a Pi with 1 or 2 GB may need
+  `cargo build -j1` or more swap), and several GB of free disk for `target/`.
 - So start the build before you plan to sit down with the rest of this guide.
 
 Why `RISC0_SKIP_BUILD=1`: `tet-cli` depends on a crate that otherwise compiles a RISC Zero guest
@@ -59,7 +67,8 @@ Run every command below **from the repository root**. The notebook looks for
 ## Step 2: make a notebook with a new device key
 
 A notebook signs for one chain. With no node to ask, any chain id and any 64 hex characters will do.
-Pick them once and keep them; the notebook saves them in `chain.json` at `init`.
+Pick them once and keep them; the notebook saves them in `chain.json` at `init`. The two `export`
+lines last only for this shell, which is fine: after `init`, every command reads `chain.json`.
 
 ```sh
 export TET_CHAIN_ID=maker-local
@@ -202,6 +211,9 @@ Does not show:
 stamp: not checked (no node)
 ```
 
+The last line is about anchoring a record on a node. No public node runs today, so it stays "not
+checked" (see the end of this guide).
+
 The check refuses the pin that sits inside the folder, because whoever can edit the folder could
 edit that file too:
 
@@ -210,9 +222,13 @@ $ python3 tools/machine-notebook/notebook.py verify --dir ~/notebook --pin ~/not
 error: --pin ~/notebook/device.pin is inside the folder being checked; give a copy kept outside it
 ```
 
-What a change looks like: in a copy of the folder, one number in record 1 was edited by hand.
+What a change looks like: copy the folder, then change the reading in record 1 of the copy. The run
+below changed the value `3.61` to `9.99` (your value will differ; `sed -i ''` is the macOS form, on
+Linux it is `sed -i`):
 
 ```console
+$ cp -R ~/notebook ~/nb-copy
+$ sed -i '' 's/3.61/9.99/' ~/nb-copy/records/1.json
 $ python3 tools/machine-notebook/notebook.py verify --dir ~/nb-copy --pin ~/notebook.pin
 INVALID
   record 1: signature: ~/nb-copy/records/1.json is not the 213 bytes this envelope signed
@@ -237,13 +253,15 @@ Read "Shows" and "Does not show" before you rely on the log for anything.
 
 ## Where people get stuck
 
-Found by running this guide from an empty folder on 2026-11-17 (Mac only):
+Found by running this guide from an empty folder on 2026-11-17 (Mac only, with `tet-cli` already
+built, so the build step itself was not part of that run):
 
 1. **The build.** It is the long step, and the README's build line leaves out `RISC0_SKIP_BUILD=1`
    (see Step 1).
 2. **Not in the repository root.** From another folder every command stops with
    `error: tet-cli not found at target/release/tet-cli (build it: cargo build -p tet-cli --release, or pass --tet-cli)`.
-   Go back to the root, or pass `--tet-cli`.
+   Go back to the root, or pass `--tet-cli`. The build line in that message also leaves out
+   `RISC0_SKIP_BUILD=1`; use the one in Step 1.
 3. **The chain variables.** The README says to read them from a node's `/chain`. No public node runs
    today; a made-up local pair, as in Step 2, is what works.
 4. **Forgetting `--pin`.** `verify` without it stops with
