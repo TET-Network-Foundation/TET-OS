@@ -4,7 +4,7 @@ import type { Feature, Section } from "../types";
 export const SECTION: Section = {
   href: "/research",
   title: "Research",
-  sentence: "Ideas we are studying. Nothing on this page runs.",
+  sentence: "Ideas we are studying. None of them is built; the two small models on this page run in your browser.",
 };
 
 export const FEATURES: Feature[] = [
@@ -47,12 +47,12 @@ export const FEATURES: Feature[] = [
     id: "learning-model",
     title: "A learning model",
     summary:
-      "An idea for a small model with a few simulated qubits: it would show why a copied simulation can sign twice, and why a real one-shot key could not.",
+      "A small model with a few simulated qubits, on this page: signing uses the key up, and a \"copy the key\" button works only because it is a simulation. It shows why a real one-shot key could not be copied.",
     status: "idea",
-    evidence: [],
+    evidence: [{ path: "tet-network/ui/app/site/run/one_shot_model.ts" }, { path: "docs/research/ONE_SHOT_TET.md" }],
     shows: ["What the model is meant to teach: a simulation can be copied, so its key can sign twice; a real one-shot key cannot be copied."],
     doesNot: [
-      "A working model. Nothing is designed or built yet.",
+      "A one-shot signature scheme. The model's checker is told how the key was made; a real scheme could not work that way.",
       "Anything about real quantum hardware. A few simulated qubits on an ordinary computer are a model, not a key.",
     ],
   },
@@ -69,5 +69,19 @@ export const FEATURES: Feature[] = [
       "When the standard will be final. It has no date here.",
     ],
     link: { href: "https://groups.google.com/a/list.nist.gov/g/pqc-forum/c/CsWPP35LJWw", label: "Source: the pqc-forum discussion of the FIPS 206 plan" },
+  },
+  {
+    id: "permit-language",
+    title: "Permits written as sentences",
+    summary:
+      "A sketch of a small language for permits: one line, such as allow agent \"shopper\" to \"buy\" once, before block N, becomes one one-time permit. A parser on this page turns each line into a permit and runs the permit check on it.",
+    status: "idea",
+    evidence: [{ path: "docs/research/PERMIT_LANGUAGE.md" }, { path: "tet-network/ui/app/site/run/permit_lang.ts" }],
+    shows: ["That each line can be turned into the one-time permit TET's machine notebook already has, and checked by the same code."],
+    doesNot: [
+      "A designed language: the sketch has one sentence form and nothing else.",
+      "That TET will have a permission language. Nothing is decided.",
+      "How it compares with Cedar or OPA in practice: the note compares them on paper.",
+    ],
   },
 ];
