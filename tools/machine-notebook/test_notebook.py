@@ -36,7 +36,9 @@ only the pin can refuse it.
   (s) another device's whole, intact log            -> INVALID against this device's pin, VALID against
       its own: the pin comes from --pin, never from the folder
   (t) --pin pointing inside the folder              -> refused (exit 2): by path, through .. or a
-      symlink, as a hard link, and by another spelling of the path where the file system allows it
+      symlink, as a hard link, and by another spelling of the path where the file system allows it;
+      and a symlink in the folder to a correct pin outside it is refused too, so the folder cannot
+      choose which outside file is read as the pin
   verify --node: a hash record with one half from another device does not count as this device's,
   and neither does another device's hash record saved in the folder.
 
@@ -583,6 +585,37 @@ class Notebook(unittest.TestCase):
             self.assertIn("is inside the folder being checked", err)
         # Control: a copy outside is accepted.
         rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+
+    def test_t_a_symlink_in_the_folder_cannot_choose_an_outside_pin(self):
+        # The folder holds a symlink to a file outside it; the file is a correct pin, so only the
+        # inside rule can refuse it. Each path below is caught by a different part of that rule.
+        d = self.copy()
+        outside = tempfile.mkdtemp(dir=self.tmp)
+        shutil.copy(self.pin, os.path.join(outside, "chosen.pin"))
+        os.remove(os.path.join(d, "device.pin"))
+        os.symlink(os.path.join(outside, "chosen.pin"), os.path.join(d, "device.pin"))
+        # A path under the folder through a symlinked subfolder: names a file under --dir as given,
+        # but the file system walks out of the folder; only the as-given check sees it.
+        os.mkdir(os.path.join(outside, "sub"))
+        os.symlink(os.path.join(outside, "sub"), os.path.join(d, "out"))
+        alias = os.path.join(self.tmp, f"alias-{os.path.basename(d)}")
+        os.symlink(d, alias)
+        cases = {
+            "the symlink, by path": os.path.join(d, "device.pin"),
+            "through a symlinked subfolder": os.path.join(d, "out", "..", "chosen.pin"),
+            # Through an outside alias of the folder: neither path check sees the folder in it;
+            # only the symlink's own identity (lstat) does.
+            "through an alias of the folder": os.path.join(alias, "device.pin"),
+        }
+        for name, p in cases.items():
+            with self.subTest(name):
+                rc, out, err = nb_err("verify", "--pin", p, "--dir", d)
+                self.assertEqual(rc, 2, out + err)
+                self.assertIn("is inside the folder being checked", err)
+                self.assertNotIn("VALID", out)
+        # Control: the very file the symlink points at, named directly, is accepted.
+        rc, out = nb("verify", "--pin", os.path.join(outside, "chosen.pin"), "--dir", d)
         self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
 
     def test_verify_node_does_not_take_a_hash_record_in_the_folder_on_trust(self):

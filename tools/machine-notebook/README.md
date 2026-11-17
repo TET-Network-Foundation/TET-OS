@@ -27,6 +27,12 @@ Does not show:
 - that a copied key did not use the same permission in another log
 - that the signature format is final: it is in outside review, and logs from this test may need re-signing
 
+Known gaps in the check itself, not fixed yet:
+- the search of the folder for another name of the pin file has no size limit and does not log
+  how many entries it read
+- that search skips entries it cannot read, without saying so
+- `publish` reuses a hash record already saved in the folder without checking it again
+
 ## The device key
 
 `init` makes a **new** key for the device. It is never the owner's key, and the owner's phrase never
@@ -125,7 +131,7 @@ Without `--node`, verify prints `stamp: not checked (no node)`.
 2026-11-07, on a Mac: a dev node from this repository (`docker compose -f docker-compose.yml -f
 docker-compose.dev.yml up -d --build tet-core`, P2P off, so it joined nothing), tet-core at 5dd6895.
 A fresh folder and a new test-only device key. The phrase and `device.key` are not shown here.
-This run predates `--pin`; `verify` now also needs `--pin <copy of device.pin>`.
+This run predates `--pin`; `verify` also needs `--pin <copy of device.pin>`.
 
 ```console
 $ curl -s localhost:5010/chain

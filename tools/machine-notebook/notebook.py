@@ -214,24 +214,32 @@ def pin_problem(got, pin):
 
 
 def pin_is_inside(path, d):
-    """Is the file at `path` one of the files in folder `d`? By path (symlinks resolved), and by
-    identity: the same (device, inode) as any entry under `d`, so another spelling of the same path
-    (letter case or Unicode form on a file system that ignores them) or a hard link is caught too."""
-    real, root = os.path.realpath(path), os.path.realpath(d)
-    if os.path.commonpath([real, root]) == root:
-        return True
-    try:
-        st = os.stat(path)
-    except OSError:
+    """Is the file at `path` one of the files in folder `d`? By path as given (before any symlink is
+    resolved, so a symlink inside `d` cannot pick an outside file as the pin), by path with symlinks
+    resolved, and by identity: the same (device, inode) as any entry under `d`, for both the path
+    itself (lstat) and what it points to (stat). That catches another spelling of the same path
+    (letter case or Unicode form on a file system that ignores them), a hard link, and a symlink in
+    `d` reached through another spelling."""
+    for p, root in ((os.path.abspath(path), os.path.abspath(d)),
+                    (os.path.realpath(path), os.path.realpath(d))):
+        if os.path.commonpath([p, root]) == root:
+            return True
+    want = set()
+    for look in (os.lstat, os.stat):
+        try:
+            st = look(path)
+        except OSError:
+            continue
+        want.add((st.st_dev, st.st_ino))
+    if not want:
         return False
-    want = (st.st_dev, st.st_ino)
     for top, dirs, files in os.walk(d):
         for n in dirs + files:
             try:
                 e = os.lstat(os.path.join(top, n))
             except OSError:
                 continue
-            if (e.st_dev, e.st_ino) == want:
+            if (e.st_dev, e.st_ino) in want:
                 return True
     return False
 
