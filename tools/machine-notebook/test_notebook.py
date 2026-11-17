@@ -595,25 +595,61 @@ class Notebook(unittest.TestCase):
         shutil.copy(self.pin, os.path.join(outside, "chosen.pin"))
         os.remove(os.path.join(d, "device.pin"))
         os.symlink(os.path.join(outside, "chosen.pin"), os.path.join(d, "device.pin"))
-        # A path under the folder through a symlinked subfolder: names a file under --dir as given,
-        # but the file system walks out of the folder; only the as-given check sees it.
+        # A symlinked subfolder: d/out -> outside/sub, which holds a correct pin too. A path into it,
+        # or through it and back up with .., resolves to a file outside the folder.
         os.mkdir(os.path.join(outside, "sub"))
+        shutil.copy(self.pin, os.path.join(outside, "sub", "chosen.pin"))
         os.symlink(os.path.join(outside, "sub"), os.path.join(d, "out"))
         alias = os.path.join(self.tmp, f"alias-{os.path.basename(d)}")
         os.symlink(d, alias)
-        cases = {
-            "the symlink, by path": os.path.join(d, "device.pin"),
-            "through a symlinked subfolder": os.path.join(d, "out", "..", "chosen.pin"),
-            # Through an outside alias of the folder: neither path check sees the folder in it;
-            # only the symlink's own identity (lstat) does.
-            "through an alias of the folder": os.path.join(alias, "device.pin"),
-        }
-        for name, p in cases.items():
+        os.symlink(os.path.join(outside, "sub"), os.path.join(d, "records", "out"))
+        rec_alias = os.path.join(self.tmp, f"alias-records-{os.path.basename(d)}")
+        os.symlink(os.path.join(d, "records"), rec_alias)
+        # A deeper symlinked subfolder, d/deep -> outside/sub/a: two ..s after it lead to outside.
+        os.mkdir(os.path.join(outside, "sub", "a"))
+        os.symlink(os.path.join(outside, "sub", "a"), os.path.join(d, "deep"))
+        # An outside alias of the symlinked subfolder in the folder.
+        out_alias = os.path.join(self.tmp, f"alias-out-{os.path.basename(d)}")
+        os.symlink(os.path.join(d, "out"), out_alias)
+        # (case name, --pin, --dir). All but the last are caught by the folders on the way to --pin
+        # being the folder or a folder in it, however either path is spelled; the last only by the --pin
+        # file's own identity (lstat): an outside hard link to the symlink in the folder.
+        cases = [
+            ("the symlink, by path", os.path.join(d, "device.pin"), d),
+            ("the symlink, via an alias of the folder", os.path.join(alias, "device.pin"), d),
+            ("through a symlinked subfolder and ..", os.path.join(d, "out", "..", "chosen.pin"), d),
+            ("into a symlinked subfolder, via an alias of the folder",
+             os.path.join(alias, "out", "chosen.pin"), d),
+            ("into a symlinked subfolder, --dir given as an alias",
+             os.path.join(d, "out", "chosen.pin"), alias),
+            ("into a symlinked subfolder, via an alias of a folder in the folder",
+             os.path.join(rec_alias, "out", "chosen.pin"), d),
+            ("through a deeper symlinked subfolder and .. twice",
+             os.path.join(d, "deep", "..", "..", "chosen.pin"), d),
+            ("into a symlinked subfolder, via an outside alias of it",
+             os.path.join(out_alias, "chosen.pin"), d),
+        ]
+        head, tail = os.path.split(d)
+        other_case = os.path.join(head, tail.swapcase())
+        if tail.swapcase() != tail and os.path.exists(other_case):
+            # Only where the file system ignores letter case (macOS by default).
+            cases.append(("into a symlinked subfolder, the folder in another letter case",
+                          os.path.join(other_case, "out", "chosen.pin"), d))
+        hard = os.path.join(self.tmp, "hardlink-to-the-symlink")
+        if os.path.lexists(hard):
+            os.remove(hard)
+        os.link(os.path.join(d, "device.pin"), hard, follow_symlinks=False)
+        if os.path.islink(hard):
+            cases.append(("an outside hard link to the symlink in the folder", hard, d))
+        for name, p, dd in cases:
             with self.subTest(name):
-                rc, out, err = nb_err("verify", "--pin", p, "--dir", d)
+                rc, out, err = nb_err("verify", "--pin", p, "--dir", dd)
                 self.assertEqual(rc, 2, out + err)
                 self.assertIn("is inside the folder being checked", err)
                 self.assertNotIn("VALID", out)
+        # Control: a folder given as an alias still verifies against a pin kept outside it.
+        rc, out = nb("verify", "--pin", self.pin, "--dir", alias)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
         # Control: the very file the symlink points at, named directly, is accepted.
         rc, out = nb("verify", "--pin", os.path.join(outside, "chosen.pin"), "--dir", d)
         self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)

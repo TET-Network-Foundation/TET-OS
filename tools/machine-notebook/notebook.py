@@ -41,6 +41,7 @@ import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -213,34 +214,94 @@ def pin_problem(got, pin):
     return None
 
 
-def pin_is_inside(path, d):
-    """Is the file at `path` one of the files in folder `d`? By path as given (before any symlink is
-    resolved, so a symlink inside `d` cannot pick an outside file as the pin), by path with symlinks
-    resolved, and by identity: the same (device, inode) as any entry under `d`, for both the path
-    itself (lstat) and what it points to (stat). That catches another spelling of the same path
-    (letter case or Unicode form on a file system that ignores them), a hard link, and a symlink in
-    `d` reached through another spelling."""
-    for p, root in ((os.path.abspath(path), os.path.abspath(d)),
-                    (os.path.realpath(path), os.path.realpath(d))):
-        if os.path.commonpath([p, root]) == root:
-            return True
-    want = set()
-    for look in (os.lstat, os.stat):
-        try:
-            st = look(path)
-        except OSError:
+MAX_LINKS = 40  # as the kernel's own limit; past it, opening the path fails anyway
+
+
+def lookup_folders(path):
+    """Every folder in which a part of `path` is looked up when the file system opens it: one part at
+    a time, symlinks expanded where they are met (at most MAX_LINKS of them), `..` taken from the
+    folder actually reached. A `..` is not a lookup a folder can redirect, so it adds none."""
+    cur = os.sep if path.startswith(os.sep) else os.getcwd()
+    todo = [p for p in path.split(os.sep)]
+    links = 0
+    while todo:
+        part = todo.pop(0)
+        if part in ("", "."):
             continue
-        want.add((st.st_dev, st.st_ino))
-    if not want:
+        if part == "..":
+            cur = os.path.dirname(cur)
+            continue
+        yield cur
+        nxt = os.path.join(cur, part)
+        try:
+            st = os.lstat(nxt)
+        except OSError:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            links += 1
+            if links > MAX_LINKS:
+                return
+            target = os.readlink(nxt)
+            if target.startswith(os.sep):
+                cur = os.sep
+            todo = target.split(os.sep) + todo
+        else:
+            cur = nxt
+
+
+def pin_is_inside(path, d):
+    """Does `path` lead into folder `d`, or is it one of the files there? Checked by identity, the
+    (device, inode) pair, so that no spelling of either path matters (letter case or Unicode form on
+    a file system that ignores them, symlinks to the folder, `..`):
+    - any folder in which a part of `path` is looked up, followed one part at a time as the file
+      system does (symlinks expanded, `..` taken after them), is `d` or a folder under it: then the
+      folder can choose what `path` reads, e.g. with a symlink in it;
+    - any folder on the way to `path` as written, before its last part is resolved, is one of those;
+    - `path` itself (lstat) or what it points to (stat) is an entry under `d`: a hard link to it.
+    Also by path with symlinks resolved."""
+    real, root = os.path.realpath(path), os.path.realpath(d)
+    if os.path.commonpath([real, root]) == root:
+        return True
+    try:
+        st = os.stat(d)
+    except OSError:
         return False
+    dirs_in_d = {(st.st_dev, st.st_ino)}
+    entries = set()
     for top, dirs, files in os.walk(d):
         for n in dirs + files:
             try:
                 e = os.lstat(os.path.join(top, n))
             except OSError:
                 continue
-            if (e.st_dev, e.st_ino) in want:
+            entries.add((e.st_dev, e.st_ino))
+            if n in dirs:
+                dirs_in_d.add((e.st_dev, e.st_ino))
+    up = os.path.dirname(os.path.abspath(path))
+    while True:
+        try:
+            u = os.stat(up)
+            if (u.st_dev, u.st_ino) in dirs_in_d:
                 return True
+        except OSError:
+            pass
+        if os.path.dirname(up) == up:
+            break
+        up = os.path.dirname(up)
+    for where in lookup_folders(path):
+        try:
+            u = os.stat(where)
+        except OSError:
+            continue
+        if (u.st_dev, u.st_ino) in dirs_in_d:
+            return True
+    for look in (os.lstat, os.stat):
+        try:
+            s = look(path)
+        except OSError:
+            continue
+        if (s.st_dev, s.st_ino) in entries:
+            return True
     return False
 
 

@@ -28,10 +28,10 @@ Does not show:
 - that the signature format is final: it is in outside review, and logs from this test may need re-signing
 
 Known gaps in the check itself, not fixed yet:
-- the search of the folder for another name of the pin file has no size limit and does not log
-  how many entries it read
-- that search skips entries it cannot read, without saying so
-- `publish` reuses a hash record already saved in the folder without checking it again
+- the check that `--pin` lies outside the folder reads the whole folder, with no size limit, and
+  does not report how much it read
+- that check is not complete in every case
+- `publish` does not check again everything it sends
 
 ## The device key
 
