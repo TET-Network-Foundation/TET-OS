@@ -14,17 +14,23 @@ dependencies with `cargo tree --locked` and checks:
      `links = "ssl"`, `"openssl"` or `"crypto"` (a C binding to libssl under another name). One
      dependency that declares reqwest without `default-features = false` turns reqwest's default-tls
      back on, and that brings native-tls and, on Linux, OpenSSL with it. That is how hf-hub did it.
-  2. (per build, not the workspace) reqwest itself has both root-store features on:
+  2. (per build, not the workspace) the reqwest linked into the binary has both root-store features on
+     (normal edges only: resolver 2 builds a separate reqwest for build scripts, and its features
+     say nothing about the binary):
      rustls-tls-webpki-roots-no-provider (the bundled Mozilla roots) and
      rustls-tls-native-roots-no-provider (the operating system's store). Only reqwest's own feature
      makes it load the OS store; rustls-native-certs being somewhere in the tree is not enough.
 
 A listing that does not run, or that does not contain reqwest and rustls, fails the test rather than
-passing it: an empty tree has no OpenSSL in it either.
+passing it: an empty tree has no OpenSSL in it either. reqwest and rustls must be in the binary's
+own (normal) tree, not only a build script's. The `links` table comes from `cargo metadata
+--all-features`, so it knows packages that only a feature such as zk-prove brings in.
 
 Known limits: dev-dependencies are not checked (tests may link what the binaries do not); only the
 three release targets; names and `links` only, so a crate that links libssl through RUSTFLAGS,
-a .cargo/config override or a build script without `links` is not seen; crates outside the
+a .cargo/config override, a build script without `links`, or a renamed copy of openssl-sys with
+another `links` value is not seen; Cargo features only, so code that turns a root store off at
+runtime (tls_built_in_native_certs(false) and the like) is not seen; crates outside the
 workspace (archive/, the zk guests) are not checked. Cargo has to be able to read every crate in
 Cargo.lock; offline that needs them in the local cache (set CARGO_NET_OFFLINE=true to be sure nothing
 is fetched).
@@ -64,7 +70,7 @@ def cargo(args, what):
 
 
 def links_by_name():
-    meta = json.loads(cargo(["metadata", "--locked", "--format-version", "1"], "cargo metadata"))
+    meta = json.loads(cargo(["metadata", "--locked", "--all-features", "--format-version", "1"], "cargo metadata"))
     out = {}
     for p in meta["packages"]:
         if p.get("links"):
@@ -72,14 +78,14 @@ def links_by_name():
     return out
 
 
-def packages(build_args, target, what):
-    out = cargo(["tree", "--locked", "-e", "normal,build", "--target", target,
+def packages(build_args, target, what, edges="normal,build"):
+    out = cargo(["tree", "--locked", "-e", edges, "--target", target,
                  "--prefix", "none", "--format", "{p}"] + build_args, what)
     return {line.split(" ", 1)[0] for line in out.splitlines() if line.strip()}
 
 
 def reqwest_features(build_args, target, what):
-    out = cargo(["tree", "--locked", "-e", "features,normal,build", "-i", "reqwest", "--target", target,
+    out = cargo(["tree", "--locked", "-e", "features,normal", "-i", "reqwest", "--target", target,
                  "--prefix", "none"] + build_args, what)
     feats = set()
     for line in out.splitlines():
@@ -96,7 +102,7 @@ def main():
             what = f"{label} on {target}"
             names = packages(args, target, what)
             problems = []
-            missing = sorted(REQUIRED - names)
+            missing = sorted(REQUIRED - packages(args, target, what, edges="normal"))
             if missing:
                 problems.append("not in the tree: " + ", ".join(missing))
             found = sorted(FORBIDDEN & names)
