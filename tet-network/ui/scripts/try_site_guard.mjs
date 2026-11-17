@@ -20,8 +20,10 @@
 // 6. Images must be PNG/JPEG/GIF/WebP whose SHA-256 matches; links must be http(s).
 // 7. The reader page says a node can serve an older version by leaving out newer edits (signatures
 //    can't prove recency), and shows the last edit's time labelled as written by the signer and not
-//    checked (the signer chose it; nothing checks it). Controls: the line removed; the old unlabelled
-//    "last edit signed {when}" back; the label without its "not checked" part.
+//    checked (the signer chose it; nothing checks it), rendered once, in en, ja and zh-HK. Comment
+//    lines don't count. Controls, each for its own assertion: the line removed; the old
+//    "last edit signed {when}" back, or a variant; the label without "not checked"; the label only
+//    in a comment; a second unlabelled render; a ja or zh-HK value without the not-checked part.
 
 import { register } from "node:module";
 import { readFileSync } from "node:fs";
@@ -224,19 +226,39 @@ await check("images need a matching SHA-256 and a raster type; links need http(s
   assert.ok(!L.inline("[x](javascript:alert(1))").includes("href"));
 });
 
-// 7. the reader is told a node can withhold newer edits
-const VIEW = readFileSync(new URL("../app/s/[site]/page.tsx", import.meta.url), "utf8");
-const honestView = (src) => {
-  assert.ok(src.includes("A node can leave out newer edits and show an older version; compare the version with the site's owner."), "the withholding line is gone");
-  assert.ok(src.includes(`t("${LAST_EDIT}"`), "the last edit's time is gone, or no longer says the signer wrote it and it is not checked");
-  assert.ok(!src.includes("last edit signed {when}"), "the last edit's time is shown as a signed time, without saying the signer chose it");
-};
+// 7. the reader is told a node can withhold newer edits, and the last edit's time is labelled
 // The signer writes created_at_ms into the edit; a signature can't show when it was made.
+const VIEW = readFileSync(new URL("../app/s/[site]/page.tsx", import.meta.url), "utf8");
+const { JA } = await import("../app/try/i18n_ja.ts");
+const { ZH_HK } = await import("../app/try/i18n_zh_hk.ts");
 const LAST_EDIT = "last edit {when} (time written by the signer, not checked)";
+const SIGNER_JA = "署名者が書いた時刻、未確認";
+const SIGNER_ZH = "簽署者寫下的時間，未經核實";
+// Comment lines are not page text: a key quoted in a comment must not satisfy the pin.
+const live = (src) => src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(l)).join("\n");
+const honestView = (raw, ja = JA, zh = ZH_HK) => {
+  const src = live(raw);
+  assert.ok(src.includes("A node can leave out newer edits and show an older version; compare the version with the site's owner."), "the withholding line is gone");
+  assert.ok(!/last edit signed\W*\{when\}/i.test(src), "the last edit's time is shown as a signed time, without saying the signer chose it");
+  assert.equal((src.match(/lastSignedAtMs/g) ?? []).length, 1, "the last edit's time is rendered more than once, or not at all; only the labelled render may show it");
+  assert.ok(src.includes(`t(${JSON.stringify(LAST_EDIT)}, { when: new Date(verdict.lastSignedAtMs)`), "the last edit's time is not shown with its label (written by the signer, not checked)");
+  assert.ok(typeof ja[LAST_EDIT] === "string" && ja[LAST_EDIT].includes(SIGNER_JA) && ja[LAST_EDIT].includes("{when}"), "the ja label lost the signer / not-checked part or {when}");
+  assert.ok(typeof zh[LAST_EDIT] === "string" && zh[LAST_EDIT].includes(SIGNER_ZH) && zh[LAST_EDIT].includes("{when}"), "the zh-HK label lost the signer / not-checked part or {when}");
+};
+// A control names the assertion it is for, so an earlier one can't catch it for the wrong reason.
+const refuses = (name, fn, why) =>
+  check(`control: ${name}`, () => assert.throws(fn, (e) => e instanceof Error && why.test(e.message), `not refused for: ${why}`));
+const LABELLED = `t(${JSON.stringify(LAST_EDIT)}, { when: new Date(verdict.lastSignedAtMs).toLocaleString() })`;
 await check("the reader page says a node can withhold newer edits, and labels the last edit's time as the signer's, not checked", () => honestView(VIEW));
-await mustThrow("a reader page without the withholding line is caught", () => honestView(VIEW.replace("A node can leave out newer edits", "Every edit is here")));
-await mustThrow("a reader page with the old unlabelled \"last edit signed {when}\" is caught", () => honestView(VIEW.replace(LAST_EDIT, "last edit signed {when}")));
-await mustThrow("a reader page whose time label drops \"not checked\" is caught", () => honestView(VIEW.replace(LAST_EDIT, "last edit {when} (time written by the signer)")));
+await check("the controls below have the labelled render to edit", () => assert.ok(VIEW.includes(`{${LABELLED}}`), "the labelled render is not in the page as the controls expect"));
+await refuses("a reader page without the withholding line is caught", () => honestView(VIEW.replace("A node can leave out newer edits", "Every edit is here")), /withholding line/);
+await refuses("the old unlabelled \"last edit signed {when}\" is caught", () => honestView(VIEW.replace(LAST_EDIT, "last edit signed {when}")), /shown as a signed time/);
+await refuses("a variant \"Last edit signed: {when}\" is caught", () => honestView(VIEW.replace(LAST_EDIT, "Last edit signed: {when}")), /shown as a signed time/);
+await refuses("a label without \"not checked\" is caught", () => honestView(VIEW.replace(LAST_EDIT, "last edit {when} (time written by the signer)")), /not shown with its label/);
+await refuses("the labelled key only in a comment, the time shown bare, is caught", () => honestView(VIEW.replace(`{${LABELLED}}`, `\n{/* ${LABELLED} */}\n{new Date(verdict.lastSignedAtMs).toLocaleString()}`)), /not shown with its label/);
+await refuses("a second, unlabelled render of the time is caught", () => honestView(VIEW.replace(LABELLED, `${LABELLED} <span>{new Date(verdict.lastSignedAtMs).toLocaleString()}</span>`)), /more than once/);
+await refuses("a ja label without the not-checked part is caught", () => honestView(VIEW, { ...JA, [LAST_EDIT]: "最終編集の署名 {when}" }), /the ja label/);
+await refuses("a zh-HK label without the not-checked part is caught", () => honestView(VIEW, JA, { ...ZH_HK, [LAST_EDIT]: "最後一次編輯簽署於 {when}" }), /the zh-HK label/);
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
 process.exit(failed ? 1 : 0);
