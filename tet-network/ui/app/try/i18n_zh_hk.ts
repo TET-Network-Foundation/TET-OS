@@ -779,7 +779,7 @@ export const ZH_HK: Record<string, string> = {
   "Sealed prediction": "封印預言",
   "A sealed prediction, opened": "已公開的封印預言",
   "Checking it against the seal…": "正在與封印核對…",
-  "Unchanged since it was sealed.": "密封後未經改動。",
+  "Unchanged since it was sealed.": "封印後未經改動。",
   "Written by {when} (time from this node's clock, not checked).": "於 {when}（此節點時鐘的時間，未經核實）之前寫成。",
   "Doesn't match any seal on this node: this text was changed, or never sealed here.": "與此節點上任何封印都不相符：文字已被改動，或從未在此封印。",
   "Sealed by ID": "封印的 ID",

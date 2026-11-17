@@ -4,7 +4,8 @@
  * Sealed prediction (lib/seal.ts): write a prediction, choose when it opens (1–30 days on this
  * node), seal it. Only the fingerprint is recorded; you get a card image to share (code, opening
  * date, chain height — never the text) and a private reveal link. Opening a reveal link checks the
- * text against the record: green "written at …, unchanged", or red.
+ * text against the record: green "unchanged since it was sealed" with the node's (unchecked) time in
+ * grey below it, or red.
  */
 import { useEffect, useRef, useState } from "react";
 import { findSignatures, publishRecord, registryRecords, signFileHash, type FoundSignature } from "../lib/proof_code";
