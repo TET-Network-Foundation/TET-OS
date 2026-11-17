@@ -7,7 +7,11 @@ member of a group without saying which member. Records are ordered by one shared
 can check that something existed before block N. Every signature is two signatures, Ed25519 and
 ML-DSA-44, and the page checks them in your browser instead of trusting a server.
 
-Try it: **<https://tetnet.org>** (no sign-up).
+**No public node runs today.** The three hosts (the demo at tetnet.org and the two seeds) were
+closed in November 2026, and the chain they ran is not restored. A new test chain, testnet-2, is
+being prepared. Signatures made earlier still verify offline: `tet-cli agent verify`, or the
+one-file verifier in [`tet-network/ui/public/verify/`](./tet-network/ui/public/verify). Until
+testnet-2 runs, you can run a node of your own (below).
 
 ## What TET is not
 
@@ -23,7 +27,7 @@ Try it: **<https://tetnet.org>** (no sign-up).
 
 | Running today | Prototype (code public, tests green) | In design |
 |---|---|---|
-| The demo at tetnet.org and two seeds: Helsinki makes the blocks, Nuremberg is a full node | Tag verifier `tet-tag-verify`: NTAG 424 DNA tap check (AN12196), per-tag keys (AN10922 `derive`), a `serve` prototype; 50 tests (PR #150, draft) | Tag registration and owners on TET (`GENUINE_TAG.md`, PR #149) |
+| **No public node today.** The demo at tetnet.org and the two seeds were closed in November 2026; testnet-2 is being prepared. What follows ran on them, and runs on a node of your own | Tag verifier `tet-tag-verify`: NTAG 424 DNA tap check (AN12196), per-tag keys (AN10922 `derive`), a `serve` prototype; 50 tests (PR #150, draft) | Tag registration and owners on TET (`GENUINE_TAG.md`, PR #149) |
 | Sign a file or text; stamp it on chain to show it existed before block N (the signed file is stored on the node, encrypted to you, for 7 days) | Hash-only stamp (the file never leaves your device): merged on main (#148), not yet confirmed on the demo | A new chain on Phase 1's blocks, with the time in the block header; today's records archived |
 | Verify a signature, a proof code or a stamp, also offline | Phase 1 (PR #151, open, not merged): blocks carry a producer signature and a timestamp (`ts_ms`); the validator set is read from genesis | `wallet_id_v2`: the ML-DSA key bound to the wallet ID |
 | Boards: anonymous posts that show a member wrote them, not which one (RISC Zero membership proof) | | Moving the message key exchange from Kyber-768 (Round 3) to ML-KEM (FIPS 203) |
@@ -55,7 +59,7 @@ All of this is in design; nothing below is live.
 
 ## Links
 
-- The demo: <https://tetnet.org>
+- The demo: <https://tetnet.org> (no node behind it today; testnet-2 is being prepared)
 - Tag verifier README: [`tet-tag-verify/README.md`](https://github.com/TET-Network-Foundation/TET-OS/blob/tag-verify-core/tet-tag-verify/README.md) (on the PR #150 branch)
 - Tag plan: [`docs/plans/GENUINE_TAG.md`](https://github.com/TET-Network-Foundation/TET-OS/blob/plan-genuine-tag/docs/plans/GENUINE_TAG.md) (on the PR #149 branch, design only)
 - [PR #150](https://github.com/TET-Network-Foundation/TET-OS/pull/150): the tag verifier (draft)
@@ -65,8 +69,11 @@ Maintained by Steve (Kazuma Sengoku).
 
 ## Limits
 
-- **Testnet.** One block producer and one operator today; a sustained attack, or the operator, can
-  stop it. The chain may be reset.
+- **No public node today.** The three hosts were closed in November 2026 and their chain is not
+  restored; testnet-2 is being prepared. Signatures made for the old chain still verify offline, but
+  its blocks can no longer be looked up, so a stamp's "existed before block N" can't be checked online.
+- **Testnet.** One block producer and one operator; a sustained attack, or the operator, can stop it.
+  The chain may be reset, and it has been.
 - **No external audit yet.**
 - **Quantum resistance is incomplete.** Every signature is hybrid, but the wallet ID is the Ed25519
   key until `wallet_id_v2`. Messages use X25519 + Kyber-768 (Round 3), not the final ML-KEM standard.
@@ -77,7 +84,7 @@ Maintained by Steve (Kazuma Sengoku).
 
 ## Read more
 
-- **Technical paper v2:** <https://tetnet.org/whitepaper> (source
+- **Technical paper v2:** <https://tetnet.org/whitepaper> (offline while no node runs; source
   `tet-network/ui/app/whitepaper/paper.ts`; HTML and PDF in `tet-network/ui/public/paper/`).
 - **Security:** [`SECURITY.md`](./SECURITY.md) and [`docs/THREAT_MODEL.md`](./docs/THREAT_MODEL.md).
 - **Contributing:** [`CONTRIBUTING.md`](./CONTRIBUTING.md).
@@ -96,6 +103,10 @@ Maintained by Steve (Kazuma Sengoku).
 - [`deploy/`](./deploy): the seed and demo host setup.
 
 ## Quick start: run a node on the public testnet
+
+> **No public seed runs today.** The bootnodes below are the closed hosts and will not answer, so
+> this node has nothing to sync from until testnet-2 lists its own address. Until then, run a single
+> node or the local three-node stack ([`tet-core/README.md`](./tet-core/README.md)).
 
 This brings up a node that syncs from the public seeds, plus the web app. Most of the ten minutes
 is the Docker build.
