@@ -20,6 +20,9 @@
 //   - JSX text in the kit is not read;
 //   - a page can call a kit component as a function and read .props
 //     (AccentBar({ shown: true }).props.className); name checks cannot see that.
+//   - the class split across literals (`bg-teal-${"700"}`, "bg-teal-" + "700") is not joined;
+//   - the same colour under another spelling (bg-[#0f766e], bg-(--color-teal-700),
+//     bg-[var(--color-teal-700)]) is not matched: the check reads class names, not colours.
 // Every check has a control here: the check run on a broken copy must fail.
 
 import { register, createRequire } from "node:module";
@@ -323,10 +326,11 @@ const KIT_ALLOWED = {
   STATUS_TEXT: ["const STATUS_TEXT", "export function StatusBadge", "export function SiteFrame"],
   "the accent classes": ["const ACCENT_FILL"],
 };
-// Any variant chain may precede the class (sm:, group-hover:, [&]:, min-[0px]:, [&:hover]:, !), so
-// the class is matched wherever it starts a token or follows the last ":". hover:bg-teal-800 and
-// dark:hover:bg-teal-300 (the kit's hover shades) are other shades and do not match.
-const ACCENT_CLASS = /(?<![^\s:!])bg-teal-(?:[67]00|400)(?![\w-])/;
+// Any variant chain may precede the class (sm:, group-hover:, [&]:, min-[0px]:, [&:hover]:, !), and
+// so may markup or punctuation (class="…", a comma, a bracket), so only a word character or "-"
+// right before the class stops a match. hover:bg-teal-800 and dark:hover:bg-teal-300 (the kit's
+// hover shades) are other shades and do not match.
+const ACCENT_CLASS = /(?<![\w-])bg-teal-(?:[67]00|400)(?![\w-])/;
 const ts = createRequire(import.meta.url)("typescript");
 function kitPrivateProblems(p, s) {
   const out = [];
@@ -441,6 +445,10 @@ await check("L control: each layout rule is caught", () => {
     'export const HOV = "[&:hover]:bg-teal-700";\n': /"export const HOV" uses the accent classes/,
     'export const IMP = "!bg-teal-700 px-2";\n': /"export const IMP" uses the accent classes/,
     'export const OP = `px-2 ${"x"} md:dark:bg-teal-400/90`;\n': /"export const OP" uses the accent classes/,
+    // Markup or punctuation before the class is still the class.
+    'export const HTML = `<div class="bg-teal-700">`;\n': /"export const HTML" uses the accent classes/,
+    'export const CSV = "a,bg-teal-700";\n': /"export const CSV" uses the accent classes/,
+    'export const PAREN = "(bg-teal-600)";\n': /"export const PAREN" uses the accent classes/,
     [`${FILL}export { ACCENT_FILL };\n`]: /"ExportDeclaration" uses ACCENT_FILL/,
     [`${FILL}export function accent() { return ACCENT_FILL; }\n`]: /"export function accent" uses ACCENT_FILL/,
     [`${FILL}export const F = () => {\n  void 0;\n  return ACCENT_FILL;\n};\n`]: /"export const F" uses ACCENT_FILL/,
