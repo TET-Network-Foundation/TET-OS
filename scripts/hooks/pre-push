@@ -1,0 +1,35 @@
+#!/bin/sh
+# pre-push: refuse any push that would update more than one ref (owner approved, 2026-11-17).
+#
+# Why: on 2026-11-16 a loop's variables came out empty, so `git push origin $2:$3` ran as
+# `git push origin :`, which pushes every branch whose name matches on both sides. One branch that
+# was not ours moved on GitHub. `push.default nothing` stops a bare `git push`, but not `:`, which is
+# an explicit refspec. This hook sees what a push would actually update, whatever the command line
+# said, and refuses when that is more than one ref.
+#
+# git passes one line per ref the push would update: <local ref> <local sha> <remote ref> <remote sha>.
+# Refs already up to date are not listed, so a push that changes nothing passes.
+#
+# Limits: a `:` push that happens to match exactly one changed branch passes (the hook cannot see the
+# refspec, only its effect). `git push --no-verify` skips every pre-push hook; this is a safety net
+# for mistakes, not access control.
+#
+# Install: scripts/hooks/install.sh (see scripts/hooks/README.md).
+
+n=0
+refs=""
+# Only the remote ref is needed; the other three fields are read and dropped.
+while read -r _ _ remote_ref _; do
+  [ -n "$remote_ref" ] || continue
+  n=$((n + 1))
+  refs="$refs
+  $remote_ref"
+done
+
+if [ "$n" -gt 1 ]; then
+  echo "pre-push: refused: this push to $1 would update $n refs:$refs" >&2
+  echo "pre-push: push one branch per command, with an explicit refspec, e.g." >&2
+  echo "pre-push:   git push origin refs/heads/<branch>:refs/heads/<branch>" >&2
+  exit 1
+fi
+exit 0
