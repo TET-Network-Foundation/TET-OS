@@ -768,7 +768,7 @@ export const ZH_HK: Record<string, string> = {
   "Copied": "已複製",
   "Mark something else": "標記其他內容",
   "Anyone can check it: type the code into the search box on the TET home page, or open the link.": "任何人都能核對：在 TET 首頁的搜尋欄輸入代碼，或開啟連結。",
-  "This shows that your ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.": "這顯示你的 ID 標記了這份完全相同的檔案，以及此節點記錄它的時間。它不顯示 ID 背後是誰，也不顯示內容是否原創或真實。",
+  "This shows that your ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.": "這顯示你的 ID 標記了這份完全相同的檔案。時間來自此節點的時鐘，未經核實。它不顯示 ID 背後是誰，也不顯示內容是否原創或真實。",
   "Enter a proof code, or drop a file here": "輸入證明碼，或把檔案拖放到這裡",
   "try it: verify this sample": "試試看：核對這個範例",
   "This record doesn't check out. Don't trust it.": "此記錄未能通過核對，請勿信任。",

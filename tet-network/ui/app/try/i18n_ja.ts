@@ -768,7 +768,7 @@ export const JA: Record<string, string> = {
   "Copied": "コピーしました",
   "Mark something else": "ほかのものを記録する",
   "Anyone can check it: type the code into the search box on the TET home page, or open the link.": "誰でも確かめられます。TET のトップページの検索欄にコードを入れるか、リンクを開いてください。",
-  "This shows that your ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.": "分かるのは、あなたの ID がこのファイルそのものを記録したことと、このノードがそれを記録した時刻です。ID の持ち主が誰か、内容が独自のものか、正しいかは分かりません。",
+  "This shows that your ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.": "分かるのは、あなたの ID がこのファイルそのものを記録したことです。時刻はこのノードの時計のもので、確認されていません。ID の持ち主が誰か、内容が独自のものか、正しいかは分かりません。",
   "Enter a proof code, or drop a file here": "証明コードを入力するか、ファイルをここにドロップ",
   "try it: verify this sample": "試してみる：このサンプルを確かめる",
   "This record doesn't check out. Don't trust it.": "この記録は確認できません。信用しないでください。",
