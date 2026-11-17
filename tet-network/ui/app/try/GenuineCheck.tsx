@@ -205,7 +205,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                     </>
                   ) : null}
                 </dl>
-                {h.verified ? <p className="text-[13.5px] text-[#5d646d]">{t("This shows that this ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.")}</p> : <p className="text-[13.5px]">{h.reason}</p>}
+                {h.verified ? <p className="text-[13.5px] text-[#5d646d]">{t("This shows that this ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.")}</p> : <p className="text-[13.5px]">{h.reason}</p>}
                 <p className="text-[13px]">
                   <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2 text-[#5d646d]")} onClick={() => download(`${h.code}.proof.json`, h.recordBytes)}>
                     {t("Download the proof file")}
