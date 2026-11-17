@@ -46,9 +46,12 @@ rand = "0.8"
 rand_new = { package = "rand", version = "0.10" }
 # TLS is rustls only; OpenSSL and native-tls must stay out of the tree (tools/deps/test_no_openssl.py).
 # Both root stores are on: "rustls-tls" adds the bundled Mozilla roots (webpki-roots) and
-# "rustls-tls-native-roots" adds the operating system's store (rustls-native-certs; on Linux it also
-# reads SSL_CERT_FILE / SSL_CERT_DIR), so a private CA the OS trusts keeps working. tet-cli,
-# TET-Core and tet-worker all get this reqwest through feature unification.
+# "rustls-tls-native-roots" adds the operating system's store (rustls-native-certs), so a private
+# CA the OS trusts keeps working. If SSL_CERT_FILE or SSL_CERT_DIR is set, on any platform, those
+# files are loaded INSTEAD of the OS store (the bundled roots stay). rustls treats every OS root
+# as a plain trust anchor: extra rules the platform keeps for some roots (name limits, distrust
+# dates) are not applied. tet-cli and every tet-core binary (TET-Core, TET-Worker-App, ...) get
+# this reqwest through feature unification.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "stream", "charset", "http2", "macos-system-configuration"] }
 ureq = { version = "2.12", default-features = false, features = ["json"] }
 rand_chacha = "0.3"
