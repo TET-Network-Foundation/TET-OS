@@ -194,7 +194,7 @@ class Notebook(unittest.TestCase):
     PINNED_SHOWS = [
         "which key signed each record",
         "that the records are in this order",
-        "that each record was written before the next one",
+        "that each record names the hash of the one before it",
         "that no one-time permission was used twice in this log, or after it ran out",
     ]
     PINNED_DOES_NOT_SHOW = [

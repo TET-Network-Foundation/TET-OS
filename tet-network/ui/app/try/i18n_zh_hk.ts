@@ -1164,7 +1164,7 @@ export const ZH_HK: Record<string, string> = {
   "Sample 1: a greenhouse sensor's log": "範例 1：溫室感應器的日誌",
   "Sample 2: the same sensor, another log": "範例 2：同一感應器的另一份日誌",
   "Your folder: {name}": "你的資料夾：{name}",
-  "that each record was written before the next one": "每項紀錄都在下一項之前寫成",
+  "that each record names the hash of the one before it": "每項紀錄都寫有前一項紀錄的雜湊值",
   "that no one-time permission was used twice in this log, or after it ran out": "這份日誌中沒有一次性許可被用了兩次，或在過期後被使用",
   "that the machine's clock was right": "機器的時鐘是準確的",
   "where the machine was": "機器當時在哪裏",

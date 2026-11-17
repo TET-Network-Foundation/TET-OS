@@ -1164,7 +1164,7 @@ export const JA: Record<string, string> = {
   "Sample 1: a greenhouse sensor's log": "サンプル1：温室のセンサーのログ",
   "Sample 2: the same sensor, another log": "サンプル2：同じセンサーの別のログ",
   "Your folder: {name}": "あなたのフォルダー：{name}",
-  "that each record was written before the next one": "各記録が次の記録より前に書かれたこと",
+  "that each record names the hash of the one before it": "各記録が直前の記録のハッシュを記していること",
   "that no one-time permission was used twice in this log, or after it ran out": "このログの中で、1回限りの許可が2回使われたり、期限切れの後に使われたりしていないこと",
   "that the machine's clock was right": "機械の時計が正しかったこと",
   "where the machine was": "機械がどこにあったか",
