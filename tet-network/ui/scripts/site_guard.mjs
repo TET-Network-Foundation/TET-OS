@@ -304,6 +304,8 @@ const classStrings = (src) => {
   }
   return out;
 };
+/** Kit constants that carry the accent fill; pages reach them only through the kit's components. */
+const KIT_PRIVATE = ["ACCENT_FILL", "STATUS_TEXT"];
 function layoutProblems(src) {
   const out = [];
   for (const [p, s] of Object.entries(src)) {
@@ -325,8 +327,22 @@ function layoutProblems(src) {
     const primaries = (stripComments(s).match(/<PrimaryLink\b/g) ?? []).length;
     if (primaries > 1) out.push(`${p}: ${primaries} primary buttons (at most one a page)`);
     if (!p.endsWith("app/site/kit.tsx") && /\bbg-teal-[67]00\b/.test(classes)) out.push(`${p}: a hand-made primary button (use <PrimaryLink>)`);
-    // The kit's accent fill is private to the kit; a page that names it is drawing its own button.
-    if (!p.endsWith("app/site/kit.tsx") && /\bACCENT_FILL\b/.test(stripComments(s))) out.push(`${p}: uses the kit's ACCENT_FILL (use <PrimaryLink>, <StatusBadge> or <AccentBar>)`);
+    // The kit's accent fill is private to the kit, and so is STATUS_TEXT, whose "running" tone carries
+    // it; a page that names either is drawing its own button.
+    if (!p.endsWith("app/site/kit.tsx")) {
+      for (const name of KIT_PRIVATE) {
+        if (new RegExp(`\\b${name}\\b`).test(stripComments(s))) out.push(`${p}: uses the kit's ${name} (use <PrimaryLink>, <StatusBadge> or <AccentBar>)`);
+      }
+    } else {
+      // The kit exports nothing that carries the accent fill: no exported constant may name it or a
+      // solid teal-600/700, directly or through another private constant.
+      for (const m of stripComments(s).matchAll(/\bexport\s+const\s+(\w+)[^=]*=([\s\S]*?);\s*\n/g)) {
+        if (/\bbg-teal-[67]00\b/.test(m[2]) || KIT_PRIVATE.some((n) => new RegExp(`\\b${n}\\b`).test(m[2]))) out.push(`${p}: exports ${m[1]}, which carries the accent fill`);
+      }
+      for (const name of KIT_PRIVATE) {
+        if (new RegExp(`\\bexport\\s+(?:const\\s+${name}\\b|\\{[^}]*\\b${name}\\b)`).test(stripComments(s))) out.push(`${p}: exports ${name}, which is private to the kit`);
+      }
+    }
   }
   return out;
 }
@@ -365,8 +381,21 @@ await check("L control: each layout rule is caught", () => {
     'className="px-4\n  text-5xl"': /type size text-5xl/,
     // The kit's accent fill used outside the kit is a hand-made button.
     'import { ACCENT_FILL } from "../kit"; <a className={cx("px-6 py-4", ACCENT_FILL)} />': /uses the kit's ACCENT_FILL/,
+    // STATUS_TEXT.running.tone is the accent fill under another name: a page that reads it draws a button.
+    'import { STATUS_TEXT } from "../kit"; <a className={cx("inline-flex px-6 py-4", STATUS_TEXT.running.tone)} />': /uses the kit's STATUS_TEXT/,
+    'import * as kit from "../kit"; const B = kit.STATUS_TEXT["running"].tone;': /uses the kit's STATUS_TEXT/,
   };
   for (const [src, re] of Object.entries(elsewhere)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
+  // The kit itself may not export what carries the accent fill, under its own name or another.
+  const KIT = "app/site/kit.tsx";
+  const kitCases = {
+    'const ACCENT_FILL = "bg-teal-700";\nexport const STATUS_TEXT = {\n  running: { tone: `${ACCENT_FILL} text-white` },\n};\n': /exports STATUS_TEXT/,
+    'const ACCENT_FILL = "bg-teal-700";\nexport const BADGE = `${ACCENT_FILL} px-2`;\n': /exports BADGE, which carries the accent fill/,
+    'export const SOLID = "bg-teal-700 text-white";\n': /exports SOLID, which carries the accent fill/,
+    'const ACCENT_FILL = "bg-teal-700";\nexport { ACCENT_FILL };\n': /exports ACCENT_FILL, which is private/,
+  };
+  for (const [src, re] of Object.entries(kitCases)) assert.match(layoutProblems({ [KIT]: src }).join(" | "), re, src);
+  assert.deepEqual(layoutProblems({ [KIT]: SRC[KIT] }), [], "the real kit exports nothing that carries the accent fill");
   // Prose is not read as classes, even prose that names a class or a colour.
   assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 't("Use text-lg for nothing: the site has five sizes.") t("A red-orange glaze, 300 ml.")' }), []);
   assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 'className="mt-4 gap-2 px-6 text-xl font-semibold max-w-prose text-teal-800 dark:text-slate-300 sm:text-4xl"' }), []);

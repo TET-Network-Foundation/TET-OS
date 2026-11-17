@@ -35,8 +35,9 @@ const ACCENT_FILL = "bg-teal-700 dark:bg-teal-400";
 /** The column every page sits in. */
 export const COLUMN = "mx-auto w-full max-w-3xl px-4 sm:px-6";
 
-/** What each status means, in a phrase. Teal for built, slate for not built; solid vs outline. */
-export const STATUS_TEXT: Record<Status, { label: string; means: string; tone: string }> = {
+/** What each status means, in a phrase. Teal for built, slate for not built; solid vs outline.
+ * Not exported: "running" carries the accent fill, so pages get these only through StatusBadge (site_guard L1). */
+const STATUS_TEXT: Record<Status, { label: string; means: string; tone: string }> = {
   running: { label: "Running", means: "works today for anyone", tone: `${ACCENT_FILL} text-white dark:text-slate-950` },
   prototype: { label: "Prototype", means: "built, runs only on your own computer", tone: "border border-teal-700 text-teal-800 dark:border-teal-400 dark:text-teal-200" },
   planned: { label: "Planned", means: "decided, not built", tone: "bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100" },
