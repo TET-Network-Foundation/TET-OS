@@ -1234,4 +1234,5 @@ export const ZH_HK: Record<string, string> = {
   "Who holds the key. Anyone with the 12 words can answer. The site learns a key, not a person.": "誰持有這把金鑰。任何擁有那 12 個字的人都能回答。網站得知的是一把金鑰，而不是一個人。",
   "That you meant to sign in to this site: the prototype signs any question it is given. The full design would check where the question came from and show the site's name first; neither is built.": "你確實想登入這個網站：原型會簽署任何收到的問題。完整的設計會檢查問題從哪裏來，並先顯示網站名稱；兩者都未有做。",
   "Anything after a restart: the server keeps its questions in memory only.": "重新啟動之後的任何事：伺服器只把問題存在記憶體中。",
+  "that the signature format is final: it is in outside review, and logs from this test may need re-signing": "簽名格式已經定案（格式正在接受外部審查，這次測試的日誌可能需要重新簽署）",
 };

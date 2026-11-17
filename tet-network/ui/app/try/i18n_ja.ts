@@ -1234,4 +1234,5 @@ export const JA: Record<string, string> = {
   "Who holds the key. Anyone with the 12 words can answer. The site learns a key, not a person.": "誰が鍵を持っているか。12語を持つ人なら誰でも答えられます。サイトが知るのは鍵であって、人ではありません。",
   "That you meant to sign in to this site: the prototype signs any question it is given. The full design would check where the question came from and show the site's name first; neither is built.": "あなたがこのサイトにサインインするつもりだったこと。試作品は渡された質問を何でも署名します。完全な設計では、質問がどこから来たかを確かめ、先にサイト名を表示しますが、どちらもまだ作られていません。",
   "Anything after a restart: the server keeps its questions in memory only.": "再起動の後のことは何も。サーバーは質問をメモリーにしか保持しません。",
+  "that the signature format is final: it is in outside review, and logs from this test may need re-signing": "署名の形式が最終版であること（外部の審査中で、このテストのログは署名し直しが必要になる場合があります）",
 };
