@@ -44,7 +44,7 @@ rand = "0.8"
 # benefit. The argument is ignored upstream anyway (`_rng`, see melekes/rust-libp2p#12) — only the
 # bound has to be satisfied.
 rand_new = { package = "rand", version = "0.10" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream", "charset", "http2", "macos-system-configuration"] }
 ureq = { version = "2.12", default-features = false, features = ["json"] }
 rand_chacha = "0.3"
 dilithium-rs = { version = "0.2", default-features = false }
