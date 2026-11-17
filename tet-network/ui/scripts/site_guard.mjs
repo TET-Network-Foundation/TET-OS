@@ -23,6 +23,13 @@
 //   - the class split across literals (`bg-teal-${"700"}`, "bg-teal-" + "700") is not joined;
 //   - the same colour under another spelling (bg-[#0f766e], bg-(--color-teal-700),
 //     bg-[var(--color-teal-700)]) is not matched: the check reads class names, not colours.
+// L1's page check reads literals with a regex lexer, not a parser. Known gaps there:
+//   - an apostrophe in raw JSX text can pair with a later quote and hide a cx(…) string on that line
+//     (className values are read first and are not affected);
+//   - a string holding "/*" before a later "*/" is taken for a comment;
+//   - a regex literal holding a quote or backtick can misalign the literals after it;
+//   - the trailing important mark (bg-teal-700!) makes a constant look like prose, so it is not read;
+//   - the hand-made button check on pages matches bg-teal-600/700, not a dark-only bg-teal-400.
 // Every check has a control here: the check run on a broken copy must fail.
 
 import { register, createRequire } from "node:module";
@@ -297,18 +304,48 @@ const looksLikeClasses = (str) => {
   return words.length > 0 && words.every((w) => CLASS_WORD.test(w)) && words.some((w) => UTILITY.test(w));
 };
 const LITERAL = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+/**
+ * A template literal's text with each ${…} part (braces balanced) replaced by a space, and the string
+ * literals inside those parts that look like class names: `p-6 ${on ? "bg-teal-700" : "bg-white"}`
+ * gives "p-6  " and ["bg-teal-700", "bg-white"]. Without the second list a conditional class in a
+ * template was never read.
+ */
+const splitTemplate = (t) => {
+  let text = "";
+  const inner = [];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] === "$" && t[i + 1] === "{") {
+      let depth = 1, j = i + 2;
+      for (; j < t.length && depth > 0; j++) depth += t[j] === "{" ? 1 : t[j] === "}" ? -1 : 0;
+      for (const m of t.slice(i + 2, j - 1).matchAll(LITERAL)) {
+        const str = m[1] ?? m[2] ?? m[3];
+        if (looksLikeClasses(str)) inner.push(str);
+      }
+      text += " ";
+      i = j - 1;
+    } else text += t[i];
+  }
+  return { text, inner };
+};
 const classStrings = (src) => {
   const code = stripComments(src);
   const out = [];
   // 1. className values, unconditionally; their text is then blanked so pass 2 cannot re-read or
   //    mis-pair them.
   const rest = code.replace(/\bclassName=\{?\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, (all, lit) => {
-    out.push(lit.slice(1, -1).replace(/\$\{[^}]*\}/g, " "));
+    const { text, inner } = splitTemplate(lit.slice(1, -1));
+    out.push(text, ...inner);
     return " ".repeat(all.length);
   });
   // 2. every other literal that looks like class names.
   for (const m of rest.matchAll(LITERAL)) {
-    const str = m[1] ?? m[2] ?? m[3].replace(/\$\{[^}]*\}/g, " ");
+    if (m[3] !== undefined) {
+      const { text, inner } = splitTemplate(m[3]);
+      if (looksLikeClasses(text)) out.push(text);
+      out.push(...inner);
+      continue;
+    }
+    const str = m[1] ?? m[2];
     if (looksLikeClasses(str)) out.push(str);
   }
   return out;
@@ -416,6 +453,10 @@ await check("L control: each layout rule is caught", () => {
     'className="text-lg [&>svg]:h-4"': /type size text-lg/,
     'const X = "data-[state=open]:mt-3 w-[calc(100%+2px)]";': /mt-3 is off the 8 px grid/,
     'const Y = "mt-4 text-[#0F0] bg-rose-500";': /colour bg-rose-5/,
+    // A class inside ${…} of a template literal is read, in a className and in any other template.
+    'className={`rounded-2xl p-6 ${on ? "bg-teal-700 text-white" : "bg-white"}`}': /hand-made primary button/,
+    'className={`p-6 ${on ? "mt-3" : ""}`}': /mt-3 is off the 8 px grid/,
+    'const T = `px-6 ${f({ a: 1 })} ${"text-lg"}`;': /type size text-lg/,
     // An apostrophe in JSX text before a className does not swallow it.
     "<p>Don't <b className=\"text-lg\">x</b> it's</p>": /type size text-lg/,
     // Container queries, uppercase arbitrary values, and a className split over lines.
