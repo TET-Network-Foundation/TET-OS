@@ -58,7 +58,7 @@ python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source load
 
 `init` saves the chain in `<dir>/chain.json`; every later command uses it, so a log is always signed
 and checked against the same chain. `run` loops in the foreground and stops by itself at `--until`
-(default 22:00, local time). There is no daemon, launchd job or cron entry.
+(default 22:00, local time); `--every` must be more than 0 seconds. There is no daemon, launchd job or cron entry.
 
 ## Run it on a Pi
 
@@ -77,7 +77,8 @@ Canonical JSON (sorted keys, no spaces) in `records/<seq>.json`, its envelope in
 `records/<seq>.json.sig.json` (payload type `application/vnd.tet.machine-log+json`), and its SHA-256
 appended to `chain.txt`. The clock is the device's, in UTC, so a record carries no time-zone offset.
 No hostname, IP address, location or name goes into a record or a log line. `stdin-json` accepts
-exactly `{"value", "unit"}`, so nothing else can ride along. A record that cites a permit also carries
+exactly `{"value", "unit"}`, so nothing else can ride along, and refuses a value that is not a finite
+number, string or bool (NaN and Infinity are not JSON). A record that cites a permit also carries
 `"permit":"<permit id>"`.
 
 ## One-time permits

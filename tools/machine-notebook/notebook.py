@@ -38,6 +38,7 @@ import datetime as dt
 import glob
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -369,8 +370,13 @@ def read_source(source):
         with open(zones[0]) as f:
             return {"source": "cpu-temp", "value": round(int(f.read().strip()) / 1000, 1), "unit": "celsius"}
     if source == "stdin-json":
+        def no_constant(name):
+            raise ValueError(f"{name} is not JSON")
+
         try:
-            r = json.loads(sys.stdin.read())
+            # NaN and Infinity are not JSON (RFC 8259): a record holding one could not be read back by
+            # other readers. parse_constant refuses the tokens; the isfinite check below refuses 1e400.
+            r = json.loads(sys.stdin.read(), parse_constant=no_constant)
         except ValueError:
             raise Fail('stdin-json wants one JSON object: {"value": ..., "unit": "..."}')
         # Exactly these two keys, so nothing else (a name, a place) can ride along into the record.
@@ -378,6 +384,8 @@ def read_source(source):
             raise Fail('stdin-json wants exactly {"value": <number|string|bool>, "unit": "<string>"}')
         if not isinstance(r["value"], (int, float, str, bool)):
             raise Fail("stdin-json value must be a number, string or bool")
+        if isinstance(r["value"], float) and not math.isfinite(r["value"]):
+            raise Fail("stdin-json value must be a finite number")
         return {"source": "stdin-json", "value": r["value"], "unit": r["unit"]}
     raise Fail(f"unknown source {source}")
 
@@ -436,7 +444,13 @@ def cmd_record(a):
 
 
 def cmd_run(a):
-    hh, mm = (int(x) for x in a.until.split(":"))
+    # A loop driven by an argument has a lower bound: 0 or less would record with no pause at all.
+    if not math.isfinite(a.every) or a.every <= 0:
+        raise Fail(f"--every is the pause between records in seconds; it must be more than 0, not {a.every}")
+    m = re.fullmatch(r"([01]?[0-9]|2[0-3]):([0-5][0-9])", a.until)
+    if not m:
+        raise Fail(f"--until is a local time HH:MM, 00:00 to 23:59, not {a.until!r}")
+    hh, mm = int(m.group(1)), int(m.group(2))
     now = dt.datetime.now()
     stop = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
     if stop <= now:

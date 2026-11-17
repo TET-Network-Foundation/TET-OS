@@ -752,5 +752,89 @@ class Notebook(unittest.TestCase):
             srv.server_close()
 
 
+def nb_any(*argv):
+    """Like nb_err, but an exit by argparse (SystemExit) or by any exception is turned into a value,
+    so a test fails only at its own assertion. Returns (rc, stderr)."""
+    try:
+        rc, _, err = nb_err(*argv)
+    except SystemExit as e:
+        return e.code, "argparse exit"
+    except Exception as e:  # noqa: BLE001 - recorded, then asserted on
+        return f"raised {e!r}", ""
+    return rc, err
+
+
+class RunAndStdinChecks(unittest.TestCase):
+    """run's arguments and stdin-json's numbers. None of these needs tet-cli."""
+
+    # run --every has a lower bound: 0, a negative value or nan is refused before any record.
+    def test_run_refuses_a_non_positive_every(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        if now.hour == 23 and now.minute >= 57:
+            self.skipTest("too close to midnight to pick an --until later today")
+        until = (now + dt.timedelta(minutes=2)).strftime("%H:%M")
+
+        calls = []
+
+        def fake_record_once(a):
+            calls.append(a.every)
+            raise RuntimeError("loop entered")
+
+        real = notebook.record_once
+        notebook.record_once = fake_record_once
+        try:
+            for every in ("0", "-1", "nan"):
+                rc, err = nb_any("run", "--dir", "/nonexistent", "--source", "loadavg", "--every", every, "--until", until)
+                # Refused (exit 2), and refused because of --every: a check on the folder that fired
+                # first would also exit 2 and must not count.
+                self.assertEqual(rc, 2, f"--every {every}: {err}")
+                self.assertIn("--every", err, f"--every {every}: refused for another reason: {err}")
+            self.assertEqual(calls, [])
+            # Control: a positive --every enters the loop, so the refusals above are --every's.
+            rc, err = nb_any("run", "--dir", "/nonexistent", "--source", "loadavg", "--every", "1", "--until", until)
+            self.assertEqual(calls, [1.0], err)
+        finally:
+            notebook.record_once = real
+
+    # run --until is HH:MM, 00:00 to 23:59; anything else is refused with the tool's own error, exit 2.
+    def test_run_refuses_a_bad_until_with_exit_2(self):
+        for until in ("25:00", "7", "12:60", "ab:cd"):
+            rc, err = nb_any("run", "--dir", "/nonexistent", "--source", "loadavg", "--every", "60", "--until", until)
+            self.assertEqual(rc, 2, f"--until {until}: {err}")
+            self.assertIn("--until", err, f"--until {until}: refused for another reason: {err}")
+
+    # stdin-json refuses NaN, Infinity and numbers that overflow to infinity: a record must be JSON
+    # (RFC 8259), which has none of them.
+    def test_stdin_json_refuses_nan_and_infinity(self):
+        # 1e400 parses to inf without any NaN/Infinity token, so a fix that only rejects the tokens
+        # (json parse_constant) is not enough.
+        for raw in ('{"value": NaN, "unit": "x"}', '{"value": Infinity, "unit": "x"}', '{"value": 1e400, "unit": "x"}', '{"value": -1e400, "unit": "x"}'):
+            old = sys.stdin
+            sys.stdin = io.StringIO(raw)
+            try:
+                with self.assertRaises(notebook.Fail, msg=raw):
+                    notebook.read_source("stdin-json")
+            finally:
+                sys.stdin = old
+        # The tokens are refused at parse, before the finite check: each check has its own message.
+        for raw in ('{"value": NaN, "unit": "x"}', '{"value": -Infinity, "unit": "x"}'):
+            old = sys.stdin
+            sys.stdin = io.StringIO(raw)
+            try:
+                with self.assertRaises(notebook.Fail, msg=raw) as cm:
+                    notebook.read_source("stdin-json")
+                self.assertIn("wants one JSON object", str(cm.exception))
+            finally:
+                sys.stdin = old
+        # Control: a finite number is still accepted.
+        old = sys.stdin
+        sys.stdin = io.StringIO('{"value": 1e300, "unit": "x"}')
+        try:
+            self.assertEqual(notebook.read_source("stdin-json")["value"], 1e300)
+        finally:
+            sys.stdin = old
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
