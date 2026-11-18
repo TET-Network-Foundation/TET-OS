@@ -213,10 +213,12 @@ Dual-licensed under **Apache-2.0** ([`LICENSE-APACHE`](./LICENSE-APACHE)) OR **M
 
 ### Build / lint / test
 
+From the repository root, as CI runs them (see [`CONTRIBUTING.md`](./CONTRIBUTING.md); CI does not
+check formatting, and clippy is reported but not yet blocking):
+
 ```bash
-cargo fmt
-RISC0_SKIP_BUILD=1 cargo clippy -- -D warnings
-RISC0_SKIP_BUILD=1 cargo test
+RISC0_SKIP_BUILD=1 cargo test --workspace
+RISC0_SKIP_BUILD=1 cargo clippy --workspace --all-targets
 ```
 
 ### Persistence & graceful shutdown

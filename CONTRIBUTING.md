@@ -14,7 +14,8 @@ few days. Small, focused pull requests are easiest to review.
 ## Running things
 
 - A node: the quick start in [`README.md`](./README.md), or [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md).
-- Rust tests: `cd tet-core && cargo test`.
+- Rust tests, from the root, as CI runs them: `RISC0_SKIP_BUILD=1 cargo test --workspace`. More in
+  [`tet-core/CONTRIBUTING.md`](./tet-core/CONTRIBUTING.md).
 - The web app: `cd tet-network/ui && npm ci --ignore-scripts && npm run dev`, then open
   `http://localhost:3000/try`.
 - The page's guards (wording, security and translation checks, each with a negative control):
