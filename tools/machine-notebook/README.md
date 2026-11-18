@@ -49,9 +49,11 @@ hard link, or another spelling of the path): the check pins both keys of the exp
 
 ## Run it on the Mac
 
-Build `tet-cli` with `RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release`: the variable skips the RISC Zero guest, so no RISC Zero toolchain is needed, and only `tet-cli zk verify` needs that guest.
-It also needs a Rust toolchain, a C compiler and Python 3.9 or newer; on Linux, the OpenSSL headers
-and pkg-config too (on Debian or Raspberry Pi OS, `libssl-dev` and `pkg-config`). The first build
+Build `tet-cli` with `RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release`.
+`RISC0_SKIP_BUILD=1` skips the zk guest. Without it the build needs the RISC Zero toolchain.
+The notebook does not use the guest. The build also needs a Rust toolchain and a C compiler (on
+macOS the Xcode Command Line Tools, on Debian or Raspberry Pi OS `build-essential`); it does not
+need OpenSSL, because `tet-cli` uses rustls. The notebook needs Python 3.9 or newer. The first build
 downloads its crates. How long it takes on a clean machine has not been measured.
 
 No public node runs today, so there is no chain to read from `GET /chain`. For a log on your own
