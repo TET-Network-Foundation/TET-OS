@@ -5,8 +5,8 @@
  *   "salt":<16 random bytes, hex>}` — and marks their fingerprint exactly as a file is marked, so the
  *   registry holds the hash and a proof code, never the text. The salt stops anyone guessing a short
  *   prediction from its hash.
- * - **The card and its share link** carry only the code, the opening date and the chain height at
- *   sealing: never the text, never the salt.
+ * - **The card and its share link** carry only the code and the opening date: never the text, never
+ *   the salt, and no block number (nothing checks one).
  * - **The reveal link** carries the sealed bytes (base64url) after `#reveal=`. Opening it hashes them,
  *   finds the record by fingerprint and shows "unchanged since it was sealed", with the seal's time
  *   from the node's clock marked not checked, or red if they don't match. Anyone holding that link
@@ -74,9 +74,13 @@ export function parseReveal(fragment: string): { bytes: Uint8Array; sealed: Seal
   }
 }
 
-/** The card's public text: code, opening date, chain height at sealing. Never the text or salt. */
-export function cardLines(o: { code: string; opens: string; height: number | null }): string[] {
-  return [`sealed · ${o.height !== null ? `block #${o.height}` : "block —"} · opens ${o.opens}`, o.code];
+/**
+ * The card's public text: code and opening date. Never the text or salt, and no block number: the
+ * chain tip fetched after sealing is not a checked anchor, and "block #N" would read as "existed
+ * before block N" when nothing checked that.
+ */
+export function cardLines(o: { code: string; opens: string }): string[] {
+  return [`sealed · opens ${o.opens}`, o.code];
 }
 
 /** Has the opening date arrived (UTC)? */

@@ -393,6 +393,7 @@ translation starts after that, so your changes carry over.
 | Sealed on this node at {when} (time from this node's clock, not checked). | {when} にこのノードで封印（このノードの時計の時刻、未確認）。 |
 | Doesn't match any seal on this node: this text was changed, or never sealed here. | このノードのどの封印とも一致しません。文章が変えられたか、ここで封印されていません。 |
 | Sealed by ID | 封印した ID |
+| The ID shown is the one with the earliest time on this node's clock, which was not checked. | 表示している ID は、このノードの時計で時刻がいちばん早いものです。この時計は確認されていません。 |
 | code | コード |
 | opens {date} | 公開日 {date} |
 | This was opened before its date ({date}). | 予定（{date}）より前に公開されています。 |
@@ -407,7 +408,8 @@ translation starts after that, so your changes carry over.
 | Sealing… | 封印しています… |
 | Seal it | 封印する |
 | Only a fingerprint of your prediction is recorded on this node, with your ID. Nobody can read it until you share the reveal link. | このノードに記録されるのは、予言の指紋とあなたの ID だけです。公開用リンクを共有するまで、誰も読めません。 |
-| Sealed. It opens on {date}. | 封印しました。公開日は {date} です。 |
+| Sealed. | 封印しました。 |
+| It opens on {date}. | 公開日は {date} です。 |
 | The card: sealed, opening date, proof code | カード：封印・公開日・証明コード |
 | Save the card | カードを保存 |
 | I sealed a prediction. It opens on {date}. | 予言を封印しました。{date} に公開します。 |

@@ -2,8 +2,8 @@
 
 /**
  * Sealed prediction (lib/seal.ts): write a prediction, choose when it opens (1–30 days on this
- * node), seal it. Only the fingerprint is recorded; you get a card image to share (code, opening
- * date, chain height — never the text) and a private reveal link. Opening a reveal link checks the
+ * node), seal it. Only the fingerprint is recorded; you get a card image to share (code and opening
+ * date — never the text, and no block number: nothing checks one) and a private reveal link. Opening a reveal link checks the
  * text against the record: green "unchanged since it was sealed" with the node's (unchecked) time in
  * grey below it, or red.
  */
@@ -15,16 +15,6 @@ import { mldsa44Verify } from "../lib/pqc";
 import { Button, FOCUS, MONO, PanelHead, cx } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
-
-async function chainHeight(): Promise<number | null> {
-  try {
-    const r = await fetch(`${BASE}/explorer/blocks/recent?n=1`);
-    const j = (await r.json()) as { blocks?: { height: number }[] };
-    return j.blocks?.[0]?.height ?? null;
-  } catch {
-    return null;
-  }
-}
 
 /** The card as a PNG data URL: dark, three lines, the code large. Only public text. */
 function drawCard(lines: string[], link: string): string {
@@ -93,6 +83,7 @@ function Reveal(props: { bytes: Uint8Array; sealed: Sealed }) {
           {t("Sealed by ID")} <span className={MONO}>{hit.signerEd25519.slice(0, 8)}</span> · {t("code")} <span className={MONO}>{hit.code}</span> · {t("opens {date}", { date: props.sealed.opens })}
         </p>
       ) : null}
+      {hit ? <p className="text-[13.5px] text-[#5d646d]">{t("The ID shown is the one with the earliest time on this node's clock, which was not checked.")}</p> : null}
       {early ? <p className="text-[14px] text-[#6b4e00]">{t("This was opened before its date ({date}).", { date: props.sealed.opens })}</p> : null}
       <p className="text-[14px] text-[#5d646d]">{t("This shows the text is the one that was sealed: it matches the seal's fingerprint. The time of the seal is from this node's clock and was not checked. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.")}</p>
     </div>
@@ -127,10 +118,9 @@ export default function SealPanel() {
       const chain = await expectedChainBinding(BASE);
       const rec = await signFileHash(bytes, chain);
       const code = await publishRecord(BASE, rec.bytes, chain);
-      const height = await chainHeight();
       const shareLink = `${window.location.origin}/try#code=${code}`;
       const revealLink = `${window.location.origin}/try?tab=seal#${revealFragment(bytes)}`;
-      setDone({ code, opens, card: drawCard(cardLines({ code, opens, height }), shareLink), shareLink, revealLink });
+      setDone({ code, opens, card: drawCard(cardLines({ code, opens }), shareLink), shareLink, revealLink });
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -170,7 +160,8 @@ export default function SealPanel() {
           </>
         ) : (
           <div className="space-y-3">
-            <p className="text-[17px] font-semibold text-[#1f5132]">✓ {t("Sealed. It opens on {date}.", { date: done.opens })}</p>
+            <p className="text-[17px] font-semibold text-[#1f5132]">✓ {t("Sealed.")}</p>
+            <p className="text-[15px]">{t("It opens on {date}.", { date: done.opens })}</p>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={done.card} alt={t("The card: sealed, opening date, proof code")} className="w-full rounded-md border border-[#c9ced4]" />
             <div className="flex flex-wrap gap-2">
