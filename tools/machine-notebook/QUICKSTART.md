@@ -257,7 +257,8 @@ built, so the build step itself was not part of that run):
 1. **The build.** It is the long step. Use the line in Step 1, with `RISC0_SKIP_BUILD=1`.
 2. **Not in the repository root.** From another folder every command stops with
    `error: tet-cli not found at target/release/tet-cli (build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)`.
-   Go back to the root, or pass `--tet-cli`.
+   (That is the message as of 2026-11-18; the 2026-11-17 run printed an older one without the
+   variable.) Go back to the root, or pass `--tet-cli`.
 3. **The chain variables.** The README says to read them from a node's `/chain`. No public node runs
    today; a made-up local pair, as in Step 2, is what works.
 4. **Forgetting `--pin`.** `verify` without it stops with

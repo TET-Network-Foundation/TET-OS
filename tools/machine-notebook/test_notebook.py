@@ -103,7 +103,7 @@ class Notebook(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         if not os.access(CLI, os.X_OK):
-            raise RuntimeError(f"tet-cli not found at {CLI}: cargo build -p tet-cli --release, or set TET_CLI")
+            raise RuntimeError(f"tet-cli not found at {CLI}: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or set TET_CLI")
         cls.tmp = tempfile.mkdtemp()
         cls.base = os.path.join(cls.tmp, "base")
         old = {k: os.environ.get(k) for k in CHAIN}
@@ -918,6 +918,28 @@ class NotFoundHint(unittest.TestCase):
         msg = str(cm.exception)
         self.assertIn(f"tet-cli not found at {missing}", msg)
         self.assertIn("(build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)", msg)
+
+    # The same hint as a maker sees it: through main(), printed on stderr, compared whole. A hint
+    # changed on the way out (in main's error print, or by a check before run_cli) fails here.
+    def test_init_without_tet_cli_prints_exactly_that_hint(self):
+        with tempfile.TemporaryDirectory() as t:
+            missing = os.path.join(t, "no-such-tet-cli")
+            out, err = io.StringIO(), io.StringIO()
+            old = {k: os.environ.get(k) for k in CHAIN}
+            os.environ.update(CHAIN)
+            try:
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = notebook.main(["--tet-cli", missing, "init", "--dir", os.path.join(t, "nb")])
+            finally:
+                for k, v in old.items():
+                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+            self.assertEqual(rc, 2)
+            self.assertEqual(out.getvalue(), "")
+            self.assertEqual(
+                err.getvalue(),
+                f"error: tet-cli not found at {missing} "
+                "(build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)\n",
+            )
 
 
 if __name__ == "__main__":
