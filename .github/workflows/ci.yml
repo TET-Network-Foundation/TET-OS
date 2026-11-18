@@ -219,6 +219,17 @@ jobs:
           TET_CLI: target/debug/tet-cli
         run: python3 tools/machine-notebook/test_notebook.py
 
+      # The agent permit example (tet-agent-sdk/examples) drives the same notebook and tet-cli: a
+      # permit acts once, and a second use of it is refused. Node built-ins and python3 only, temp
+      # dirs, no npm install and no network, so it can run here on the runner's own Node.
+      # Exit 0 all six steps ok, 1 on any failed step, 2 if tet-cli is missing.
+      # scripts/run_guards.sh picks this line up too.
+      - if: needs.gate.outputs.code == 'true'
+        name: agent permit example — a permit acts once
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: node tet-agent-sdk/examples/agent_permit_once.mjs
+
       # Sign in with TET, the local-only prototype (tools/sign-in): signs and checks only through
       # tet-cli, so it runs here on the same binary. A replayed nonce, another domain and an expired
       # challenge must each be refused for that reason; scripts/run_guards.sh picks this line up too.
