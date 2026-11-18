@@ -44,13 +44,20 @@ rand = "0.8"
 # benefit. The argument is ignored upstream anyway (`_rng`, see melekes/rust-libp2p#12) — only the
 # bound has to be satisfied.
 rand_new = { package = "rand", version = "0.10" }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# TLS is rustls only; OpenSSL and native-tls must stay out of the tree (tools/deps/test_no_openssl.py).
+# Both root stores are on: "rustls-tls" adds the bundled Mozilla roots (webpki-roots) and
+# "rustls-tls-native-roots" adds the operating system's store (rustls-native-certs), so a private
+# CA the OS trusts keeps working. If SSL_CERT_FILE or SSL_CERT_DIR is set, on any platform, those
+# files are loaded INSTEAD of the OS store (the bundled roots stay). rustls treats every OS root
+# as a plain trust anchor: extra rules the platform keeps for some roots (name limits, distrust
+# dates) are not applied. tet-cli and every tet-core binary (TET-Core, TET-Worker-App, ...) get
+# this reqwest through feature unification.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "stream", "charset", "http2", "macos-system-configuration"] }
 ureq = { version = "2.12", default-features = false, features = ["json"] }
 rand_chacha = "0.3"
 dilithium-rs = { version = "0.2", default-features = false }
 candle-core = "0.10.2"
 candle-transformers = "0.10.2"
-hf-hub = "0.5.0"
 tokenizers = "0.22.2"
 anyhow = "1.0.102"
 once_cell = "1"
