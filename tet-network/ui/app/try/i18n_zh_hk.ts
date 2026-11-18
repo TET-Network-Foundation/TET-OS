@@ -57,6 +57,8 @@ export const ZH_HK: Record<string, string> = {
   "Thread": "討論串",
   "board": "討論區",
   "{n} posts": "{n} 則帖文",
+  "({n}) · {board} · started {when} (time written by the poster, not checked)": "({n}) · {board} · {when} 開始（發帖者寫下的時間，未經核實）",
+  "{board} · {n} posts · {when} (time written by the poster, not checked)": "{board} · {n} 則帖文 · {when}（發帖者寫下的時間，未經核實）",
   "Give the thread a title and write its first post.": "為討論串起標題，然後寫首帖。",
   "Old posts from before threads. Start a thread to post.": "這些是討論串功能推出前的舊帖文。如要發帖，請開一個討論串。",
   "Read, or reply below. Reply to a post with >>n.": "閱讀，或在下方回覆。用 >>n 回覆某則帖文。",

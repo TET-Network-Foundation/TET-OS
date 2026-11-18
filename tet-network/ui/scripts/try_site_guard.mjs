@@ -24,8 +24,9 @@
 //    lines don't count. Controls, each for its own assertion: the line removed; the old
 //    "last edit signed {when}" back, or a variant; the label without "not checked"; the label only
 //    in a comment; a second unlabelled render; a ja or zh-HK value without the not-checked part.
-// 8. Every time shown as unchecked (seven renders across six panels: SealPanel, SearchPanel,
-//    ProofCode, GenuineCheck twice, GenuinePanel, the reader page), and the sealer's ID picked by the
+// 8. Every time shown as unchecked (nine renders across seven panels: SealPanel, SearchPanel,
+//    ProofCode, GenuineCheck twice, GenuinePanel, the reader page, HomePanel's two thread times),
+//    and the sealer's ID picked by the
 //    node's clock, keeps "not checked" in en and its fragment in ja and zh-HK, is rendered in live
 //    code (comments found by the TSX parse, not by how a line starts), and has no check mark on it
 //    or on any element round it, a self-closing one included. After sealing, no element with a
@@ -38,9 +39,19 @@
 // 8b. The seal, genuine-check and marking panels say no "existed when" and call no mark "first",
 //    "earliest" or "later", in en and in the ja / zh-HK value of every key they render. It reads
 //    word lists, so a new phrasing outside them passes; the lists are above CLAIM_EN.
+// 8c. Rows in 8 only read the files they name. A census counts every place live code under app/try,
+//    app/s and app/lib makes or formats a date, per file, against a pinned table (DATE_CENSUS), so a
+//    new panel, a new helper or a new time in a pinned panel fails until someone labels or pins it.
+//    Controls: a new panel with a date, a second time in a pinned panel, a new app/lib helper, a use
+//    hidden in a comment. Not seen: dates made outside those folders, a library that formats dates
+//    under another name, a timestamp shown as a bare number. The table records six files that show
+//    record times with no label today (boards, mail, shelter, questions, directory, files): known and
+//    open, not fixed here.
 
 import { createRequire, register } from "node:module";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
@@ -338,6 +349,8 @@ await refuses("a zh-HK label that keeps the fragment but says 簽署 before {whe
 //   is per file, so a render that replaces a pinned non-render use keeps the count.
 const NODE = ["time from this node's clock, not checked", "このノードの時計の時刻、未確認", "此節點時鐘的時間，未經核實"];
 const SIGNER = ["time written by the signer, not checked", "署名者が書いた時刻、未確認", "簽署者寫下的時間，未經核實"];
+// A board post's time is sent_at_ms, set by the poster's tab when it signs (app/lib/tmail.ts).
+const POSTER = ["time written by the poster, not checked", "投稿者が書いた時刻、未確認", "發帖者寫下的時間，未經核實"];
 const UNCHECKED_TIMES = [
   ["app/try/SealPanel.tsx", "Sealed on this node at {when} (time from this node's clock, not checked).", ...NODE, "hit.publishedAtMs"],
   ["app/try/SearchPanel.tsx", "signed · version {n} · {date} (time written by the signer, not checked)", ...SIGNER, "h.signedAtMs"],
@@ -350,6 +363,8 @@ const UNCHECKED_TIMES = [
   ["app/try/GenuineCheck.tsx", "The order comes from this node's clock, which was not checked.", "was not checked", "確認されていません", "未經核實", null],
   // "Sealed by ID X": X is picked by the node's clock (the sort above NOT_SHOWN), and the page says so.
   ["app/try/SealPanel.tsx", "The ID shown is the one with the earliest time on this node's clock, which was not checked.", "which was not checked", "確認されていません", "未經核實", null],
+  ["app/try/HomePanel.tsx", "({n}) · {board} · started {when} (time written by the poster, not checked)", ...POSTER, "h.createdAtMs"],
+  ["app/try/HomePanel.tsx", "{board} · {n} posts · {when} (time written by the poster, not checked)", ...POSTER, "h.lastAtMs"],
 ];
 const SRC = Object.fromEntries(UNCHECKED_TIMES.map(([f]) => [f, readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
 // The checks below read the parse; a file the parser had to repair would be read as it guessed.
@@ -400,7 +415,8 @@ const enclosing = (code, at) => {
 };
 // Uses of a time field that are not a render, per file: SealPanel sorts by publishedAtMs to pick the
 // seal (a.publishedAtMs - b.publishedAtMs: two uses).
-const NOT_SHOWN = { "app/try/SealPanel.tsx": { publishedAtMs: 2 } };
+// HomePanel sorts the newest threads by createdAtMs (b.createdAtMs - a.createdAtMs: two uses).
+const NOT_SHOWN = { "app/try/SealPanel.tsx": { publishedAtMs: 2 }, "app/try/HomePanel.tsx": { createdAtMs: 2 } };
 const fieldCount = (code, field) => (code.match(new RegExp(`\\b${field}\\b`, "g")) ?? []).length;
 const labelled = ([file, key, en, ja, zh, time], src = SRC[file], jaD = JA, zhD = ZH_HK) => {
   assert.ok(key.includes(en), `${file}: the key lost "${en}"`);
@@ -561,6 +577,62 @@ for (const row of UNCHECKED_TIMES) {
   await refuses(`${file}: the label only in a comment is caught`, () => labelled(row, SRC[file].split(`t(${JSON.stringify(key)}`).join(`\n// t(${JSON.stringify(key)}\nt("x"`)), /is not rendered/);
   await refuses(`${file}: a ja value without "${ja}" is caught`, () => labelled(row, SRC[file], { ...JA, [key]: JA[key].replace(ja, "") }), /the ja value/);
   await refuses(`${file}: a zh-HK value without "${zh}" is caught`, () => labelled(row, SRC[file], JA, { ...ZH_HK, [key]: ZH_HK[key].replace(zh, "") }), /the zh-HK value/);
+}
+
+// 8c. Census: the rows above only read the files they name, so a time rendered anywhere else would
+// pass unseen. Every place that makes or formats a date in live code under app/try, app/s and app/lib
+// is counted per file and pinned here. A new panel, a new helper or a new time in a pinned panel
+// changes a count and fails, until someone looks at it and either labels it (a row above) or pins
+// it with the reason. The census only finds; the reasons are a person's reading, not a check.
+const DATE_USE = /\bnew Date\b|\bDate\s*\(|\bIntl\s*\.\s*DateTimeFormat\b|\bfmtDate\s*\(|\bfmtWhen\s*\(|\.toLocale(Date|Time)String\s*\(|\.toISOString\s*\(|\.toUTCString\s*\(|\.toDateString\s*\(/g;
+const dateUses = (src) => (live(src).match(DATE_USE) ?? []).length;
+// file -> [count, why]; the count is of matches, so new Date(x).toLocaleString() is two. "labelled": every record time it shows has a row above. "not a record": a
+// clock, a countdown, a parse or a form value. "OPEN": shows a record time with no label; known, not
+// fixed here (listed in the report so the wording can be decided once for all of them).
+const DATE_CENSUS = {
+  "app/try/SealPanel.tsx": [1, "labelled"],
+  "app/try/SearchPanel.tsx": [1, "labelled"],
+  "app/try/ProofCode.tsx": [1, "labelled"],
+  "app/try/GenuineCheck.tsx": [3, "labelled"],
+  "app/s/[site]/page.tsx": [1, "labelled"],
+  "app/try/HomePanel.tsx": [4, "labelled; two are the date filter's parse"],
+  "app/try/ui.tsx": [9, "the formatters themselves (fmtWhen, fmtDate)"],
+  "app/try/LiveStrip.tsx": [2, "not a record: the strip's own clock"],
+  "app/try/LivePanel.tsx": [2, "not a record: when this tab read the node; block times from the node"],
+  "app/try/InsidePanel.tsx": [1, "not a record: when the node counted"],
+  "app/try/MailPanel.tsx": [8, "OPEN: message times written by the sender; the rest are form values"],
+  "app/try/BoardPanel.tsx": [6, "OPEN: post and thread times written by the poster"],
+  "app/try/ShelterPanel.tsx": [5, "OPEN: post, case and log times"],
+  "app/try/QuestionsPanel.tsx": [2, "OPEN: question times written by the poster; manifest expiry"],
+  "app/try/DirectoryPanel.tsx": [5, "OPEN: listing time; a today count"],
+  "app/try/FilesTryPanel.tsx": [1, "OPEN: file envelope time written by the sender"],
+  "app/lib/tmail_timelock.ts": [1, "not a record: the release time the sender chose"],
+  "app/lib/seal.ts": [4, "not a record: today's date for the opening rule"],
+  "app/lib/verify_anything.mjs": [4, "not a record: manifest expiry in a refusal message"],
+};
+const censusFiles = (dir) =>
+  readdirSync(new URL(`../${dir}`, import.meta.url), { recursive: true, withFileTypes: true })
+    .filter((e) => e.isFile() && /\.(tsx?|mjs|js)$/.test(e.name) && !/^i18n/.test(e.name))
+    .map((e) => `${dir}/${relative(fileURLToPath(new URL(`../${dir}`, import.meta.url)), join(e.parentPath ?? e.path, e.name))}`);
+const census = (read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8"), added = {}) => {
+  const found = {};
+  const files = { ...Object.fromEntries(["app/try", "app/s", "app/lib"].flatMap(censusFiles).map((f) => [f, null])), ...added };
+  for (const [f, src] of Object.entries(files)) {
+    const n = dateUses(src ?? read(f));
+    if (n) found[f] = n;
+  }
+  const wrong = [...new Set([...Object.keys(found), ...Object.keys(DATE_CENSUS)])]
+    .filter((f) => (found[f] ?? 0) !== (DATE_CENSUS[f]?.[0] ?? 0))
+    .map((f) => `${f}: ${found[f] ?? 0} date use(s), pinned ${DATE_CENSUS[f]?.[0] ?? 0}`);
+  assert.deepEqual(wrong, [], `a date is made or formatted where nobody has looked; label it or pin it in DATE_CENSUS:\n${wrong.join("\n")}`);
+};
+await check("every date made or formatted under app/try, app/s and app/lib is pinned in the census", () => census());
+{
+  const real = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
+  await refuses("a new panel that shows a date is caught by the census", () => census(real, { "app/try/AboutPanel.tsx": "export const A = (x) => <p>{new Date(x.atMs).toLocaleString()}</p>;\n" }), /AboutPanel.tsx: 1 date use/);
+  await refuses("a second time in a pinned panel is caught by the census", () => census((f) => real(f) + (f === "app/try/HomePanel.tsx" ? "\nconst y = <span>{fmtWhen(h.bumpAtMs, now)}</span>;" : "")), /HomePanel.tsx: 5 date use/);
+  await refuses("a helper in app/lib that formats a date is caught by the census", () => census((f) => real(f) + (f === "app/lib/public_search.ts" ? "\nexport const when = (ms) => new Intl.DateTimeFormat().format(ms);" : "")), /public_search.ts: 1 date use/);
+  await refuses("a date use only moved into a comment is caught by the census", () => census((f) => (f === "app/try/SealPanel.tsx" ? real(f).replace("new Date(hit.publishedAtMs)", "/* new Date */ (hit.publishedAtMs)") : real(f))), /SealPanel.tsx: 0 date use/);
 }
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");

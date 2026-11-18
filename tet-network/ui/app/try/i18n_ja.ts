@@ -57,6 +57,8 @@ export const JA: Record<string, string> = {
   "Thread": "スレ",
   "board": "掲示板",
   "{n} posts": "{n} 件",
+  "({n}) · {board} · started {when} (time written by the poster, not checked)": "({n}) · {board} · {when} 開始（投稿者が書いた時刻、未確認）",
+  "{board} · {n} posts · {when} (time written by the poster, not checked)": "{board} · {n} 件 · {when}（投稿者が書いた時刻、未確認）",
   "Give the thread a title and write its first post.": "スレタイを付けて、最初の投稿を書いてください。",
   "Old posts from before threads. Start a thread to post.": "スレ機能より前の古い投稿です。書き込むにはスレを立ててください。",
   "Read, or reply below. Reply to a post with >>n.": "読むか、下からレスしてください。投稿へのレスは >>n です。",
