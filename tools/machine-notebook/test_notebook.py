@@ -905,5 +905,20 @@ class RunAndStdinChecks(unittest.TestCase):
             sys.stdin = old
 
 
+class NotFoundHint(unittest.TestCase):
+    """The hint printed when tet-cli is missing. None of this needs tet-cli."""
+
+    # The hint's build line must be one that works without the RISC Zero toolchain: tet-cli's
+    # dependencies otherwise compile a RISC Zero guest. QUICKSTART.md quotes this message.
+    def test_missing_tet_cli_names_the_build_line_that_skips_the_guest(self):
+        with tempfile.TemporaryDirectory() as t:
+            missing = os.path.join(t, "no-such-tet-cli")
+            with self.assertRaises(notebook.Fail) as cm:
+                notebook.run_cli(missing, ["--version"])
+        msg = str(cm.exception)
+        self.assertIn(f"tet-cli not found at {missing}", msg)
+        self.assertIn("(build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)", msg)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

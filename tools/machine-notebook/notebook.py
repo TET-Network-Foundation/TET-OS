@@ -115,7 +115,7 @@ def run_cli(cli, argv, env_extra=None):
     try:
         p = subprocess.run([cli] + argv, capture_output=True, text=True, env=env, timeout=120)
     except FileNotFoundError:
-        raise Fail(f"tet-cli not found at {cli} (build it: cargo build -p tet-cli --release, or pass --tet-cli)")
+        raise Fail(f"tet-cli not found at {cli} (build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)")
     return p.returncode, p.stdout, p.stderr
 
 
