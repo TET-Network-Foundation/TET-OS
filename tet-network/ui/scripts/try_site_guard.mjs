@@ -250,6 +250,9 @@ const honestView = (raw, ja = JA, zh = ZH_HK) => {
   assert.ok(src.includes(`t(${JSON.stringify(LAST_EDIT)}, { when: new Date(verdict.lastSignedAtMs)`), "the last edit's time is not shown with its label (written by the signer, not checked)");
   assert.ok(typeof ja[LAST_EDIT] === "string" && ja[LAST_EDIT].includes(SIGNER_JA) && ja[LAST_EDIT].includes("{when}"), "the ja label lost the signer / not-checked part or {when}");
   assert.ok(typeof zh[LAST_EDIT] === "string" && zh[LAST_EDIT].includes(SIGNER_ZH) && zh[LAST_EDIT].includes("{when}"), "the zh-HK label lost the signer / not-checked part or {when}");
+  // The fragment after {when} can stay while the words before it call the time signed again.
+  assert.ok(!ja[LAST_EDIT].split("{when}")[0].includes("署名"), "the ja label calls the time signed (署名) before {when}");
+  assert.ok(!zh[LAST_EDIT].split("{when}")[0].includes("簽"), "the zh-HK label calls the time signed (簽) before {when}");
 };
 // A control names the assertion it is for, so an earlier one can't catch it for the wrong reason.
 const refuses = (name, fn, why) =>
@@ -265,6 +268,8 @@ await refuses("the labelled key only in a comment, the time shown bare, is caugh
 await refuses("a second, unlabelled render of the time is caught", () => honestView(VIEW.replace(LABELLED, `${LABELLED} <span>{new Date(verdict.lastSignedAtMs).toLocaleString()}</span>`)), /more than once/);
 await refuses("a ja label without the not-checked part is caught", () => honestView(VIEW, { ...JA, [LAST_EDIT]: "最終編集の署名 {when}" }), /the ja label/);
 await refuses("a zh-HK label without the not-checked part is caught", () => honestView(VIEW, JA, { ...ZH_HK, [LAST_EDIT]: "最後一次編輯簽署於 {when}" }), /the zh-HK label/);
+await refuses("a ja label that keeps the fragment but says 署名 before {when} is caught", () => honestView(VIEW, { ...JA, [LAST_EDIT]: `最終編集の署名 {when}（${SIGNER_JA}）` }), /calls the time signed \(署名\)/);
+await refuses("a zh-HK label that keeps the fragment but says 簽署 before {when} is caught", () => honestView(VIEW, JA, { ...ZH_HK, [LAST_EDIT]: `最後一次編輯簽署於 {when}（${SIGNER_ZH}）` }), /calls the time signed \(簽\)/);
 
 // 8. Every time the UI shows that nothing checks carries "not checked" in en, ja and zh-HK, one row
 // per label. A row: the file, the t() key it renders, and the fragment each language must keep. The
@@ -273,10 +278,17 @@ await refuses("a zh-HK label without the not-checked part is caught", () => hone
 // that element, from its opening tag to its closing tag, must carry no check mark (any check glyph or
 // Check component) and none of the verified-green colours: a check mark beside a time it calls
 // unchecked reads as "checked" (the sealed-prediction box did exactly this).
-// Known gaps: elements are found as text (the last "<p", "<span", "<dd" or "<div" before the key, up
-// to the next closing tag of that name), so a green ancestor around it is not seen; a comment or dead
-// branch in the middle of a line counts as live; the GenuineCheck summary date is labelled only by its
-// title attribute.
+// The time is counted by its bare field name (publishedAtMs, signedAtMs, lastSignedAtMs) in the file's
+// live code, so any spelling counts: h.x, h?.x, h["x"], h?.["x"], a destructured { x }. Uses that are
+// not a render (a sort) are pinned per file in NOT_SHOWN. Every element that encloses the label, up to
+// the top of the file, is read for marks and green too, not only the nearest one.
+// What it does NOT see, so a pass here is not proof: a mark or green that comes from a CSS file, a
+// CSS variable, a class name that does not say green / emerald / lime / teal, an hsl() colour, a
+// component whose name does not say Check / Tick / Verified / Success / Badge (or a tone of ok,
+// success, good, verified), an svg path or an image; a mark in a sibling element beside the time
+// (the GenuineCheck summary row's ✓ for the signature is a sibling, on purpose); a comment or dead
+// branch in the middle of a line, which counts as live; a field renamed on its way in (const p =
+// h.publishedAtMs, then p), which is caught only by the count going up, not by the name.
 const NODE = ["time from this node's clock, not checked", "このノードの時計の時刻、未確認", "此節點時鐘的時間，未經核實"];
 const SIGNER = ["time written by the signer, not checked", "署名者が書いた時刻、未確認", "簽署者寫下的時間，未經核實"];
 const UNCHECKED_TIMES = [
@@ -287,23 +299,81 @@ const UNCHECKED_TIMES = [
   ["app/try/GenuineCheck.tsx", "recorded on this node at {when} (time from this node's clock, not checked)", ...NODE, "h.publishedAtMs"],
   ["app/try/GenuinePanel.tsx", "This shows that your ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.", "is not checked", "確認されていません", "未經核實", null],
   ["app/s/[site]/page.tsx", "last edit {when} (time written by the signer, not checked)", ...SIGNER, "verdict.lastSignedAtMs"],
+  ["app/try/SealPanel.tsx", "This shows the text is the one that was sealed: it matches the seal's fingerprint. The time of the seal is from this node's clock and was not checked. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.", "was not checked", "確認されていません", "未經核實", null],
+  ["app/try/GenuineCheck.tsx", "Listed in the order of this node's clock, which was not checked.", "was not checked", "確認されていません", "未經核實", null],
 ];
 const SRC = Object.fromEntries(UNCHECKED_TIMES.map(([f]) => [f, readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
-const MARK = /[✓✔✅☑]|<\w*Check|#1f5132|#e8f5ec|\bgreen-/;
-const timeCount = (code, time) => code.split(time).length - 1;
+// A check mark: the glyphs, their HTML entities and JS escapes, and components or tones that draw one.
+const CHECK = /[✓✔✅☑🗸🗹]|&#0*(10003|10004|9989|9745);|&#x0*(2713|2714|2705|2611);|&check(mark)?;|\\u\{?0*(2713|2714|2705|2611)\}?|fromCharCode\(\s*(10003|10004|0x2713|0x2714)\s*\)|<\w*(Check|Tick|Verified|Success)|<Badge\b|\btone=\{?\s*["'](ok|success|good|verified)["']/i;
+// Green: Tailwind green-like classes, named CSS greens, and any #rgb / #rrggbb / rgb() whose green
+// channel leads (the verified box is #1f5132 on #e8f5ec; other panels use #1e6b35 and emerald-*).
+const GREEN_CLASS = /\b(green|emerald|lime|teal)-(\d|\[)|["'\s:](green|lime|seagreen|forestgreen|darkgreen|limegreen|mediumseagreen|springgreen|lawngreen|olivedrab|darkolivegreen|lightgreen|palegreen|yellowgreen|greenyellow|chartreuse)["'\s;]/i;
+const greenLeads = (r, g, b) => g > r && g > b && g - Math.max(r, b) >= 8;
+const greenColour = (text) => {
+  for (const m of text.matchAll(/#([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/gi)) {
+    const h = m[1].length === 3 ? [...m[1]].map((c) => c + c).join("") : m[1];
+    if (greenLeads(parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16))) return true;
+  }
+  for (const m of text.matchAll(/rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/gi)) if (greenLeads(+m[1], +m[2], +m[3])) return true;
+  return false;
+};
+const MARK = { test: (text) => CHECK.test(text) || GREEN_CLASS.test(text) || greenColour(text) };
+// The JSX tags still open at `at`, outermost first, each with its opening-tag text. A tag runs to its
+// ">" outside braces and quotes; a closing tag pops back to the last open tag of its name.
+const enclosing = (code, at) => {
+  const stack = [];
+  let i = 0;
+  while (i < at) {
+    const lt = code.indexOf("<", i);
+    if (lt < 0 || lt >= at) break;
+    const m = /^<(\/?)([A-Za-z][\w.]*|(?=>))/.exec(code.slice(lt, lt + 80));
+    if (!m) {
+      i = lt + 1;
+      continue;
+    }
+    let j = lt + m[0].length;
+    for (let depth = 0, q = null; j < code.length; j++) {
+      const c = code[j];
+      if (q) {
+        if (c === "\\") j++;
+        else if (c === q) q = null;
+      } else if (c === '"' || c === "'" || c === "`") q = c;
+      else if (c === "{") depth++;
+      else if (c === "}") depth--;
+      else if (c === ">" && depth === 0) break;
+    }
+    const text = code.slice(lt, j + 1);
+    if (m[1]) {
+      const k = stack.map((t) => t.name).lastIndexOf(m[2]);
+      if (k >= 0) stack.length = k;
+    } else if (!text.endsWith("/>")) stack.push({ name: m[2], text });
+    i = j + 1;
+  }
+  return stack;
+};
+// Uses of a time field that are not a render, per file: SealPanel sorts by publishedAtMs to pick the
+// seal (a.publishedAtMs - b.publishedAtMs: two uses).
+const NOT_SHOWN = { "app/try/SealPanel.tsx": { publishedAtMs: 2 } };
+const fieldCount = (code, field) => (code.match(new RegExp(`\\b${field}\\b`, "g")) ?? []).length;
 const labelled = ([file, key, en, ja, zh, time], src = SRC[file], jaD = JA, zhD = ZH_HK) => {
   assert.ok(key.includes(en), `${file}: the key lost "${en}"`);
   const code = live(src);
   const at = code.indexOf(`t(${JSON.stringify(key)}`);
   assert.ok(at >= 0, `${file}: the label "${key}" is not rendered`);
+  // A title= or aria-label= is not visible on touch and is read unreliably: the label must be page text.
+  assert.ok(!/[\w-]+=\{\s*$/.test(code.slice(Math.max(0, at - 40), at)), `${file}: the label "${key}" is only an attribute, not visible text`);
   const tags = ["p", "span", "dd", "div"].map((tag) => [tag, code.lastIndexOf(`<${tag}`, at)]);
   const [tag, open] = tags.reduce((a, b) => (b[1] > a[1] ? b : a));
   const close = code.indexOf(`</${tag}>`, at);
   const element = code.slice(open, close < 0 ? code.length : close);
   assert.ok(!MARK.test(element), `${file}: a check mark sits on the unchecked time "${key}"`);
+  for (const outer of enclosing(code, at)) assert.ok(!MARK.test(outer.text), `${file}: an element round the unchecked time "${key}" is marked or green: ${outer.text.slice(0, 80)}`);
   if (time) {
-    const rows = UNCHECKED_TIMES.filter((r) => r[0] === file && r[5] === time).length;
-    assert.equal(timeCount(code, time), rows, `${file}: ${time} is shown ${timeCount(code, time)} times for ${rows} labelled render(s); every render must carry its label`);
+    const field = time.split(".").pop();
+    const rows = UNCHECKED_TIMES.filter((r) => r[0] === file && r[5]?.split(".").pop() === field).length;
+    const allowed = rows + (NOT_SHOWN[file]?.[field] ?? 0);
+    const n = fieldCount(code, field);
+    assert.equal(n, allowed, `${file}: ${field} is used ${n} times for ${rows} labelled render(s) and ${allowed - rows} pinned non-render use(s); every render must carry its label`);
     assert.ok(element.includes(time), `${file}: ${time} is not inside the labelled element`);
   }
   assert.ok(typeof jaD[key] === "string" && jaD[key].includes(ja), `${file}: the ja value of "${key}" lost "${ja}"`);
@@ -319,6 +389,48 @@ await refuses("a heavier check mark after the label, in its element, is caught",
 await refuses("a Check icon component on the label is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_RENDER, `<CheckIcon /> ${SEAL_RENDER}`)), /check mark sits on/);
 await refuses("the grey line restyled verified-green is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(`<p className="text-[14px] text-[#5d646d]">\n            ${SEAL_RENDER}`, `<p className="rounded-md bg-green-100 text-[14px]">\n            ${SEAL_RENDER}`)), /check mark sits on/);
 await refuses("the time moved into the green verified box is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(`✓ {t("Unchanged since it was sealed.")}`, `✓ {t("Unchanged since it was sealed.")} ${SEAL_RENDER}, { when: "" })}`).replace(/\n\s*<p className="text-\[14px\] text-\[#5d646d\]">\n\s*\{t\("Written by[^\n]*\n\s*<\/p>/, "")), /check mark sits on/);
+// Each gap the last review found, closed here, with the assertion it must trip.
+const SEAL_P = `<p className="text-[14px] text-[#5d646d]">\n            ${SEAL_RENDER}`;
+await check("the controls below have the grey sealed-time line to edit", () => assert.ok(SRC[SEAL[0]].includes(SEAL_P), "the grey <p> round the sealed time is not as the controls expect"));
+const sealWith = (extra) => SRC[SEAL[0]].replace(`✓ {t("Unchanged since it was sealed.")}`, `✓ {t("Unchanged since it was sealed.")} ${extra}`);
+await refuses("a second bare render via optional chaining (hit?.publishedAtMs) is caught", () => labelled(SEAL, sealWith("{new Date(hit?.publishedAtMs).toLocaleString()}")), /every render must carry its label/);
+await refuses("a second bare render via bracket access (hit[\"publishedAtMs\"]) is caught", () => labelled(SEAL, sealWith(`{new Date(hit["publishedAtMs"]).toLocaleString()}`)), /every render must carry its label/);
+await refuses("a second bare render via optional bracket access (hit?.['publishedAtMs']) is caught", () => labelled(SEAL, sealWith("{new Date(hit?.['publishedAtMs']).toLocaleString()}")), /every render must carry its label/);
+const SEARCH = UNCHECKED_TIMES[1];
+await refuses("SearchPanel: a second bare render via h[\"signedAtMs\"] is caught", () => labelled(SEARCH, SRC[SEARCH[0]].replace(`{t(${JSON.stringify(SEARCH[1])}`, `{String(h["signedAtMs"])} {t(${JSON.stringify(SEARCH[1])}`)), /every render must carry its label/);
+for (const [what, mark] of [["an HTML entity &#10003;", "&#10003;"], ["a hex entity &#x2714;", "&#x2714;"], ["&check;", "&check;"], ['a string in braces {"✓"}', '{"✓"}'], ['an escape in braces {"\\u2713"}', '{"\\u2713"}']])
+  await refuses(`a check mark written as ${what} in the label's element is caught`, () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `${SEAL_P.split("\n")[0]}\n            ${mark} ${SEAL_RENDER}`)), /check mark sits on/);
+await refuses("the grey line restyled another green (#1e6b35) is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, SEAL_P.replace("text-[#5d646d]", "text-[#1e6b35]"))), /check mark sits on/);
+await refuses("the grey line restyled emerald is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, SEAL_P.replace("text-[#5d646d]", "text-emerald-700"))), /check mark sits on/);
+await refuses("a <Badge tone=\"ok\"> round the time is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<Badge tone="ok">\n${SEAL_P}`).replace(`${SEAL_RENDER}`, `${SEAL_RENDER}`).replace(/(\{t\("Written by \{when\}[^\n]*\n\s*<\/p>)/, "$1</Badge>")), /element round the unchecked time/);
+await refuses("a green box (bg-[#e8f5ec]) round the grey line is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<div className="rounded-md bg-[#e8f5ec] p-2">\n${SEAL_P}`).replace(/(\{t\("Written by \{when\}[^\n]*\n\s*<\/p>)/, "$1</div>")), /element round the unchecked time/);
+await refuses("an emerald wrapper (border-emerald-300) round the grey line is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<div className="border border-emerald-300">\n${SEAL_P}`).replace(/(\{t\("Written by \{when\}[^\n]*\n\s*<\/p>)/, "$1</div>")), /element round the unchecked time/);
+const SUMMARY = UNCHECKED_TIMES[3];
+await refuses("GenuineCheck: the summary date labelled only by a title attribute again is caught", () => labelled(SUMMARY, SRC[SUMMARY[0]].replace(/<span className="text-\[13\.5px\] text-\[#5d646d\]">\n\s*\{new Date\(h\.publishedAtMs\)\.toLocaleDateString\(locale\)\} \(\{t\("time from this node's clock, not checked"\)\}\)\n\s*<\/span>/, `<span className="text-[13.5px] text-[#5d646d]" title={t("time from this node's clock, not checked")}>{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>`)), /only an attribute/);
+
+// 8b. No sentence says the node shows WHEN something existed, and nothing is called "first" or
+// "later" on the node's clock. Live code of the panels, and the ja / zh-HK values of every key they render.
+const CLAIM_EN = /existed when|when this node recorded|\bfirst marked|marked later/i;
+const CLAIM_JA_ZH = /最初に本物|後から別の|最先標記|其後另一個|封印を記録した時点|記錄封印時/;
+const CLAIM_FILES = ["app/try/SealPanel.tsx", "app/try/GenuineCheck.tsx", "app/try/GenuinePanel.tsx"];
+const noWhenClaim = (srcs, ja = JA, zh = ZH_HK) => {
+  for (const [file, src] of Object.entries(srcs)) {
+    const code = live(src);
+    assert.ok(!CLAIM_EN.test(code), `${file}: a line claims when something existed, or calls a mark first / later: ${code.match(CLAIM_EN)?.[0]}`);
+    for (const m of code.matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) {
+      const key = JSON.parse(`"${m[1]}"`);
+      for (const [lang, d] of [["ja", ja], ["zh-HK", zh]]) assert.ok(!(typeof d[key] === "string" && CLAIM_JA_ZH.test(d[key])), `${file}: the ${lang} value of "${key.slice(0, 50)}" claims when, or calls a mark first / later`);
+    }
+  }
+};
+const CLAIM_SRC = Object.fromEntries(CLAIM_FILES.map((f) => [f, SRC[f] ?? readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
+await check("no panel says the node shows when something existed, or calls a mark first or later (en, ja, zh-HK)", () => noWhenClaim(CLAIM_SRC));
+await refuses("the old seal sentence (\"existed when this node recorded the seal\") is caught", () => noWhenClaim({ ...CLAIM_SRC, [SEAL[0]]: CLAIM_SRC[SEAL[0]].replace("This shows the text is the one that was sealed: it matches the seal's fingerprint.", "This shows the text existed when this node recorded the seal.") }), /claims when something existed/);
+await refuses("\"First marked as genuine\" back is caught", () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Also marked, by another ID")', 't("First marked as genuine")') }), /calls a mark first/);
+await refuses("\"Also marked later\" back is caught", () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Also marked, by another ID")', 't("Also marked later, by another ID")') }), /calls a mark first/);
+await refuses("a ja value that calls a mark first is caught", () => noWhenClaim(CLAIM_SRC, { ...JA, "Marked as genuine": "最初に本物として記録されたもの" }), /the ja value/);
+await refuses("a zh-HK value that says when the node recorded the seal is caught", () => noWhenClaim(CLAIM_SRC, JA, { ...ZH_HK, [UNCHECKED_TIMES[7][1]]: "這顯示此節點記錄封印時，這段文字已經存在。" }), /the zh-HK value/);
+
 for (const row of UNCHECKED_TIMES) {
   const [file, key, en, ja, zh] = row;
   await refuses(`${file}: the label dropped from the page is caught`, () => labelled(row, SRC[file].split(`t(${JSON.stringify(key)}`).join(`t(${JSON.stringify(key.replace(en, "x"))}`)), /is not rendered/);
