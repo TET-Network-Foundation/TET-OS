@@ -6,7 +6,7 @@ one-time permits (`tools/machine-notebook`, "One-time permits"). Every signature
 cryptography is added.
 
 ```sh
-RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release   # skips the RISC Zero guest, which tet-cli needs only for zk verify
+RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release   # skips the zk guest; this example does not use it
 node tet-agent-sdk/examples/agent_permit_once.mjs      # or TET_CLI=path/to/tet-cli
 ```
 
