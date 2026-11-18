@@ -29,7 +29,12 @@
 //    its fragment in ja and zh-HK, is rendered in a live line, and has no check mark on it.
 //    Controls, per row: the label dropped; the label only in a comment; a ja or zh-HK value without
 //    the fragment. For the sealed prediction: a check mark before or after the time, a Check icon,
-//    a green restyle, the time shown again bare, the time moved into the green box.
+//    a green restyle, the time shown again bare, the time moved into the green box. A pass is not
+//    proof: what it does NOT see is listed above UNCHECKED_TIMES (CSS files and variables, constants
+//    holding a mark or a class, computed keys, helpers, tags inside strings, and more).
+// 8b. The seal, genuine-check and marking panels say no "existed when" and call no mark "first",
+//    "earliest" or "later", in en and in the ja / zh-HK value of every key they render. It reads
+//    word lists, so a new phrasing outside them passes; the lists are above CLAIM_EN.
 
 import { register } from "node:module";
 import { readFileSync } from "node:fs";
@@ -282,17 +287,24 @@ await refuses("a zh-HK label that keeps the fragment but says 簽署 before {whe
 // live code, so any spelling counts: h.x, h?.x, h["x"], h?.["x"], a destructured { x }. Uses that are
 // not a render (a sort) are pinned per file in NOT_SHOWN. Every element that encloses the label, up to
 // the top of the file, is read for marks and green too, not only the nearest one.
-// What it does NOT see, so a pass here is not proof: a mark or green that comes from a CSS file, a
-// CSS variable, a class name that does not say green / emerald / lime / teal, an hsl() colour, a
-// component whose name does not say Check / Tick / Verified / Success / Badge (or a tone of ok,
-// success, good, verified), an svg path or an image; a mark in a sibling element beside the time
-// (the GenuineCheck summary row's ✓ for the signature is a sibling, on purpose); a comment or dead
-// branch in the middle of a line, which counts as live; a field renamed on its way in (const p =
-// h.publishedAtMs, then p), which is caught only by the count going up, not by the name.
+// What it does NOT see, so a pass here is not proof:
+// - a mark or green from a CSS file or CSS module, a CSS variable whose name does not say green, a
+//   lab() / lch() / color() value, an svg path or an image;
+// - a constant that holds a mark or a class (const OK = "✓", then {OK}; const G = "bg-...", then
+//   className={G}): only the text at the render is read;
+// - a component whose name does not contain Check / Tick / Verified / Success / Badge, with no tone
+//   of ok / success / good / verified;
+// - a tag written inside a JS string ({"</div>" && null}) is read as a tag, so it can close a green
+//   wrapper early;
+// - a mark in a sibling element beside the time (the GenuineCheck summary row's ✓ for the signature
+//   is a sibling, on purpose); a comment or dead branch in the middle of a line, which counts as live;
+// - the time reached without its field name: a computed key (h["published" + "AtMs"]), Object.values,
+//   a helper in another file, or a renamed alias (const p = h.publishedAtMs, then p twice). The count
+//   is per file, so a render that replaces a pinned non-render use keeps the count.
 const NODE = ["time from this node's clock, not checked", "このノードの時計の時刻、未確認", "此節點時鐘的時間，未經核實"];
 const SIGNER = ["time written by the signer, not checked", "署名者が書いた時刻、未確認", "簽署者寫下的時間，未經核實"];
 const UNCHECKED_TIMES = [
-  ["app/try/SealPanel.tsx", "Written by {when} (time from this node's clock, not checked).", ...NODE, "hit.publishedAtMs"],
+  ["app/try/SealPanel.tsx", "Sealed on this node at {when} (time from this node's clock, not checked).", ...NODE, "hit.publishedAtMs"],
   ["app/try/SearchPanel.tsx", "signed · version {n} · {date} (time written by the signer, not checked)", ...SIGNER, "h.signedAtMs"],
   ["app/try/ProofCode.tsx", "published {when} (time from this node's clock, not checked)", ...NODE, "h.publishedAtMs"],
   ["app/try/GenuineCheck.tsx", "time from this node's clock, not checked", ...NODE, "h.publishedAtMs"],
@@ -300,21 +312,25 @@ const UNCHECKED_TIMES = [
   ["app/try/GenuinePanel.tsx", "This shows that your ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.", "is not checked", "確認されていません", "未經核實", null],
   ["app/s/[site]/page.tsx", "last edit {when} (time written by the signer, not checked)", ...SIGNER, "verdict.lastSignedAtMs"],
   ["app/try/SealPanel.tsx", "This shows the text is the one that was sealed: it matches the seal's fingerprint. The time of the seal is from this node's clock and was not checked. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.", "was not checked", "確認されていません", "未經核實", null],
-  ["app/try/GenuineCheck.tsx", "Listed in the order of this node's clock, which was not checked.", "was not checked", "確認されていません", "未經核實", null],
+  ["app/try/GenuineCheck.tsx", "The order comes from this node's clock, which was not checked.", "was not checked", "確認されていません", "未經核實", null],
 ];
 const SRC = Object.fromEntries(UNCHECKED_TIMES.map(([f]) => [f, readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
 // A check mark: the glyphs, their HTML entities and JS escapes, and components or tones that draw one.
-const CHECK = /[✓✔✅☑🗸🗹]|&#0*(10003|10004|9989|9745);|&#x0*(2713|2714|2705|2611);|&check(mark)?;|\\u\{?0*(2713|2714|2705|2611)\}?|fromCharCode\(\s*(10003|10004|0x2713|0x2714)\s*\)|<\w*(Check|Tick|Verified|Success)|<Badge\b|\btone=\{?\s*["'](ok|success|good|verified)["']/i;
+const CHECK = /[✓✔✅☑🗸🗹]|&#0*(10003|10004|9989|9745);|&#x0*(2713|2714|2705|2611);|&check(mark)?;|\\u\{?0*(2713|2714|2705|2611)\}?|\\u\{?0*(d83d|1f5f8|1f5f9)|\\0*(2713|2714|2705|2611)(?![0-9a-f])|\bfrom(CharCode|CodePoint)\s*\(|<[\w.]*(Check|Tick|Verified|Success|Badge)|\btone=\{?\s*["'](ok|success|good|verified)["']/i;
 // Green: Tailwind green-like classes, named CSS greens, and any #rgb / #rrggbb / rgb() whose green
 // channel leads (the verified box is #1f5132 on #e8f5ec; other panels use #1e6b35 and emerald-*).
-const GREEN_CLASS = /\b(green|emerald|lime|teal)-(\d|\[)|["'\s:](green|lime|seagreen|forestgreen|darkgreen|limegreen|mediumseagreen|springgreen|lawngreen|olivedrab|darkolivegreen|lightgreen|palegreen|yellowgreen|greenyellow|chartreuse)["'\s;]/i;
-const greenLeads = (r, g, b) => g > r && g > b && g - Math.max(r, b) >= 8;
+const GREEN_CLASS = /\b(green|emerald|lime|teal)-|[-"'\s:\[(](\w*green\w*|lime|chartreuse|olivedrab)[\]"'\s;)/,]/i;
+const greenLeads = (r, g, b) => g > r && g > b && g - Math.max(r, b) >= 6;
 const greenColour = (text) => {
-  for (const m of text.matchAll(/#([0-9a-f]{6}|[0-9a-f]{3})(?![0-9a-f])/gi)) {
-    const h = m[1].length === 3 ? [...m[1]].map((c) => c + c).join("") : m[1];
+  for (const m of text.matchAll(/#([0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3,4})(?![0-9a-f])/gi)) {
+    const h = m[1].length <= 4 ? [...m[1]].map((c) => c + c).join("") : m[1];
     if (greenLeads(parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16))) return true;
   }
-  for (const m of text.matchAll(/rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)/gi)) if (greenLeads(+m[1], +m[2], +m[3])) return true;
+  const ch = (v) => (v.endsWith("%") ? parseFloat(v) * 2.55 : parseFloat(v));
+  for (const m of text.matchAll(/rgba?\(\s*([\d.]+%?)[\s,]+([\d.]+%?)[\s,]+([\d.]+%?)/gi)) if (greenLeads(ch(m[1]), ch(m[2]), ch(m[3]))) return true;
+  // Hue-based colours: hsl() / hwb() hue 75-165 degrees, oklch() hue 120-180 degrees, with some chroma.
+  for (const m of text.matchAll(/\b(hsla?|hwb)\(\s*([\d.]+)(deg)?[\s,]+([\d.]+)%/gi)) if (+m[2] >= 75 && +m[2] <= 165 && (m[1].toLowerCase() === "hwb" || +m[4] >= 10)) return true;
+  for (const m of text.matchAll(/\boklch\(\s*[\d.]+%?\s+([\d.]+)%?\s+([\d.]+)/gi)) if (+m[2] >= 120 && +m[2] <= 180 && +m[1] > 0.02) return true;
   return false;
 };
 const MARK = { test: (text) => CHECK.test(text) || GREEN_CLASS.test(text) || greenColour(text) };
@@ -326,6 +342,11 @@ const enclosing = (code, at) => {
   while (i < at) {
     const lt = code.indexOf("<", i);
     if (lt < 0 || lt >= at) break;
+    // useState<Foo>, Array<Bar>: a type argument, not a tag.
+    if (lt > 0 && /[\w$)\]]/.test(code[lt - 1])) {
+      i = lt + 1;
+      continue;
+    }
     const m = /^<(\/?)([A-Za-z][\w.]*|(?=>))/.exec(code.slice(lt, lt + 80));
     if (!m) {
       i = lt + 1;
@@ -385,10 +406,10 @@ const SEAL_RENDER = `{t(${JSON.stringify(SEAL[1])}`;
 await check("the controls below have the sealed-prediction render to edit", () => assert.ok(SRC[SEAL[0]].includes(SEAL_RENDER), "the sealed-prediction render is not in SealPanel as the controls expect"));
 await refuses("the old check mark on the unchecked time is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_RENDER, `✓ ${SEAL_RENDER}`)), /check mark sits on/);
 await refuses("the time shown a second time, bare, in the green box is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(`✓ {t("Unchanged since it was sealed.")}`, `✓ {t("Unchanged since it was sealed.")} {new Date(hit.publishedAtMs).toLocaleString(locale)}`)), /every render must carry its label/);
-await refuses("a heavier check mark after the label, in its element, is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(/(\{t\("Written by \{when\}[^\n]*\n)/, "$1 ✔\n")), /check mark sits on/);
+await refuses("a heavier check mark after the label, in its element, is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(/(\{t\("Sealed on this node at \{when\}[^\n]*\n)/, "$1 ✔\n")), /check mark sits on/);
 await refuses("a Check icon component on the label is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_RENDER, `<CheckIcon /> ${SEAL_RENDER}`)), /check mark sits on/);
 await refuses("the grey line restyled verified-green is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(`<p className="text-[14px] text-[#5d646d]">\n            ${SEAL_RENDER}`, `<p className="rounded-md bg-green-100 text-[14px]">\n            ${SEAL_RENDER}`)), /check mark sits on/);
-await refuses("the time moved into the green verified box is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(`✓ {t("Unchanged since it was sealed.")}`, `✓ {t("Unchanged since it was sealed.")} ${SEAL_RENDER}, { when: "" })}`).replace(/\n\s*<p className="text-\[14px\] text-\[#5d646d\]">\n\s*\{t\("Written by[^\n]*\n\s*<\/p>/, "")), /check mark sits on/);
+await refuses("the time moved into the green verified box is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(`✓ {t("Unchanged since it was sealed.")}`, `✓ {t("Unchanged since it was sealed.")} ${SEAL_RENDER}, { when: "" })}`).replace(/\n\s*<p className="text-\[14px\] text-\[#5d646d\]">\n\s*\{t\("Sealed on this node at[^\n]*\n\s*<\/p>/, "")), /check mark sits on/);
 // Each gap the last review found, closed here, with the assertion it must trip.
 const SEAL_P = `<p className="text-[14px] text-[#5d646d]">\n            ${SEAL_RENDER}`;
 await check("the controls below have the grey sealed-time line to edit", () => assert.ok(SRC[SEAL[0]].includes(SEAL_P), "the grey <p> round the sealed time is not as the controls expect"));
@@ -402,34 +423,64 @@ for (const [what, mark] of [["an HTML entity &#10003;", "&#10003;"], ["a hex ent
   await refuses(`a check mark written as ${what} in the label's element is caught`, () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `${SEAL_P.split("\n")[0]}\n            ${mark} ${SEAL_RENDER}`)), /check mark sits on/);
 await refuses("the grey line restyled another green (#1e6b35) is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, SEAL_P.replace("text-[#5d646d]", "text-[#1e6b35]"))), /check mark sits on/);
 await refuses("the grey line restyled emerald is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, SEAL_P.replace("text-[#5d646d]", "text-emerald-700"))), /check mark sits on/);
-await refuses("a <Badge tone=\"ok\"> round the time is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<Badge tone="ok">\n${SEAL_P}`).replace(`${SEAL_RENDER}`, `${SEAL_RENDER}`).replace(/(\{t\("Written by \{when\}[^\n]*\n\s*<\/p>)/, "$1</Badge>")), /element round the unchecked time/);
-await refuses("a green box (bg-[#e8f5ec]) round the grey line is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<div className="rounded-md bg-[#e8f5ec] p-2">\n${SEAL_P}`).replace(/(\{t\("Written by \{when\}[^\n]*\n\s*<\/p>)/, "$1</div>")), /element round the unchecked time/);
-await refuses("an emerald wrapper (border-emerald-300) round the grey line is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<div className="border border-emerald-300">\n${SEAL_P}`).replace(/(\{t\("Written by \{when\}[^\n]*\n\s*<\/p>)/, "$1</div>")), /element round the unchecked time/);
+await refuses("a <Badge tone=\"ok\"> round the time is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<Badge tone="ok">\n${SEAL_P}`).replace(`${SEAL_RENDER}`, `${SEAL_RENDER}`).replace(/(\{t\("Sealed on this node at \{when\}[^\n]*\n\s*<\/p>)/, "$1</Badge>")), /element round the unchecked time/);
+await refuses("a green box (bg-[#e8f5ec]) round the grey line is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<div className="rounded-md bg-[#e8f5ec] p-2">\n${SEAL_P}`).replace(/(\{t\("Sealed on this node at \{when\}[^\n]*\n\s*<\/p>)/, "$1</div>")), /element round the unchecked time/);
+await refuses("an emerald wrapper (border-emerald-300) round the grey line is caught", () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `<div className="border border-emerald-300">\n${SEAL_P}`).replace(/(\{t\("Sealed on this node at \{when\}[^\n]*\n\s*<\/p>)/, "$1</div>")), /element round the unchecked time/);
+for (const [what, mark] of [["String.fromCodePoint(0x2713)", "{String.fromCodePoint(0x2713)}"], ["String.fromCharCode(0x2705)", "{String.fromCharCode(0x2705)}"], ["a surrogate-pair escape for 🗸", '{"\\uD83D\\uDDF8"}']])
+  await refuses(`a check mark written as ${what} in the label's element is caught`, () => labelled(SEAL, SRC[SEAL[0]].replace(SEAL_P, `${SEAL_P.split("\n")[0]}\n            ${mark} ${SEAL_RENDER}`)), /check mark sits on/);
+const wrap = (open, close = "</div>") => SRC[SEAL[0]].replace(SEAL_P, `${open}\n${SEAL_P}`).replace(/(\{t\("Sealed on this node at \{when\}[^\n]*\n\s*<\/p>)/, `$1${close}`);
+for (const [what, open, close] of [
+  ["a CSS ::before content of \\2713", `<div className="before:content-['\\2713_']">`],
+  ["an 8-digit hex green", `<div className="bg-[#e8f5ecff]">`],
+  ["an rgb() green in percent", `<div style={{ background: "rgb(91% 96% 93%)" }}>`],
+  ["an hsl() green", `<div style={{ color: "hsl(140 45% 30%)" }}>`],
+  ["an oklch() green", `<div style={{ background: "oklch(95% 0.03 150)" }}>`],
+  ["a bracketed named green (bg-[green]/10)", `<div className="bg-[green]/10">`],
+  ["darkseagreen", `<div style={{ color: "darkseagreen" }}>`],
+  ["a CSS variable named green (var(--green-ok))", `<div className="text-[var(--green-ok)]">`],
+  ["<StatusBadge>", "<StatusBadge>", "</StatusBadge>"],
+  ["<ui.Badge>", "<ui.Badge>", "</ui.Badge>"],
+])
+  await refuses(`${what} round the grey line is caught`, () => labelled(SEAL, wrap(open, close)), /element round the unchecked time/);
+await check("a type argument (useState<VerifiedHit | null>) above the label is not read as a tag", () => labelled(SEAL, `const unused = useState<VerifiedHit | null>(null);\n${SRC[SEAL[0]]}`));
 const SUMMARY = UNCHECKED_TIMES[3];
 await refuses("GenuineCheck: the summary date labelled only by a title attribute again is caught", () => labelled(SUMMARY, SRC[SUMMARY[0]].replace(/<span className="text-\[13\.5px\] text-\[#5d646d\]">\n\s*\{new Date\(h\.publishedAtMs\)\.toLocaleDateString\(locale\)\} \(\{t\("time from this node's clock, not checked"\)\}\)\n\s*<\/span>/, `<span className="text-[13.5px] text-[#5d646d]" title={t("time from this node's clock, not checked")}>{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>`)), /only an attribute/);
 
 // 8b. No sentence says the node shows WHEN something existed, and nothing is called "first" or
 // "later" on the node's clock. Live code of the panels, and the ja / zh-HK values of every key they render.
-const CLAIM_EN = /existed when|when this node recorded|\bfirst marked|marked later/i;
-const CLAIM_JA_ZH = /最初に本物|後から別の|最先標記|其後另一個|封印を記録した時点|記錄封印時/;
+// Word lists: "existed" with a time word, other than "existed before (that) block" (a checked anchor); "when this node recorded";
+// first / earliest next to mark / seal / record, either order; "marked earlier / later"; "the original".
+const CLAIM_EN = /existed (when|at|by|on|since)\b|\bexisted before (?!(that |the |a )?block)|when this node recorded|\b(first|earliest)\b\W+(\w+\W+)?(mark|seal|record)\w*|\b(mark|seal|record)\w*\W+(\w+\W+)?(first|earliest|earlier|later)\b|\bthe original\b/i;
+const CLAIM_JA_ZH = /最初|初めて|一番|最も早|後から|先に記録|時点で.*存在|時に.*存在|首次|最早|最先|其後|較早|時.{0,6}已經存在/;
 const CLAIM_FILES = ["app/try/SealPanel.tsx", "app/try/GenuineCheck.tsx", "app/try/GenuinePanel.tsx"];
 const noWhenClaim = (srcs, ja = JA, zh = ZH_HK) => {
   for (const [file, src] of Object.entries(srcs)) {
     const code = live(src);
     assert.ok(!CLAIM_EN.test(code), `${file}: a line claims when something existed, or calls a mark first / later: ${code.match(CLAIM_EN)?.[0]}`);
-    for (const m of code.matchAll(/\bt\("((?:[^"\\]|\\.)*)"/g)) {
-      const key = JSON.parse(`"${m[1]}"`);
-      for (const [lang, d] of [["ja", ja], ["zh-HK", zh]]) assert.ok(!(typeof d[key] === "string" && CLAIM_JA_ZH.test(d[key])), `${file}: the ${lang} value of "${key.slice(0, 50)}" claims when, or calls a mark first / later`);
+    // Keys in double quotes, single quotes or backticks (a backtick key with ${} is skipped: no static key).
+    for (const m of code.matchAll(/\bt\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)'|`((?:[^`\\$]|\\.)*)`)/g)) {
+      const raw = m[1] ?? m[2] ?? m[3];
+      const key = m[1] !== undefined ? JSON.parse(`"${raw}"`) : raw.replace(/\\(.)/g, "$1");
+      for (const [lang, d] of [["ja", ja], ["zh-HK", zh]]) {
+        const v = typeof d[key] === "string" ? d[key].match(CLAIM_JA_ZH) : null;
+        assert.ok(!v, `${file}: the ${lang} value of "${key.slice(0, 50)}" claims when, or calls a mark first / later: ${v?.[0]}`);
+      }
     }
   }
 };
 const CLAIM_SRC = Object.fromEntries(CLAIM_FILES.map((f) => [f, SRC[f] ?? readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
 await check("no panel says the node shows when something existed, or calls a mark first or later (en, ja, zh-HK)", () => noWhenClaim(CLAIM_SRC));
-await refuses("the old seal sentence (\"existed when this node recorded the seal\") is caught", () => noWhenClaim({ ...CLAIM_SRC, [SEAL[0]]: CLAIM_SRC[SEAL[0]].replace("This shows the text is the one that was sealed: it matches the seal's fingerprint.", "This shows the text existed when this node recorded the seal.") }), /claims when something existed/);
-await refuses("\"First marked as genuine\" back is caught", () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Also marked, by another ID")', 't("First marked as genuine")') }), /calls a mark first/);
-await refuses("\"Also marked later\" back is caught", () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Also marked, by another ID")', 't("Also marked later, by another ID")') }), /calls a mark first/);
-await refuses("a ja value that calls a mark first is caught", () => noWhenClaim(CLAIM_SRC, { ...JA, "Marked as genuine": "最初に本物として記録されたもの" }), /the ja value/);
-await refuses("a zh-HK value that says when the node recorded the seal is caught", () => noWhenClaim(CLAIM_SRC, JA, { ...ZH_HK, [UNCHECKED_TIMES[7][1]]: "這顯示此節點記錄封印時，這段文字已經存在。" }), /the zh-HK value/);
+await refuses("the old seal sentence (\"existed when this node recorded the seal\") is caught", () => noWhenClaim({ ...CLAIM_SRC, [SEAL[0]]: CLAIM_SRC[SEAL[0]].replace("This shows the text is the one that was sealed: it matches the seal's fingerprint.", "This shows the text existed when this node recorded the seal.") }), /calls a mark first \/ later: existed when$/);
+await refuses("\"First marked as genuine\" back is caught", () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Also marked, by another ID")', 't("First marked as genuine")') }), /calls a mark first \/ later: First marked$/);
+await refuses("\"Also marked later\" back is caught", () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Also marked, by another ID")', 't("Also marked later, by another ID")') }), /calls a mark first \/ later: marked later$/);
+await refuses("a ja value that calls a mark first is caught", () => noWhenClaim(CLAIM_SRC, { ...JA, "Marked as genuine": "最初に本物として記録されたもの" }), /the ja value of "Marked as genuine" .*: 最初$/);
+await refuses("a zh-HK value that says when the node recorded the seal is caught", () => noWhenClaim(CLAIM_SRC, JA, { ...ZH_HK, [UNCHECKED_TIMES[7][1]]: "這顯示此節點記錄封印時，這段文字已經存在。" }), /the zh-HK value .*: 時，這段文字已經存在$/);
+// The phrasings the last review found passing; each must name its own match.
+for (const [en, hit] of [["Marked first", "Marked first"], ["Earliest mark, the original", "Earliest mark"], ["This shows the text existed at the time the node recorded the seal.", "existed at"]])
+  await refuses(`the en wording "${en}" is caught`, () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Also marked, by another ID")', `t(${JSON.stringify(en)})`) }), new RegExp(`calls a mark first / later: ${hit}$`));
+for (const [lang, v, hit] of [["ja", "初めて本物として記録", "初めて"], ["ja", "一番最初に記録", "一番"], ["zh-HK", "首次標記", "首次"], ["zh-HK", "最早標記", "最早"]])
+  await refuses(`a ${lang} value "${v}" is caught`, () => (lang === "ja" ? noWhenClaim(CLAIM_SRC, { ...JA, "Marked as genuine": v }) : noWhenClaim(CLAIM_SRC, JA, { ...ZH_HK, "Marked as genuine": v })), new RegExp(`the ${lang} value of "Marked as genuine" .*: ${hit}$`));
+await refuses("a single-quoted key whose ja value calls a mark first is caught", () => noWhenClaim({ ...CLAIM_SRC, [SUMMARY[0]]: CLAIM_SRC[SUMMARY[0]].replace('t("Marked by")', "t('Marked by')") }, { ...JA, "Marked by": "最初に記録した ID" }), /the ja value of "Marked by" .*: 最初$/);
 
 for (const row of UNCHECKED_TIMES) {
   const [file, key, en, ja, zh] = row;

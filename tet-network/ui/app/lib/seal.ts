@@ -8,8 +8,9 @@
  * - **The card and its share link** carry only the code, the opening date and the chain height at
  *   sealing: never the text, never the salt.
  * - **The reveal link** carries the sealed bytes (base64url) after `#reveal=`. Opening it hashes them,
- *   finds the record by fingerprint and shows "written at <time>, unchanged" — or red if they don't
- *   match. Anyone holding that link can reveal: sharing it is publishing.
+ *   finds the record by fingerprint and shows "unchanged since it was sealed", with the seal's time
+ *   from the node's clock marked not checked, or red if they don't match. Anyone holding that link
+ *   can reveal: sharing it is publishing.
  * - **Proves:** this exact text is the one sealed (its fingerprint matches); the seal's time is this
  *   node's clock and is not checked. **Doesn't
  *   prove:** that the prediction was right, or that the author didn't seal many different

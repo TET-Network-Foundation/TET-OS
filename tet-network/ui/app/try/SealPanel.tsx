@@ -80,7 +80,7 @@ function Reveal(props: { bytes: Uint8Array; sealed: Sealed }) {
             ✓ {t("Unchanged since it was sealed.")}
           </p>
           <p className="text-[14px] text-[#5d646d]">
-            {t("Written by {when} (time from this node's clock, not checked).", { when: new Date(hit.publishedAtMs).toLocaleString(locale) })}
+            {t("Sealed on this node at {when} (time from this node's clock, not checked).", { when: new Date(hit.publishedAtMs).toLocaleString(locale) })}
           </p>
         </>
       ) : (

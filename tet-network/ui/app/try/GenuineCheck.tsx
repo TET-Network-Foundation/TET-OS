@@ -161,7 +161,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
       <OfflineVerifier />
       {marked.length ? <CheckCopy marked={marked} sample={props.sample} /> : null}
       {/* The order comes from the node's clock (publishedAtMs), which nothing checks: say so rather than call one "first". */}
-      {hits.length > 1 ? <p className="text-[13.5px] text-[#5d646d]">{t("Listed in the order of this node's clock, which was not checked.")}</p> : null}
+      {hits.length > 1 ? <p className="text-[13.5px] text-[#5d646d]">{t("The order comes from this node's clock, which was not checked.")}</p> : null}
       <ul className="divide-y divide-[#eceef1] rounded-md border border-[#c9ced4]">
         {hits.map((h, i) => (
           <li key={i} className={cx(!h.verified && "bg-[#fbeaea]")}>

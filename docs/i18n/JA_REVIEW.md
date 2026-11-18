@@ -386,11 +386,11 @@ translation starts after that, so your changes carry over.
 | Find marks by file or date | ファイルや日付で記録を探す |
 | Proof code, or search threads | 証明コード、またはスレッド検索 |
 | Also marked, by another ID | 別の ID でも記録されています |
-| Listed in the order of this node's clock, which was not checked. | このノードの時計の順に並んでいます（時計は確認されていません）。 |
+| The order comes from this node's clock, which was not checked. | 並び順はこのノードの時計によるもので、時計は確認されていません。 |
 | Sealed prediction | 予言の封印 |
 | A sealed prediction, opened | 封印された予言が公開されました |
 | Checking it against the seal… | 封印と照らし合わせています… |
-| Written by {when}, unchanged since. | {when} までに書かれ、それ以降変わっていません。 |
+| Sealed on this node at {when} (time from this node's clock, not checked). | {when} にこのノードで封印（このノードの時計の時刻、未確認）。 |
 | Doesn't match any seal on this node: this text was changed, or never sealed here. | このノードのどの封印とも一致しません。文章が変えられたか、ここで封印されていません。 |
 | Sealed by ID | 封印した ID |
 | code | コード |
