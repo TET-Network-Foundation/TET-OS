@@ -411,7 +411,7 @@ jobs:
           cache-dependency-path: tet-network/ui/package-lock.json
 
       # The step fails if site_run_guard fails, and also if R11 did not run: a skip line, or a missing
-      # "ok" line for either R11 check, means TET_CLI was lost, and a guard that only skips is not a
+      # "ok" line for any of the three R11 checks, means TET_CLI was lost, and a guard that only skips is not a
       # guard. (Not `! grep`: bash exempts a negated command from set -e.) TET_CLI is absolute because
       # the step runs in tet-network/ui and R11 hands the path to notebook.py and signin.py.
       - if: needs.gate.outputs.code == 'true'
@@ -426,6 +426,7 @@ jobs:
           node --experimental-strip-types scripts/site_run_guard.mjs | tee "$out"
           if grep -q '^skip R11' "$out"; then echo "R11 was skipped: TET_CLI not seen"; exit 1; fi
           grep -q '^ok   R11 a notebook the page writes is VALID' "$out"
+          grep -q '^ok   R11 control: a pin not of this key' "$out"
           grep -q '^ok   R11 an answer the page signs is accepted' "$out"
 
   ui:
