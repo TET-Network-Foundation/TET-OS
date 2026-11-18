@@ -10,7 +10,8 @@
  * - **The reveal link** carries the sealed bytes (base64url) after `#reveal=`. Opening it hashes them,
  *   finds the record by fingerprint and shows "written at <time>, unchanged" — or red if they don't
  *   match. Anyone holding that link can reveal: sharing it is publishing.
- * - **Proves:** this exact text existed when this node recorded it, unchanged since. **Doesn't
+ * - **Proves:** this exact text is the one sealed (its fingerprint matches); the seal's time is this
+ *   node's clock and is not checked. **Doesn't
  *   prove:** that the prediction was right, or that the author didn't seal many different
  *   predictions (and reveal only the one that came true).
  */

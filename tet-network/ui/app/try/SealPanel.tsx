@@ -94,7 +94,7 @@ function Reveal(props: { bytes: Uint8Array; sealed: Sealed }) {
         </p>
       ) : null}
       {early ? <p className="text-[14px] text-[#6b4e00]">{t("This was opened before its date ({date}).", { date: props.sealed.opens })}</p> : null}
-      <p className="text-[14px] text-[#5d646d]">{t("This shows the text existed when this node recorded the seal, and hasn't changed since. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.")}</p>
+      <p className="text-[14px] text-[#5d646d]">{t("This shows the text is the one that was sealed: it matches the seal's fingerprint. The time of the seal is from this node's clock and was not checked. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.")}</p>
     </div>
   );
 }
@@ -197,7 +197,7 @@ export default function SealPanel() {
                 {copied === "reveal" ? t("Copied") : t("Copy the reveal link")}
               </Button>
             </div>
-            <p className="text-[14px] text-[#5d646d]">{t("This shows the text existed when this node recorded the seal, and hasn't changed since. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.")}</p>
+            <p className="text-[14px] text-[#5d646d]">{t("This shows the text is the one that was sealed: it matches the seal's fingerprint. The time of the seal is from this node's clock and was not checked. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.")}</p>
             <p className="text-[14px] text-[#5d646d]">{t("Hashtag: #TET予言")}</p>
           </div>
         )}

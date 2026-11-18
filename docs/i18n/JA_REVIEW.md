@@ -385,8 +385,8 @@ translation starts after that, so your changes carry over.
 | This record doesn't check out. Don't trust it. | この記録は確認できません。信用しないでください。 |
 | Find marks by file or date | ファイルや日付で記録を探す |
 | Proof code, or search threads | 証明コード、またはスレッド検索 |
-| First marked as genuine | 最初に本物として記録されたもの |
-| Also marked later, by another ID | 後から別の ID でも記録されたもの |
+| Also marked, by another ID | 別の ID でも記録されています |
+| Listed in the order of this node's clock, which was not checked. | このノードの時計の順に並んでいます（時計は確認されていません）。 |
 | Sealed prediction | 予言の封印 |
 | A sealed prediction, opened | 封印された予言が公開されました |
 | Checking it against the seal… | 封印と照らし合わせています… |
@@ -396,7 +396,7 @@ translation starts after that, so your changes carry over.
 | code | コード |
 | opens {date} | 公開日 {date} |
 | This was opened before its date ({date}). | 予定（{date}）より前に公開されています。 |
-| This shows the text existed when this node recorded the seal, and hasn't changed since. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true. | 分かるのは、このノードが封印を記録した時点でこの文章が存在し、それ以降変わっていないことです。予言が当たったかどうかは分かりません。また、作者がたくさんの違う予言を封印して、当たったものだけを公開した可能性も否定できません。 |
+| This shows the text is the one that was sealed: it matches the seal's fingerprint. The time of the seal is from this node's clock and was not checked. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true. | 分かるのは、この文章が封印されたものと同じであること（封印の指紋と一致します）です。封印の時刻はこのノードの時計のもので、確認されていません。予言が当たったかどうかは分かりません。また、作者がたくさんの違う予言を封印して、当たったものだけを公開した可能性も否定できません。 |
 | Write a prediction and choose when it opens. Only its fingerprint is recorded now; the text stays hidden until you reveal it. | 予言を書いて、公開日を選んでください。今記録されるのは指紋だけで、公開するまで文章は誰にも見えません。 |
 | Your prediction | あなたの予言 |
 | e.g. It will snow in Tokyo on 1 December. | 例：12月1日、東京で雪が降る。 |

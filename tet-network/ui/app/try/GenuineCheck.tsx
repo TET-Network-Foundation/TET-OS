@@ -160,6 +160,8 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
     <div className="space-y-3">
       <OfflineVerifier />
       {marked.length ? <CheckCopy marked={marked} sample={props.sample} /> : null}
+      {/* The order comes from the node's clock (publishedAtMs), which nothing checks: say so rather than call one "first". */}
+      {hits.length > 1 ? <p className="text-[13.5px] text-[#5d646d]">{t("Listed in the order of this node's clock, which was not checked.")}</p> : null}
       <ul className="divide-y divide-[#eceef1] rounded-md border border-[#c9ced4]">
         {hits.map((h, i) => (
           <li key={i} className={cx(!h.verified && "bg-[#fbeaea]")}>
@@ -169,13 +171,15 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                 <span aria-hidden className={h.verified ? "text-[#1f5132]" : "text-[#8a1f1f]"}>{h.verified ? "✓" : "✗"}</span>
                 <span className={cx(MONO, "font-semibold")}>{h.code}</span>
                 <span className={cx(MONO, "text-[13.5px] text-[#5d646d]")}>{h.signerEd25519.slice(0, 8)}</span>
-                <span className="text-[13.5px] text-[#5d646d]" title={t("time from this node's clock, not checked")}>{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>
+                <span className="text-[13.5px] text-[#5d646d]">
+                  {new Date(h.publishedAtMs).toLocaleDateString(locale)} ({t("time from this node's clock, not checked")})
+                </span>
                 <span aria-hidden className="ml-auto text-[#5d646d] group-open:rotate-90">›</span>
               </summary>
               <div className="space-y-2 px-3 pb-3 text-[15px]">
                 {h.verified ? (
                   <p className="font-semibold text-[#1f5132]">
-                    {h.match === "file" ? (firstFile === i ? t("First marked as genuine") : t("Also marked later, by another ID")) : t("Marked as genuine")}
+                    {h.match === "file" && firstFile >= 0 && firstFile !== i && h.signerEd25519 !== hits[firstFile].signerEd25519 ? t("Also marked, by another ID") : t("Marked as genuine")}
                   </p>
                 ) : (
                   <p className="font-semibold text-[#8a1f1f]">{t("This record doesn't check out. Don't trust it.")}</p>
