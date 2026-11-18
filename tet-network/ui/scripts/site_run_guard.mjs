@@ -524,23 +524,34 @@ if (!CLI) {
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, new RegExp(`^VALID\\n  2 records, all signed by ${key.keyid}\\n  permit ${r.permitId} \\(open-vent\\): used once, by record 2`));
   });
-  // Every envelope in the notebook (record 1, record 2, and the permit record 2 uses) must be
+  // Every envelope in the notebook (record 1, record 2, and the permit record 2 uses; R11 does not
+  // pass --node, so stamps are left to test_notebook.py) must be
   // refused, each on its own line: a regex that any one line could satisfy would stay green if
-  // records, or permits, or all but one record went unpinned. A near-miss id (last hex digit
-  // changed) catches a check that compares only part of a key id.
+  // records, or permits, or all but one record went unpinned. Near-miss ids, one per hex digit of
+  // each half (first, every middle one, last), catch a check that compares only part of a key id:
+  // a prefix, a suffix, or all but one digit. Another key's id differs almost everywhere, so it
+  // cannot catch those.
   const problemLines = (out) => out.split("\nShows:\n")[0].split("\n").slice(1);
-  const nearMiss = (id) => id.slice(0, -1) + (id.endsWith("0") ? "1" : "0");
-  await check("R11 control: a pin wrong in one half only, or not a full pin, is refused for that reason on every envelope (tet-cli)", async () => {
+  const HEX_AT = "tet-ed25519:".length; // = "tet-mldsa44:".length: the 64 hex digits start here
+  const nearMiss = (id, i) => id.slice(0, HEX_AT + i) + (id[HEX_AT + i] === "0" ? "1" : "0") + id.slice(HEX_AT + i + 1);
+  const digits = [...Array(64).keys()];
+  await check("R11 control: a pin not of this key (in one half, at any one hex digit, or in both) or not a full pin is refused for that reason on every envelope (tet-cli)", async () => {
     const key = await K.makeTestKey();
     const [ed, ml] = pinOf(key);
     const [otherEd, otherMl] = pinOf(await K.makeTestKey());
     assert.notEqual(ed, otherEd);
     assert.notEqual(ml, otherMl);
+    assert.equal(ed.length, HEX_AT + 64);
+    assert.equal(ml.length, HEX_AT + 64);
+    const mlWrong = (pinned) => `its ML-DSA-44 half is signed by ${ml}, not this device's ${pinned[1]}`;
+    const edWrong = (pinned) => `signed by ${ed}, not this device's ${pinned[0]}`;
     const cases = [
-      ["another key's ML-DSA-44 id", [ed, otherMl], (pinned) => `its ML-DSA-44 half is signed by ${ml}, not this device's ${pinned[1]}`],
-      ["a near-miss ML-DSA-44 id", [ed, nearMiss(ml)], (pinned) => `its ML-DSA-44 half is signed by ${ml}, not this device's ${pinned[1]}`],
-      ["another key's Ed25519 id", [otherEd, ml], (pinned) => `signed by ${ed}, not this device's ${pinned[0]}`],
-      ["a near-miss Ed25519 id", [nearMiss(ed), ml], (pinned) => `signed by ${ed}, not this device's ${pinned[0]}`],
+      ["another key's ML-DSA-44 id", [ed, otherMl], mlWrong],
+      ...digits.map((i) => [`a near-miss ML-DSA-44 id (hex digit ${i})`, [ed, nearMiss(ml, i)], mlWrong]),
+      ["another key's Ed25519 id", [otherEd, ml], edWrong],
+      ...digits.map((i) => [`a near-miss Ed25519 id (hex digit ${i})`, [nearMiss(ed, i), ml], edWrong]),
+      // Both halves foreign: notebook.py names the Ed25519 half first, one reason per envelope.
+      ["another key's pin, both halves", [otherEd, otherMl], edWrong],
     ];
     for (const [name, pinned, why] of cases) {
       const r = await verifyPageNotebook(key, pinned);
@@ -553,9 +564,22 @@ if (!CLI) {
         why(pinned).startsWith("signed") ? `  record 2: permit: ${r.permitId} is ${why(pinned)}` : `  record 2: permit: ${r.permitId}: ${why(pinned)}`,
       ], name);
     }
-    const oneLine = await verifyPageNotebook(key, `${ed}\n`);
-    assert.equal(oneLine.status, 2, oneLine.stdout + oneLine.stderr);
-    assert.match(oneLine.stderr, /is not a pin file: two lines, tet-ed25519:<64 hex> and tet-mldsa44:<64 hex>/);
+    // Not a full pin: one line, with or without its newline, with an empty second line, the
+    // ML-DSA-44 line alone; a half cut short by one digit (a pin that only a prefix compare
+    // would accept); or a full pin followed by more lines.
+    for (const [name, text] of [
+      ["the Ed25519 line", `${ed}\n`],
+      ["the Ed25519 line, no newline", ed],
+      ["the Ed25519 line and an empty line", `${ed}\n\n`],
+      ["the ML-DSA-44 line", `${ml}\n`],
+      ["the Ed25519 id one digit short", `${ed.slice(0, -1)}\n${ml}\n`],
+      ["the ML-DSA-44 id one digit short", `${ed}\n${ml.slice(0, -1)}\n`],
+      ["the pin written twice", `${ed}\n${ml}\n${ed}\n${ml}\n`],
+    ]) {
+      const oneLine = await verifyPageNotebook(key, text);
+      assert.equal(oneLine.status, 2, `${name}: ${oneLine.stdout}${oneLine.stderr}`);
+      assert.match(oneLine.stderr, /is not a pin file: two lines, tet-ed25519:<64 hex> and tet-mldsa44:<64 hex>/, name);
+    }
     const none = await verifyPageNotebook(key, null);
     assert.equal(none.status, 2, none.stdout + none.stderr);
     assert.match(none.stderr, /the following arguments are required: --pin/);
