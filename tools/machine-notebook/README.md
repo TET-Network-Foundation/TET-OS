@@ -52,7 +52,7 @@ hard link, or another spelling of the path): the check pins both keys of the exp
 ## Run it on the Mac
 
 ```sh
-cargo build -p tet-cli --release        # the only build step
+RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release   # the only build step
 export TET_CHAIN_ID=… TET_GENESIS_HASH=…  # the chain to sign for: a node's GET /chain shows both
 python3 tools/machine-notebook/notebook.py init   --dir ~/notebook          # prints the key id
 cp ~/notebook/device.pin ~/notebook.pin                                     # the pin, kept outside the folder
@@ -70,7 +70,7 @@ and checked against the same chain. `run` loops in the foreground and stops by i
 
 ## Run it on a Pi
 
-The same commands. Build `tet-cli` on the Pi (`cargo build -p tet-cli --release`) or copy an aarch64
+The same commands. Build `tet-cli` on the Pi (`RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release`) or copy an aarch64
 build to it, then pass `--tet-cli /path/to/tet-cli` or set `TET_CLI`. On Linux `--source cpu-temp`
 reads `/sys/class/thermal/thermal_zone0`; on macOS it refuses. Python 3 with the standard library
 is all it needs.

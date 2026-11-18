@@ -39,19 +39,17 @@ starts `Finished`; if it ends with `error` instead, see "Where people get stuck"
 
 How long that takes, honestly:
 
-- On one Mac (Apple silicon, 8 cores, 16 GB), a release build of `tet-cli` was noted as taking
-  about 35 minutes, on a busy machine. Whether that build used `RISC0_SKIP_BUILD=1` was not
-  recorded. That is the only timing on record, and it was not a careful measurement.
-- A cold build on a clean machine has not been timed. On a Raspberry Pi it has not been tried; expect
-  it to be much slower than on a laptop, to need a lot of memory (a Pi with 1 or 2 GB may need
-  `cargo build -j1` or more swap), and several GB of free disk for `target/`.
+- The build is not yet timed on a clean machine or a Pi. It is the long step of this guide.
+- On a Raspberry Pi it has not been tried; expect it to be much slower than on a laptop, to need a
+  lot of memory (a Pi with 1 or 2 GB may need `cargo build -j1` or more swap), and several GB of
+  free disk for `target/`.
 - So start the build before you plan to sit down with the rest of this guide.
 
 Why `RISC0_SKIP_BUILD=1`: `tet-cli` depends on a crate that otherwise compiles a RISC Zero guest
 program, which needs the RISC Zero toolchain. The notebook does not use that program; it only uses
-`tet-cli agent sign` and `tet-cli agent verify`. CI builds with the same setting. The README's
-shorter line (`cargo build -p tet-cli --release`, without the variable) will probably fail on a
-machine without the RISC Zero toolchain; that has not been checked on a clean machine either.
+`tet-cli agent sign` and `tet-cli agent verify`. CI builds with the same setting. The line without
+the variable (`cargo build -p tet-cli --release`) will probably fail on a machine without the RISC
+Zero toolchain; that has not been checked on a clean machine.
 
 When it is done, `target/release/tet-cli` exists. Check it:
 
@@ -256,12 +254,10 @@ Read "Shows" and "Does not show" before you rely on the log for anything.
 Found by running this guide from an empty folder on 2026-11-17 (Mac only, with `tet-cli` already
 built, so the build step itself was not part of that run):
 
-1. **The build.** It is the long step, and the README's build line leaves out `RISC0_SKIP_BUILD=1`
-   (see Step 1).
+1. **The build.** It is the long step. Use the line in Step 1, with `RISC0_SKIP_BUILD=1`.
 2. **Not in the repository root.** From another folder every command stops with
-   `error: tet-cli not found at target/release/tet-cli (build it: cargo build -p tet-cli --release, or pass --tet-cli)`.
-   Go back to the root, or pass `--tet-cli`. The build line in that message also leaves out
-   `RISC0_SKIP_BUILD=1`; use the one in Step 1.
+   `error: tet-cli not found at target/release/tet-cli (build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)`.
+   Go back to the root, or pass `--tet-cli`.
 3. **The chain variables.** The README says to read them from a node's `/chain`. No public node runs
    today; a made-up local pair, as in Step 2, is what works.
 4. **Forgetting `--pin`.** `verify` without it stops with
