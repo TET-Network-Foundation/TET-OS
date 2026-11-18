@@ -34,7 +34,7 @@ type Verify = (pub: string, sig: string, msg: Uint8Array) => Promise<boolean>;
 
 /** A sentence with the command it names shown as code (a command is not translated). */
 function cmd(text: string): ReactNode {
-  return text.split(/(notebook\.py verify(?: --node)?)/).map((part, i) =>
+  return text.split(/(notebook\.py verify(?: --node| --pin)?)/).map((part, i) =>
     i % 2 ? (
       <code translate="no" key={i} className="font-mono text-[0.92em]">
         {part}
@@ -60,7 +60,7 @@ export async function checkSamples(verify: Verify = mldsa44Verify): Promise<Chec
 export async function checkFolder(folder: DroppedFolder, t: T, verify: Verify = mldsa44Verify): Promise<Checked> {
   const name = folder.name ?? t("dropped files");
   const base = { name, files: folder.files.size, sample: null, result: null };
-  if (folder.error === "too_many") return { ...base, error: t("This folder holds more than {n} files. This page checks logs of up to {max} records; use notebook.py verify for a longer one.", { n: MAX_FILES, max: MAX_RECORDS }) };
+  if (folder.error === "too_many") return { ...base, error: t("This folder holds more than {n} files. This page checks logs of up to {max} records; use notebook.py verify --pin for a longer one.", { n: MAX_FILES, max: MAX_RECORDS }) };
   if (folder.error) return { ...base, error: t("The folder could not be read.") };
   const raw = [...folder.files.keys()];
   const paths: string[] = notebookPaths(raw);
@@ -117,7 +117,7 @@ export function ResultDetails(props: { c: Checked; t: T }) {
         <p>
           {cmd(r.error === "no_chain"
             ? t("This folder has no usable chain.json, so there is no chain to check the signatures against. notebook.py verify stops here too.")
-            : t("This log has {n} records. This page checks logs of up to {max} records; use notebook.py verify for a longer one.", { n: r.records, max: MAX_RECORDS }))}
+            : t("This log has {n} records. This page checks logs of up to {max} records; use notebook.py verify --pin for a longer one.", { n: r.records, max: MAX_RECORDS }))}
         </p>
       ) : r.valid ? (
         <div>
@@ -276,6 +276,7 @@ export function MachineLogBody(props: { t: T; initial?: Checked[] }) {
       <Details label={t("How this check works")} hideLabel={t("Hide details")}>
         <ul className="flex list-disc flex-col gap-1.5 pl-5">
           <li>{cmd(t("A folder is checked the way notebook.py verify checks it, in this tab."))}</li>
+          <li>{cmd(t("notebook.py verify also needs --pin: a file with both key ids of the device you expect, tet-ed25519 and tet-mldsa44 (a copy of the device.pin that notebook.py init writes), kept outside the folder. This page does not compare with a pin; it shows which key signed."))}</li>
           <li>{t("The page never opens device.key, the device's secret phrase.")}</li>
           <li>{cmd(t("The signatures are checked against the chain named in the folder's chain.json, as notebook.py verify does."))}</li>
           <li>{cmd(t("Anchors on chain are not checked here. notebook.py verify --node checks them against a node."))}</li>
