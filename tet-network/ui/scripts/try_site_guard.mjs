@@ -25,8 +25,11 @@
 //    "last edit signed {when}" back, or a variant; the label without "not checked"; the label only
 //    in a comment; a second unlabelled render; a ja or zh-HK value without the not-checked part.
 // 8. Every time shown as unchecked (seven renders across six panels: SealPanel, SearchPanel,
-//    ProofCode, GenuineCheck twice, GenuinePanel, the reader page) keeps "not checked" in en and
-//    its fragment in ja and zh-HK, is rendered in a live line, and has no check mark on it.
+//    ProofCode, GenuineCheck twice, GenuinePanel, the reader page), and the sealer's ID picked by the
+//    node's clock, keeps "not checked" in en and its fragment in ja and zh-HK, is rendered in live
+//    code (comments found by the TSX parse, not by how a line starts), and has no check mark on it
+//    or on any element round it, a self-closing one included. After sealing, no element with a
+//    check mark shows a date.
 //    Controls, per row: the label dropped; the label only in a comment; a ja or zh-HK value without
 //    the fragment. For the sealed prediction: a check mark before or after the time, a Check icon,
 //    a green restyle, the time shown again bare, the time moved into the green box. A pass is not
@@ -36,12 +39,13 @@
 //    "earliest" or "later", in en and in the ja / zh-HK value of every key they render. It reads
 //    word lists, so a new phrasing outside them passes; the lists are above CLAIM_EN.
 
-import { register } from "node:module";
+import { createRequire, register } from "node:module";
 import { readFileSync } from "node:fs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 
 register("./lib/ts_hooks.mjs", import.meta.url);
+const ts = createRequire(import.meta.url)("typescript");
 process.env.NEXT_PUBLIC_TET_CHAIN_ID ||= "tet-local-dev";
 process.env.NEXT_PUBLIC_TET_TREASURY_ADDRESS ||= "fedcba0987654321fedcba0987654321fedcba0987654321fedcba0987654321";
 
@@ -245,8 +249,32 @@ const { ZH_HK } = await import("../app/try/i18n_zh_hk.ts");
 const LAST_EDIT = "last edit {when} (time written by the signer, not checked)";
 const SIGNER_JA = "署名者が書いた時刻、未確認";
 const SIGNER_ZH = "簽署者寫下的時間，未經核實";
-// Comment lines are not page text: a key quoted in a comment must not satisfy the pin.
-const live = (src) => src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(l)).join("\n");
+// Comments are not page text: a key quoted in a comment must not satisfy the pin. The file is parsed
+// as TSX (the typescript package, as site_guard.mjs does) and only real comments are blanked, to
+// spaces of the same length, so offsets stay the source's: code before or after a comment on the same
+// line ({/**/}{new Date(...)}) stays live, and "//" or "/*" inside a string or JSX text is not a comment.
+const PARSED = new Map();
+const parse = (src) => {
+  let sf = PARSED.get(src);
+  if (!sf) PARSED.set(src, (sf = ts.createSourceFile("panel.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)));
+  return sf;
+};
+const live = (src) => {
+  const sf = parse(src);
+  const out = src.split("");
+  // Every comment is in the trivia before some token: on the token's line (the API calls those
+  // "trailing" of the token before) or after a line break ("leading"); both are read. JSX text is not
+  // trivia, so it is skipped, and so is a zero-width node, which could sit at the start of JSX text.
+  const visit = (node) => {
+    const kids = node.getChildren(sf);
+    if (kids.length) return kids.forEach(visit);
+    if (node.kind === ts.SyntaxKind.JsxText || node.kind === ts.SyntaxKind.JsxTextAllWhiteSpaces || node.pos === node.end) return;
+    for (const r of [...(ts.getTrailingCommentRanges(src, node.pos) ?? []), ...(ts.getLeadingCommentRanges(src, node.pos) ?? [])])
+      for (let i = r.pos; i < r.end; i++) if (out[i] !== "\n") out[i] = " ";
+  };
+  visit(sf);
+  return out.join("");
+};
 const honestView = (raw, ja = JA, zh = ZH_HK) => {
   const src = live(raw);
   assert.ok(src.includes("A node can leave out newer edits and show an older version; compare the version with the site's owner."), "the withholding line is gone");
@@ -294,10 +322,17 @@ await refuses("a zh-HK label that keeps the fragment but says 簽署 before {whe
 //   className={G}): only the text at the render is read;
 // - a component whose name does not contain Check / Tick / Verified / Success / Badge, with no tone
 //   of ok / success / good / verified;
-// - a tag written inside a JS string ({"</div>" && null}) is read as a tag, so it can close a green
-//   wrapper early;
 // - a mark in a sibling element beside the time (the GenuineCheck summary row's ✓ for the signature
-//   is a sibling, on purpose); a comment or dead branch in the middle of a line, which counts as live;
+//   is a sibling, on purpose), including a sibling inside the same attribute of a self-closing
+//   wrapper; a dead branch ({false && ...}) counts as live, which only makes the check stricter;
+// - a wrapper reached through a component: a helper that takes the label as a prop and draws the
+//   green box in its own file or further down this one (only the label's own ancestors are read);
+// - other spellings found in review and not matched: √, &#x1F5F8;, an entity without its ";",
+//   String["fromCodePoint"], decodeURIComponent, hsl() hues in turn or rad, oklab(), honeydew /
+//   aquamarine / mintcream, variant="success", and Tailwind arbitrary colours written with
+//   underscores (bg-[rgb(232_245_236)]); and the 8b word lists' limits below;
+// - files that do not parse: the panels are checked to parse cleanly, and the controls' edited
+//   sources too, because a repaired parse is a guess;
 // - the time reached without its field name: a computed key (h["published" + "AtMs"]), Object.values,
 //   a helper in another file, or a renamed alias (const p = h.publishedAtMs, then p twice). The count
 //   is per file, so a render that replaces a pinned non-render use keeps the count.
@@ -313,8 +348,14 @@ const UNCHECKED_TIMES = [
   ["app/s/[site]/page.tsx", "last edit {when} (time written by the signer, not checked)", ...SIGNER, "verdict.lastSignedAtMs"],
   ["app/try/SealPanel.tsx", "This shows the text is the one that was sealed: it matches the seal's fingerprint. The time of the seal is from this node's clock and was not checked. It doesn't show the prediction was right, or that the author didn't seal many different predictions and open only the one that came true.", "was not checked", "確認されていません", "未經核實", null],
   ["app/try/GenuineCheck.tsx", "The order comes from this node's clock, which was not checked.", "was not checked", "確認されていません", "未經核實", null],
+  // "Sealed by ID X": X is picked by the node's clock (the sort above NOT_SHOWN), and the page says so.
+  ["app/try/SealPanel.tsx", "The ID shown is the one with the earliest time on this node's clock, which was not checked.", "which was not checked", "確認されていません", "未經核實", null],
 ];
 const SRC = Object.fromEntries(UNCHECKED_TIMES.map(([f]) => [f, readFileSync(new URL(`../${f}`, import.meta.url), "utf8")]));
+// The checks below read the parse; a file the parser had to repair would be read as it guessed.
+await check("every panel the checks read parses as TSX without errors", () => {
+  for (const [f, src] of Object.entries(SRC)) assert.equal(parse(src).parseDiagnostics.length, 0, `${f} does not parse cleanly`);
+});
 // A check mark: the glyphs, their HTML entities and JS escapes, and components or tones that draw one.
 const CHECK = /[✓✔✅☑🗸🗹]|&#0*(10003|10004|9989|9745);|&#x0*(2713|2714|2705|2611);|&check(mark)?;|\\u\{?0*(2713|2714|2705|2611)\}?|\\u\{?0*(d83d|1f5f8|1f5f9)|\\0*(2713|2714|2705|2611)(?![0-9a-f])|\bfrom(CharCode|CodePoint)\s*\(|<[\w.]*(Check|Tick|Verified|Success|Badge)|\btone=\{?\s*["'](ok|success|good|verified)["']/i;
 // Green: Tailwind green-like classes, named CSS greens, and any #rgb / #rrggbb / rgb() whose green
@@ -334,43 +375,28 @@ const greenColour = (text) => {
   return false;
 };
 const MARK = { test: (text) => CHECK.test(text) || GREEN_CLASS.test(text) || greenColour(text) };
-// The JSX tags still open at `at`, outermost first, each with its opening-tag text. A tag runs to its
-// ">" outside braces and quotes; a closing tag pops back to the last open tag of its name.
+// The JSX elements round `at`, outermost first, from the TSX parse: each with its opening-tag text.
+// A type argument (useState<Foo>) is not an element, whatever comes before it. A self-closing element
+// whose attribute holds the label (<Box className="..." children={<p>{t(...)}</p>} />) encloses it too:
+// its text is the whole element with the inner element on the way to the label cut out.
 const enclosing = (code, at) => {
-  const stack = [];
-  let i = 0;
-  while (i < at) {
-    const lt = code.indexOf("<", i);
-    if (lt < 0 || lt >= at) break;
-    // useState<Foo>, Array<Bar>: a type argument, not a tag.
-    if (lt > 0 && /[\w$)\]]/.test(code[lt - 1])) {
-      i = lt + 1;
-      continue;
+  const sf = parse(code);
+  const find = (n) => {
+    for (const c of n.getChildren(sf)) if (c.getStart(sf) <= at && at < c.end) return find(c);
+    return n;
+  };
+  const out = [];
+  let inner = null;
+  for (let n = find(sf); n; n = n.parent) {
+    if (ts.isJsxElement(n)) out.push({ name: n.openingElement.tagName.getText(sf), text: n.openingElement.getText(sf) });
+    else if (ts.isJsxSelfClosingElement(n)) {
+      const whole = n.getText(sf);
+      const text = inner ? whole.slice(0, inner.getStart(sf) - n.getStart(sf)) + "…" + whole.slice(inner.end - n.getStart(sf)) : whole;
+      out.push({ name: n.tagName.getText(sf), text });
     }
-    const m = /^<(\/?)([A-Za-z][\w.]*|(?=>))/.exec(code.slice(lt, lt + 80));
-    if (!m) {
-      i = lt + 1;
-      continue;
-    }
-    let j = lt + m[0].length;
-    for (let depth = 0, q = null; j < code.length; j++) {
-      const c = code[j];
-      if (q) {
-        if (c === "\\") j++;
-        else if (c === q) q = null;
-      } else if (c === '"' || c === "'" || c === "`") q = c;
-      else if (c === "{") depth++;
-      else if (c === "}") depth--;
-      else if (c === ">" && depth === 0) break;
-    }
-    const text = code.slice(lt, j + 1);
-    if (m[1]) {
-      const k = stack.map((t) => t.name).lastIndexOf(m[2]);
-      if (k >= 0) stack.length = k;
-    } else if (!text.endsWith("/>")) stack.push({ name: m[2], text });
-    i = j + 1;
+    if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) inner = n;
   }
-  return stack;
+  return out.reverse();
 };
 // Uses of a time field that are not a render, per file: SealPanel sorts by publishedAtMs to pick the
 // seal (a.publishedAtMs - b.publishedAtMs: two uses).
@@ -443,6 +469,53 @@ for (const [what, open, close] of [
 ])
   await refuses(`${what} round the grey line is caught`, () => labelled(SEAL, wrap(open, close)), /element round the unchecked time/);
 await check("a type argument (useState<VerifiedHit | null>) above the label is not read as a tag", () => labelled(SEAL, `const unused = useState<VerifiedHit | null>(null);\n${SRC[SEAL[0]]}`));
+// The three gaps of the second review. Each edited source must itself parse cleanly, so a refusal
+// can't come from the parser's repair of a broken file.
+const clean = (src) => (assert.equal(parse(src).parseDiagnostics.length, 0, "the control's source does not parse"), src);
+await refuses("a control source that does not parse is refused before it is read", () => clean(`const x = <div>{t("a"</div>;`), /does not parse/);
+// Comments: a line that starts like a comment but carries code.
+await refuses("a bare render after an empty JSX comment on the same line ({/**/}{new Date(...)}) is caught", () => labelled(SEAL, clean(sealWith("\n            {/**/}{new Date(hit.publishedAtMs).toLocaleString()}"))), /every render must carry its label/);
+await refuses("a check mark after an empty JSX comment on its own line in the label's element is caught", () => labelled(SEAL, clean(SRC[SEAL[0]].replace(SEAL_P, `${SEAL_P.split("\n")[0]}\n            {/**/}✓\n            ${SEAL_RENDER}`))), /check mark sits on/);
+await refuses("a check mark after a block comment opener line (/* x */ then code) is caught", () => labelled(SEAL, clean(SRC[SEAL[0]].replace(SEAL_P, `${SEAL_P.split("\n")[0]}\n            {/* x */ "✓"} ${SEAL_RENDER}`))), /check mark sits on/);
+// Type arguments: a real tag right after JSX text ending in a letter or ")", or after "return".
+await refuses("a green wrapper right after JSX text ending in a letter (at<div ...>) is caught", () => labelled(SEAL, clean(wrap(`seal at<div className="rounded-md bg-[#e8f5ec] p-2">`))), /element round the unchecked time/);
+await refuses("a green wrapper right after JSX text ending in \")\" is caught", () => labelled(SEAL, clean(wrap(`(see below)<div className="rounded-md bg-[#e8f5ec] p-2">`))), /element round the unchecked time/);
+// The render is moved into a helper whose return starts the green box; the panel keeps a plain line.
+const SEAL_LINE = SRC[SEAL[0]].match(/<p className="text-\[14px\] text-\[#5d646d\]">\n\s*\{t\("Sealed on this node at[^\n]*\n\s*<\/p>/)[0];
+const returnWrap = `function Extra({ hit, t, locale }) {\n  return<div className="bg-[#e8f5ec]">\n${SEAL_LINE}</div>;\n}\n${SRC[SEAL[0]].replace(SEAL_LINE, '<p className="text-[14px]">{t("x")}</p>')}`;
+await check("the return<div> control holds the labelled render once, inside the helper", () => assert.ok(returnWrap.split(SEAL_RENDER).length === 2 && returnWrap.indexOf(SEAL_RENDER) < returnWrap.indexOf("export default")));
+await refuses("a green wrapper right after return (return<div ...>) is caught", () => labelled(SEAL, clean(returnWrap)), /element round the unchecked time/);
+// Self-closing wrappers: the label passed in an attribute.
+for (const [what, open] of [["a green self-closing wrapper (children={...} />)", `<Box className="rounded-md bg-[#e8f5ec]" children={`], ["a self-closing Badge (children={...} />)", `<Badge children={`]])
+  await refuses(`${what} round the grey line is caught`, () => labelled(SEAL, clean(wrap(open, "} />"))), /element round the unchecked time/);
+await check("a plain self-closing wrapper round the grey line is not refused", () => labelled(SEAL, clean(wrap(`<Box className="p-2" children={`, "} />"))));
+// After sealing, the line with the mark says only that it is sealed: the opening date is the
+// author's choice, and a mark beside it reads as if something checked it.
+const markedDate = (src) => {
+  const sf = parse(live(src));
+  const visit = (n) => {
+    if (ts.isJsxElement(n)) {
+      // Its own text: without any element nested in it, at any depth (through braces and fragments).
+      const whole = n.getText(sf);
+      const start = n.getStart(sf);
+      const cut = [];
+      // (forEachChild stops at a truthy return, so the callback returns nothing.)
+      const nested = (c) => {
+        if (ts.isJsxElement(c) || ts.isJsxSelfClosingElement(c)) cut.push([c.getStart(sf) - start, c.end - start]);
+        else c.forEachChild(nested);
+      };
+      n.children.forEach(nested);
+      let own = whole;
+      for (const [a, b] of cut.reverse()) own = own.slice(0, a) + own.slice(b);
+      if (CHECK.test(own)) assert.ok(!/\{date\}|\{when\}|\bDate\(|\.opens\b|AtMs\b/.test(whole), `a check mark sits on a date: ${whole.slice(0, 90)}`);
+    }
+    n.forEachChild(visit);
+  };
+  visit(sf);
+};
+await check("SealPanel: no element with a check mark shows a date", () => markedDate(SRC[SEAL[0]]));
+await refuses("SealPanel: the old \"✓ Sealed. It opens on {date}.\" line is caught", () => markedDate(SRC[SEAL[0]].replace('✓ {t("Sealed.")}</p>\n            <p className="text-[15px]">{t("It opens on {date}.", { date: done.opens })}</p>', '✓ {t("Sealed. It opens on {date}.", { date: done.opens })}</p>')), /check mark sits on a date/);
+await refuses("SealPanel: the date in a span inside the marked line is caught", () => markedDate(SRC[SEAL[0]].replace('✓ {t("Sealed.")}</p>', '✓ {t("Sealed.")} <span>{done.opens}</span></p>')), /check mark sits on a date/);
 const SUMMARY = UNCHECKED_TIMES[3];
 await refuses("GenuineCheck: the summary date labelled only by a title attribute again is caught", () => labelled(SUMMARY, SRC[SUMMARY[0]].replace(/<span className="text-\[13\.5px\] text-\[#5d646d\]">\n\s*\{new Date\(h\.publishedAtMs\)\.toLocaleDateString\(locale\)\} \(\{t\("time from this node's clock, not checked"\)\}\)\n\s*<\/span>/, `<span className="text-[13.5px] text-[#5d646d]" title={t("time from this node's clock, not checked")}>{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>`)), /only an attribute/);
 
