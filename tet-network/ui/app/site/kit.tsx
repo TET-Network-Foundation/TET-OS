@@ -29,12 +29,16 @@ import type { Status } from "./types";
 
 const cx = (...p: Array<string | false | null | undefined>) => p.filter(Boolean).join(" ");
 const FOCUS = "outline-none focus-visible:ring-4 focus-visible:ring-teal-600/40 rounded-lg";
+/** The accent fill: the one solid teal the site uses. Not exported: pages get it only through
+ * PrimaryLink, StatusBadge and AccentBar, so they cannot hand-make a button with it (site_guard L1). */
+const ACCENT_FILL = "bg-teal-700 dark:bg-teal-400";
 /** The column every page sits in. */
 export const COLUMN = "mx-auto w-full max-w-3xl px-4 sm:px-6";
 
-/** What each status means, in a phrase. Teal for built, slate for not built; solid vs outline. */
-export const STATUS_TEXT: Record<Status, { label: string; means: string; tone: string }> = {
-  running: { label: "Running", means: "works today for anyone", tone: "bg-teal-700 text-white dark:bg-teal-400 dark:text-slate-950" },
+/** What each status means, in a phrase. Teal for built, slate for not built; solid vs outline.
+ * Not exported: "running" carries the accent fill, so pages get these only through StatusBadge (site_guard L1). */
+const STATUS_TEXT: Record<Status, { label: string; means: string; tone: string }> = {
+  running: { label: "Running", means: "works today for anyone", tone: `${ACCENT_FILL} text-white dark:text-slate-950` },
   prototype: { label: "Prototype", means: "built, runs only on your own computer", tone: "border border-teal-700 text-teal-800 dark:border-teal-400 dark:text-teal-200" },
   planned: { label: "Planned", means: "decided, not built", tone: "bg-slate-200 text-slate-900 dark:bg-slate-700 dark:text-slate-100" },
   idea: { label: "Idea", means: "not decided; being studied", tone: "border border-slate-400 text-slate-700 dark:border-slate-500 dark:text-slate-300" },
@@ -114,11 +118,25 @@ export function SiteFrame(props: { children: ReactNode }) {
   );
 }
 
+/** A thin vertical accent bar that grows in (HowDiagram's step connector). `shown` false keeps it
+ * collapsed, except under reduced motion. */
+export function AccentBar(props: { shown: boolean }) {
+  return (
+    <span
+      className={cx(
+        "block h-full w-1 origin-top rounded-full", ACCENT_FILL,
+        "motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-out",
+        props.shown ? "scale-y-100" : "scale-y-0 motion-reduce:scale-y-100",
+      )}
+    />
+  );
+}
+
 /** The page's one primary button (a link; "#id" scrolls). At most one per page. */
 export function PrimaryLink(props: { href: string; label: string }) {
   const { t } = useSite();
   return (
-    <a href={appHref(props.href)} className={cx("inline-flex w-fit rounded-md bg-teal-700 px-6 py-4 font-semibold text-white hover:bg-teal-800 dark:bg-teal-400 dark:text-slate-950 dark:hover:bg-teal-300", FOCUS)}>
+    <a href={appHref(props.href)} className={cx("inline-flex w-fit rounded-md px-6 py-4 font-semibold text-white hover:bg-teal-800 dark:text-slate-950 dark:hover:bg-teal-300", ACCENT_FILL, FOCUS)}>
       {t(props.label)}
     </a>
   );

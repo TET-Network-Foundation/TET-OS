@@ -12,6 +12,7 @@
  */
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSite } from "../i18n";
+import { AccentBar } from "../kit";
 
 const cx = (...p: Array<string | false | null | undefined>) => p.filter(Boolean).join(" ");
 
@@ -115,13 +116,7 @@ export function HowDiagram() {
           <li key={s.title} ref={(el) => void (refs.current[i] = el)} data-step={i} className="flex flex-col">
             {i > 0 ? (
               <div aria-hidden="true" className="flex h-12 w-12 justify-center">
-                <span
-                  className={cx(
-                    "block h-full w-1 origin-top rounded-full bg-teal-700 dark:bg-teal-300",
-                    "motion-safe:transition-transform motion-safe:duration-500 motion-safe:ease-out",
-                    hidden[i] ? "scale-y-0 motion-reduce:scale-y-100" : "scale-y-100",
-                  )}
-                />
+                <AccentBar shown={!hidden[i]} />
               </div>
             ) : null}
             <div

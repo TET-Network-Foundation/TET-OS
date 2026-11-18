@@ -14,9 +14,25 @@
 //    wording or money words (the patterns of scripts/try_money_guard.mjs, read from that file); no
 //    testimonials or quoted users; no promised dates.
 // J. Every string the site shows has Japanese.
+// L1's kit check reads kit.tsx's string and template literals only. Known gaps, left open on purpose
+// (the check protects a colour rule, not a secret):
+//   - a regex literal in the kit (/bg-teal-700 …/.source) is not read;
+//   - JSX text in the kit is not read;
+//   - a page can call a kit component as a function and read .props
+//     (AccentBar({ shown: true }).props.className); name checks cannot see that.
+//   - the class split across literals (`bg-teal-${"700"}`, "bg-teal-" + "700") is not joined;
+//   - the same colour under another spelling (bg-[#0f766e], bg-(--color-teal-700),
+//     bg-[var(--color-teal-700)]) is not matched: the check reads class names, not colours.
+// L1's page check reads literals with a regex lexer, not a parser. Known gaps there:
+//   - an apostrophe in raw JSX text can pair with a later quote and hide a cx(…) string on that line
+//     (className values are read first and are not affected);
+//   - a string holding "/*" before a later "*/" is taken for a comment;
+//   - a regex literal holding a quote or backtick can misalign the literals after it;
+//   - the trailing important mark (bg-teal-700!) makes a constant look like prose, so it is not read;
+//   - the hand-made button check on pages matches bg-teal-600/700, not a dark-only bg-teal-400.
 // Every check has a control here: the check run on a broken copy must fail.
 
-import { register } from "node:module";
+import { register, createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
@@ -269,8 +285,114 @@ const ALLOWED_SIZES = new Set(["sm", "base", "xl", "2xl", "4xl"]);
 const ALLOWED_WIDTHS = new Set(["3xl", "prose", "xl"]);
 const SPACING = /(?<![\w-])-?(?:p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|gap-x|gap-y|space-x|space-y)-(\d+(?:\.\d+)?)(?![\w.])/g;
 const OTHER_HUES = /(?<![\w-])(?:bg|text|border|ring|from|via|to|fill|stroke|outline|decoration|divide|shadow|accent|caret)-(?:red|orange|amber|yellow|lime|green|emerald|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose|gray|zinc|neutral|stone)-\d/g;
-/** Every class-name string in a file: className="…", cx("…", "…") arguments, and the kit's tone tables. */
-const classStrings = (src) => [...stripComments(src).matchAll(/className=\{?["'`]([^"'`]+)["'`]|\b(?:cx|tone|COLUMN|CARD|FOCUS)\b[^\n]*?["'`]([^"'`]*\b(?:text|p[xytblr]?|m[xytblr]?|gap|bg|font|max-w)-[^"'`]*)["'`]/g)].map((m) => m[1] ?? m[2]);
+/**
+ * Every string in a file that looks like class names, wherever it is: className="…", cx("…"), a
+ * constant of any name, an entry of a table on its own line, a template literal (its ${…} parts left
+ * out). Until 2026-11-17 only className and lines naming cx / tone / COLUMN / CARD / FOCUS were read, so
+ * `const BUTTON = "… bg-amber-100 …"` or a tone-table entry on its own line was never checked (found on
+ * /fleet, ui/fleet). A string looks like class names when every word in it is class-shaped (lower case,
+ * digits and - : / [ ] ( ) . ! % #) and at least one word is a utility with a value (text-…, p-4,
+ * gap-2, bg-…, font-…, max-w-…, border-…, ring-…, and the rest below), so prose is not read as classes.
+ * An arbitrary value in brackets ([&>svg]:h-4, w-[calc(100%+2px)], text-[#0F0]) may hold any
+ * character but a space. className="…" / className={`…`} strings are always read, whatever they hold,
+ * and before the other literals, so an apostrophe in nearby JSX text cannot swallow them.
+ */
+const CLASS_WORD = /^!?(?:[a-z0-9:().\/%#@_-]|\[[^\]\s]*\])+$/;
+const UTILITY = /^(?:[a-z0-9-]+:)*!?-?(?:text|font|leading|tracking|p[xytblrse]?|m[xytblrse]?|gap(?:-[xy])?|space-[xy]|max-w|min-w|w|h|min-h|max-h|bg|border(?:-[xytblrse])?|rounded(?:-[a-z]+)?|ring|outline|shadow|from|via|to|fill|stroke|decoration|divide|accent|caret|grid-cols|col-span|items|justify|self|place|inset|top|left|right|bottom|z|opacity|scroll-m[xytblrse]?|underline-offset)-[a-z0-9[(.\/]/;
+const looksLikeClasses = (str) => {
+  const words = str.trim().split(/\s+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => CLASS_WORD.test(w)) && words.some((w) => UTILITY.test(w));
+};
+const LITERAL = /"((?:[^"\\\n]|\\.)*)"|'((?:[^'\\\n]|\\.)*)'|`((?:[^`\\]|\\.)*)`/g;
+/**
+ * A template literal's text with each ${…} part (braces balanced) replaced by a space, and the string
+ * literals inside those parts that look like class names: `p-6 ${on ? "bg-teal-700" : "bg-white"}`
+ * gives "p-6  " and ["bg-teal-700", "bg-white"]. Without the second list a conditional class in a
+ * template was never read.
+ */
+const splitTemplate = (t) => {
+  let text = "";
+  const inner = [];
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] === "$" && t[i + 1] === "{") {
+      let depth = 1, j = i + 2;
+      for (; j < t.length && depth > 0; j++) depth += t[j] === "{" ? 1 : t[j] === "}" ? -1 : 0;
+      for (const m of t.slice(i + 2, j - 1).matchAll(LITERAL)) {
+        const str = m[1] ?? m[2] ?? m[3];
+        if (looksLikeClasses(str)) inner.push(str);
+      }
+      text += " ";
+      i = j - 1;
+    } else text += t[i];
+  }
+  return { text, inner };
+};
+const classStrings = (src) => {
+  const code = stripComments(src);
+  const out = [];
+  // 1. className values, unconditionally; their text is then blanked so pass 2 cannot re-read or
+  //    mis-pair them.
+  const rest = code.replace(/\bclassName=\{?\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, (all, lit) => {
+    const { text, inner } = splitTemplate(lit.slice(1, -1));
+    out.push(text, ...inner);
+    return " ".repeat(all.length);
+  });
+  // 2. every other literal that looks like class names.
+  for (const m of rest.matchAll(LITERAL)) {
+    if (m[3] !== undefined) {
+      const { text, inner } = splitTemplate(m[3]);
+      if (looksLikeClasses(text)) out.push(text);
+      out.push(...inner);
+      continue;
+    }
+    const str = m[1] ?? m[2];
+    if (looksLikeClasses(str)) out.push(str);
+  }
+  return out;
+};
+/** Kit constants that carry the accent fill; pages reach them only through the kit's components. */
+const KIT_PRIVATE = ["ACCENT_FILL", "STATUS_TEXT"];
+/**
+ * Inside kit.tsx, the only top-level statements that may name a private constant, or hold the solid
+ * accent classes. Anything else that does (an alias, a getter, `export let`, `export default`,
+ * `export { … }`) is a way to hand the fill to a page, so it is flagged. The kit is parsed with the
+ * TypeScript compiler, not matched with a regex, so formatting cannot hide a statement.
+ */
+const KIT_ALLOWED = {
+  ACCENT_FILL: ["const ACCENT_FILL", "const STATUS_TEXT", "export function AccentBar", "export function PrimaryLink"],
+  STATUS_TEXT: ["const STATUS_TEXT", "export function StatusBadge", "export function SiteFrame"],
+  "the accent classes": ["const ACCENT_FILL"],
+};
+// Any variant chain may precede the class (sm:, group-hover:, [&]:, min-[0px]:, [&:hover]:, !), and
+// so may markup or punctuation (class="…", a comma, a bracket), so only a word character or "-"
+// right before the class stops a match. hover:bg-teal-800 and dark:hover:bg-teal-300 (the kit's
+// hover shades) are other shades and do not match.
+const ACCENT_CLASS = /(?<![\w-])bg-teal-(?:[67]00|400)(?![\w-])/;
+const ts = createRequire(import.meta.url)("typescript");
+function kitPrivateProblems(p, s) {
+  const out = [];
+  const sf = ts.createSourceFile(p, s, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  for (const st of sf.statements) {
+    const exported = (ts.getModifiers?.(st) ?? []).some((m) => m.kind === ts.SyntaxKind.ExportKeyword) ? "export " : "";
+    let label = ts.SyntaxKind[st.kind];
+    if (ts.isFunctionDeclaration(st) && st.name) label = `${exported}function ${st.name.text}`;
+    if (ts.isVariableStatement(st)) {
+      const flags = st.declarationList.flags;
+      const kw = flags & ts.NodeFlags.Const ? "const" : flags & ts.NodeFlags.Let ? "let" : "var";
+      label = `${exported}${kw} ${st.declarationList.declarations.map((d) => d.name.getText(sf)).join(", ")}`;
+    }
+    const used = new Set();
+    (function walk(n) {
+      if (ts.isIdentifier(n) && KIT_PRIVATE.includes(n.text)) used.add(n.text);
+      if ((ts.isStringLiteralLike(n) || ts.isTemplateHead(n) || ts.isTemplateMiddle(n) || ts.isTemplateTail(n)) && ACCENT_CLASS.test(n.text)) used.add("the accent classes");
+      ts.forEachChild(n, walk);
+    })(st);
+    for (const what of used) {
+      if (!KIT_ALLOWED[what].includes(label)) out.push(`${p}: "${label}" uses ${what}, which is private to the kit (only ${KIT_ALLOWED[what].join("; ")})`);
+    }
+  }
+  return out;
+}
 function layoutProblems(src) {
   const out = [];
   for (const [p, s] of Object.entries(src)) {
@@ -292,6 +414,15 @@ function layoutProblems(src) {
     const primaries = (stripComments(s).match(/<PrimaryLink\b/g) ?? []).length;
     if (primaries > 1) out.push(`${p}: ${primaries} primary buttons (at most one a page)`);
     if (!p.endsWith("app/site/kit.tsx") && /\bbg-teal-[67]00\b/.test(classes)) out.push(`${p}: a hand-made primary button (use <PrimaryLink>)`);
+    // The kit's accent fill is private to the kit, and so is STATUS_TEXT, whose "running" tone carries
+    // it; a page that names either is drawing its own button.
+    if (!p.endsWith("app/site/kit.tsx")) {
+      for (const name of KIT_PRIVATE) {
+        if (new RegExp(`\\b${name}\\b`).test(stripComments(s))) out.push(`${p}: uses the kit's ${name} (use <PrimaryLink>, <StatusBadge> or <AccentBar>)`);
+      }
+    } else {
+      out.push(...kitPrivateProblems(p, s));
+    }
   }
   return out;
 }
@@ -312,6 +443,67 @@ await check("L control: each layout rule is caught", () => {
     'className="bg-teal-700 px-4"': /hand-made primary button/,
   };
   for (const [src, re] of Object.entries(cases)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
+  // Class names outside className and the kit's named tables are read too (the /fleet blind spot).
+  const elsewhere = {
+    'const BUTTON = "rounded-md border bg-amber-100 px-4 py-2";': /colour bg-amber-1/,
+    'const STYLE = `mt-3 ${extra}`;': /mt-3 is off the 8 px grid/,
+    'const tones = {\n  paused:\n    "border border-dashed border-rose-500",\n};': /colour border-rose-5/,
+    "const Q = 'text-lg font-semibold';": /type size text-lg/,
+    // Arbitrary values and variants do not hide a string.
+    'className="text-lg [&>svg]:h-4"': /type size text-lg/,
+    'const X = "data-[state=open]:mt-3 w-[calc(100%+2px)]";': /mt-3 is off the 8 px grid/,
+    'const Y = "mt-4 text-[#0F0] bg-rose-500";': /colour bg-rose-5/,
+    // A class inside ${…} of a template literal is read, in a className and in any other template.
+    'className={`rounded-2xl p-6 ${on ? "bg-teal-700 text-white" : "bg-white"}`}': /hand-made primary button/,
+    'className={`p-6 ${on ? "mt-3" : ""}`}': /mt-3 is off the 8 px grid/,
+    'const T = `px-6 ${f({ a: 1 })} ${"text-lg"}`;': /type size text-lg/,
+    // An apostrophe in JSX text before a className does not swallow it.
+    "<p>Don't <b className=\"text-lg\">x</b> it's</p>": /type size text-lg/,
+    // Container queries, uppercase arbitrary values, and a className split over lines.
+    'const Z = "text-5xl font-semibold @md:p-4";': /type size text-5xl/,
+    'className="bg-[#0F766E] text-5xl px-4"': /type size text-5xl/,
+    'className="px-4\n  text-5xl"': /type size text-5xl/,
+    // The kit's accent fill used outside the kit is a hand-made button.
+    'import { ACCENT_FILL } from "../kit"; <a className={cx("px-6 py-4", ACCENT_FILL)} />': /uses the kit's ACCENT_FILL/,
+    // STATUS_TEXT.running.tone is the accent fill under another name: a page that reads it draws a button.
+    'import { STATUS_TEXT } from "../kit"; <a className={cx("inline-flex px-6 py-4", STATUS_TEXT.running.tone)} />': /uses the kit's STATUS_TEXT/,
+    'import * as kit from "../kit"; const B = kit.STATUS_TEXT["running"].tone;': /uses the kit's STATUS_TEXT/,
+  };
+  for (const [src, re] of Object.entries(elsewhere)) assert.match(layoutProblems({ "app/(site)/x/page.tsx": src }).join(" | "), re, src);
+  // The kit itself may not hand the fill out: under its own name, an alias, a getter, or any export form.
+  const KIT = "app/site/kit.tsx";
+  const FILL = 'const ACCENT_FILL = "bg-teal-700 dark:bg-teal-400";\n';
+  const kitCases = {
+    [`${FILL}export const STATUS_TEXT = {\n  running: { tone: \`\${ACCENT_FILL} text-white\` },\n};\n`]: /"export const STATUS_TEXT" uses ACCENT_FILL/,
+    [`${FILL}export const BADGE = \`\${ACCENT_FILL} px-2\`;\n`]: /"export const BADGE" uses ACCENT_FILL/,
+    'export const SOLID = "bg-teal-700 text-white";\n': /"export const SOLID" uses the accent classes/,
+    'export const NIGHT = "dark:bg-teal-400 px-2";\n': /"export const NIGHT" uses the accent classes/,
+    // Any variant before the class is still the class.
+    'export const SM = "sm:bg-teal-700";\n': /"export const SM" uses the accent classes/,
+    'export const GH = "group-hover:bg-teal-600 px-2";\n': /"export const GH" uses the accent classes/,
+    'export const AMP = "[&]:bg-teal-700 dark:[&]:bg-teal-400";\n': /"export const AMP" uses the accent classes/,
+    'export const MIN = "px-2 min-[0px]:bg-teal-700";\n': /"export const MIN" uses the accent classes/,
+    'export const HOV = "[&:hover]:bg-teal-700";\n': /"export const HOV" uses the accent classes/,
+    'export const IMP = "!bg-teal-700 px-2";\n': /"export const IMP" uses the accent classes/,
+    'export const OP = `px-2 ${"x"} md:dark:bg-teal-400/90`;\n': /"export const OP" uses the accent classes/,
+    // Markup or punctuation before the class is still the class.
+    'export const HTML = `<div class="bg-teal-700">`;\n': /"export const HTML" uses the accent classes/,
+    'export const CSV = "a,bg-teal-700";\n': /"export const CSV" uses the accent classes/,
+    'export const PAREN = "(bg-teal-600)";\n': /"export const PAREN" uses the accent classes/,
+    [`${FILL}export { ACCENT_FILL };\n`]: /"ExportDeclaration" uses ACCENT_FILL/,
+    [`${FILL}export function accent() { return ACCENT_FILL; }\n`]: /"export function accent" uses ACCENT_FILL/,
+    [`${FILL}export const F = () => {\n  void 0;\n  return ACCENT_FILL;\n};\n`]: /"export const F" uses ACCENT_FILL/,
+    [`${FILL}const ALIAS = ACCENT_FILL;\nexport { ALIAS };\n`]: /"const ALIAS" uses ACCENT_FILL/,
+    [`${FILL}export default ACCENT_FILL;\n`]: /"ExportAssignment" uses ACCENT_FILL/,
+    [`${FILL}export let L = ACCENT_FILL;\n`]: /"export let L" uses ACCENT_FILL/,
+    [`${FILL}export const N = ACCENT_FILL`]: /"export const N" uses ACCENT_FILL/,
+    [`${FILL}export const ACCENT_FILL2 = 1, B = ACCENT_FILL;\n`]: /"export const ACCENT_FILL2, B" uses ACCENT_FILL/,
+    [`${FILL}export const STATUS_TEXT = { running: { tone: ACCENT_FILL } };\nexport function Other() { return STATUS_TEXT.running.tone; }\n`]: /"export function Other" uses STATUS_TEXT/,
+  };
+  for (const [src, re] of Object.entries(kitCases)) assert.match(layoutProblems({ [KIT]: src }).join(" | "), re, src);
+  assert.deepEqual(layoutProblems({ [KIT]: SRC[KIT] }), [], "the real kit exports nothing that carries the accent fill");
+  // Prose is not read as classes, even prose that names a class or a colour.
+  assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 't("Use text-lg for nothing: the site has five sizes.") t("A red-orange glaze, 300 ml.")' }), []);
   assert.deepEqual(layoutProblems({ "app/(site)/x/page.tsx": 'className="mt-4 gap-2 px-6 text-xl font-semibold max-w-prose text-teal-800 dark:text-slate-300 sm:text-4xl"' }), []);
 });
 
