@@ -44,10 +44,12 @@
 //    new panel, a new helper or a new time in a pinned panel fails until someone labels or pins it.
 //    Controls: a new panel with a date, a second time in a pinned panel, a new app/lib helper, a use
 //    hidden in a comment, a bare toLocaleString in a new helper, a DateTimeFormat taken out of Intl,
-//    a RelativeTimeFormat, a .jsx panel, a file named like a language table. It counts how a date is
+//    a RelativeTimeFormat, a .jsx panel, files named like a language table, an optional call, bracket
+//    access, a method taken as a reference. Symlinks are read too. It counts how a date is
 //    spelled (any Date token, the Intl date formats, the date methods, the try formatters), not what
 //    a value is, so these are not seen: dates made outside those folders; a value rendered as text
-//    with no date method (`${d}`, String(d), a bare number); a library that formats dates under
+//    with no date method (`${d}`, String(d), d.toString(), a bare number); a method name built at
+//    run time; a library that formats dates under
 //    another name; a count that stays the same because one use replaced another (a parse turned
 //    into a render). The table records six files that show
 //    record times with no label today (boards, mail, shelter, questions, directory, files): known and
@@ -589,9 +591,10 @@ for (const row of UNCHECKED_TIMES) {
 // is counted per file and pinned here. A new panel, a new helper or a new time in a pinned panel
 // changes a count and fails, until someone looks at it and either labels it (a row above) or pins
 // it with the reason. The census only finds; the reasons are a person's reading, not a check.
-const DATE_USE = /\bDate\b|\bfmt(Date|When|Seconds)\s*\(|\b(DateTimeFormat|RelativeTimeFormat|DurationFormat)\b|\.(toLocaleString|toLocale(Date|Time)String|toISOString|toUTCString|toDateString|toTimeString|toJSON|get(UTC)?(FullYear|Month|Date|Day|Hours|Minutes|Seconds))\s*\(/g;
+const DATE_USE = /\bDate\b|\bfmt(Date|When|Seconds)\b|\b(DateTimeFormat|RelativeTimeFormat|DurationFormat)\b|\b(toLocaleString|toLocale(Date|Time)String|toISOString|toUTCString|toDateString|toTimeString|toJSON|get(UTC)?(FullYear|Month|Date|Day|Hours|Minutes|Seconds))\b/g;
 const dateUses = (src) => (live(src).match(DATE_USE) ?? []).length;
-// file -> [count, why]; the count is of matches, so new Date(x).toLocaleString() is two. "labelled": every record time it shows has a row above. "not a record": a
+// file -> [count, why]; the count is of matches, so new Date(x).toLocaleString() is two and an
+// import of fmtDate is one. "labelled": every record time it shows has a row above. "not a record": a
 // clock, a countdown, a parse or a form value. "OPEN": shows a record time with no label; known, not
 // fixed here (listed in the report so the wording can be decided once for all of them).
 const DATE_CENSUS = {
@@ -617,34 +620,39 @@ const DATE_CENSUS = {
   "app/lib/useIncomingMessages.ts": [2, "not a record: Date.now() or a number's toLocaleString (read 2026-11-18)"],
   "app/lib/verify_anything.mjs": [4, "not a record: manifest expiry in a refusal message"],
   "app/s/[site]/page.tsx": [2, "labelled"],
-  "app/try/BoardPanel.tsx": [19, "OPEN: post and thread times written by the poster"],
-  "app/try/DirectoryPanel.tsx": [5, "OPEN: listing time; a today count"],
-  "app/try/FilesTryPanel.tsx": [3, "OPEN: file envelope time written by the sender"],
+  "app/try/BoardPanel.tsx": [21, "OPEN: post and thread times written by the poster"],
+  "app/try/DirectoryPanel.tsx": [6, "OPEN: listing time; a today count"],
+  "app/try/FilesTryPanel.tsx": [4, "OPEN: file envelope time written by the sender"],
   "app/try/GenuineCheck.tsx": [4, "labelled"],
   "app/try/HomePanel.tsx": [6, "labelled; two are the date filter's parse"],
   "app/try/InsidePanel.tsx": [3, "not a record: when the node counted"],
-  "app/try/LivePanel.tsx": [5, "not a record: when this tab read the node; block times from the node"],
+  "app/try/LivePanel.tsx": [6, "not a record: when this tab read the node; block times from the node"],
   "app/try/LiveStrip.tsx": [2, "not a record: the strip's own clock"],
-  "app/try/MailPanel.tsx": [13, "OPEN: message times written by the sender; the rest are form values"],
+  "app/try/MailPanel.tsx": [14, "OPEN: message times written by the sender; the rest are form values"],
   "app/try/ProofCode.tsx": [2, "labelled"],
   "app/try/QrPanel.tsx": [1, "not a record: Date.now() or a number's toLocaleString (read 2026-11-18)"],
-  "app/try/QuestionsPanel.tsx": [10, "OPEN: question times written by the poster; manifest expiry"],
+  "app/try/QuestionsPanel.tsx": [13, "OPEN: question times written by the poster; manifest expiry"],
   "app/try/SealPanel.tsx": [4, "labelled"],
-  "app/try/SearchPanel.tsx": [1, "labelled"],
-  "app/try/ShelterPanel.tsx": [7, "OPEN: post, case and log times"],
+  "app/try/SearchPanel.tsx": [2, "labelled"],
+  "app/try/ShelterPanel.tsx": [9, "OPEN: post, case and log times"],
   "app/try/SignPanel.tsx": [1, "not a record: Date.now() or a number's toLocaleString (read 2026-11-18)"],
   "app/try/VerifyPanel.tsx": [2, "not a record: Date.now() or a number's toLocaleString (read 2026-11-18)"],
   "app/try/page.tsx": [3, "not a record: Date.now() or a number's toLocaleString (read 2026-11-18)"],
   "app/try/ui.tsx": [10, "the formatters themselves (fmtWhen, fmtDate)"],
   "app/try/wallet.tsx": [4, "not a record: Date.now() or a number's toLocaleString (read 2026-11-18)"],
 };
+// The language tables hold only translated strings; they are skipped by exact path, not by name.
+const LANGUAGE_TABLES = ["app/try/i18n_ja.ts", "app/try/i18n_zh_hk.ts"];
+// Which files the census reads; the files the controls add go through the same test.
+const countedFile = (f) => /\.([cm]?[jt]sx?)$/.test(f) && !LANGUAGE_TABLES.includes(f);
 const censusFiles = (dir) =>
   readdirSync(new URL(`../${dir}`, import.meta.url), { recursive: true, withFileTypes: true })
-    .filter((e) => e.isFile() && /\.([cm]?[jt]sx?)$/.test(e.name) && !/^i18n(_[a-z_]+)?\.ts$/.test(e.name))
-    .map((e) => `${dir}/${relative(fileURLToPath(new URL(`../${dir}`, import.meta.url)), join(e.parentPath ?? e.path, e.name))}`);
+    .filter((e) => e.isFile() || e.isSymbolicLink())
+    .map((e) => `${dir}/${relative(fileURLToPath(new URL(`../${dir}`, import.meta.url)), join(e.parentPath ?? e.path, e.name))}`)
+    .filter(countedFile);
 const census = (read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8"), added = {}) => {
   const found = {};
-  const files = { ...Object.fromEntries(["app/try", "app/s", "app/lib"].flatMap(censusFiles).map((f) => [f, null])), ...added };
+  const files = { ...Object.fromEntries(["app/try", "app/s", "app/lib"].flatMap(censusFiles).map((f) => [f, null])), ...Object.fromEntries(Object.entries(added).filter(([f]) => countedFile(f))) };
   for (const [f, src] of Object.entries(files)) {
     const n = dateUses(src ?? read(f));
     if (n) found[f] = n;
@@ -657,18 +665,24 @@ const census = (read = (f) => readFileSync(new URL(`../${f}`, import.meta.url), 
 await check("every date made or formatted under app/try, app/s and app/lib is pinned in the census", () => census());
 {
   const real = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8");
-  await refuses("a new panel that shows a date is caught by the census", () => census(real, { "app/try/AboutPanel.tsx": "export const A = (x) => <p>{new Date(x.atMs).toLocaleString()}</p>;\n" }), /AboutPanel.tsx: \d+ date use/);
-  await refuses("a second time in a pinned panel is caught by the census", () => census((f) => real(f) + (f === "app/try/HomePanel.tsx" ? "\nconst y = <span>{fmtWhen(h.bumpAtMs, now)}</span>;" : "")), /HomePanel.tsx: \d+ date use/);
-  await refuses("a helper in app/lib that formats a date is caught by the census", () => census((f) => real(f) + (f === "app/lib/public_search.ts" ? "\nexport const when = (ms) => new Intl.DateTimeFormat().format(ms);" : "")), /public_search.ts: \d+ date use/);
+  const ABOUT = "export const A = (x) => <p>{new Date(x.atMs).toLocaleString()}</p>;\n";
+  const HELPER = "\nexport const when = (ms) => new Intl.DateTimeFormat().format(ms);";
+  await refuses("a new panel that shows a date is caught by the census", () => census(real, { "app/try/AboutPanel.tsx": ABOUT }), new RegExp(`AboutPanel.tsx: ${dateUses(ABOUT)} date use`));
+  await refuses("a second time in a pinned panel is caught by the census", () => census((f) => real(f) + (f === "app/try/HomePanel.tsx" ? "\nconst y = <span>{fmtWhen(h.bumpAtMs, now)}</span>;" : "")), new RegExp(`HomePanel.tsx: ${DATE_CENSUS["app/try/HomePanel.tsx"][0] + 1} date use`));
+  await refuses("a helper in app/lib that formats a date is caught by the census", () => census((f) => real(f) + (f === "app/lib/public_search.ts" ? HELPER : "")), new RegExp(`public_search.ts: ${dateUses(HELPER)} date use`));
   for (const [name, file, src] of [
     ["a bare toLocaleString on a Date in a new helper file", "app/try/when.ts", "export const when = (d) => d.toLocaleString();\n"],
     ["a DateTimeFormat taken out of Intl first", "app/try/when.tsx", "const { DateTimeFormat: F } = Intl;\nexport const W = (p) => <p>{F(\"en\").format(p.ms)}</p>;\n"],
     ["a RelativeTimeFormat (\"3 days ago\")", "app/lib/ago.ts", "export const ago = (n) => new Intl.RelativeTimeFormat().format(n, \"day\");\n"],
     ["a .jsx panel", "app/try/Old.jsx", "export const O = (p) => <p>{p.d.toLocaleString()}</p>;\n"],
     ["a file named like a language table", "app/try/i18n_when.tsx", "export const W = (p) => <p>{p.d.toLocaleString()}</p>;\n"],
+    ["a .ts helper named like a language table", "app/try/i18n_when.ts", "export const when = (d) => d.toLocaleString();\n"],
+    ["an optional call", "app/try/when.ts", "export const when = (d) => d.toLocaleString?.();\n"],
+    ["a method reached by bracket access", "app/try/when.ts", "export const when = (d) => d[\"toLocaleString\"]();\n"],
+    ["a method taken as a reference", "app/lib/when.ts", "const f = Object.prototype.toLocaleString;\nexport const when = (d) => f.call(d);\n"],
   ])
-    await refuses(`${name} is caught by the census`, () => census(real, { [file]: src }), new RegExp(`${file.split("/").pop().replace(".", "\\.")}: \\d+ date use`));
-  await refuses("a date use only moved into a comment is caught by the census", () => census((f) => (f === "app/try/SealPanel.tsx" ? real(f).replace("new Date(hit.publishedAtMs)", "/* new Date */ (hit.publishedAtMs)") : real(f))), /SealPanel.tsx: \d+ date use/);
+    await refuses(`${name} is caught by the census`, () => census(real, { [file]: src }), new RegExp(`${file.split("/").pop().replace(".", "\\.")}: ${dateUses(src)} date use`));
+  await refuses("a date use only moved into a comment is caught by the census", () => census((f) => (f === "app/try/SealPanel.tsx" ? real(f).replace("new Date(hit.publishedAtMs)", "/* new Date */ (hit.publishedAtMs)") : real(f))), new RegExp(`SealPanel.tsx: ${DATE_CENSUS["app/try/SealPanel.tsx"][0] - 1} date use`));
 }
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");
