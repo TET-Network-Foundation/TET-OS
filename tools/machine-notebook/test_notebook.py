@@ -25,6 +25,23 @@ One-time permits (a permit the device key signs; a record may cite its id):
   (m) the permit's bytes signed as a log record   -> INVALID, the permit's payload type
   (n) `record --permit` on a used permit          -> refused (exit 2), nothing written, log still VALID
 
+The pin (verify --pin: both key ids of the expected signer, from a file kept outside the folder). The
+check pins both keys, so each half is tested on its own (CLAUDE.md C4): the envelope gets a VALID
+signature over the same bytes from another device for ONE half, which tet-cli agent verify accepts, so
+only the pin can refuse it.
+  (o) a record's ML-DSA-44 half from another device -> INVALID, that one line
+  (p) a record's Ed25519 half from another device   -> INVALID, that one line
+  (q) a permit's ML-DSA-44 half from another device -> INVALID, that one line
+  (r) a permit's Ed25519 half from another device   -> INVALID, that one line
+  (s) another device's whole, intact log            -> INVALID against this device's pin, VALID against
+      its own: the pin comes from --pin, never from the folder
+  (t) --pin pointing inside the folder              -> refused (exit 2): by path, through .. or a
+      symlink, as a hard link, and by another spelling of the path where the file system allows it;
+      and a symlink in the folder to a correct pin outside it is refused too, so the folder cannot
+      choose which outside file is read as the pin
+  verify --node: a hash record with one half from another device does not count as this device's,
+  and neither does another device's hash record saved in the folder.
+
 The Shows / Does not show lists verify prints are pinned word for word, in notebook.py and in the
 README (the try page and /agents show the same words); a changed word, a dropped or swapped item and
 swapped lists are each caught.
@@ -98,6 +115,10 @@ class Notebook(unittest.TestCase):
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         assert rc == 0, out
         cls.keyid = out.strip()
+        # The pin, kept OUTSIDE the folder: verify must not take it from the folder it checks.
+        cls.pin = os.path.join(cls.tmp, "base.pin")
+        shutil.copy(os.path.join(cls.base, "device.pin"), cls.pin)
+        cls.other = None
         for v in (20.5, 21.5, 22.5):
             rc, out = nb("record", "--dir", cls.base, "--source", "stdin-json", stdin=json.dumps({"value": v, "unit": "celsius"}))
             assert rc == 0, out
@@ -116,13 +137,16 @@ class Notebook(unittest.TestCase):
         return os.path.join(d, "records", f"{n}.json")
 
     def assertInvalidBecause(self, d, reason):
-        rc, out = nb("verify", "--dir", d)
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
         self.assertEqual(rc, 1, out)
         self.assertEqual(out.splitlines()[0], "INVALID", out)
         self.assertIn(reason, out, f"INVALID, but not for the reason this case is named for:\n{out}")
 
     def test_init_prints_only_the_key_id_and_keeps_the_phrase_private(self):
         self.assertRegex(self.keyid, r"^tet-ed25519:[0-9a-f]{64}$")
+        with open(self.pin) as f:
+            self.assertRegex(f.read(), r"^tet-ed25519:[0-9a-f]{64}\ntet-mldsa44:[0-9a-f]{64}\n$")
+        self.assertEqual(notebook.read_pin(self.pin)[0], self.keyid)
         key = os.path.join(self.base, "device.key")
         self.assertEqual(os.stat(key).st_mode & 0o777, 0o600)
         with open(key) as f:
@@ -157,7 +181,7 @@ class Notebook(unittest.TestCase):
         self.assertRegex(rec["clock_utc"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
 
     def test_a_untouched_log_is_valid(self):
-        rc, out = nb("verify", "--dir", self.copy())
+        rc, out = nb("verify", "--pin", self.pin, "--dir", self.copy())
         self.assertEqual(rc, 0, out)
         self.assertEqual(out.splitlines()[0], "VALID")
         self.assertIn(f"3 records, all signed by {self.keyid}", out)
@@ -180,6 +204,7 @@ class Notebook(unittest.TestCase):
         "who runs the machine",
         "that the key was not copied",
         "that a copied key did not use the same permission in another log",
+        "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
     ]
 
     @staticmethod
@@ -212,7 +237,7 @@ class Notebook(unittest.TestCase):
         return out
 
     def test_verify_prints_exactly_the_two_lists_and_the_readme_quotes_them(self):
-        rc, out = nb("verify", "--dir", self.copy())
+        rc, out = nb("verify", "--pin", self.pin, "--dir", self.copy())
         self.assertEqual(rc, 0, out)
         with open(os.path.join(HERE, "README.md")) as f:
             readme = f.read()
@@ -306,7 +331,7 @@ class Notebook(unittest.TestCase):
 
     def assertOnlyProblem(self, d, reason, prefix=False):
         """verify says INVALID and lists exactly one problem: the one this case is named for."""
-        rc, out = nb("verify", "--dir", d)
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
         self.assertEqual(rc, 1, out)
         lines = out.splitlines()
         self.assertEqual(lines[0], "INVALID", out)
@@ -331,7 +356,7 @@ class Notebook(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         with open(self.rec(d, 4), "rb") as f:
             self.assertEqual(json.loads(f.read())["permit"], pid)
-        rc, out = nb("verify", "--dir", d)
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
         self.assertEqual(rc, 0, out)
         self.assertEqual(out.splitlines()[0], "VALID")
         self.assertIn(f"permit {pid} (open-valve): used once, by record 4; open until seq 4", out)
@@ -419,8 +444,264 @@ class Notebook(unittest.TestCase):
         self.assertIn(f"not recorded: permit: {pid} was already used by record 4", err)
         self.assertFalse(os.path.exists(self.rec(d, 5)))
         self.assertEqual(len(notebook.chain_lines(d)), 4)
-        rc, out = nb("verify", "--dir", d)
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
         self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+
+    # ── the pin: both keys of the expected signer ─────────────────────────────────────────────
+
+    def other_device(self):
+        """A second device on the same chain (made once): the donor of one valid half."""
+        if type(self).other is None:
+            o = os.path.join(self.tmp, "other-halves")
+            old = {k: os.environ.get(k) for k in CHAIN}
+            os.environ.update(CHAIN)
+            try:
+                rc, out = nb("init", "--dir", o)
+            finally:
+                for k, v in old.items():
+                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+            self.assertEqual(rc, 0, out)
+            type(self).other = o
+        return type(self).other
+
+    @staticmethod
+    def splice(env, donor, prefix, tet_field):
+        """`env` with ONE half (its signature, key id and public key) taken from `donor`."""
+        out = json.loads(json.dumps(env))
+        out["signatures"] = [s for s in out["signatures"] if not s["keyid"].startswith(prefix)] + [
+            next(s for s in donor["signatures"] if s["keyid"].startswith(prefix))
+        ]
+        out["tet"][tet_field] = donor["tet"][tet_field]
+        return out
+
+    HALVES = {"ml": (notebook.ML, "agent_mldsa44_pubkey_b64"), "ed": (notebook.ED, "agent_ed25519_pubkey_hex")}
+
+    def splice_file(self, d, payload, payload_type, half):
+        """Replace `payload`'s envelope half `half` with the other device's valid one over the same
+        bytes; returns the other device's key id for that half. tet-cli must still accept the
+        envelope, or the case would be measuring the signature check instead of the pin."""
+        o = self.other_device()
+        donor_path = os.path.join(self.tmp, "donor.sig.json")
+        notebook.sign(CLI, o, payload, payload_type, out=donor_path)
+        with open(donor_path) as f:
+            donor = json.load(f)
+        with open(payload + ".sig.json") as f:
+            env = json.load(f)
+        prefix, field = self.HALVES[half]
+        spliced = self.splice(env, donor, prefix, field)
+        self.assertNotEqual(spliced, env)
+        with open(payload + ".sig.json", "w") as f:
+            json.dump(spliced, f)
+        rc, out, _ = notebook.run_cli(CLI, ["agent", "verify", "--sig", payload + ".sig.json", "--payload", payload], notebook.chain_env(d))
+        self.assertEqual(rc, 0, f"tet-cli refused the spliced envelope, so the pin is never reached:\n{out}")
+        return notebook.half_keyids(donor)[0 if half == "ed" else 1]
+
+    def test_o_a_record_with_another_devices_mldsa_half_is_invalid(self):
+        d = self.copy()
+        other_ml = self.splice_file(d, self.rec(d, 2), notebook.PAYLOAD_TYPE, "ml")
+        ml = notebook.read_pin(self.pin)[1]
+        self.assertOnlyProblem(d, f"record 2: key: its ML-DSA-44 half is signed by {other_ml}, not this device's {ml}")
+
+    def test_p_a_record_with_another_devices_ed25519_half_is_invalid(self):
+        d = self.copy()
+        other_ed = self.splice_file(d, self.rec(d, 2), notebook.PAYLOAD_TYPE, "ed")
+        # Two lines, both named: the pin's, and the whole-log "different keys" line (it compares Ed25519
+        # key ids). Asserting the exact list keeps the pin's line from being optional.
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (1, "INVALID"), out)
+        lines = out.splitlines()
+        self.assertEqual(
+            [ln.strip() for ln in lines[1:lines.index("Shows:")]],
+            [f"record 2: key: signed by {other_ed}, not this device's {self.keyid}", "log: key: 2 different keys signed this log"],
+            out,
+        )
+
+    def test_q_a_permit_with_another_devices_mldsa_half_is_invalid(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        other_ml = self.splice_file(d, self.permit_path(d, pid), notebook.PERMIT_PAYLOAD_TYPE, "ml")
+        self.assertEqual(self.cite(d, pid), 4)
+        ml = notebook.read_pin(self.pin)[1]
+        self.assertOnlyProblem(d, f"record 4: permit: {pid}: its ML-DSA-44 half is signed by {other_ml}, not this device's {ml}")
+        # record refuses it before writing, with the same reason (its pin is the device's own key).
+        rc, _, err = nb_err("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=self.READING)
+        self.assertEqual(rc, 2, err)
+        self.assertIn(f"its ML-DSA-44 half is signed by {other_ml}", err)
+
+    def test_r_a_permit_with_another_devices_ed25519_half_is_invalid(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        other_ed = self.splice_file(d, self.permit_path(d, pid), notebook.PERMIT_PAYLOAD_TYPE, "ed")
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is signed by {other_ed}, not this device's {self.keyid}")
+
+    def test_s_the_pin_comes_from_outside_the_folder(self):
+        # Another device's intact log, with its own device.keyid and device.pin inside: INVALID against
+        # this pin, VALID against its own.
+        o = os.path.join(self.tmp, "whole-other-log")
+        shutil.copytree(self.other_device(), o)
+        for v in (1, 2):
+            rc, out = nb("record", "--dir", o, "--source", "stdin-json", stdin=json.dumps({"value": v, "unit": "count"}))
+            self.assertEqual(rc, 0, out)
+        other_ed = notebook.read_pin(os.path.join(o, "device.pin"))[0]
+        rc, out = nb("verify", "--pin", self.pin, "--dir", o)
+        self.assertEqual((rc, out.splitlines()[0]), (1, "INVALID"), out)
+        self.assertIn(f"record 1: key: signed by {other_ed}, not this device's {self.keyid}", out)
+        # Control: the same folder against its own pin, copied out, is VALID.
+        own = os.path.join(self.tmp, "whole-other.pin")
+        shutil.copy(os.path.join(o, "device.pin"), own)
+        rc, out = nb("verify", "--pin", own, "--dir", o)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+
+    def test_t_a_pin_inside_the_folder_is_refused(self):
+        d = self.copy()
+        for inside in (os.path.join(d, "device.pin"), os.path.join(d, "records", "..", "device.pin")):
+            rc, out, err = nb_err("verify", "--pin", inside, "--dir", d)
+            self.assertEqual(rc, 2, out)
+            self.assertIn("is inside the folder being checked", err)
+            self.assertNotIn("VALID", out)
+        link = os.path.join(self.tmp, "pin-link")
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(os.path.join(d, "device.pin"), link)
+        rc, _, err = nb_err("verify", "--pin", link, "--dir", d)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("is inside the folder being checked", err)
+        # The same file under another name: a hard link outside the folder.
+        hard = os.path.join(self.tmp, "pin-hardlink")
+        if os.path.lexists(hard):
+            os.remove(hard)
+        os.link(os.path.join(d, "device.pin"), hard)
+        rc, _, err = nb_err("verify", "--pin", hard, "--dir", d)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("is inside the folder being checked", err)
+        # Another spelling of the folder's path, where the file system ignores letter case (macOS by
+        # default; skipped where it does not, since that path is then another, missing file).
+        head, tail = os.path.split(d)
+        other_case = os.path.join(head, tail.swapcase())
+        if tail.swapcase() != tail and os.path.exists(other_case):
+            rc, _, err = nb_err("verify", "--pin", os.path.join(other_case, "device.pin"), "--dir", d)
+            self.assertEqual(rc, 2, err)
+            self.assertIn("is inside the folder being checked", err)
+        # Control: a copy outside is accepted.
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+
+    def test_t_a_symlink_in_the_folder_cannot_choose_an_outside_pin(self):
+        # The folder holds a symlink to a file outside it; the file is a correct pin, so only the
+        # inside rule can refuse it. Each path below is caught by a different part of that rule.
+        d = self.copy()
+        outside = tempfile.mkdtemp(dir=self.tmp)
+        shutil.copy(self.pin, os.path.join(outside, "chosen.pin"))
+        os.remove(os.path.join(d, "device.pin"))
+        os.symlink(os.path.join(outside, "chosen.pin"), os.path.join(d, "device.pin"))
+        # A symlinked subfolder: d/out -> outside/sub, which holds a correct pin too. A path into it,
+        # or through it and back up with .., resolves to a file outside the folder.
+        os.mkdir(os.path.join(outside, "sub"))
+        shutil.copy(self.pin, os.path.join(outside, "sub", "chosen.pin"))
+        os.symlink(os.path.join(outside, "sub"), os.path.join(d, "out"))
+        alias = os.path.join(self.tmp, f"alias-{os.path.basename(d)}")
+        os.symlink(d, alias)
+        os.symlink(os.path.join(outside, "sub"), os.path.join(d, "records", "out"))
+        rec_alias = os.path.join(self.tmp, f"alias-records-{os.path.basename(d)}")
+        os.symlink(os.path.join(d, "records"), rec_alias)
+        # A deeper symlinked subfolder, d/deep -> outside/sub/a: two ..s after it lead to outside.
+        os.mkdir(os.path.join(outside, "sub", "a"))
+        os.symlink(os.path.join(outside, "sub", "a"), os.path.join(d, "deep"))
+        # An outside alias of the symlinked subfolder in the folder.
+        out_alias = os.path.join(self.tmp, f"alias-out-{os.path.basename(d)}")
+        os.symlink(os.path.join(d, "out"), out_alias)
+        # (case name, --pin, --dir). All but the last are caught by the folders on the way to --pin
+        # being the folder or a folder in it, however either path is spelled; the last only by the --pin
+        # file's own identity (lstat): an outside hard link to the symlink in the folder.
+        cases = [
+            ("the symlink, by path", os.path.join(d, "device.pin"), d),
+            ("the symlink, via an alias of the folder", os.path.join(alias, "device.pin"), d),
+            ("through a symlinked subfolder and ..", os.path.join(d, "out", "..", "chosen.pin"), d),
+            ("into a symlinked subfolder, via an alias of the folder",
+             os.path.join(alias, "out", "chosen.pin"), d),
+            ("into a symlinked subfolder, --dir given as an alias",
+             os.path.join(d, "out", "chosen.pin"), alias),
+            ("into a symlinked subfolder, via an alias of a folder in the folder",
+             os.path.join(rec_alias, "out", "chosen.pin"), d),
+            ("through a deeper symlinked subfolder and .. twice",
+             os.path.join(d, "deep", "..", "..", "chosen.pin"), d),
+            ("into a symlinked subfolder, via an outside alias of it",
+             os.path.join(out_alias, "chosen.pin"), d),
+        ]
+        head, tail = os.path.split(d)
+        other_case = os.path.join(head, tail.swapcase())
+        if tail.swapcase() != tail and os.path.exists(other_case):
+            # Only where the file system ignores letter case (macOS by default).
+            cases.append(("into a symlinked subfolder, the folder in another letter case",
+                          os.path.join(other_case, "out", "chosen.pin"), d))
+        hard = os.path.join(self.tmp, "hardlink-to-the-symlink")
+        if os.path.lexists(hard):
+            os.remove(hard)
+        os.link(os.path.join(d, "device.pin"), hard, follow_symlinks=False)
+        if os.path.islink(hard):
+            cases.append(("an outside hard link to the symlink in the folder", hard, d))
+        for name, p, dd in cases:
+            with self.subTest(name):
+                rc, out, err = nb_err("verify", "--pin", p, "--dir", dd)
+                self.assertEqual(rc, 2, out + err)
+                self.assertIn("is inside the folder being checked", err)
+                self.assertNotIn("VALID", out)
+        # Control: a folder given as an alias still verifies against a pin kept outside it.
+        rc, out = nb("verify", "--pin", self.pin, "--dir", alias)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+        # Control: the very file the symlink points at, named directly, is accepted.
+        rc, out = nb("verify", "--pin", os.path.join(outside, "chosen.pin"), "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+
+    def test_verify_node_does_not_take_a_hash_record_in_the_folder_on_trust(self):
+        # Record 1's hash record by ANOTHER device, saved in this folder as records/1.hash.sig.json
+        # and served by the node, anchored: it is not this device's, so record 1 is not on the node.
+        import argparse
+        d = self.copy()
+        o = os.path.join(self.tmp, "stamp-other")
+        shutil.copytree(self.other_device(), o)
+        shutil.copy(self.rec(d, 1), self.rec(o, 1))
+        foreign, _ = notebook.build_publish_body(argparse.Namespace(dir=o, seq=1, tet_cli=CLI))
+        with open(os.path.join(d, "records", "1.hash.sig.json"), "wb") as f:
+            f.write(foreign)
+        with open(self.rec(d, 1), "rb") as f:
+            sha1 = hashlib.sha256(f.read()).hexdigest()
+        tx = "c" * 64
+
+        class Stub(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                if self.path == f"/sigs/search?file={sha1}":
+                    body = {"records": [{"record_b64": base64.b64encode(foreign).decode(), "anchor": {"tx_hash": tx, "block_height": 7}}]}
+                elif self.path.startswith("/sigs/search?file="):
+                    body = {"records": []}
+                elif self.path == f"/explorer/tx/{tx}":
+                    body = {"found": True, "canonical": True, "block_height": 7, "tx": {"tx": {"kind": "file_fee", "file_id": notebook.stamp_file_id(foreign)}}}
+                else:
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(json.dumps(body).encode())
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Stub)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            rc, out = nb("verify", "--pin", self.pin, "--dir", d, "--node", f"http://127.0.0.1:{srv.server_port}")
+            self.assertEqual(rc, 0, out)
+            self.assertIn("stamp: record 1: not on this node", out)
+            # Control: verified against the other device's own pin, the same record does count.
+            own = os.path.join(self.tmp, "stamp-other.pin")
+            shutil.copy(os.path.join(o, "device.pin"), own)
+            _, out = nb("verify", "--pin", own, "--dir", d, "--node", f"http://127.0.0.1:{srv.server_port}")
+            self.assertIn("stamp: record 1: existed before block 7 (this node's chain)", out)
+        finally:
+            srv.shutdown()
+            srv.server_close()
 
     def test_publish_builds_the_registry_body(self):
         d = self.copy()
@@ -484,6 +765,15 @@ class Notebook(unittest.TestCase):
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         shutil.copy(self.rec(d, 1), self.rec(other, 1))
         hash1_other, _ = notebook.build_publish_body(argparse.Namespace(dir=other, seq=1, tet_cli=CLI))
+        # Record 1's hash record by THIS device, with its ML-DSA-44 half from the other key over the same
+        # bytes: tet-cli accepts it, and only the pin's second half can say it is not this device's.
+        f = self.copy()
+        hash1_mine, _ = notebook.build_publish_body(argparse.Namespace(dir=f, seq=1, tet_cli=CLI))
+        hash1_spliced = json.dumps(self.splice(json.loads(hash1_mine), json.loads(hash1_other), *self.HALVES["ml"])).encode()
+        p = os.path.join(self.tmp, "spliced-hash.sig.json")
+        with open(p, "wb") as fh:
+            fh.write(hash1_spliced)
+        self.assertEqual(notebook.run_cli(CLI, ["agent", "verify", "--sig", p], notebook.chain_env(d))[0], 0)
         def sha(n):
             with open(self.rec(d, n), "rb") as f:
                 return hashlib.sha256(f.read()).hexdigest()
@@ -494,7 +784,7 @@ class Notebook(unittest.TestCase):
             def do_GET(self):
                 if self.path.startswith("/sigs/search?file="):
                     f = self.path.split("=", 1)[1]
-                    recs = {sha(1): [hash1_other], sha(2): [hash2], sha(3): [hash3]}.get(f, [])
+                    recs = {sha(1): [hash1_other, hash1_spliced], sha(2): [hash2], sha(3): [hash3]}.get(f, [])
                     body = {"records": [{"record_b64": base64.b64encode(r).decode(), **({"anchor": state["anchor2"]} if r is hash2 and state["anchor2"] else {})} for r in recs]}
                 elif self.path == f"/explorer/tx/{tx_good}":
                     body = {"found": True, "canonical": True, "block_height": 7, "tx": {"tx": {"kind": "file_fee", "file_id": notebook.stamp_file_id(hash2)}}}
@@ -515,20 +805,104 @@ class Notebook(unittest.TestCase):
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         url = f"http://127.0.0.1:{srv.server_port}"
         try:
-            rc, out = nb("verify", "--dir", d, "--node", url)
+            rc, out = nb("verify", "--pin", self.pin, "--dir", d, "--node", url)
             self.assertEqual(rc, 0, out)
-            self.assertIn("stamp: record 1: not on this node", out)  # only another key's record is there
+            self.assertIn("stamp: record 1: not on this node", out)  # another key's record, and one with another key's half
             self.assertIn("stamp: record 2: published, not anchored", out)
             self.assertIn("stamp: record 3: published, not anchored", out)  # found, re-verified here
             state["anchor2"] = {"tx_hash": tx_good, "block_height": 7}
-            _, out = nb("verify", "--dir", d, "--node", url)
+            _, out = nb("verify", "--pin", self.pin, "--dir", d, "--node", url)
             self.assertIn("stamp: record 2: existed before block 7 (this node's chain)", out)
             state["anchor2"] = {"tx_hash": tx_wrong, "block_height": 7}
-            _, out = nb("verify", "--dir", d, "--node", url)
+            _, out = nb("verify", "--pin", self.pin, "--dir", d, "--node", url)
             self.assertIn("stamp: record 2: anchor stamps a different file", out)
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+def nb_any(*argv):
+    """Like nb_err, but an exit by argparse (SystemExit) or by any exception is turned into a value,
+    so a test fails only at its own assertion. Returns (rc, stderr)."""
+    try:
+        rc, _, err = nb_err(*argv)
+    except SystemExit as e:
+        return e.code, "argparse exit"
+    except Exception as e:  # noqa: BLE001 - recorded, then asserted on
+        return f"raised {e!r}", ""
+    return rc, err
+
+
+class RunAndStdinChecks(unittest.TestCase):
+    """run's arguments and stdin-json's numbers. None of these needs tet-cli."""
+
+    # run --every has a lower bound: 0, a negative value or nan is refused before any record.
+    def test_run_refuses_a_non_positive_every(self):
+        import datetime as dt
+        now = dt.datetime.now()
+        if now.hour == 23 and now.minute >= 57:
+            self.skipTest("too close to midnight to pick an --until later today")
+        until = (now + dt.timedelta(minutes=2)).strftime("%H:%M")
+
+        calls = []
+
+        def fake_record_once(a):
+            calls.append(a.every)
+            raise RuntimeError("loop entered")
+
+        real = notebook.record_once
+        notebook.record_once = fake_record_once
+        try:
+            for every in ("0", "-1", "nan"):
+                rc, err = nb_any("run", "--dir", "/nonexistent", "--source", "loadavg", "--every", every, "--until", until)
+                # Refused (exit 2), and refused because of --every: a check on the folder that fired
+                # first would also exit 2 and must not count.
+                self.assertEqual(rc, 2, f"--every {every}: {err}")
+                self.assertIn("--every", err, f"--every {every}: refused for another reason: {err}")
+            self.assertEqual(calls, [])
+            # Control: a positive --every enters the loop, so the refusals above are --every's.
+            rc, err = nb_any("run", "--dir", "/nonexistent", "--source", "loadavg", "--every", "1", "--until", until)
+            self.assertEqual(calls, [1.0], err)
+        finally:
+            notebook.record_once = real
+
+    # run --until is HH:MM, 00:00 to 23:59; anything else is refused with the tool's own error, exit 2.
+    def test_run_refuses_a_bad_until_with_exit_2(self):
+        for until in ("25:00", "7", "12:60", "ab:cd"):
+            rc, err = nb_any("run", "--dir", "/nonexistent", "--source", "loadavg", "--every", "60", "--until", until)
+            self.assertEqual(rc, 2, f"--until {until}: {err}")
+            self.assertIn("--until", err, f"--until {until}: refused for another reason: {err}")
+
+    # stdin-json refuses NaN, Infinity and numbers that overflow to infinity: a record must be JSON
+    # (RFC 8259), which has none of them.
+    def test_stdin_json_refuses_nan_and_infinity(self):
+        # 1e400 parses to inf without any NaN/Infinity token, so a fix that only rejects the tokens
+        # (json parse_constant) is not enough.
+        for raw in ('{"value": NaN, "unit": "x"}', '{"value": Infinity, "unit": "x"}', '{"value": 1e400, "unit": "x"}', '{"value": -1e400, "unit": "x"}'):
+            old = sys.stdin
+            sys.stdin = io.StringIO(raw)
+            try:
+                with self.assertRaises(notebook.Fail, msg=raw):
+                    notebook.read_source("stdin-json")
+            finally:
+                sys.stdin = old
+        # The tokens are refused at parse, before the finite check: each check has its own message.
+        for raw in ('{"value": NaN, "unit": "x"}', '{"value": -Infinity, "unit": "x"}'):
+            old = sys.stdin
+            sys.stdin = io.StringIO(raw)
+            try:
+                with self.assertRaises(notebook.Fail, msg=raw) as cm:
+                    notebook.read_source("stdin-json")
+                self.assertIn("wants one JSON object", str(cm.exception))
+            finally:
+                sys.stdin = old
+        # Control: a finite number is still accepted.
+        old = sys.stdin
+        sys.stdin = io.StringIO('{"value": 1e300, "unit": "x"}')
+        try:
+            self.assertEqual(notebook.read_source("stdin-json")["value"], 1e300)
+        finally:
+            sys.stdin = old
 
 
 if __name__ == "__main__":

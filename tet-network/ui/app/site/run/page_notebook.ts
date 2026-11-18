@@ -1,8 +1,10 @@
 /**
- * A machine notebook held in the tab: the same files `tools/machine-notebook/notebook.py` writes
- * (chain.json, device.keyid, records/<seq>.json and its .sig.json, chain.txt, permits/<id>.json and
- * its .sig.json), byte for byte in the same canonical JSON, signed by a test key from page_key.ts.
- * There is no device.key: the key lives in memory and is never written down.
+ * A machine notebook held in the tab. The page writes chain.json, device.keyid, records/<seq>.json
+ * and its .sig.json, chain.txt, and permits/<id>.json and its .sig.json: the folder files that
+ * `tools/machine-notebook/notebook.py` writes, byte for byte in the same canonical JSON, signed by a
+ * test key from page_key.ts. It writes no device.key (the key lives in memory and is never written
+ * down) and no device.pin. `notebook.py verify` needs the signer's pin, both key ids, from a file
+ * kept outside the folder (`--pin`); a folder alone does not say which key it should have been.
  *
  * Checking is always the page's real checker, lib/machine_log.mjs `checkMachineLog` (the port of
  * notebook.py verify), passed in as `c.checkMachineLog` so a guard can swap it. A permit is claimed

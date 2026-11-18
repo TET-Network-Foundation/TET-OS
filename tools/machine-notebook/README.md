@@ -25,6 +25,13 @@ Does not show:
 - who runs the machine
 - that the key was not copied
 - that a copied key did not use the same permission in another log
+- that the signature format is final: it is in outside review, and logs from this test may need re-signing
+
+Known gaps in the check itself, not fixed yet:
+- the check that `--pin` lies outside the folder reads the whole folder, with no size limit, and
+  does not report how much it read
+- that check is not complete in every case
+- `publish` does not check again everything it sends
 
 ## The device key
 
@@ -34,23 +41,30 @@ the key id is printed. tet-cli receives the words through the `TET_MNEMONIC` env
 never as an argument (arguments are visible to every process through `ps`). Anyone who copies
 `device.key` can sign as the device, which is why "the key was not copied" is on the list above.
 
+Every TET signature has two halves, Ed25519 and ML-DSA-44, each under its own public key. `init` also
+writes `<dir>/device.pin`: the device's two key ids, one per line (`tet-ed25519:<hex>`,
+`tet-mldsa44:<hex>`). **Copy it somewhere outside the folder when you run `init`.** `verify` needs that
+copy (`--pin`) and refuses a pin file inside the folder it checks, by path or as the same file (a
+hard link, or another spelling of the path): the check pins both keys of the expected signer.
+
 ## Run it on the Mac
 
 ```sh
 cargo build -p tet-cli --release        # the only build step
 export TET_CHAIN_ID=… TET_GENESIS_HASH=…  # the chain to sign for: a node's GET /chain shows both
 python3 tools/machine-notebook/notebook.py init   --dir ~/notebook          # prints the key id
+cp ~/notebook/device.pin ~/notebook.pin                                     # the pin, kept outside the folder
 python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg
 echo '{"value": 21.5, "unit": "celsius"}' | python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source stdin-json
 python3 tools/machine-notebook/notebook.py run    --dir ~/notebook --source loadavg --every 60   # stops at 22:00
-python3 tools/machine-notebook/notebook.py verify --dir ~/notebook
+python3 tools/machine-notebook/notebook.py verify --dir ~/notebook --pin ~/notebook.pin
 python3 tools/machine-notebook/notebook.py permit --dir ~/notebook --action open-valve --expires-seq 20   # prints the permit id
 python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit <permit id>
 ```
 
 `init` saves the chain in `<dir>/chain.json`; every later command uses it, so a log is always signed
 and checked against the same chain. `run` loops in the foreground and stops by itself at `--until`
-(default 22:00, local time). There is no daemon, launchd job or cron entry.
+(default 22:00, local time); `--every` must be more than 0 seconds. There is no daemon, launchd job or cron entry.
 
 ## Run it on a Pi
 
@@ -69,7 +83,8 @@ Canonical JSON (sorted keys, no spaces) in `records/<seq>.json`, its envelope in
 `records/<seq>.json.sig.json` (payload type `application/vnd.tet.machine-log+json`), and its SHA-256
 appended to `chain.txt`. The clock is the device's, in UTC, so a record carries no time-zone offset.
 No hostname, IP address, location or name goes into a record or a log line. `stdin-json` accepts
-exactly `{"value", "unit"}`, so nothing else can ride along. A record that cites a permit also carries
+exactly `{"value", "unit"}`, so nothing else can ride along, and refuses a value that is not a finite
+number, string or bool (NaN and Infinity are not JSON). A record that cites a permit also carries
 `"permit":"<permit id>"`.
 
 ## One-time permits
@@ -87,7 +102,7 @@ record and checked with `tet-cli agent verify`. `expires_seq` is the last record
 the permit. `--action` is a short name (letters, digits, `. _ -`), so no name or place rides along.
 
 `verify` reads the log INVALID if any permit is cited twice, cited after its `expires_seq`, or not
-signed by this device's key. It also refuses a cited permit that is missing, was edited after signing,
+signed by this device's key (both halves, against the pin). It also refuses a cited permit that is missing, was edited after signing,
 was signed as something other than a permit, or sits under a file name that is not its own id.
 `record` makes the same check before it writes anything, because one bad citation would leave an
 append-only log INVALID for good.
@@ -105,7 +120,8 @@ that envelope's SHA-256 (`tet sig publish v1`), both with `tet-cli agent sign`, 
 `tet-core/src/sigs.rs` checks them. The reading itself never leaves the device. Sign for the node's
 own chain (`TET_CHAIN_ID`, `TET_GENESIS_HASH` at `init`), or it refuses the record.
 
-`verify --node <url>` finds each published record on that node and re-checks its anchor the way the
+`verify --node <url>` finds each published record on that node, re-verifies it against the pin (a
+copy in the folder is not taken on trust), and re-checks its anchor the way the
 page does (`checkStamp`): a mined file-stamp transaction in a canonical block that names that
 record. An anchor places a record before a block on that node's chain; blocks carry no time yet.
 Without `--node`, verify prints `stamp: not checked (no node)`.
@@ -115,6 +131,7 @@ Without `--node`, verify prints `stamp: not checked (no node)`.
 2026-11-07, on a Mac: a dev node from this repository (`docker compose -f docker-compose.yml -f
 docker-compose.dev.yml up -d --build tet-core`, P2P off, so it joined nothing), tet-core at 5dd6895.
 A fresh folder and a new test-only device key. The phrase and `device.key` are not shown here.
+This run predates `--pin`; `verify` also needs `--pin <copy of device.pin>`.
 
 ```console
 $ curl -s localhost:5010/chain
@@ -184,7 +201,11 @@ records under a temporary key; one byte flipped, two records swapped, one delete
 with a `prev` that skips its predecessor must each read INVALID for their own reason. For permits: one
 cited once at its last open seq is VALID; cited twice, cited after `expires_seq`, signed by another
 key, edited after signing, copied under a second name, missing, or signed as a log record, each reads
-INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. It also checks
+INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. For the
+pin, one case per half: a record and a permit whose Ed25519 or ML-DSA-44 half is another device's valid
+signature each read INVALID for that half; another device's intact log reads INVALID against this
+device's pin; a pin file inside the folder is refused. It also checks
 the chain binding is kept as `/chain` gives it, the publish body, and `verify --node` against a stub
-(not on the node, published, anchored, an anchor for another file, another key's record). It needs a built
+(not on the node, published, anchored, an anchor for another file, another key's record, a record with
+another key's ML-DSA-44 half). It needs a built
 `tet-cli` and fails, rather than skips, without one.

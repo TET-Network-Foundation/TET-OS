@@ -1,6 +1,7 @@
-// "Check a machine's log" (Try TET): the browser's copy of `notebook.py verify`
-// (tools/machine-notebook/notebook.py, `check_chain` and `permit_problem`), run on a notebook folder
-// the visitor drops. Same checks, same order, same wording for every problem it finds itself.
+// "Check a machine's log" (Try TET): a browser check of a notebook folder the visitor drops, modelled
+// on `notebook.py verify` (tools/machine-notebook/notebook.py, `check_chain` and `permit_problem`).
+// It is not the same check as `notebook.py verify`, and does not do everything that does; the
+// reference is notebook.py. Where it reports a problem, it uses notebook.py's wording.
 //
 // No new cryptography. Every envelope (records/<seq>.json.sig.json, permits/<id>.json.sig.json) is
 // checked by `verifyEnvelope` (lib/verify_anything.mjs), the page's port of tet-core's
@@ -40,6 +41,7 @@ export const DOES_NOT_SHOW = [
   "who runs the machine",
   "that the key was not copied",
   "that a copied key did not use the same permission in another log",
+  "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
 ];
 
 /**

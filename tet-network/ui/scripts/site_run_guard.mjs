@@ -487,25 +487,102 @@ const CLI = process.env.TET_CLI;
 if (!CLI) {
   console.log("skip R11 the real notebook.py and signin.py read what the page writes (TET_CLI is not set)");
 } else {
-  await check("R11 a notebook the page writes is VALID to the real notebook.py verify (tet-cli)", async () => {
+  // notebook.py verify needs --pin: both key ids of the expected signer, from a file kept outside
+  // the folder. The pin is built from the test key itself (its Ed25519 key id, and the ML-DSA-44 key
+  // id computed from its public key), never read out of the envelopes being checked, so the check
+  // is not circular.
+  const { mldsa44KeyId } = await import("../app/lib/verify_anything.mjs");
+  const pinOf = (key) => [key.keyid, mldsa44KeyId(key.mlPubB64)];
+  async function verifyPageNotebook(key, pin) {
     const N = await import("../app/site/run/page_notebook.ts");
-    const nb = N.newNotebook(await K.makeTestKey(), K.RUN_CHAIN);
+    const nb = N.newNotebook(key, K.RUN_CHAIN);
     const pid = await N.addPermit(nb, "open-vent", 3);
     await N.addRecord(nb, { value: 21, unit: "celsius" }, REAL);
     await N.addRecord(nb, { value: "open-vent", unit: "action" }, REAL, pid);
     const dir = mkdtempSync(join(tmpdir(), "site-run-nb-"));
+    const pinDir = mkdtempSync(join(tmpdir(), "site-run-pin-"));
     try {
       for (const [p, b] of nb.files) {
         mkdirSync(dirname(join(dir, p)), { recursive: true });
         writeFileSync(join(dir, p), b);
       }
       writeFileSync(join(dir, "chain.txt"), nb.hashes.map((h) => `${h}\n`).join(""));
-      const r = spawnSync("python3", [join(ROOT, "tools/machine-notebook/notebook.py"), "--tet-cli", CLI, "verify", "--dir", dir], { encoding: "utf8" });
-      assert.equal(r.status, 0, r.stdout + r.stderr);
-      assert.match(r.stdout, new RegExp(`^VALID\\n  2 records, all signed by tet-ed25519:[0-9a-f]{64}\\n  permit ${pid} \\(open-vent\\): used once, by record 2`));
+      const args = [join(ROOT, "tools/machine-notebook/notebook.py"), "--tet-cli", CLI, "verify", "--dir", dir];
+      if (pin) {
+        writeFileSync(join(pinDir, "device.pin"), typeof pin === "string" ? pin : `${pin[0]}\n${pin[1]}\n`);
+        args.push("--pin", join(pinDir, "device.pin"));
+      }
+      return { ...spawnSync("python3", args, { encoding: "utf8" }), permitId: pid };
     } finally {
       rmSync(dir, { recursive: true, force: true });
+      rmSync(pinDir, { recursive: true, force: true });
     }
+  }
+  await check("R11 a notebook the page writes is VALID to the real notebook.py verify, pinned to the page's key (tet-cli)", async () => {
+    const key = await K.makeTestKey();
+    const r = await verifyPageNotebook(key, pinOf(key));
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, new RegExp(`^VALID\\n  2 records, all signed by ${key.keyid}\\n  permit ${r.permitId} \\(open-vent\\): used once, by record 2`));
+  });
+  // Every envelope in the notebook (record 1, record 2, and the permit record 2 uses; R11 does not
+  // pass --node, so stamps are left to test_notebook.py) must be
+  // refused, each on its own line: a regex that any one line could satisfy would stay green if
+  // records, or permits, or all but one record went unpinned. Near-miss ids, one per hex digit of
+  // each half (first, every middle one, last), catch a check that compares only part of a key id:
+  // a prefix, a suffix, or all but one digit. Another key's id differs almost everywhere, so it
+  // cannot catch those.
+  const problemLines = (out) => out.split("\nShows:\n")[0].split("\n").slice(1);
+  const HEX_AT = "tet-ed25519:".length; // = "tet-mldsa44:".length: the 64 hex digits start here
+  const nearMiss = (id, i) => id.slice(0, HEX_AT + i) + (id[HEX_AT + i] === "0" ? "1" : "0") + id.slice(HEX_AT + i + 1);
+  const digits = [...Array(64).keys()];
+  await check("R11 control: a pin not of this key (in one half, at any one hex digit, or in both) or not a full pin is refused for that reason on every envelope (tet-cli)", async () => {
+    const key = await K.makeTestKey();
+    const [ed, ml] = pinOf(key);
+    const [otherEd, otherMl] = pinOf(await K.makeTestKey());
+    assert.notEqual(ed, otherEd);
+    assert.notEqual(ml, otherMl);
+    assert.equal(ed.length, HEX_AT + 64);
+    assert.equal(ml.length, HEX_AT + 64);
+    const mlWrong = (pinned) => `its ML-DSA-44 half is signed by ${ml}, not this device's ${pinned[1]}`;
+    const edWrong = (pinned) => `signed by ${ed}, not this device's ${pinned[0]}`;
+    const cases = [
+      ["another key's ML-DSA-44 id", [ed, otherMl], mlWrong],
+      ...digits.map((i) => [`a near-miss ML-DSA-44 id (hex digit ${i})`, [ed, nearMiss(ml, i)], mlWrong]),
+      ["another key's Ed25519 id", [otherEd, ml], edWrong],
+      ...digits.map((i) => [`a near-miss Ed25519 id (hex digit ${i})`, [nearMiss(ed, i), ml], edWrong]),
+      // Both halves foreign: notebook.py names the Ed25519 half first, one reason per envelope.
+      ["another key's pin, both halves", [otherEd, otherMl], edWrong],
+    ];
+    for (const [name, pinned, why] of cases) {
+      const r = await verifyPageNotebook(key, pinned);
+      assert.notEqual(r.status, 0, `${name}: ${r.stdout}`);
+      assert.match(r.stdout, /^INVALID\n/, name);
+      assert.deepEqual(problemLines(r.stdout), [
+        `  record 1: key: ${why(pinned)}`,
+        `  record 2: key: ${why(pinned)}`,
+        // notebook.py words an Ed25519 refusal of a permit as "permit: <id> is signed by ...".
+        why(pinned).startsWith("signed") ? `  record 2: permit: ${r.permitId} is ${why(pinned)}` : `  record 2: permit: ${r.permitId}: ${why(pinned)}`,
+      ], name);
+    }
+    // Not a full pin: one line, with or without its newline, with an empty second line, the
+    // ML-DSA-44 line alone; a half cut short by one digit (a pin that only a prefix compare
+    // would accept); or a full pin followed by more lines.
+    for (const [name, text] of [
+      ["the Ed25519 line", `${ed}\n`],
+      ["the Ed25519 line, no newline", ed],
+      ["the Ed25519 line and an empty line", `${ed}\n\n`],
+      ["the ML-DSA-44 line", `${ml}\n`],
+      ["the Ed25519 id one digit short", `${ed.slice(0, -1)}\n${ml}\n`],
+      ["the ML-DSA-44 id one digit short", `${ed}\n${ml.slice(0, -1)}\n`],
+      ["the pin written twice", `${ed}\n${ml}\n${ed}\n${ml}\n`],
+    ]) {
+      const oneLine = await verifyPageNotebook(key, text);
+      assert.equal(oneLine.status, 2, `${name}: ${oneLine.stdout}${oneLine.stderr}`);
+      assert.match(oneLine.stderr, /is not a pin file: two lines, tet-ed25519:<64 hex> and tet-mldsa44:<64 hex>/, name);
+    }
+    const none = await verifyPageNotebook(key, null);
+    assert.equal(none.status, 2, none.stdout + none.stderr);
+    assert.match(none.stderr, /the following arguments are required: --pin/);
   });
   await check("R11 an answer the page signs is accepted by the real signin.py SignInServer.accept (tet-cli)", async () => {
     const chain = { chainId: "tet-example-sign-in", genesisHash: (await import("node:crypto")).createHash("sha256").update("tet sign-in prototype").digest("hex") };

@@ -87,6 +87,7 @@ export const JA: Record<string, string> = {
   "who runs the machine": "誰が機械を動かしているか",
   "that the key was not copied": "鍵がコピーされていないこと",
   "that a copied key did not use the same permission in another log": "コピーされた鍵が、同じ許可を別のログで使っていないこと",
+  "that the signature format is final: it is in outside review, and logs from this test may need re-signing": "署名の形式が最終版であること（外部の審査中で、このテストのログは署名し直しが必要になる場合があります）",
   "whether the log checks out, by the same rules as the notebook's own check": "ノート自身の確認と同じ規則で、ログが合格かどうか",
   "the reason, when it does not": "不合格のときは、その理由",
   "anything about a log you were not given": "渡されていないログについてのこと",

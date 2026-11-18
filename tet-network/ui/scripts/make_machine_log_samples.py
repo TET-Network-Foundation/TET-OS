@@ -42,6 +42,7 @@ def main():
     with tempfile.TemporaryDirectory() as t:
         good = os.path.join(t, "greenhouse-sensor")
         keyid = fx.init(good)
+        fx.keep_pin(good, t)
         pid = fx.permit(good, "open-vent", 3)
         fx.record(good, 18.5, "C")
         fx.record(good, 27.0, "C", permit=pid)

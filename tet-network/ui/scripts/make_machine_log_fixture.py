@@ -104,12 +104,24 @@ def snapshot(d):
     return dict(sorted(files.items()))
 
 
+# The base device's pin (device.pin, both key ids), copied OUTSIDE every case folder: verify takes the
+# expected signer from --pin, never from the folder it checks. Set by main() after the base init.
+PIN = None
+
+
+def keep_pin(d, t):
+    """Copy `d`'s device.pin to `t`/base.pin (outside every case folder) and use it for verify."""
+    global PIN
+    PIN = os.path.join(t, "base.pin")
+    shutil.copy(os.path.join(d, "device.pin"), PIN)
+
+
 def verify(d):
     """Run from the folder's parent with a relative --dir, so no temp path lands in the fixture."""
     here = os.getcwd()
     os.chdir(os.path.dirname(d))
     try:
-        rc, out = run(["verify", "--dir", os.path.basename(d)])
+        rc, out = run(["verify", "--pin", PIN, "--dir", os.path.basename(d)])
     finally:
         os.chdir(here)
     return {"exit": rc, "stdout": out}
@@ -126,6 +138,7 @@ def main():
     with tempfile.TemporaryDirectory() as t:
         base_dir = os.path.join(t, "base")
         keyid = init(base_dir)
+        keep_pin(base_dir, t)
         # Readings chosen so a re-serializer that is not Python's own would differ: a float that is
         # integral (21.0), one in exponent form (1e-05), non-ASCII text (escaped by ensure_ascii).
         pid = permit(base_dir, "open-valve", 3)

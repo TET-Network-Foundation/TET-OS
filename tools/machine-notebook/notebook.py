@@ -6,7 +6,7 @@ one-time permits that a record may cite. Prototype.
     python3 notebook.py record  --dir DIR --source loadavg|cpu-temp|stdin-json [--permit PERMIT_ID]
     python3 notebook.py permit  --dir DIR --action NAME --expires-seq N
     python3 notebook.py run     --dir DIR --source ... --every SECONDS [--until HH:MM]
-    python3 notebook.py verify  --dir DIR [--node URL]
+    python3 notebook.py verify  --dir DIR --pin PINFILE [--node URL]
     python3 notebook.py publish --dir DIR --seq N --node URL
 
 No new cryptography: every signature is `tet-cli agent sign` (the agent envelope in
@@ -16,7 +16,10 @@ every process via `ps`). Stdlib only.
 
 Layout of DIR:
   device.key              the device's own 12-word phrase, mode 0600. Never the owner's.
-  device.keyid            its public key id (tet-ed25519:<hex>)
+  device.keyid            its Ed25519 key id (tet-ed25519:<hex>)
+  device.pin              both of its key ids, one per line: tet-ed25519:<hex>, tet-mldsa44:<hex>.
+                          verify takes the pin from --pin, a copy kept OUTSIDE the folder: the check
+                          pins both keys of the expected signer.
   chain.json              the chain every envelope is bound to: {"chain_id", "genesis_hash"} (public)
   records/<seq>.json      one reading, canonical JSON (sorted keys, no spaces)
   records/<seq>.json.sig.json   its envelope (payload type application/vnd.tet.machine-log+json)
@@ -35,8 +38,10 @@ import datetime as dt
 import glob
 import hashlib
 import json
+import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -71,6 +76,7 @@ DOES_NOT_SHOW = [
     "who runs the machine",
     "that the key was not copied",
     "that a copied key did not use the same permission in another log",
+    "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
 ]
 
 
@@ -167,6 +173,11 @@ def cmd_init(a):
     keyid = f"tet-ed25519:{address}"
     with open(os.path.join(d, "device.keyid"), "w") as f:
         f.write(keyid + "\n")
+    pin = derive_pin(tet_cli(a), d)
+    if pin[0] != keyid:
+        raise Fail("tet-cli signed with another key than keys generate printed")
+    with open(os.path.join(d, "device.pin"), "w") as f:
+        f.write(f"{pin[0]}\n{pin[1]}\n")
     os.makedirs(os.path.join(d, "records"), exist_ok=True)
     print(keyid)
 
@@ -174,12 +185,154 @@ def cmd_init(a):
 # ── permits ───────────────────────────────────────────────────────────────────────────────────
 
 
-def device_keyid(d):
-    p = os.path.join(d, "device.keyid")
-    if not os.path.exists(p):
-        return None
-    with open(p) as f:
-        return f.read().strip()
+ED = "tet-ed25519:"
+ML = "tet-mldsa44:"
+PIN_RE = re.compile(r"(tet-ed25519:[0-9a-f]{64})\n(tet-mldsa44:[0-9a-f]{64})\n?")
+
+
+def half_keyids(env):
+    """(Ed25519 key id, ML-DSA-44 key id) named in an envelope's signatures; None for a half that is
+    missing or named twice. tet-cli agent verify has already checked that each names the key that
+    signed it, so comparing both with the pin compares both keys."""
+    sigs = env.get("signatures", []) if isinstance(env, dict) else []
+    ids = [str(s.get("keyid", "")) for s in sigs if isinstance(s, dict)] if isinstance(sigs, list) else []
+
+    def one(prefix):
+        hits = [k for k in ids if k.startswith(prefix)]
+        return hits[0] if len(hits) == 1 else None
+
+    return one(ED), one(ML)
+
+
+def pin_problem(got, pin):
+    """Why an envelope with key ids `got` is not the pinned signer's, or None. One reason, Ed25519
+    half first, so each half has exactly one line that can name it."""
+    if got[0] != pin[0]:
+        return f"signed by {got[0]}, not this device's {pin[0]}"
+    if got[1] != pin[1]:
+        return f"its ML-DSA-44 half is signed by {got[1]}, not this device's {pin[1]}"
+    return None
+
+
+MAX_LINKS = 40  # as the kernel's own limit; past it, opening the path fails anyway
+
+
+def lookup_folders(path):
+    """Every folder in which a part of `path` is looked up when the file system opens it: one part at
+    a time, symlinks expanded where they are met (at most MAX_LINKS of them), `..` taken from the
+    folder actually reached. A `..` is not a lookup a folder can redirect, so it adds none."""
+    cur = os.sep if path.startswith(os.sep) else os.getcwd()
+    todo = [p for p in path.split(os.sep)]
+    links = 0
+    while todo:
+        part = todo.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            cur = os.path.dirname(cur)
+            continue
+        yield cur
+        nxt = os.path.join(cur, part)
+        try:
+            st = os.lstat(nxt)
+        except OSError:
+            return
+        if stat.S_ISLNK(st.st_mode):
+            links += 1
+            if links > MAX_LINKS:
+                return
+            target = os.readlink(nxt)
+            if target.startswith(os.sep):
+                cur = os.sep
+            todo = target.split(os.sep) + todo
+        else:
+            cur = nxt
+
+
+def pin_is_inside(path, d):
+    """Does `path` lead into folder `d`, or is it one of the files there? Checked by identity, the
+    (device, inode) pair, so that no spelling of either path matters (letter case or Unicode form on
+    a file system that ignores them, symlinks to the folder, `..`):
+    - any folder in which a part of `path` is looked up, followed one part at a time as the file
+      system does (symlinks expanded, `..` taken after them), is `d` or a folder under it: then the
+      folder can choose what `path` reads, e.g. with a symlink in it;
+    - any folder on the way to `path` as written, before its last part is resolved, is one of those;
+    - `path` itself (lstat) or what it points to (stat) is an entry under `d`: a hard link to it.
+    Also by path with symlinks resolved."""
+    real, root = os.path.realpath(path), os.path.realpath(d)
+    if os.path.commonpath([real, root]) == root:
+        return True
+    try:
+        st = os.stat(d)
+    except OSError:
+        return False
+    dirs_in_d = {(st.st_dev, st.st_ino)}
+    entries = set()
+    for top, dirs, files in os.walk(d):
+        for n in dirs + files:
+            try:
+                e = os.lstat(os.path.join(top, n))
+            except OSError:
+                continue
+            entries.add((e.st_dev, e.st_ino))
+            if n in dirs:
+                dirs_in_d.add((e.st_dev, e.st_ino))
+    up = os.path.dirname(os.path.abspath(path))
+    while True:
+        try:
+            u = os.stat(up)
+            if (u.st_dev, u.st_ino) in dirs_in_d:
+                return True
+        except OSError:
+            pass
+        if os.path.dirname(up) == up:
+            break
+        up = os.path.dirname(up)
+    for where in lookup_folders(path):
+        try:
+            u = os.stat(where)
+        except OSError:
+            continue
+        if (u.st_dev, u.st_ino) in dirs_in_d:
+            return True
+    for look in (os.lstat, os.stat):
+        try:
+            s = look(path)
+        except OSError:
+            continue
+        if (s.st_dev, s.st_ino) in entries:
+            return True
+    return False
+
+
+def read_pin(path, d=None):
+    """Both key ids of the expected signer, from a pin file. With `d`, the file must lie outside it."""
+    if d is not None and pin_is_inside(path, d):
+        raise Fail(f"--pin {path} is inside the folder being checked; give a copy kept outside it")
+    try:
+        with open(path) as f:
+            m = PIN_RE.fullmatch(f.read())
+    except (OSError, UnicodeDecodeError):
+        m = None
+    if not m:
+        raise Fail(f"--pin {path} is not a pin file: two lines, tet-ed25519:<64 hex> and tet-mldsa44:<64 hex>")
+    return m.group(1), m.group(2)
+
+
+def derive_pin(cli, d):
+    """The pin of the key in this folder's device.key: sign a throwaway payload and read both key ids
+    from the envelope. For the device's own side (init, and record checking a permit before it
+    writes); verify never uses it."""
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, "pin-probe")
+        with open(p, "wb") as f:
+            f.write(b"")
+        sign(cli, d, p, "application/vnd.tet.machine-pin-probe", out=p + ".sig.json")
+        with open(p + ".sig.json") as f:
+            pin = half_keyids(json.load(f))
+    if None in pin:
+        raise Fail("could not read both key ids from tet-cli agent sign (format changed?)")
+    return pin
 
 
 def cmd_permit(a):
@@ -207,11 +360,12 @@ def cmd_permit(a):
 
 def permit_problem(d, cli, pid, seq, used, device):
     """Why record `seq` may not cite permit `pid`, or None if it may. `used` maps a permit id to the
-    record that already cited it; `device` is the key id this log belongs to. Returns (reason, permit).
+    record that already cited it; `device` is the pin (both key ids) of the key this log belongs to.
+    Returns (reason, permit).
 
     One reason per citation, in this order, so each has exactly one check that can give it: the permit
     is in the notebook; its envelope verifies over exactly these bytes (tet-cli agent verify); this
-    device's key signed it; it is a permit, and the one the record names; it is still open at this
+    device's key signed it, both halves; it is a permit, and the one the record names; it is still open at this
     seq; nothing cited it before."""
     if not isinstance(pid, str) or not re.fullmatch(r"[0-9a-f]{32}", pid):
         return "permit: not a permit id (32 hex)", None
@@ -229,9 +383,9 @@ def permit_problem(d, cli, pid, seq, used, device):
         env = json.load(f)
     if env.get("payloadType") != PERMIT_PAYLOAD_TYPE:
         return f"permit: {pid}: payload type is {env.get('payloadType')!r}, not {PERMIT_PAYLOAD_TYPE}", None
-    signer = ed_keyid(env)
-    if device is None or signer != device:
-        return f"permit: {pid} is signed by {signer}, not this device's {device}", None
+    why = pin_problem(half_keyids(env), device)
+    if why:
+        return f"permit: {pid} is {why}" if why.startswith("signed") else f"permit: {pid}: {why}", None
     with open(path, "rb") as f:
         body = f.read()
     try:
@@ -285,8 +439,13 @@ def read_source(source):
         with open(zones[0]) as f:
             return {"source": "cpu-temp", "value": round(int(f.read().strip()) / 1000, 1), "unit": "celsius"}
     if source == "stdin-json":
+        def no_constant(name):
+            raise ValueError(f"{name} is not JSON")
+
         try:
-            r = json.loads(sys.stdin.read())
+            # NaN and Infinity are not JSON (RFC 8259): a record holding one could not be read back by
+            # other readers. parse_constant refuses the tokens; the isfinite check below refuses 1e400.
+            r = json.loads(sys.stdin.read(), parse_constant=no_constant)
         except ValueError:
             raise Fail('stdin-json wants one JSON object: {"value": ..., "unit": "..."}')
         # Exactly these two keys, so nothing else (a name, a place) can ride along into the record.
@@ -294,6 +453,8 @@ def read_source(source):
             raise Fail('stdin-json wants exactly {"value": <number|string|bool>, "unit": "<string>"}')
         if not isinstance(r["value"], (int, float, str, bool)):
             raise Fail("stdin-json value must be a number, string or bool")
+        if isinstance(r["value"], float) and not math.isfinite(r["value"]):
+            raise Fail("stdin-json value must be a finite number")
         return {"source": "stdin-json", "value": r["value"], "unit": r["unit"]}
     raise Fail(f"unknown source {source}")
 
@@ -330,7 +491,7 @@ def record_once(a):
     if pid is not None:
         # The same check verify makes, before anything is written: a log is append-only, so one record
         # citing a used or expired permit would leave the whole log INVALID for good.
-        why, _ = permit_problem(d, tet_cli(a), pid, seq, cited_permits(d), device_keyid(d))
+        why, _ = permit_problem(d, tet_cli(a), pid, seq, cited_permits(d), derive_pin(tet_cli(a), d))
         if why:
             raise Fail(f"not recorded: {why}")
         record["permit"] = pid
@@ -352,7 +513,13 @@ def cmd_record(a):
 
 
 def cmd_run(a):
-    hh, mm = (int(x) for x in a.until.split(":"))
+    # A loop driven by an argument has a lower bound: 0 or less would record with no pause at all.
+    if not math.isfinite(a.every) or a.every <= 0:
+        raise Fail(f"--every is the pause between records in seconds; it must be more than 0, not {a.every}")
+    m = re.fullmatch(r"([01]?[0-9]|2[0-3]):([0-5][0-9])", a.until)
+    if not m:
+        raise Fail(f"--until is a local time HH:MM, 00:00 to 23:59, not {a.until!r}")
+    hh, mm = int(m.group(1)), int(m.group(2))
     now = dt.datetime.now()
     stop = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
     if stop <= now:
@@ -373,8 +540,9 @@ def ed_keyid(env):
     return ids[0] if len(ids) == 1 else None
 
 
-def check_chain(d, cli):
-    """Every problem found, as (seq or None, reason). Empty means the log checks out."""
+def check_chain(d, cli, pin):
+    """Every problem found, as (seq or None, reason). Empty means the log checks out. `pin` is both
+    key ids of the expected signer, from outside the folder (read_pin)."""
     problems = []
     rec_dir = os.path.join(d, "records")
     names = sorted(
@@ -385,11 +553,6 @@ def check_chain(d, cli):
     chain = chain_lines(d)
     if len(chain) != len(names):
         problems.append((None, f"chain.txt lists {len(chain)} records, records/ holds {len(names)}"))
-    want_keyid = None
-    kp = os.path.join(d, "device.keyid")
-    if os.path.exists(kp):
-        with open(kp) as f:
-            want_keyid = f.read().strip()
     signers = []
     used = {}  # permit id -> the record that cited it first
     uses = []  # (seq, permit) for every citation that checked out
@@ -421,8 +584,9 @@ def check_chain(d, cli):
                 problems.append((n, f"signature: payload type is {env.get('payloadType')!r}, not {PAYLOAD_TYPE}"))
             k = ed_keyid(env)
             signers.append(k)
-            if want_keyid and k != want_keyid:
-                problems.append((n, f"key: signed by {k}, not this device's {want_keyid}"))
+            why = pin_problem(half_keyids(env), pin)
+            if why:
+                problems.append((n, f"key: {why}"))
         # 2. the record itself
         try:
             rec = json.loads(body)
@@ -443,7 +607,7 @@ def check_chain(d, cli):
         # 3. the permit it cites, if any: this device's own, still open at this seq, not cited before
         if isinstance(rec, dict) and "permit" in rec:
             pid = rec["permit"]
-            why, permit = permit_problem(d, cli, pid, i, used, want_keyid or k)
+            why, permit = permit_problem(d, cli, pid, i, used, pin)
             if why:
                 problems.append((n, why))
             else:
@@ -469,21 +633,17 @@ def stamp_file_id(record_bytes):
     return f"{h[:8]}-{h[8:12]}-{h[12:16]}-{h[16:20]}-{h[20:32]}"
 
 
-def is_my_hash_record(d, cli, raw, log_sha):
-    """A registry record made elsewhere counts only if it re-verifies here: this device's key, a
+def is_my_hash_record(d, cli, raw, log_sha, pin):
+    """A registry record made elsewhere counts only if it re-verifies here: this device's key (both
+    halves, against the pin), a
     hash-only envelope over exactly this log record's SHA-256, under the notebook's chain."""
     try:
         env = json.loads(raw)
-        signer = env["tet"]["agent_ed25519_pubkey_hex"]
         payload = base64.b64decode(env["payload"])
     except (ValueError, KeyError, TypeError):
         return False
-    kp = os.path.join(d, "device.keyid")
-    if not os.path.exists(kp):
+    if pin_problem(half_keyids(env), pin):
         return False
-    with open(kp) as f:
-        if f.read().strip() != f"tet-ed25519:{signer}":
-            return False
     if env.get("payloadType") != HASH_PAYLOAD_TYPE or payload != log_sha:
         return False
     with tempfile.TemporaryDirectory() as t:
@@ -494,7 +654,7 @@ def is_my_hash_record(d, cli, raw, log_sha):
     return rc == 0
 
 
-def check_stamps(d, node, cli):
+def check_stamps(d, node, cli, pin):
     """Every record: is it in this node's registry, and is its anchor real? The anchor is
     re-checked the way checkStamp (lib/sign_anything.ts) does."""
     node = node.rstrip("/")
@@ -504,11 +664,6 @@ def check_stamps(d, node, cli):
     for seq in seqs:
         with open(os.path.join(rec_dir, f"{seq}.json"), "rb") as f:
             log_record = f.read()
-        hp = os.path.join(rec_dir, f"{seq}.hash.sig.json")
-        local = None
-        if os.path.exists(hp):
-            with open(hp, "rb") as f:
-                local = f.read()
         found = get_json(f"{node}/sigs/search?file={sha256_hex(log_record)}").get("records") or []
         mine = []
         for r in found:
@@ -516,7 +671,9 @@ def check_stamps(d, node, cli):
                 raw = base64.b64decode(r.get("record_b64", ""))
             except ValueError:
                 continue
-            if raw == local or (local is None and is_my_hash_record(d, cli, raw, hashlib.sha256(log_record).digest())):
+            # Every registry record is re-verified here, against the pin: a copy in this folder
+            # (records/<n>.hash.sig.json) is not evidence of who signed it.
+            if is_my_hash_record(d, cli, raw, hashlib.sha256(log_record).digest(), pin):
                 mine.append((r, raw))
         if not mine:
             lines.append(f"stamp: record {seq}: not on this node")
@@ -542,7 +699,8 @@ def check_stamps(d, node, cli):
 
 
 def cmd_verify(a):
-    problems, signers, uses = check_chain(a.dir, tet_cli(a))
+    pin = read_pin(a.pin, a.dir)
+    problems, signers, uses = check_chain(a.dir, tet_cli(a), pin)
     print("INVALID" if problems else "VALID")
     for seq, why in problems:
         print(f"  {'record ' + str(seq) if seq is not None else 'log'}: {why}")
@@ -557,7 +715,7 @@ def cmd_verify(a):
     for s in DOES_NOT_SHOW:
         print(f"  - {s}")
     if a.node:
-        for ln in check_stamps(a.dir, a.node, tet_cli(a)):
+        for ln in check_stamps(a.dir, a.node, tet_cli(a), pin):
             print(ln)
     else:
         print("stamp: not checked (no node)")
@@ -642,6 +800,7 @@ def main(argv=None):
     s.add_argument("--until", default="22:00", help="HH:MM local; the loop stops by itself (default 22:00)")
     s = sub.add_parser("verify")
     s.add_argument("--dir", required=True)
+    s.add_argument("--pin", required=True, help="the device's pin file (device.pin, written by init), kept OUTSIDE --dir")
     s.add_argument("--node", help="also check published records' anchors on this node")
     s = sub.add_parser("publish")
     s.add_argument("--dir", required=True)
