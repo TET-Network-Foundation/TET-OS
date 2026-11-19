@@ -35,8 +35,8 @@ Use this for local dev, CI-style builds, and `scripts/start-3-node-testnet.sh` (
 ### Repository
 
 ```bash
-git clone <your-repo-url> Nexus_Network
-cd Nexus_Network
+git clone https://github.com/TET-Network-Foundation/TET-OS.git
+cd TET-OS
 ```
 
 There is **no `.gitmodules`** in this monorepo at present; clone the single repository. Related trees (`tet-network/ui`, `methods/`, etc.) live in the same checkout.
