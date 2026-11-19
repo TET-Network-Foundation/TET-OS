@@ -257,6 +257,7 @@ If you are labelling things you made, give each one a label and record it once. 
 this log apart from the readings above. The labels here are `tag-01` to `tag-30`; use your own.
 
 ```sh
+cd ~/TET-OS
 export TET_CHAIN_ID=maker-local
 export TET_GENESIS_HASH=$(printf 'maker local' | shasum -a 256 | cut -c1-64)   # on Linux: sha256sum
 python3 tools/machine-notebook/notebook.py init --dir ~/tags &&
@@ -266,7 +267,8 @@ for n in $(seq -w 1 30); do
 done
 ```
 
-The two `export` lines are Step 2's again, because a new shell has forgotten them. The `&&` at the
+The `cd` and the two `export` lines are Step 1's and Step 2's again, because a new shell has
+forgotten them. The `&&` at the
 ends of lines stops the block if `init` fails, instead of trying thirty records with no key. `init`
 prints a new key id, as in Step 2. Then one line per item:
 
