@@ -1,4 +1,4 @@
-//! CAAC (環境適応型コンセンサス): hardware probe + **probabilistic fingerprint** + PoC/PoR routing skeleton.
+//! CAAC (environment-adaptive consensus): hardware probe + **probabilistic fingerprint** + PoC/PoR routing skeleton.
 
 use rand_core::{OsRng, RngCore as _};
 use serde::Serialize;
