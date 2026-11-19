@@ -40,7 +40,11 @@ pub enum FileStoreError {
     #[error("file id {0} is already used by another file")]
     IdTaken(String),
     #[error("file storage full: {stored} + {incoming} bytes > cap {cap}")]
-    StorageFull { stored: u64, incoming: u64, cap: u64 },
+    StorageFull {
+        stored: u64,
+        incoming: u64,
+        cap: u64,
+    },
 }
 
 pub struct FileStore {
@@ -99,7 +103,9 @@ fn effective_ttl_ms(ttl_ms: u64) -> u64 {
 }
 
 fn is_expired(env: &FileEnvelopeV1, now: u64) -> bool {
-    let expire_at = env.created_at_ms.saturating_add(effective_ttl_ms(env.ttl_ms));
+    let expire_at = env
+        .created_at_ms
+        .saturating_add(effective_ttl_ms(env.ttl_ms));
     now > expire_at
 }
 
@@ -146,14 +152,21 @@ impl FileStore {
     /// Every path that stores a body comes through here (uploads and blobs fetched from peers).
     fn insert_blob(&self, file_id: &[u8], blob: &[u8]) -> Result<(), FileStoreError> {
         if let Some(cap) = Self::max_total_bytes() {
-            let stored = self.total_blob_bytes().saturating_sub(self.size_of(file_id));
+            let stored = self
+                .total_blob_bytes()
+                .saturating_sub(self.size_of(file_id));
             let incoming = blob.len() as u64;
             if stored.saturating_add(incoming) > cap {
-                return Err(FileStoreError::StorageFull { stored, incoming, cap });
+                return Err(FileStoreError::StorageFull {
+                    stored,
+                    incoming,
+                    cap,
+                });
             }
         }
         self.blob.insert(file_id, blob)?;
-        self.sizes.insert(file_id, &(blob.len() as u64).to_be_bytes())?;
+        self.sizes
+            .insert(file_id, &(blob.len() as u64).to_be_bytes())?;
         Ok(())
     }
 
@@ -169,7 +182,10 @@ impl FileStore {
     /// The most bytes of file bodies this node keeps in total (`TET_FILES_MAX_TOTAL_BYTES`); `None`
     /// (the default) means no cap beyond the entry count. A node taking large files sets it.
     pub fn max_total_bytes() -> Option<u64> {
-        std::env::var("TET_FILES_MAX_TOTAL_BYTES").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|v| *v > 0)
+        std::env::var("TET_FILES_MAX_TOTAL_BYTES")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|v| *v > 0)
     }
 
     /// The bytes of file bodies stored now (from the size index; blobs are not read).
@@ -269,19 +285,28 @@ impl FileStore {
         // one from a hash anyone holding the .sig.json can compute), so another envelope under the
         // same id must not overwrite its body. The identical envelope may be uploaded again.
         if let Some(existing) = self.get_meta(&env.file_id.to_string())
-            && (existing.sender_wallet_id.trim().to_ascii_lowercase() != env.sender_wallet_id.trim().to_ascii_lowercase()
-                || existing.file_sha256.trim().to_ascii_lowercase() != env.file_sha256.trim().to_ascii_lowercase()
-                || existing.receiver_wallet_id.trim().to_ascii_lowercase() != env.receiver_wallet_id.trim().to_ascii_lowercase())
+            && (existing.sender_wallet_id.trim().to_ascii_lowercase()
+                != env.sender_wallet_id.trim().to_ascii_lowercase()
+                || existing.file_sha256.trim().to_ascii_lowercase()
+                    != env.file_sha256.trim().to_ascii_lowercase()
+                || existing.receiver_wallet_id.trim().to_ascii_lowercase()
+                    != env.receiver_wallet_id.trim().to_ascii_lowercase())
         {
             return Err(FileStoreError::IdTaken(env.file_id.to_string()));
         }
         // Room first, so a full store leaves no index entry for a file it can't keep.
         if let Some(cap) = Self::max_total_bytes() {
             let id = env.file_id.to_string();
-            let stored = self.total_blob_bytes().saturating_sub(self.size_of(id.as_bytes()));
+            let stored = self
+                .total_blob_bytes()
+                .saturating_sub(self.size_of(id.as_bytes()));
             let incoming = blob.len() as u64;
             if stored.saturating_add(incoming) > cap {
-                return Err(FileStoreError::StorageFull { stored, incoming, cap });
+                return Err(FileStoreError::StorageFull {
+                    stored,
+                    incoming,
+                    cap,
+                });
             }
         }
         let newly = self.store_meta(env)?;
