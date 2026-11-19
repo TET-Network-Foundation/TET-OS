@@ -2,7 +2,8 @@
 //!
 //! This module implements the **Basic E2EE** envelope protocol, its hybrid-signature verification,
 //! the node-local store and the REST/gossip surface. **Burn-after-read** (S7-1) and **time-lock**
-//! (S7-2) are supported. Anonymous (S8) is still rejected at verification.
+//! (S7-2) are supported, and so is **anonymous** mail (S8): see [`anon`] for the membership
+//! registry it proves against.
 //!
 //! Time-lock is **scheduled release, not an enforced lock** (spec §A.2.2 approach C, locked
 //! decision #1): the ciphertext reaches relaying nodes at send time and cooperating nodes withhold
