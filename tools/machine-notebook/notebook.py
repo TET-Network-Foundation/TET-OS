@@ -100,10 +100,11 @@ MAX_FILE = 1 << 20
 MAX_CHAIN_TXT = 16 << 20
 
 
-def read_file(path, cap=MAX_FILE):
+def read_file(path, cap=MAX_FILE, forbid=()):
     """The bytes of the regular file at `path`, read once. FileNotFoundError if there is none;
     Unreadable for a symlink, FIFO, device or directory (opened without following or blocking, then
-    checked on the open descriptor), or for more than `cap` bytes."""
+    checked on the open descriptor), for more than `cap` bytes, or for a file whose (device, inode)
+    is in `forbid` (a hard link to it)."""
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -114,6 +115,8 @@ def read_file(path, cap=MAX_FILE):
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             raise Unreadable("not a regular file")
+        if (st.st_dev, st.st_ino) in forbid:
+            raise Unreadable("is the same file as one of the device's own files (a hard link)")
         chunks, size = [], 0
         while True:
             b = os.read(fd, 65536)
@@ -481,17 +484,23 @@ def permit_problem(d, cli, pid, seq, used, device):
     return None, permit
 
 
-def cited_permits(d):
-    """{permit id: seq of the first record citing it}, read from the records on disk."""
+def cited_permits(d, head_seq, head_hash):
+    """{permit id: seq of the first record citing it}, for the device's own side. Walked back from
+    device.head through each record's prev, so every record counted is one whose bytes this device's
+    head pins; a record missing or changed is refused, not skipped."""
     used = {}
-    rec_dir = os.path.join(d, "records")
-    for seq in sorted(int(m.group(1)) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))):
+    want = head_hash
+    for seq in range(head_seq, 0, -1):
         try:
-            pid = json.loads(read_file(os.path.join(rec_dir, f"{seq}.json"))).get("permit")
-        except (OSError, Unreadable, ValueError, AttributeError):
-            continue
-        if isinstance(pid, str):
-            used.setdefault(pid, seq)
+            body = read_file(os.path.join(d, "records", f"{seq}.json"))
+            rec = json.loads(body)
+        except (OSError, Unreadable, ValueError):
+            body, rec = None, None
+        if body is None or sha256_hex(body) != want or not isinstance(rec, dict):
+            raise Fail(f"not recorded: record {seq} is missing or is not the one this device signed; run verify")
+        if isinstance(rec.get("permit"), str):
+            used[rec["permit"]] = seq  # walking back, so the earliest citation is kept
+        want = rec.get("prev")
     return used
 
 
@@ -614,21 +623,26 @@ def record_once(a):
     if pid is not None:
         # The same check verify makes, before anything is written: a log is append-only, so one record
         # citing a used or expired permit would leave the whole log INVALID for good.
-        why, _ = permit_problem(d, tet_cli(a), pid, seq, cited_permits(d), derive_pin(tet_cli(a), d))
+        why, _ = permit_problem(d, tet_cli(a), pid, seq, cited_permits(d, head_seq, head_hash), derive_pin(tet_cli(a), d))
         if why:
             raise Fail(f"not recorded: {why}")
         record["permit"] = pid
     body = canonical(record)
     with open(path, "wb") as f:
         f.write(body)
+    # device.head moves to this record BEFORE it is signed: if anything stops this run after the
+    # signature exists (a crash, a timeout, chain.txt not writable), the log no longer ends at the
+    # head, and the next record is refused instead of signing a second record under this number.
+    write_head(d, seq, sha256_hex(body))
     try:
         sign(tet_cli(a), d, path, PAYLOAD_TYPE)
     except Fail:
+        # tet-cli refused and wrote no envelope: nothing was signed, so the old head stands.
         os.remove(path)
+        write_head(d, head_seq, head_hash)
         raise
     with open(os.path.join(d, "chain.txt"), "a") as f:
         f.write(sha256_hex(body) + "\n")
-    write_head(d, seq, sha256_hex(body))
     print(f"seq {seq}: {record['reading']['value']} {record['reading']['unit']}" + (f" (permit {pid})" if pid else ""))
 
 
@@ -672,7 +686,7 @@ def check_chain(d, cli, pin):
     problems = []
     rec_dir = os.path.join(d, "records")
     names = sorted(
-        (int(m.group(1)), n) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))
+        (int(m.group(1)), n) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"([0-9]+)\.json", n))
     ) if os.path.isdir(rec_dir) else []
     if not names:
         return [(None, "no records")], [], [], {}
@@ -885,8 +899,13 @@ def cmd_export(a):
             files += [os.path.join(sub, n) for n in sorted(os.listdir(os.path.join(d, sub))) if pat.fullmatch(n)]
     if "chain.json" not in files:
         raise Fail(f"no chain.json in {d}; nothing to export")
+    own = set()
+    for n in ("device.key", "device.head", "device.pin", "device.keyid"):
+        with contextlib.suppress(OSError):
+            st = os.lstat(os.path.join(d, n))
+            own.add((st.st_dev, st.st_ino))
     try:
-        data = {n: read_file(os.path.join(d, n), MAX_CHAIN_TXT if n == "chain.txt" else MAX_FILE) for n in files}
+        data = {n: read_file(os.path.join(d, n), MAX_CHAIN_TXT if n == "chain.txt" else MAX_FILE, own) for n in files}
     except (OSError, Unreadable) as e:
         raise Fail(f"export: {e}")
     os.makedirs(out, mode=0o700)

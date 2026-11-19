@@ -46,11 +46,15 @@ What a handed-over folder holds:
   (y) export                                               -> chain, records and permits only, the
       same bytes, VALID; no device.key, device.head or pin
       verify on a folder holding device.key                -> its last line says to hand over an export
+      export of a folder with a hard link to device.key or device.head -> refused, nothing written
 
 record continues a log only where the device last signed it (device.head, outside chain.txt):
   (x) the newest record removed, then record               -> refused, nothing written
       a permit's record removed, then record --permit       -> refused, the permit is not cited again
       chain.txt's last line changed, same length            -> refused
+      record stopped after signing (chain.txt not writable), that record removed -> refused
+      record --permit with an earlier record moved out of records/ -> refused, not cited again
+      a record named in non-ASCII digits                     -> not a record (verify: count differs)
       no device.head                                         -> refused
       verify names the newest record and its hash; with the newest removed it still reads VALID
       (nothing in the folder can tell) and names the one before
@@ -1098,6 +1102,17 @@ class Export(unittest.TestCase):
         rc, _, err = nb_err("export", "--dir", d, "--out", out_dir)
         self.assertEqual(rc, 2, "export must not write into an existing folder")
 
+    def test_y_export_refuses_a_hard_link_to_a_device_file(self):
+        for own in ("device.key", "device.head"):
+            d = self.copy()
+            os.makedirs(os.path.join(d, "permits"), exist_ok=True)
+            os.link(os.path.join(d, own), os.path.join(d, "permits", "0" * 32 + ".json"))
+            out_dir = os.path.join(self.tmp, f"linked-{own}")
+            rc, _, err = nb_err("export", "--dir", d, "--out", out_dir)
+            self.assertEqual(rc, 2, own)
+            self.assertIn("is the same file as one of the device's own files", err, own)
+            self.assertFalse(os.path.exists(out_dir), f"{own}: export wrote a folder")
+
     def test_y_verify_on_a_folder_with_device_key_says_to_hand_over_an_export(self):
         d = self.copy()
         rc, out = nb("verify", "--pin", self.pin, "--dir", d)
@@ -1183,6 +1198,45 @@ class DeviceHead(unittest.TestCase):
         self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
         with open(self.rec(d, 2), "rb") as f:
             self.assertIn(end(2, hashlib.sha256(f.read()).hexdigest()), out.splitlines())
+
+    def test_x_a_record_stopped_after_signing_is_not_signed_again(self):
+        # chain.txt cannot be written, so record stops after the signature exists. Removing that
+        # record afterwards must not let the device sign another record under the same number.
+        d = self.copy()
+        chain_txt = os.path.join(d, "chain.txt")
+        os.chmod(chain_txt, 0o444)
+        try:
+            with self.assertRaises(PermissionError):
+                nb_err("record", "--dir", d, "--source", "stdin-json", stdin=json.dumps({"value": 9, "unit": "count"}))
+        finally:
+            os.chmod(chain_txt, 0o644)
+        self.assertTrue(os.path.exists(self.rec(d, 4) + ".sig.json"), "the case needs record 4 signed before the stop")
+        os.remove(self.rec(d, 4))
+        os.remove(self.rec(d, 4) + ".sig.json")
+        rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=json.dumps({"value": 8, "unit": "count"}))
+        self.assertEqual(rc, 2, out)
+        self.assertIn("not recorded: this device last signed record 4, and the log does not end with it (chain.txt ends at record 3)", err)
+        self.assertFalse(os.path.exists(self.rec(d, 4)), "a second record 4 was written")
+
+    def test_x_record_refuses_a_permit_when_an_earlier_record_is_out_of_the_folder(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=Notebook.READING)
+        self.assertEqual(rc, 0, out)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", stdin=Notebook.READING)
+        self.assertEqual(rc, 0, out)
+        os.rename(self.rec(d, 4), os.path.join(self.tmp, f"aside-{os.path.basename(d)}"))  # the record citing the permit
+        rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=Notebook.READING)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("not recorded: record 4 is missing or is not the one this device signed; run verify", err)
+        self.assertFalse(os.path.exists(self.rec(d, 6)), "the permit was cited again")
+
+    def test_x_a_record_name_in_other_digits_is_not_a_record(self):
+        d = self.copy()
+        os.rename(self.rec(d, 1), os.path.join(d, "records", "\u0661.json"))  # ARABIC-INDIC DIGIT ONE
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (1, "INVALID"), out)
+        self.assertIn("log: chain.txt lists 3 records, records/ holds 2", out)
 
     def test_x_record_refuses_without_device_head(self):
         d = self.copy()

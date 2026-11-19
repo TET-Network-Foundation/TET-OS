@@ -131,7 +131,11 @@ number, string or bool (NaN and Infinity are not JSON). A record that cites a pe
 `<dir>/device.head` (mode 0600): the number and SHA-256 of the last record it signed. `record` appends
 only to a log that still ends there; a log made shorter, or whose last line was changed, is refused
 (`not recorded: this device last signed record N, …`), so the device never signs a second record under
-a number it has used.
+a number it has used. `device.head` moves to a record before that record is signed, so a run stopped
+after signing (a crash, a timeout, `chain.txt` not writable) leaves the device refusing to record
+and saying so, rather than signing a number twice. `record --permit` reads the earlier records
+back from `device.head` through each record's `prev`, so a record moved out of `records/` is refused,
+not skipped.
 
 ## One-time permits
 
