@@ -252,15 +252,18 @@ If you are labelling things you made, give each one a label and record it once. 
 this log apart from the readings above. The labels here are `tag-01` to `tag-30`; use your own.
 
 ```sh
-python3 tools/machine-notebook/notebook.py init --dir ~/tags
-cp ~/tags/device.pin ~/tags.pin
+export TET_CHAIN_ID=maker-local
+export TET_GENESIS_HASH=$(printf 'maker local' | shasum -a 256 | cut -c1-64)   # on Linux: sha256sum
+python3 tools/machine-notebook/notebook.py init --dir ~/tags &&
+cp ~/tags/device.pin ~/tags.pin &&
 for n in $(seq -w 1 30); do
   echo "{\"value\": \"tag-$n\", \"unit\": \"tag\"}" | python3 tools/machine-notebook/notebook.py record --dir ~/tags --source stdin-json
 done
 ```
 
-`init` prints a new key id, as in Step 2 (the chain variables must still be set in this shell).
-Then one line per item:
+The two `export` lines are Step 2's again, because a new shell has forgotten them. The `&&` at the
+ends of lines stops the block if `init` fails, instead of trying thirty records with no key. `init`
+prints a new key id, as in Step 2. Then one line per item:
 
 ```console
 seq 1: tag-01 tag
