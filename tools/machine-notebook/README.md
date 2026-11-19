@@ -40,6 +40,9 @@ goes near this tool. The device's 12 words are written to `<dir>/device.key` wit
 the key id is printed. tet-cli receives the words through the `TET_MNEMONIC` environment variable,
 never as an argument (arguments are visible to every process through `ps`). Anyone who copies
 `device.key` can sign as the device, which is why "the key was not copied" is on the list above.
+To hand a log to someone who checks it, leave the key out (from the folder that holds `notebook`:
+`tar -czf notebook-log.tgz --exclude device.key notebook`) and send them the pin by another route,
+so that whoever could change the log in transit could not also change the pin.
 
 Every TET signature has two halves, Ed25519 and ML-DSA-44, each under its own public key. `init` also
 writes `<dir>/device.pin`: the device's two key ids, one per line (`tet-ed25519:<hex>`,
@@ -54,7 +57,8 @@ Build `tet-cli` with `RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release`.
 The notebook does not use the guest. The build also needs a Rust toolchain and a C compiler (on
 macOS the Xcode Command Line Tools, on Debian or Raspberry Pi OS `build-essential`); it does not
 need OpenSSL, because `tet-cli` uses rustls. The notebook needs Python 3.9 or newer. The first build
-downloads its crates. How long it takes on a clean machine has not been measured.
+downloads its crates. With the crates already downloaded, a build into an empty `target/` took
+2 min 43 s on an Apple M3 Mac (2026-11-19); the download itself, Linux and the Pi are not timed.
 
 No public node runs today, so there is no chain to read from `GET /chain`. For a log on your own
 machine, any chain id and any 64 hex characters work, as long as you keep the same pair:
