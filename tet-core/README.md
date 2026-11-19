@@ -16,8 +16,8 @@ TET-Core is the **canonical** reference node for the TET Network: a persistent l
 ## Run a 3-node testnet in 30 seconds
 
 ```bash
-git clone https://github.com/[REPO_URL]
-cd Nexus_Network/tet-core
+git clone https://github.com/TET-Network-Foundation/TET-OS.git
+cd TET-OS/tet-core
 ./scripts/start-network.sh
 ```
 
@@ -75,10 +75,11 @@ docker run -p 5010:5010 -p 5011:5011 \
 
 ```bash
 # Prerequisites: Rust 1.85+ (edition 2024), 4 GB RAM, 10 GB disk
-git clone https://github.com/[REPO_URL]
-cd Nexus_Network/tet-core
+git clone https://github.com/TET-Network-Foundation/TET-OS.git
+cd TET-OS/tet-core
 
-cp .env.example .env
+# Required: the node exits at start without it (64 hex chars, the treasury wallet id)
+export TET_TREASURY_ADDRESS=<64-hex-wallet-id>
 # Optional: PORT=5010 TET_ENABLE_P2P=1
 
 export RISC0_SKIP_BUILD=1
@@ -114,7 +115,7 @@ The UI proxies API calls to tet-core via `/tet-node-api/*` (or `NEXT_PUBLIC_TET_
 
 ## Create a wallet and send your first TX
 
-1. Open **http://localhost:3000** and complete the wallet wizard (12-word mnemonic + PIN), or go to **/setup**.
+1. Open **http://localhost:3000/create-wallet** and complete the wallet wizard (12-word mnemonic + PIN).
 2. Open **http://localhost:3000/os** and unlock the wallet (PIN). This loads Ed25519 + ML-DSA (WASM) into the hybrid signer session.
 3. Confirm balance: status bar / **Transactions** tab (calls `GET /ledger/me`).
 4. **Send Coins** tab: enter recipient `wallet_id` (64-char hex) and amount in TET → confirm. The UI signs with Ed25519 + ML-DSA and submits via the ledger API.
@@ -142,6 +143,7 @@ TET-Core runs an **Axum** HTTP server over a **sled**-backed ledger (`ledger.rs`
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `TET_TREASURY_ADDRESS` | — (required) | Treasury wallet id, 64 hex chars; the node exits at start without it |
 | `PORT` | `5010` | REST API port (with `TET_REST_BIND` unset, bind is `0.0.0.0:{PORT}` in recent builds — set explicitly in prod) |
 | `TET_REST_BIND` | `0.0.0.0:{PORT}` | HTTP listen socket |
 | `TET_DB_DIR` | `tet.db_{PORT}` | sled database directory |
@@ -162,8 +164,6 @@ TET-Core runs an **Axum** HTTP server over a **sled**-backed ledger (`ledger.rs`
 | `TET_HTTP_RPS_PER_ADDR` | `TET_HTTP_RPS` | HTTP requests per second from one client address |
 | `RISC0_SKIP_BUILD` | — | Skip RISC0 guest build (CI/dev; set for `cargo build`) |
 | `TET_JSON_LOG` | `true` | Structured JSON logs when `true` |
-
-See [`.env.example`](./.env.example) for admin keys, founder mnemonic, and GCP templates.
 
 **Not implemented (use alternatives):**
 
@@ -280,7 +280,7 @@ After `tet-node-1` starts, inspect logs for libp2p **PeerId** and set `TET_BOOTN
 ### クイックスタート（日本語）
 
 ```bash
-cp .env.example .env
+export TET_TREASURY_ADDRESS=<64-hex-wallet-id>  # 必須（未設定だと起動時に終了）
 RISC0_SKIP_BUILD=1 cargo run --bin TET-Core
 ```
 
