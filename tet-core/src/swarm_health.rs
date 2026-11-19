@@ -208,7 +208,13 @@ pub fn spawn_watchdog(
     stall_threshold_ms: u64,
     exit_after_ms: u64,
 ) -> tokio::task::JoinHandle<()> {
-    spawn_watchdog_with(health, stall_threshold_ms, exit_after_ms, exit_process_hook(), Arc::new(now_ms))
+    spawn_watchdog_with(
+        health,
+        stall_threshold_ms,
+        exit_after_ms,
+        exit_process_hook(),
+        Arc::new(now_ms),
+    )
 }
 
 /// [`spawn_watchdog`] with the exit hook and the clock injected, so the real loop can be driven by

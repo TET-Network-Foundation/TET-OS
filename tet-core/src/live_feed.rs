@@ -58,7 +58,10 @@ pub fn record(kind: &'static str, height: Option<u64>, peer_id: Option<&str>) {
 
 /// The kept events, newest first.
 pub fn snapshot() -> Vec<LiveEvent> {
-    feed().lock().map(|q| q.iter().rev().cloned().collect()).unwrap_or_default()
+    feed()
+        .lock()
+        .map(|q| q.iter().rev().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// The source commit this binary was built from: `TET_GIT_SHA` at compile time (the deploy
