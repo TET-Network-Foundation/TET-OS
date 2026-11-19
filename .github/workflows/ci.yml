@@ -235,6 +235,14 @@ jobs:
         name: node backup — a node comes back up from the tarball
         run: python3 tools/node-backup/test_backup_restore.py
 
+      # The testnet-2 rehearsal runbook (docs/ops/TESTNET2_REHEARSAL.md, part 2): every setting,
+      # file, log line and REST route its commands rely on must still exist in the node, and the
+      # check must fail, naming the item, when one is renamed. Starts nothing.
+      # scripts/run_guards.sh picks this line up too.
+      - if: needs.gate.outputs.code == 'true'
+        name: testnet-2 runbook — every command it relies on still exists
+        run: python3 tools/testnet2-rehearsal/test_runbook_commands.py
+
       # TLS stays rustls: no openssl-sys, openssl or native-tls in tet-cli, tet-core (default and
       # zk-prove, as the node image builds it) or the workspace, on any release target, and reqwest
       # keeps the OS root store on next to the bundled one.

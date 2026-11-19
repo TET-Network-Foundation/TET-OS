@@ -1,0 +1,8 @@
+; macOS sandbox profile for the local two-node rehearsal (docs/ops/TESTNET2_REHEARSAL.md, part 2).
+; With P2P on, the node always starts mDNS, which sends on every network interface, not only
+; loopback. This profile refuses UDP/TCP port 5353, so mDNS cannot start and every socket the node
+; keeps is the 127.0.0.1 one it was told to use. Everything else is allowed.
+(version 1)
+(allow default)
+(deny network-outbound (remote ip "*:5353"))
+(deny network-bind (local ip "*:5353"))
