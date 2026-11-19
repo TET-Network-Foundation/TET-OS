@@ -45,9 +45,9 @@ stuck" below.
 
 How long that takes, honestly:
 
-- On an Apple M3 Mac (8 cores, 16 GB), four builds into an empty `target/` took between 2 min 43 s
-  and 4 min 17 s (two people, two runs, 2026-11-19; the slower ones while the Mac was busy with other
-  work). In all four the crates were already downloaded. The first download on a new machine was not timed, so your first build will take
+- On an Apple M3 Mac (8 cores, 16 GB), six builds into an empty `target/` took between 2 min 43 s
+  and 4 min 17 s (two people in each of three runs, 2026-11-19; the slower ones while the Mac was busy
+  with other work). In all six the crates were already downloaded. The first download on a new machine was not timed, so your first build will take
   longer, by however long your connection needs.
 - It is the long step of this guide. It has not been timed on Linux or on a Pi.
 - On a Raspberry Pi it has not been tried; expect it to be much slower than on a laptop, to need a
@@ -307,7 +307,8 @@ The person who checks the log needs four things from you, and must never get a f
    for the same reason, and `verify` refuses it.
 
 3. **The key id.** The line `init` printed for `~/tags`, which is also the first line of
-   `~/tags.pin`. It may travel with the pin, by the same route, as long as that route is not the
+   `~/tags.pin` (the line starting `tet-ed25519:`; the second line is the other half of the
+   device's signature key and is not the one `verify` prints). It may travel with the pin, by the same route, as long as that route is not the
    archive's: put it in the same message as the pin, or read it out to them. They compare it with
    what `verify` prints.
 
@@ -330,8 +331,9 @@ VALID
 ```
 
 (The Shows / Does not show lists follow.) They compare that key id with the one you sent. A match
-shows the thirty records were signed by the key whose pin they hold, in this order. It does not
-show which machine held the key.
+shows the thirty records were signed by the key whose pin they hold. It does not show which machine
+held the key, and it does not show that whoever holds the key did not write a different log: the
+key holder can always re-sign.
 
 Then they change one record in a copy and see the check refuse it:
 
