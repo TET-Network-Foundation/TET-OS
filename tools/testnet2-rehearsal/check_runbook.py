@@ -6,7 +6,11 @@ It reads the ```bash blocks of the section "## Part 2" and checks, against the r
 1. settings: every TET_* name the blocks set appears as "NAME" in tet-core/src. That is a text
    search over the whole source, tests included: it catches a rename, not a setting that is
    still named somewhere but no longer read. TET_CORE_BIN is the runbook's own variable and is not checked.
-2. files: every $REPO/<path> exists.
+2. files: every $REPO/<path> exists in the repository. A path under target/<profile>/ is a build
+   output, which a clean checkout does not have, so it is never looked for on disk: its last part
+   must be the name of a [[bin]] that a workspace member's Cargo.toml declares, and that bin's
+   source file must exist. A binary nobody builds any more fails; one that is merely not built
+   here passes, and the result is the same with or without a build.
 3. log lines: every grep 'pattern' on a node.log matches text the node prints. The literal part of
    the pattern (up to the first [ or \\ that is not an escaped ]) must appear in tet-core/src; a
    trailing "0x" is dropped, because the node prints the value with it.
@@ -56,6 +60,47 @@ def source_text(root):
     return "\n".join(parts)
 
 
+def declared_bins(root):
+    """{bin name: source path} for every [[bin]] in the workspace members' Cargo.toml.
+
+    A small reader on purpose (tomllib needs Python 3.11): it reads the [workspace] members list
+    and each member's [[bin]] tables, name and path only."""
+    with open(os.path.join(root, "Cargo.toml"), encoding="utf-8") as fh:
+        top = fh.read()
+    m = re.search(r"^\[workspace\][^\[]*?^members\s*=\s*\[(.*?)\]", top, re.S | re.M)
+    members = re.findall(r'"([^"]+)"', m.group(1)) if m else []
+    bins = {}
+    for mem in members:
+        path = os.path.join(root, mem, "Cargo.toml")
+        if not os.path.isfile(path):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        for table in re.split(r"^\[", text, flags=re.M):
+            if not table.startswith("[bin]]"):
+                continue
+            name = re.search(r'^name\s*=\s*"([^"]+)"', table, re.M)
+            src = re.search(r'^path\s*=\s*"([^"]+)"', table, re.M)
+            if name:
+                bins[name.group(1)] = os.path.join(mem, src.group(1)) if src else None
+    return bins
+
+
+def file_missing(root, p, bins):
+    """None if the runbook's $REPO/<p> is there (or, for a build output, is built from the repo)."""
+    m = re.match(r"^target/(?:[A-Za-z0-9_-]+/)?(release|debug)/([^/]+)$", p)
+    if m:
+        name = m.group(2)
+        if name not in bins:
+            return f"file {p}: a build output, and no Cargo.toml in the workspace declares a [[bin]] named {name!r}"
+        if bins[name] is None or not os.path.isfile(os.path.join(root, bins[name])):
+            return f"file {p}: [[bin]] {name!r} is declared, but its source {bins[name]} is not in the repository"
+        return None
+    if p == "target" or p.startswith("target/"):
+        return f"file {p}: under target/, but not a binary the check can tie to a [[bin]] (target/<profile>/<name>)"
+    return None if os.path.exists(os.path.join(root, p)) else f"file {p}: not in the repository"
+
+
 def literal_prefix(pattern):
     out, k = [], 0
     while k < len(pattern):
@@ -103,7 +148,8 @@ def check(doc, root):
 
     paths = sorted(set(re.findall(r"\$REPO/([A-Za-z0-9_./-]+)", code)))
     counts["files"] = len(paths)
-    missing += [f"file {p}: not in the repository" for p in paths if not os.path.exists(os.path.join(root, p))]
+    bins = declared_bins(root)
+    missing += [r for r in (file_missing(root, p, bins) for p in paths) if r]
 
     greps = sorted({literal_prefix(p) for p in re.findall(r"grep (?:-[a-z0-9]+ )*'([^']+)' \"\$W/n[12]/node\.log\"", code)})
     counts["log lines"] = len(greps)

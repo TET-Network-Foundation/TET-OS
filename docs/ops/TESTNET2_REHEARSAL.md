@@ -130,7 +130,10 @@ order, and printed what each step says it must.
 `python3 tools/testnet2-rehearsal/test_runbook_commands.py` (also run in CI) checks that every
 setting, log line and REST route these blocks use still appears in the node's source, that every
 file and command exists, and that it fails,
-naming the item, when one is renamed.
+naming the item, when one is renamed. The node binary under `target/` is a build output, so the check
+does not look for it on disk: it checks that a `Cargo.toml` in the workspace still declares a
+`[[bin]]` named `TET-Core` and that its source file exists. The result is the same with or without a
+build.
 
 You need: macOS (for `sandbox-exec`), `bash`, `python3`, `curl`, `lsof`, and a `TET-Core` release
 binary. Ports 18101, 18102, 18201 and 18202 must be free.

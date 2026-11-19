@@ -59,6 +59,9 @@ def main():
         doc_case("a file that is not in the repository is refused",
                  "tools/testnet2-rehearsal/no-mdns.sb", "tools/testnet2-rehearsal/no-mdns-v2.sb",
                  "MISSING file tools/testnet2-rehearsal/no-mdns-v2.sb")
+        doc_case("a binary that no workspace member builds is refused",
+                 "$REPO/target/release/TET-Core ", "$REPO/target/release/TET-Core-Node ",
+                 "MISSING file target/release/TET-Core-Node")
         doc_case("a log line the node does not print is refused",
                  "'libp2p PeerId: [A-Za-z0-9]*' \"$W/n2/node.log\"", "'libp2p PeerID: [A-Za-z0-9]*' \"$W/n2/node.log\"",
                  "MISSING log line 'libp2p PeerID: '")
@@ -75,10 +78,44 @@ def main():
                  "```bash\n", "```sh\n",
                  "none found in the Part 2 blocks")
 
-        # the other side: the runbook is unchanged and the node stops reading one setting
-        root2 = os.path.join(work, "root")
-        shutil.copytree(os.path.join(ROOT, "tet-core", "src"), os.path.join(root2, "tet-core", "src"))
-        shutil.copytree(HERE, os.path.join(root2, "tools", "testnet2-rehearsal"))
+        # the other side: the runbook is unchanged and the repository changes. Each copy holds only
+        # what the check reads (no target/), as a clean checkout does, whether or not ROOT has a build.
+        def copy_root(name):
+            r = os.path.join(work, name)
+            shutil.copytree(os.path.join(ROOT, "tet-core", "src"), os.path.join(r, "tet-core", "src"))
+            shutil.copytree(HERE, os.path.join(r, "tools", "testnet2-rehearsal"),
+                            ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copy(os.path.join(ROOT, "Cargo.toml"), os.path.join(r, "Cargo.toml"))
+            for d in os.listdir(ROOT):
+                for sub in ("", "methods", "host"):
+                    m = os.path.join(d, sub, "Cargo.toml")
+                    if os.path.isfile(os.path.join(ROOT, m)) and not os.path.exists(os.path.join(r, m)):
+                        os.makedirs(os.path.dirname(os.path.join(r, m)), exist_ok=True)
+                        shutil.copy(os.path.join(ROOT, m), os.path.join(r, m))
+            return r
+
+        clean = copy_root("clean")
+        code, out = run(DOC, clean)
+        case("the runbook passes in a tree with no build (no target/ directory)",
+             not os.path.exists(os.path.join(clean, "target")) and code == 0 and out.strip().endswith("ok"), out)
+
+        nobin = copy_root("nobin")
+        cargo = os.path.join(nobin, "tet-core", "Cargo.toml")
+        with open(cargo, encoding="utf-8") as fh:
+            s = fh.read()
+        with open(cargo, "w", encoding="utf-8") as fh:
+            fh.write(s.replace('name = "TET-Core"\n', 'name = "TET-Node"\n'))
+        code, out = run(DOC, nobin)
+        case("the node binary no longer declared in Cargo.toml is refused",
+             s.count('name = "TET-Core"\n') == 1 and code == 1 and "MISSING file target/release/TET-Core:" in out, out)
+
+        nosrc = copy_root("nosrc")
+        os.remove(os.path.join(nosrc, "tet-core", "src", "main.rs"))
+        code, out = run(DOC, nosrc)
+        case("the node binary declared but its source gone is refused",
+             code == 1 and "MISSING file target/release/TET-Core:" in out and "src/main.rs" in out, out)
+
+        root2 = copy_root("root")
         renamed = 0
         for d, _, files in os.walk(os.path.join(root2, "tet-core", "src")):
             for f in files:
