@@ -29,7 +29,7 @@ const ZERO = "0".repeat(64);
 export const SHOWS = [
   "which key signed each record",
   "that the records are in this order",
-  "that each record was written before the next one",
+  "that each record names the hash of the one before it",
   "that no one-time permission was used twice in this log, or after it ran out",
 ];
 

@@ -78,7 +78,7 @@ export const JA: Record<string, string> = {
   // ── features: Shows / Does not show ────────────────────────────────────────────────────────
   "which key signed each record": "どの鍵がそれぞれの記録に署名したか",
   "that the records are in this order": "記録がこの順番であること",
-  "that each record was written before the next one": "各記録が次の記録より前に書かれたこと",
+  "that each record names the hash of the one before it": "各記録が直前の記録のハッシュを記していること",
   "that no one-time permission was used twice in this log, or after it ran out":
     "このログの中で、1回限りの許可が2回使われたり、期限切れの後に使われたりしていないこと",
   "that the reading is true": "測定値が正しいこと",

@@ -64,6 +64,8 @@ const ml = await import("../app/lib/machine_log.mjs");
 const { mldsa44Verify } = await import("../app/lib/pqc.ts");
 const { JA } = await import("../app/try/i18n_ja.ts");
 const { ZH_HK } = await import("../app/try/i18n_zh_hk.ts");
+const { JA: SITE_JA } = await import("../app/site/text/machines.ts");
+const { FEATURES: SITE_FEATURES } = await import("../app/site/features/machines.ts");
 
 const NOTEBOOK = readFileSync(new URL("../../../tools/machine-notebook/notebook.py", import.meta.url), "utf8");
 const PANEL = readFileSync(new URL("../app/try/MachineLogPanel.tsx", import.meta.url), "utf8");
@@ -74,7 +76,7 @@ const FIX = JSON.parse(readFileSync(new URL("./fixtures/machine_log_v1.json", im
 const PINNED_SHOWS = [
   "which key signed each record",
   "that the records are in this order",
-  "that each record was written before the next one",
+  "that each record names the hash of the one before it",
   "that no one-time permission was used twice in this log, or after it ran out",
 ];
 const PINNED_DOES_NOT_SHOW = [
@@ -85,6 +87,35 @@ const PINNED_DOES_NOT_SHOW = [
   "that the key was not copied",
   "that a copied key did not use the same permission in another log",
   "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
+];
+// The translations are pinned too: a key that exists with a value that says something else (the old
+// "written before the next one", say) would pass a check that only asks whether Japanese exists.
+// Same order as PINNED_SHOWS then PINNED_DOES_NOT_SHOW.
+const PINNED_JA = [
+  "どの鍵がそれぞれの記録に署名したか",
+  "記録がこの順番であること",
+  "各記録が直前の記録のハッシュを記していること",
+  "このログの中で、1回限りの許可が2回使われたり、期限切れの後に使われたりしていないこと",
+  "測定値が正しいこと",
+  "機械の時計が正しかったこと",
+  "機械がどこにあったか",
+  "誰が機械を動かしているか",
+  "鍵がコピーされていないこと",
+  "コピーされた鍵が、同じ許可を別のログで使っていないこと",
+  "署名の形式が最終版であること（外部の審査中で、このテストのログは署名し直しが必要になる場合があります）",
+];
+const PINNED_ZH_HK = [
+  "每項紀錄由哪一把金鑰簽署",
+  "紀錄是按這個次序排列",
+  "每項紀錄都寫有前一項紀錄的雜湊值",
+  "這份日誌中沒有一次性許可被用了兩次，或在過期後被使用",
+  "讀數是真實的",
+  "機器的時鐘是準確的",
+  "機器當時在哪裏",
+  "誰在操作這部機器",
+  "金鑰沒有被複製",
+  "被複製的金鑰沒有在另一份日誌中使用同一個許可",
+  "簽名格式已經定案（格式正在接受外部審查，這次測試的日誌可能需要重新簽署）",
 ];
 
 let failed = 0;
@@ -137,11 +168,13 @@ await check("A1 the page's lists are notebook.py's SHOWS / DOES_NOT_SHOW, and th
   assert.deepEqual(listProblems(ml.SHOWS, ml.DOES_NOT_SHOW), [], "machine_log.mjs differs from the pinned lists");
 });
 
-await check("A2 they are what the real notebook.py verify printed, for a valid log and an invalid one", () => {
-  for (const name of ["valid", "permit_reused"]) {
-    const c = FIX.cases.find((x) => x.name === name);
+await check("A2 they are what the real notebook.py verify printed, in every fixture case, valid and invalid", () => {
+  // Every case, not two: a half-regenerated or hand-edited fixture must not keep an old list anywhere.
+  assert.ok(FIX.cases.length >= 14, `fixture has ${FIX.cases.length} cases`);
+  for (const name of ["valid", "permit_reused"]) assert.ok(FIX.cases.some((x) => x.name === name), `no ${name} case`);
+  for (const c of FIX.cases) {
     const p = printedLists(c.verify.stdout);
-    assert.deepEqual(listProblems(p.shows, p.doesNot), [], `${name}: printed lists differ`);
+    assert.deepEqual(listProblems(p.shows, p.doesNot), [], `${c.name}: printed lists differ`);
   }
 });
 
@@ -173,6 +206,40 @@ await check("A4 every item, and both headings, have Japanese and Hong Kong Chine
     assert.ok(typeof JA[k] === "string" && JA[k].trim(), `ja: missing ${JSON.stringify(k)}`);
     assert.ok(typeof ZH_HK[k] === "string" && ZH_HK[k].trim(), `zh-HK: missing ${JSON.stringify(k)}`);
   }
+});
+
+/** Every way a translation table differs from the pinned values, for the list items. Empty means identical. */
+function translationProblems(dict, pinned, label) {
+  const keys = [...PINNED_SHOWS, ...PINNED_DOES_NOT_SHOW];
+  const out = [];
+  if (pinned.length !== keys.length) out.push(`${label}: ${pinned.length} pinned values for ${keys.length} items`);
+  keys.forEach((k, i) => {
+    if (dict[k] !== pinned[i]) out.push(`${label}[${JSON.stringify(k)}]: ${JSON.stringify(dict[k])} ≠ ${JSON.stringify(pinned[i])}`);
+  });
+  return out;
+}
+
+await check("A5 the site's /machines lists are notebook.py's SHOWS / DOES_NOT_SHOW, word for word", () => {
+  const f = SITE_FEATURES.find((x) => x.id === "machine-notebook");
+  assert.ok(f, "no machine-notebook feature in app/site/features/machines.ts");
+  assert.deepEqual(listProblems(f.shows, f.doesNot), [], "features/machines.ts differs from the pinned lists");
+});
+
+await check("A6 the Japanese and Hong Kong Chinese for every item are the pinned values, and the site's Japanese is the try page's", () => {
+  assert.deepEqual(translationProblems(JA, PINNED_JA, "try ja"), []);
+  assert.deepEqual(translationProblems(ZH_HK, PINNED_ZH_HK, "try zh-HK"), []);
+  assert.deepEqual(translationProblems(SITE_JA, PINNED_JA, "site ja"), []);
+});
+
+await check("A5/A6 control: a translation value changed, a site item reverted, a site item dropped are each caught", () => {
+  const pinnedJa = Object.fromEntries([...PINNED_SHOWS, ...PINNED_DOES_NOT_SHOW].map((k, i) => [k, PINNED_JA[i]]));
+  assert.deepEqual(translationProblems(pinnedJa, PINNED_JA, "x"), [], "the helper refuses the pinned table itself");
+  const k = PINNED_SHOWS[2];
+  assert.ok(translationProblems({ ...pinnedJa, [k]: "各記録が次の記録より前に書かれたこと" }, PINNED_JA, "x").length > 0, "changed value");
+  assert.ok(translationProblems({ ...pinnedJa, [k]: undefined }, PINNED_JA, "x").length > 0, "missing value");
+  const S = [...PINNED_SHOWS];
+  assert.ok(listProblems(S.map((s, i) => (i === 2 ? "that each record was written before the next one" : s)), PINNED_DOES_NOT_SHOW).length > 0, "reverted item");
+  assert.ok(listProblems(S.filter((_, i) => i !== 2), PINNED_DOES_NOT_SHOW).length > 0, "dropped item");
 });
 
 await check("A control: a changed word, a dropped item, two items swapped, the lists swapped are each caught", () => {
