@@ -17,6 +17,9 @@ every process via `ps`). Stdlib only.
 Layout of DIR:
   device.key              the device's own 12-word phrase, mode 0600. Never the owner's.
   device.keyid            its Ed25519 key id (tet-ed25519:<hex>)
+  device.head             "<seq> <sha256>" of the last record this device signed, mode 0600. record
+                          appends only to a log that still ends there, so the device never signs a
+                          second record under a number it has already used.
   device.pin              both of its key ids, one per line: tet-ed25519:<hex>, tet-mldsa44:<hex>.
                           verify takes the pin from --pin, a copy kept OUTSIDE the folder: the check
                           pins both keys of the expected signer.
@@ -34,6 +37,7 @@ the device clock in UTC. No hostname, IP, location or name is written to a recor
 
 import argparse
 import base64
+import contextlib
 import datetime as dt
 import glob
 import hashlib
@@ -245,6 +249,7 @@ def cmd_init(a):
     with open(os.path.join(d, "device.pin"), "w") as f:
         f.write(f"{pin[0]}\n{pin[1]}\n")
     os.makedirs(os.path.join(d, "records"), exist_ok=True)
+    write_head(d, 0, ZERO)
     print(keyid)
 
 
@@ -524,6 +529,45 @@ def read_source(source):
     raise Fail(f"unknown source {source}")
 
 
+HEAD_RE = re.compile(r"(0|[1-9][0-9]{0,17}) ([0-9a-f]{64})\n")
+
+
+def read_head(d):
+    """(seq, sha256) of the last record this device signed, from device.head."""
+    p = os.path.join(d, "device.head")
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        raise Fail(
+            f"no device.head in {d}, so the device cannot tell where its log ended. A folder made before "
+            "device.head existed: run verify, and if the log is VALID and whole, write "
+            '"<number of records> <sha256 of the newest record>" to device.head, mode 600'
+        )
+    if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077:
+        raise Fail("device.head must be a regular file only its owner can read and write; chmod 600 it")
+    try:
+        m = HEAD_RE.fullmatch(read_file(p, 128).decode("ascii"))
+    except (OSError, Unreadable, UnicodeDecodeError):
+        m = None
+    if not m:
+        raise Fail('device.head is not "<seq> <sha256>"')
+    return int(m.group(1)), m.group(2)
+
+
+def write_head(d, seq, h):
+    """Replace device.head in one step: a crash leaves the old one or the new one, never half."""
+    p = os.path.join(d, "device.head")
+    tmp = p + ".tmp"
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"{seq} {h}\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
 def chain_lines(d):
     """chain.txt's lines; [] if there is none. Unreadable if it is not a regular file."""
     try:
@@ -541,6 +585,14 @@ def record_once(a):
         chain = chain_lines(d)
     except Unreadable as e:
         raise Fail(f"chain.txt: {e}")
+    # The device's own memory of where its log ended, not chain.txt's: chain.txt is not signed, and a
+    # log that ends earlier than the device remembers is refused, not continued.
+    head_seq, head_hash = read_head(d)
+    if (len(chain), chain[-1] if chain else ZERO) != (head_seq, head_hash):
+        raise Fail(
+            f"not recorded: this device last signed record {head_seq}, and the log does not end with it "
+            f"(chain.txt ends at record {len(chain)}); run verify"
+        )
     seq = len(chain) + 1
     rec_dir = os.path.join(d, "records")
     os.makedirs(rec_dir, exist_ok=True)
@@ -574,6 +626,7 @@ def record_once(a):
         raise
     with open(os.path.join(d, "chain.txt"), "a") as f:
         f.write(sha256_hex(body) + "\n")
+    write_head(d, seq, sha256_hex(body))
     print(f"seq {seq}: {record['reading']['value']} {record['reading']['unit']}" + (f" (permit {pid})" if pid else ""))
 
 

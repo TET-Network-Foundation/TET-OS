@@ -42,6 +42,12 @@ only the pin can refuse it.
   verify --node: a hash record with one half from another device does not count as this device's,
   and neither does another device's hash record saved in the folder.
 
+record continues a log only where the device last signed it (device.head, outside chain.txt):
+  (x) the newest record removed, then record               -> refused, nothing written
+      a permit's record removed, then record --permit       -> refused, the permit is not cited again
+      chain.txt's last line changed, same length            -> refused
+      no device.head                                         -> refused
+
 Every file verify reads is read once, and tet-cli checks those same bytes. A wrapper around the real
 tet-cli changes ONE file in the folder on one call, so each input is broken on its own:
   (w) record 3's bytes changed just before tet-cli reads them   -> INVALID, record 3's signature
@@ -335,6 +341,7 @@ class Notebook(unittest.TestCase):
         notebook.sign(CLI, d, self.rec(d, seq), notebook.PAYLOAD_TYPE)
         with open(os.path.join(d, "chain.txt"), "a") as f:
             f.write(hashlib.sha256(body).hexdigest() + "\n")
+        notebook.write_head(d, seq, hashlib.sha256(body).hexdigest())  # as record does after signing
         return seq
 
     def assertOnlyProblem(self, d, reason, prefix=False):
@@ -1034,6 +1041,77 @@ class Notebook(unittest.TestCase):
                 t.join(0.2)
                 os.close(fd)
             t.join(2)
+
+
+class DeviceHead(unittest.TestCase):
+    """record continues only a log that ends where the device last signed (device.head). chain.txt
+    and records/ are not signed, so a log made shorter must be refused, not refilled."""
+
+    @classmethod
+    def setUpClass(cls):
+        Notebook.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    copy, rec, permit = Notebook.copy, Notebook.rec, Notebook.permit
+
+    def drop_newest(self, d):
+        chain = notebook.chain_lines(d)
+        n = len(chain)
+        os.remove(self.rec(d, n))
+        os.remove(self.rec(d, n) + ".sig.json")
+        with open(os.path.join(d, "chain.txt"), "w") as f:
+            f.write("".join(ln + "\n" for ln in chain[:-1]))
+        return n
+
+    def test_x_init_and_record_keep_device_head(self):
+        with open(os.path.join(self.base, "device.head")) as f:
+            head = f.read()
+        self.assertEqual(head, f"3 {notebook.chain_lines(self.base)[-1]}\n")
+        self.assertEqual(os.stat(os.path.join(self.base, "device.head")).st_mode & 0o777, 0o600)
+
+    def test_x_record_refuses_a_log_shorter_than_the_device_signed(self):
+        d = self.copy()
+        self.assertEqual(self.drop_newest(d), 3)
+        rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=json.dumps({"value": 9, "unit": "count"}))
+        self.assertEqual(rc, 2, out)
+        self.assertIn("not recorded: this device last signed record 3, and the log does not end with it (chain.txt ends at record 2)", err)
+        self.assertFalse(os.path.exists(self.rec(d, 3)), "a second record 3 was written")
+        self.assertEqual(len(notebook.chain_lines(d)), 2)
+
+    def test_x_record_refuses_to_cite_a_permit_again_after_its_record_was_removed(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=Notebook.READING)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.drop_newest(d), 4)
+        rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=Notebook.READING)
+        self.assertEqual(rc, 2, out)
+        self.assertIn("not recorded: this device last signed record 4, and the log does not end with it (chain.txt ends at record 3)", err)
+        self.assertFalse(os.path.exists(self.rec(d, 4)), "the permit was cited by a new record 4")
+
+    def test_x_record_refuses_a_log_whose_last_line_is_not_the_one_the_device_signed(self):
+        # Same length, another last hash: the device would chain its next record to a record it never
+        # signed. Only the hash, not the count, can tell.
+        d = self.copy()
+        chain = notebook.chain_lines(d)
+        chain[-1] = hashlib.sha256(b"not a record of this device").hexdigest()
+        with open(os.path.join(d, "chain.txt"), "w") as f:
+            f.write("".join(ln + "\n" for ln in chain))
+        rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=json.dumps({"value": 9, "unit": "count"}))
+        self.assertEqual(rc, 2, out)
+        self.assertIn("not recorded: this device last signed record 3, and the log does not end with it (chain.txt ends at record 3)", err)
+        self.assertFalse(os.path.exists(self.rec(d, 4)))
+
+    def test_x_record_refuses_without_device_head(self):
+        d = self.copy()
+        os.remove(os.path.join(d, "device.head"))
+        rc, _, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=json.dumps({"value": 9, "unit": "count"}))
+        self.assertEqual(rc, 2, err)
+        self.assertIn("no device.head in", err)
+        self.assertFalse(os.path.exists(self.rec(d, 4)))
 
 
 # On call NB_WRAP_AT, copies NB_WRAP_SRC over NB_WRAP_DST, before or after the real tet-cli runs.

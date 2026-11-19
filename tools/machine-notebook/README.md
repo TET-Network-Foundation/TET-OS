@@ -109,6 +109,12 @@ exactly `{"value", "unit"}`, so nothing else can ride along, and refuses a value
 number, string or bool (NaN and Infinity are not JSON). A record that cites a permit also carries
 `"permit":"<permit id>"`.
 
+`chain.txt` is not signed, so `record` does not take the next number from it alone. The device keeps
+`<dir>/device.head` (mode 0600): the number and SHA-256 of the last record it signed. `record` appends
+only to a log that still ends there; a log made shorter, or whose last line was changed, is refused
+(`not recorded: this device last signed record N, …`), so the device never signs a second record under
+a number it has used.
+
 ## One-time permits
 
 A permit is the device's own signed note that one action may be recorded once. `permit` writes it and
@@ -223,7 +229,10 @@ records under a temporary key; one byte flipped, two records swapped, one delete
 with a `prev` that skips its predecessor must each read INVALID for their own reason. For permits: one
 cited once at its last open seq is VALID; cited twice, cited after `expires_seq`, signed by another
 key, edited after signing, copied under a second name, missing, or signed as a log record, each reads
-INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. For the
+INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. `record` refuses a log that no longer ends at
+the last record the device signed (records removed from the end, or chain.txt's last line changed).
+Every file is read once and tet-cli checks those bytes: a file changed in the folder during a check,
+and a record that is not a regular file, each read INVALID for that reason. For the
 pin, one case per half: a record and a permit whose Ed25519 or ML-DSA-44 half is another device's valid
 signature each read INVALID for that half; another device's intact log reads INVALID against this
 device's pin; a pin file inside the folder is refused. It also checks
