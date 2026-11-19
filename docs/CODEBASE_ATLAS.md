@@ -378,9 +378,8 @@ main.rs
 | `vision.rs` | CAAC + ZK-Court + thermo REST probes |
 | `worker.rs` | Registration, e2ee jobs, cockpit |
 | `network.rs` | **HTTP** network stats/power (not `network.rs` libp2p) |
-| `dex.rs` | P2P DEX isolated experiment |
 | `founder.rs`, `founding.rs`, `admin.rs` | Operator/founder tools |
-| `pages.rs`, `ui.rs`, `assets.rs` | Legacy HTML/JS UI served from tet-core |
+| `pages.rs`, `assets.rs` | Legacy HTML/JS UI served from tet-core |
 | `metrics.rs`, `logs.rs`, `telemetry.rs` | Ops |
 
 ### Auxiliary modules (requested in scope)
@@ -393,7 +392,6 @@ main.rs
 | `sync.rs` | Catch-up driver, sync gating for auto-mine (~28 unit tests) |
 | `replication.rs` | Guardian replica signed ledger snapshots |
 | `quantum_shield.rs` | ML-DSA verification helpers |
-| `p2p_dex.rs` | DEX engine (Quantum Gate experiment) |
 | `attestation.rs` | Signer link attestation reports |
 
 ---
@@ -699,12 +697,10 @@ Consolidated from `CODEBASE_OVERVIEW.md`, `WHITEPAPER_v1.0_GAPS.md`, `STATUS.md`
 | `worker_ai.rs` | — | AI engine integration | §4 | unclear |
 | `worker_config.rs` | — | Worker env configuration | — | unclear |
 | `replication.rs` | — | Guardian replica snapshots (`TET_REPLICA_SK_HEX`) | §8 | unclear |
-| `onchain.rs` | — | Solana bridge hooks | — | Partial |
 | `oracle.rs` | — | Price/oracle stubs | — | unclear |
 | `marketplace.rs` | — | Phase4 marketplace status | §12 | unclear |
 | `render_farm.rs` | — | Phase4 render status | — | unclear |
 | `tee_compute.rs` | — | TEE status probes | — | unclear |
-| `p2p_dex.rs` | — | Isolated DEX | — | Partial |
 | `conductor.rs` | — | Plugin conductor | — | unclear |
 | `chaos.rs` | — | Chaos reroute tests | — | yes |
 | `metrics.rs` | — | Prometheus-style metrics | — | handler tests |
@@ -722,8 +718,6 @@ Consolidated from `CODEBASE_OVERVIEW.md`, `WHITEPAPER_v1.0_GAPS.md`, `STATUS.md`
 |------|------|
 | `ledger/crypto.rs` | Encryption helpers for sled values |
 | `ledger/peers.rs` | Peer metadata |
-| `ledger/solana_client.rs` | Devnet Solana faucet sidecar |
-| `ledger/settlement.rs` | Settlement helpers |
 
 ---
 
