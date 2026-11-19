@@ -6,8 +6,9 @@
 //    fingerprint; a reveal link carries the exact sealed bytes. Control: a seal of the text alone is caught.
 // 2. Each seal has a fresh 16-byte random salt, so a short prediction can't be guessed from its
 //    fingerprint. Control: a fixed salt is caught.
-// 3. The card, the share link and the X post carry only the code, the date and the chain height —
-//    never the prediction or its salt. Control: a card with the text is caught.
+// 3. The card, the share link and the X post carry only the code and the date — never the
+//    prediction or its salt, and no block number (nothing checks one). Controls: a card with the
+//    text, and the old card line with a block number, are caught.
 // 4. A reveal counts only a verified record matched by the sealed bytes' fingerprint (the earliest).
 //    Control: a reveal accepting any verified hit is caught.
 // 5. The honest lines stay (written when recorded and unchanged; not that it was right; not that the
@@ -68,10 +69,13 @@ await check("each seal has a fresh random salt", () => fresh(S.newSeal));
 await mustThrow("a fixed salt is caught", () => fresh((t, o) => S.sealBytes(t, o, salt)));
 
 // 3. nothing hidden on the card, the share link or the X post
-const lines = S.cardLines({ code: "TET-ABCD-EFGH", opens: "2026-12-01", height: 1234 });
+const lines = S.cardLines({ code: "TET-ABCD-EFGH", opens: "2026-12-01" });
 const publicOnly = (ls, src) => {
   assert.ok(ls.every((l) => !l.includes(text) && !l.includes("03030303")), "the card carries the text or salt");
-  assert.deepEqual(ls, ["sealed · block #1234 · opens 2026-12-01", "TET-ABCD-EFGH"]);
+  // No block number: the chain tip fetched after sealing is not a checked anchor, and "block #N"
+  // would read as "existed before block N".
+  assert.ok(ls.every((l) => !/block|#\d/i.test(l)), "the card names a block, which nothing checked");
+  assert.deepEqual(ls, ["sealed · opens 2026-12-01", "TET-ABCD-EFGH"]);
   const share = src.slice(src.indexOf("const shareLink ="), src.indexOf("\n", src.indexOf("const shareLink =")));
   assert.ok(/\/try#code=\$\{code\}`/.test(share) && !/text|bytes|reveal/.test(share.replace("shareLink", "")), "the share link carries more than the code");
   const x = src.slice(src.indexOf("x.com/intent/post"), src.indexOf("target=", src.indexOf("x.com/intent/post")));
@@ -79,6 +83,8 @@ const publicOnly = (ls, src) => {
 };
 await check("the card, the share link and the X post carry no hidden text", () => publicOnly(lines, PANEL));
 await mustThrow("a card with the text is caught", () => publicOnly([...lines, text], PANEL));
+await check("control: the old card line with a block number is caught, for the block", () =>
+  assert.throws(() => publicOnly(["sealed · block #1234 · opens 2026-12-01", "TET-ABCD-EFGH"], PANEL), /names a block/));
 
 // 4. reveal counts only verified fingerprint matches
 const revealRule = (src) => assert.ok(src.includes('found.filter((f) => f.match === "file" && f.verified)'), "the reveal doesn't require a verified fingerprint match");

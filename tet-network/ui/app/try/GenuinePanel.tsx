@@ -162,7 +162,7 @@ export default function GenuinePanel() {
               </Button>
             </div>
             <p className="text-[14px]">{t("Anyone can check it: type the code into the search box on the TET home page, or open the link.")}</p>
-            <p className="text-[14px] text-[#5d646d]">{t("This shows that your ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.")}</p>
+            <p className="text-[14px] text-[#5d646d]">{t("This shows that your ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.")}</p>
             <div className="space-y-2 border-t border-[#eceef1] pt-3">
               <p className="font-semibold">{t("Anchor on chain")}</p>
               {anchor ? (

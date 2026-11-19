@@ -42,7 +42,7 @@ export function ProofCodeBox(props: { code: string; recordBytes: Uint8Array; nam
         <path d={d} fill="#000" />
       </svg>
       <p className="text-[14px]">{t("The code finds it; the signature proves it.")}</p>
-      <p className="text-[14px] text-[#5d646d]">{t("Proves this key signed this file's SHA-256, and that it was published on this node at that time. Doesn't prove the work is original or that a person made it.")}</p>
+      <p className="text-[14px] text-[#5d646d]">{t("Proves this key signed this file's SHA-256. The time shown is from this node's clock and is not checked. Doesn't prove the work is original or that a person made it.")}</p>
       <p className="text-[14px] text-[#5d646d]">{t("Published in this node's public signature registry, at your request. Keep the .sig.json: with it and the file, anyone can check the signature in Verify.")}</p>
       <OfflineVerifier />
       <div className="flex flex-wrap gap-2">
@@ -113,7 +113,7 @@ export function SignatureResults(props: { query: string; fromMs?: number; toMs?:
                 </button>
               ) : (
                 <span className={MONO}>{h.signerEd25519.slice(0, 16)}…</span>
-              )} · {t("published")} <span className={MONO}>{new Date(h.publishedAtMs).toLocaleString()}</span>
+              )} · {t("published {when} (time from this node's clock, not checked)", { when: new Date(h.publishedAtMs).toLocaleString() })}
             </p>
             <p className="break-all text-[#5d646d]">
               {t("File SHA-256")} <span className={MONO}>{h.fileSha256}</span>

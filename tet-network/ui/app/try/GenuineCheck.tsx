@@ -160,6 +160,8 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
     <div className="space-y-3">
       <OfflineVerifier />
       {marked.length ? <CheckCopy marked={marked} sample={props.sample} /> : null}
+      {/* The order comes from the node's clock (publishedAtMs), which nothing checks: say so rather than call one "first". */}
+      {hits.length > 1 ? <p className="text-[13.5px] text-[#5d646d]">{t("The order comes from this node's clock, which was not checked.")}</p> : null}
       <ul className="divide-y divide-[#eceef1] rounded-md border border-[#c9ced4]">
         {hits.map((h, i) => (
           <li key={i} className={cx(!h.verified && "bg-[#fbeaea]")}>
@@ -169,19 +171,21 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                 <span aria-hidden className={h.verified ? "text-[#1f5132]" : "text-[#8a1f1f]"}>{h.verified ? "✓" : "✗"}</span>
                 <span className={cx(MONO, "font-semibold")}>{h.code}</span>
                 <span className={cx(MONO, "text-[13.5px] text-[#5d646d]")}>{h.signerEd25519.slice(0, 8)}</span>
-                <span className="text-[13.5px] text-[#5d646d]">{new Date(h.publishedAtMs).toLocaleDateString(locale)}</span>
+                <span className="text-[13.5px] text-[#5d646d]">
+                  {new Date(h.publishedAtMs).toLocaleDateString(locale)} ({t("time from this node's clock, not checked")})
+                </span>
                 <span aria-hidden className="ml-auto text-[#5d646d] group-open:rotate-90">›</span>
               </summary>
               <div className="space-y-2 px-3 pb-3 text-[15px]">
                 {h.verified ? (
                   <p className="font-semibold text-[#1f5132]">
-                    {h.match === "file" ? (firstFile === i ? t("First marked as genuine") : t("Also marked later, by another ID")) : t("Marked as genuine")}
+                    {h.match === "file" && firstFile >= 0 && firstFile !== i && h.signerEd25519 !== hits[firstFile].signerEd25519 ? t("Also marked, by another ID") : t("Marked as genuine")}
                   </p>
                 ) : (
                   <p className="font-semibold text-[#8a1f1f]">{t("This record doesn't check out. Don't trust it.")}</p>
                 )}
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                  <dt className="text-[#5d646d]">{t("Who")}</dt>
+                  <dt className="text-[#5d646d]">{t("Marked by")}</dt>
                   <dd className="m-0">
                     {t("ID")}{" "}
                     {props.onId ? (
@@ -193,7 +197,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                     )}
                   </dd>
                   <dt className="text-[#5d646d]">{t("When")}</dt>
-                  <dd className="m-0">{t("recorded on this node at {when}", { when: new Date(h.publishedAtMs).toLocaleString(locale) })}</dd>
+                  <dd className="m-0">{t("recorded on this node at {when} (time from this node's clock, not checked)", { when: new Date(h.publishedAtMs).toLocaleString(locale) })}</dd>
                   <dt className="text-[#5d646d]">{t("What")}</dt>
                   <dd className={cx(MONO, "m-0 break-all text-[13px]")}>{t("fingerprint (SHA-256)")} {h.fileSha256}</dd>
                   {h.verified && h.anchor ? (
@@ -205,7 +209,7 @@ export default function GenuineCheck(props: { query: string; fromMs?: number; to
                     </>
                   ) : null}
                 </dl>
-                {h.verified ? <p className="text-[13.5px] text-[#5d646d]">{t("This shows that this ID marked this exact file and when this node recorded it. It doesn't show who is behind the ID, or that the content is original or true.")}</p> : <p className="text-[13.5px]">{h.reason}</p>}
+                {h.verified ? <p className="text-[13.5px] text-[#5d646d]">{t("This shows that this ID marked this exact file. The time is from this node's clock and is not checked. It doesn't show who is behind the ID, or that the content is original or true.")}</p> : <p className="text-[13.5px]">{h.reason}</p>}
                 <p className="text-[13px]">
                   <button type="button" className={cx(FOCUS, "rounded-sm underline underline-offset-2 text-[#5d646d]")} onClick={() => download(`${h.code}.proof.json`, h.recordBytes)}>
                     {t("Download the proof file")}

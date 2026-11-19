@@ -11,7 +11,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { readPublicThreads, searchThreads, type PublicListing, type PublicThread } from "../lib/public_search";
 import type { OpenBoard } from "../lib/try_board";
 import { openBoard } from "../lib/try_board";
-import { FOCUS, MONO, cx } from "./ui";
+import { FOCUS, cx } from "./ui";
 import { BASE, useTryWallet } from "./wallet";
 import { useLang } from "./i18n";
 import ContinueBlock from "./ContinueBlock";
@@ -226,7 +226,7 @@ export default function HomePanel(props: {
                     {h.title || t("Untitled")}
                   </button>{" "}
                   <span className="text-[13px] text-[#5d646d]">
-                    ({h.count}) · {h.board} · {new Date(h.createdAtMs).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                    {t("({n}) · {board} · started {when} (time written by the poster, not checked)", { n: h.count, board: h.board, when: new Date(h.createdAtMs).toLocaleString([], { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) })}
                   </span>
                 </li>
               ))}
@@ -265,7 +265,7 @@ export default function HomePanel(props: {
                       {h.title || t("Untitled")}
                     </button>
                     <p className="text-[13.5px] text-[#5d646d]">
-                      {h.board} · {t("{n} posts", { n: h.count })} · <span className={MONO}>{new Date(h.lastAtMs).toLocaleString()}</span>
+                      {t("{board} · {n} posts · {when} (time written by the poster, not checked)", { board: h.board, n: h.count, when: new Date(h.lastAtMs).toLocaleString() })}
                     </p>
                   </li>
                 ))}
