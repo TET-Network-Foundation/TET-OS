@@ -22,7 +22,10 @@ few days. Small, focused pull requests are easiest to review.
   `node --experimental-strip-types scripts/<name>_guard.mjs` in `tet-network/ui`. CI runs all of them.
 - All of CI's guards at once, before any push: `bash scripts/run_guards.sh` from the root. It needs
   a built `tet-cli` (`cargo build -p tet-cli --release`) and `npm ci --ignore-scripts` in
-  `tet-network/ui`.
+  `tet-network/ui`. Commit first: it exits 2 without running anything while any file is untracked,
+  because the guards that scan the repository read only files git tracks.
+- The push hook, once per clone: `sh scripts/hooks/install.sh`. It refuses a push that would update
+  more than one ref on the remote. See [`scripts/hooks/README.md`](./scripts/hooks/README.md).
 
 ## Rules every change keeps
 
