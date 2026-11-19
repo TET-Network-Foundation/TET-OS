@@ -61,6 +61,9 @@ if [ -z "$missing" ]; then pass "every ui-job guard step reaches the runner"; el
 nb=$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) } job == "rust" && /^[[:space:]]+run: python3 tools\/[A-Za-z0-9_\/-]+\/test_[A-Za-z0-9_]+\.py[[:space:]]*$/' .github/workflows/ci.yml | grep -c 'tools/machine-notebook/test_notebook.py')
 if [ "$nb" = 1 ]; then pass "ci.yml's rust job lists the machine notebook guard for the runner"; else flunk "ci.yml's rust job lists the machine notebook guard for the runner" "found $nb"; fi
 
+# The rust job's node example step (the agent permit example) reaches the runner, from the root.
+if grep -qxF ".	node tet-agent-sdk/examples/agent_permit_once.mjs" <<<"$listed"; then pass "the agent permit example reaches the runner, from the root"; else flunk "the agent permit example reaches the runner, from the root"; fi
+
 # Untracked files: a guard that scans `git ls-files` (as try_privacy_guard does) cannot see a file
 # that isn't committed, so the runner must not report green while one exists (2026-11-12).
 SCAN="sh -c '! git ls-files -z | xargs -0 grep -l untraceable'"

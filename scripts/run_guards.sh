@@ -4,7 +4,7 @@
 #   bash scripts/run_guards.sh            # from the repo root; exit 0 only if every guard is green
 #   bash scripts/run_guards.sh && git push
 #
-# The list is read from .github/workflows/ci.yml (the `python3 tools/…/test_*.py` steps of the `rust`
+# The list is read from .github/workflows/ci.yml (the `python3 tools/…/test_*.py` and `node tet-agent-sdk/examples/*.mjs` steps of the `rust`
 # job, run from the root against target/release/tet-cli unless TET_CLI is set; the `node …
 # scripts/*.mjs` steps of the `ui` job, run from tet-network/ui; and the committed signer's interop
 # check), so it can't drift from CI.
@@ -49,6 +49,7 @@ else
   list=$(awk '
     /^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) }
     job == "rust" && /^[[:space:]]+run: python3 tools\/[A-Za-z0-9_\/-]+\/test_[A-Za-z0-9_]+\.py[[:space:]]*$/ { sub(/^[[:space:]]+run: /, ""); print ".\t" $0 }
+    job == "rust" && /^[[:space:]]+run: node tet-agent-sdk\/examples\/[A-Za-z0-9_-]+\.mjs[[:space:]]*$/ { sub(/^[[:space:]]+run: /, ""); print ".\t" $0 }
     job == "ui" && /^[[:space:]]+run: node .*scripts\/[A-Za-z0-9_-]+\.mjs/ { sub(/^[[:space:]]+run: /, ""); print "tet-network/ui\t" $0 }
     job == "wasm" && /^[[:space:]]+run: node tet-agent-sdk\/scripts\/check_wasm_interop\.mjs/ { sub(/^[[:space:]]+run: /, ""); print ".\t" $0 }
   ' "$CI")

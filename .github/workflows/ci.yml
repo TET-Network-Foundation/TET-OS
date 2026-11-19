@@ -219,6 +219,17 @@ jobs:
           TET_CLI: target/debug/tet-cli
         run: python3 tools/machine-notebook/test_notebook.py
 
+      # The agent permit example (tet-agent-sdk/examples) drives the same notebook and tet-cli: a
+      # permit acts once, and a second use of it is refused. Node built-ins and python3 only, temp
+      # dirs, no npm install and no network, so it can run here on the runner's own Node.
+      # Exit 0 all six steps ok, 1 on any failed step, 2 if tet-cli is missing.
+      # scripts/run_guards.sh picks this line up too.
+      - if: needs.gate.outputs.code == 'true'
+        name: agent permit example — a permit acts once
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: node tet-agent-sdk/examples/agent_permit_once.mjs
+
       # Sign in with TET, the local-only prototype (tools/sign-in): signs and checks only through
       # tet-cli, so it runs here on the same binary. A replayed nonce, another domain and an expired
       # challenge must each be refused for that reason; scripts/run_guards.sh picks this line up too.
@@ -394,6 +405,40 @@ jobs:
           n=$(grep -cE '^warning: ' clippy.log || true)
           echo "### Clippy: $n warnings (non-blocking)" >> "$GITHUB_STEP_SUMMARY"
           grep -E '^warning: .* generated [0-9]+ warnings' clippy.log >> "$GITHUB_STEP_SUMMARY" || true
+
+      # R11 of the public site's run guard: what the page writes is read by the real notebook.py and
+      # signin.py through the tet-cli built above. The ui job has no tet-cli, so R11 only prints a
+      # skip line there; this is where it runs. Node 22 for --experimental-strip-types.
+      # LAST in the job on purpose: the install below brings the site's npm packages into the job
+      # that holds the Rust build. No later step of this run uses target/ or ~/.cargo, so a package
+      # cannot swap a binary that a later guard here trusts. Known limit: the rust-cache post-step
+      # still saves both afterwards (only when its key missed), and later runs restore that cache.
+      - if: needs.gate.outputs.code == 'true'
+        name: Install Node 22 (for the site run guard's R11)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tet-network/ui/package-lock.json
+
+      # The step fails if site_run_guard fails, and also if R11 did not run: a skip line, or a missing
+      # "ok" line for any of the three R11 checks, means TET_CLI was lost, and a guard that only skips is not a
+      # guard. (Not `! grep`: bash exempts a negated command from set -e.) TET_CLI is absolute because
+      # the step runs in tet-network/ui and R11 hands the path to notebook.py and signin.py.
+      - if: needs.gate.outputs.code == 'true'
+        name: public site — R11, the page's notebook and sign-in answer pass the real tools (tet-cli)
+        working-directory: tet-network/ui
+        env:
+          TET_CLI: ${{ github.workspace }}/target/debug/tet-cli
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          out="$RUNNER_TEMP/site_run_guard.txt"
+          node --experimental-strip-types scripts/site_run_guard.mjs | tee "$out"
+          if grep -q '^skip R11' "$out"; then echo "R11 was skipped: TET_CLI not seen"; exit 1; fi
+          grep -q '^ok   R11 a notebook the page writes is VALID' "$out"
+          grep -q '^ok   R11 control: a pin not of this key' "$out"
+          grep -q '^ok   R11 an answer the page signs is accepted' "$out"
 
   ui:
     name: ui (next build)
