@@ -60,7 +60,9 @@ python3 tools/machine-notebook/notebook.py export --dir ~/notebook --out ~/noteb
 ```
 
 `export` writes a new folder with `chain.json`, `chain.txt`, `records/` and `permits/`, byte for byte,
-and nothing else: no `device.key`, `device.head`, `device.pin` or `device.keyid`. `verify` run on a
+and nothing else: no `device.key`, `device.head`, `device.pin` or `device.keyid`. It copies a file only
+if it is what its name says (a record, a permit, an envelope, hash lines), and not one of the device's
+own files under another name; otherwise it writes nothing and names the file. `verify` run on a
 folder that holds `device.key` says so on its last line.
 
 Every TET signature has two halves, Ed25519 and ML-DSA-44, each under its own public key. `init` also
@@ -137,6 +139,10 @@ and saying so, rather than signing a number twice. `record --permit` reads the e
 back from `device.head` through each record's `prev`, so a record moved out of `records/` is refused,
 not skipped.
 
+One `record` runs at a time in a folder: a `run` loop and a manual `record` take turns on
+`<dir>/device.lock`. A run waits up to 30 seconds for the other to finish, then gives up and says so
+(`not recorded: another record run … held device.lock for 30s`).
+
 ## One-time permits
 
 A permit is the device's own signed note that one action may be recorded once. `permit` writes it and
@@ -153,7 +159,9 @@ the permit. `--action` is a short name (letters, digits, `. _ -`), so no name or
 
 `verify` reads the log INVALID if any permit is cited twice, cited after its `expires_seq`, or not
 signed by this device's key (both halves, against the pin). It also refuses a cited permit that is missing, was edited after signing,
-was signed as something other than a permit, or sits under a file name that is not its own id.
+was signed as something other than a permit, sits under a file name that is not its own id, or whose
+action or id is not in the form `permit` writes. Text from the folder that `verify` prints stays on its
+own line: a line break or other control character in it is printed as `\u000a` and the like.
 `record` makes the same check before it writes anything, because one bad citation would leave an
 append-only log INVALID for good.
 
@@ -253,8 +261,10 @@ cited once at its last open seq is VALID; cited twice, cited after `expires_seq`
 key, edited after signing, copied under a second name, missing, or signed as a log record, each reads
 INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. `record` refuses a log that no longer ends at
 the last record the device signed (records removed from the end, or chain.txt's last line changed).
-`export` copies exactly the chain, records and permits, and verify's last line names a `device.key` in
-the folder it checked. Every file is read once and tet-cli checks those bytes: a file changed in the folder during a check,
+Two `record` runs at once on one permit sign one record, and the other is refused. `export` copies
+exactly the chain, records and permits, refuses the device key moved or linked under a log file's name,
+and verify's last line names a `device.key` in the folder it checked. A permit whose action or id is
+not in the form `permit` writes is not a permit, and a line break in a record is printed escaped. Every file is read once and tet-cli checks those bytes: a file changed in the folder during a check,
 and a record that is not a regular file, each read INVALID for that reason. For the
 pin, one case per half: a record and a permit whose Ed25519 or ML-DSA-44 half is another device's valid
 signature each read INVALID for that half; another device's intact log reads INVALID against this

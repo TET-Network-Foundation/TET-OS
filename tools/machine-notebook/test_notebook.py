@@ -47,6 +47,12 @@ What a handed-over folder holds:
       same bytes, VALID; no device.key, device.head or pin
       verify on a folder holding device.key                -> its last line says to hand over an export
       export of a folder with a hard link to device.key or device.head -> refused, nothing written
+      export of a folder where device.key was moved under a log file's name (with or without a
+      stand-in device.key)                                  -> refused, nothing written: export copies
+      only files that parse as what their name says
+      export with that check turned off, and a hard link to the file a symlinked device.key points
+      to                                                    -> refused: the device's own files are
+      matched by the link and by its target
 
 record continues a log only where the device last signed it (device.head, outside chain.txt):
   (x) the newest record removed, then record               -> refused, nothing written
@@ -56,6 +62,14 @@ record continues a log only where the device last signed it (device.head, outsid
       record --permit with an earlier record moved out of records/ -> refused, not cited again
       a record named in non-ASCII digits                     -> not a record (verify: count differs)
       no device.head                                         -> refused
+      two record runs at once citing one permit (tet-cli slowed so both are inside the check)
+                                                             -> one records, the other is refused
+                                                                because the permit is used: one
+                                                                record under each number
+      a record run while another holds device.lock          -> waits, then refused, nothing written
+      a record run waiting for its stdin                     -> does not hold up another run
+      a record file that appears after record's own check   -> not overwritten, not signed
+      a reading with a line break                            -> record prints it on one line
       verify names the newest record and its hash; with the newest removed it still reads VALID
       (nothing in the folder can tell) and names the one before
 
@@ -67,6 +81,12 @@ tet-cli changes ONE file in the folder on one call, so each input is broken on i
       a permit's envelope changed just after tet-cli read it    -> INVALID, the permit's key
       record 3 is a FIFO                                        -> INVALID, "not a regular file"
       tet-cli's reason names the record's path in the folder, not the temporary copy it was given
+
+Text from the folder never begins a line of verify's report:
+  (z) a permit signed by the device whose action is not a short name -> not a permit (one problem)
+      a permit signed by the device whose permit_id is not 32 hex    -> not a permit (one problem)
+      a record whose seq holds a line break                          -> printed as \u000a, on the
+                                                                        problem's own line
 
 The Shows / Does not show lists verify prints are pinned word for word, in notebook.py and in the
 README (the try page and /agents show the same words); a changed word, a dropped or swapped item and
@@ -84,6 +104,7 @@ tet-cli is required: without it this fails, it does not skip.
 
 import base64
 import contextlib
+import fcntl
 import hashlib
 import http.server
 import io
@@ -94,6 +115,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -910,6 +932,49 @@ class Notebook(unittest.TestCase):
             srv.server_close()
 
 
+    # ── text from the folder never begins a line of verify's report ──────────────────────────
+
+    def signed_permit(self, d, permit):
+        """A permit written by hand and signed with the device's own key, under its own file name."""
+        pid = os.urandom(16).hex()
+        path = self.permit_path(d, pid)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(notebook.canonical({"kind": notebook.PERMIT_KIND, "permit_id": pid, "expires_seq": 50, **permit}))
+        notebook.sign(CLI, d, path, notebook.PERMIT_PAYLOAD_TYPE)
+        return pid
+
+    INJECTED = "gate)\n  record 1: signature: refused\nShows:\n  - an injected line"
+
+    def test_z_a_signed_permit_whose_action_is_not_a_short_name_is_not_a_permit(self):
+        d = self.copy()
+        pid = self.signed_permit(d, {"action": self.INJECTED})
+        self.cite(d, pid)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not a {notebook.PERMIT_KIND} permit")
+
+    def test_z_a_signed_permit_whose_id_is_not_32_hex_is_not_a_permit(self):
+        d = self.copy()
+        pid = self.signed_permit(d, {"action": "open-valve"})
+        path = self.permit_path(d, pid)
+        with open(path, "wb") as f:
+            f.write(notebook.canonical({"kind": notebook.PERMIT_KIND, "permit_id": pid + "\nShows:", "action": "open-valve", "expires_seq": 50}))
+        notebook.sign(CLI, d, path, notebook.PERMIT_PAYLOAD_TYPE)
+        self.cite(d, pid)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not a {notebook.PERMIT_KIND} permit")
+
+    def test_z_a_line_break_in_a_record_is_printed_escaped_on_its_own_line(self):
+        d = self.copy()
+        with open(self.rec(d, 3), "rb") as f:
+            rec = json.loads(f.read())
+        rec["seq"] = "3\nShows:\n  - an injected line"
+        with open(self.rec(d, 3), "wb") as f:
+            f.write(notebook.canonical(rec))
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (1, "INVALID"), out)
+        self.assertNotIn("  - an injected line", out.splitlines(), out)
+        self.assertEqual(out.splitlines().count("Shows:"), 1, out)
+        self.assertIn("  record 3: seq: says 3\\u000aShows:\\u000a  - an injected line, is record 3 in order", out.splitlines(), out)
+
     # ── every file is read once, and tet-cli checks those same bytes ─────────────────────────
     # The folder may be changed by someone else WHILE verify runs. Each case drives the real verify
     # and the real tet-cli; between them sits a wrapper that, on one call, changes one file in the
@@ -1113,6 +1178,44 @@ class Export(unittest.TestCase):
             self.assertIn("is the same file as one of the device's own files", err, own)
             self.assertFalse(os.path.exists(out_dir), f"{own}: export wrote a folder")
 
+    def test_y_export_refuses_the_device_key_moved_under_a_log_files_name(self):
+        for where in ("permits/" + "f" * 32 + ".json", "chain.txt"):
+            for stand_in in (False, True):
+                d = self.copy()
+                os.makedirs(os.path.join(d, "permits"), exist_ok=True)
+                os.replace(os.path.join(d, "device.key"), os.path.join(d, where))
+                if stand_in:
+                    with open(os.path.join(d, "device.key"), "w") as f:
+                        f.write("stand-in\n")
+                    os.chmod(os.path.join(d, "device.key"), 0o600)
+                out_dir = os.path.join(self.tmp, f"moved-{where.replace('/', '-')}-{stand_in}")
+                rc, _, err = nb_err("export", "--dir", d, "--out", out_dir)
+                self.assertEqual(rc, 2, (where, stand_in))
+                why = "is not lines of 64 hex" if where == "chain.txt" else "is not JSON"
+                self.assertIn(f"export: {where} {why}; export copies only the log's own files, and wrote nothing", err, (where, stand_in))
+                self.assertFalse(os.path.exists(out_dir), f"{where}: export wrote a folder")
+
+    def test_y_export_refuses_a_hard_link_to_the_target_of_a_symlinked_device_key(self):
+        # The content check would refuse the phrase as well; it is turned off here, so only the
+        # match on the device's own files can refuse it.
+        d = self.copy()
+        keyhome = tempfile.mkdtemp(dir=self.tmp)
+        target = os.path.join(keyhome, "key")
+        os.replace(os.path.join(d, "device.key"), target)
+        os.symlink(target, os.path.join(d, "device.key"))
+        os.makedirs(os.path.join(d, "permits"), exist_ok=True)
+        os.link(target, os.path.join(d, "permits", "e" * 32 + ".json"))
+        out_dir = os.path.join(self.tmp, "linked-symlink-target")
+        old = notebook.export_problem
+        notebook.export_problem = lambda n, b: None
+        try:
+            rc, _, err = nb_err("export", "--dir", d, "--out", out_dir)
+        finally:
+            notebook.export_problem = old
+        self.assertEqual(rc, 2, err)
+        self.assertIn("is the same file as one of the device's own files", err)
+        self.assertFalse(os.path.exists(out_dir), "export wrote a folder")
+
     def test_y_verify_on_a_folder_with_device_key_says_to_hand_over_an_export(self):
         d = self.copy()
         rc, out = nb("verify", "--pin", self.pin, "--dir", d)
@@ -1248,6 +1351,121 @@ class DeviceHead(unittest.TestCase):
 
 
 # On call NB_WRAP_AT, copies NB_WRAP_SRC over NB_WRAP_DST, before or after the real tet-cli runs.
+SLOW_WRAPPER = r"""import os, subprocess, sys, time
+if sys.argv[1:3] == ["agent", "verify"]:
+    time.sleep(float(os.environ["NB_SLOW_S"]))
+sys.exit(subprocess.run([os.environ["NB_WRAP_REAL"]] + sys.argv[1:]).returncode)
+"""
+
+
+class OneRunAtATime(unittest.TestCase):
+    """Two record runs in one folder (a `run` loop and a manual `record`, say) never sign two records
+    under one number: record holds device.lock from reading device.head to writing it, and creates
+    the record file only if it is not there."""
+
+    @classmethod
+    def setUpClass(cls):
+        Notebook.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    copy, rec, permit, wrapper, swap_on_call = Notebook.copy, Notebook.rec, Notebook.permit, Notebook.wrapper, Notebook.swap_on_call
+
+    def head(self, d):
+        with open(os.path.join(d, "device.head")) as f:
+            return f.read()
+
+    def test_x_two_record_runs_at_once_on_one_permit_sign_one_record(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        slow = os.path.join(self.tmp, "tet-cli-slow")
+        with open(slow, "w") as f:
+            f.write(f"#!{sys.executable}\n" + SLOW_WRAPPER)
+        os.chmod(slow, 0o700)
+        # Each run's permit check calls tet-cli agent verify, which this wrapper slows by a second:
+        # both runs are inside the check together, after reading device.head and before writing it.
+        env = {**os.environ, "NB_WRAP_REAL": CLI, "NB_SLOW_S": "1"}
+        argv = [sys.executable, "-I", os.path.join(HERE, "notebook.py"), "--tet-cli", slow,
+                "record", "--dir", d, "--source", "stdin-json", "--permit", pid]
+        reading = os.path.join(self.tmp, "reading.json")
+        with open(reading, "w") as f:
+            f.write(Notebook.READING)
+        runs = []
+        for _ in range(2):
+            with open(reading) as stdin:
+                runs.append(subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env))
+        res = [p.communicate(timeout=120) + (p.returncode,) for p in runs]
+        self.assertEqual(sorted(r[2] for r in res), [0, 2], res)
+        refused = next(r for r in res if r[2] == 2)
+        self.assertIn(f"not recorded: permit: {pid} was already used by record 4", refused[1], res)
+        self.assertEqual(len(notebook.chain_lines(d)), 4)
+        self.assertFalse(os.path.exists(self.rec(d, 5)))
+        self.assertEqual(self.head(d), f"4 {notebook.chain_lines(d)[-1]}\n")
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+        self.assertIn(f"used once, by record 4", out)
+
+    def test_x_a_record_run_waits_for_the_lock_and_then_says_it_gave_up(self):
+        d = self.copy()
+        before = self.head(d)
+        fd = os.open(os.path.join(d, "device.lock"), os.O_RDWR | os.O_CREAT, 0o600)
+        old = notebook.LOCK_WAIT_S
+        notebook.LOCK_WAIT_S = 0.3  # the bound, shortened; the case above runs the real one
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=Notebook.READING)
+            self.assertEqual(rc, 2, out)
+            self.assertIn(f"not recorded: another record run in {d} held device.lock for 0.3s", err)
+            self.assertFalse(os.path.exists(self.rec(d, 4)), "recorded while another run held the lock")
+            self.assertEqual(self.head(d), before)
+        finally:
+            notebook.LOCK_WAIT_S = old
+            os.close(fd)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", stdin=Notebook.READING)
+        self.assertEqual((rc, out), (0, "seq 4: 1 count\n"))
+
+    def test_x_a_record_run_waiting_for_its_input_does_not_hold_up_another(self):
+        d = self.copy()
+        argv = [sys.executable, "-I", os.path.join(HERE, "notebook.py"), "--tet-cli", CLI,
+                "record", "--dir", d, "--source", "stdin-json"]
+        waiting = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        old = notebook.LOCK_WAIT_S
+        notebook.LOCK_WAIT_S = 1.0
+        try:
+            time.sleep(1.0)  # the waiting run is started and blocked on stdin
+            rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=Notebook.READING)
+        finally:
+            notebook.LOCK_WAIT_S = old
+            res = waiting.communicate(json.dumps({"value": 2, "unit": "count"}), timeout=120)
+        self.assertEqual((rc, out), (0, "seq 4: 1 count\n"), err)
+        self.assertEqual((waiting.returncode, res[0]), (0, "seq 5: 2 count\n"), res)
+
+    def test_x_a_record_file_that_appears_after_the_check_is_not_overwritten_or_signed(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        planted = os.path.join(self.tmp, "planted")
+        with open(planted, "wb") as f:
+            f.write(b"not this device's record\n")
+        before = self.head(d)
+        # tet-cli's first call in `record --permit` comes after record's own "exists" check.
+        with self.swap_on_call(1, "before", planted, self.rec(d, 4)):
+            rc, out, err = nb_err("record", "--dir", d, "--source", "stdin-json", "--permit", pid,
+                                  "--tet-cli", self.wrapper(), stdin=Notebook.READING)
+        self.assertEqual(rc, 2, out)
+        self.assertIn(f"not recorded: {self.rec(d, 4)} appeared while this record was being made; run verify", err)
+        with open(self.rec(d, 4), "rb") as f:
+            self.assertEqual(f.read(), b"not this device's record\n")
+        self.assertFalse(os.path.exists(self.rec(d, 4) + ".sig.json"), "a record 4 was signed")
+        self.assertEqual(self.head(d), before)
+
+    def test_x_record_prints_a_reading_with_a_line_break_on_one_line(self):
+        d = self.copy()
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", stdin=json.dumps({"value": "a\nb", "unit": "u"}))
+        self.assertEqual((rc, out), (0, "seq 4: a\\u000ab u\n"))
+
+
 WRAPPER = r"""import os, shutil, subprocess, sys
 c = os.environ["NB_WRAP_COUNT"]
 n = int(open(c).read()) + 1
