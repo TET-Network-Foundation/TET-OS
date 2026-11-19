@@ -42,6 +42,14 @@ only the pin can refuse it.
   verify --node: a hash record with one half from another device does not count as this device's,
   and neither does another device's hash record saved in the folder.
 
+Every file verify reads is read once, and tet-cli checks those same bytes. A wrapper around the real
+tet-cli changes ONE file in the folder on one call, so each input is broken on its own:
+  (w) record 3's bytes changed just before tet-cli reads them   -> INVALID, record 3's signature
+      record 3's envelope changed just after tet-cli read it    -> INVALID, record 3's key
+      a permit's bytes changed just before tet-cli reads them   -> INVALID, the permit's signature
+      a permit's envelope changed just after tet-cli read it    -> INVALID, the permit's key
+      record 3 is a FIFO                                        -> INVALID, "not a regular file"
+
 The Shows / Does not show lists verify prints are pinned word for word, in notebook.py and in the
 README (the try page and /agents show the same words); a changed word, a dropped or swapped item and
 swapped lists are each caught.
@@ -881,6 +889,166 @@ class Notebook(unittest.TestCase):
         finally:
             srv.shutdown()
             srv.server_close()
+
+
+    # ── every file is read once, and tet-cli checks those same bytes ─────────────────────────
+    # The folder may be changed by someone else WHILE verify runs. Each case drives the real verify
+    # and the real tet-cli; between them sits a wrapper that, on one call, changes one file in the
+    # folder: just before tet-cli reads (payload) or just after (envelope). Each case breaks ONE of the
+    # two inputs, so a verify that re-reads either one from the folder is caught by its own case.
+
+    def wrapper(self):
+        w = os.path.join(self.tmp, "tet-cli-wrapper")
+        if not os.path.exists(w):
+            with open(w, "w") as f:
+                f.write(f"#!{sys.executable}\n" + WRAPPER)
+            os.chmod(w, 0o700)
+        return w
+
+    @contextlib.contextmanager
+    def swap_on_call(self, at, when, src, dst):
+        """On tet-cli call number `at`, copy `src` over `dst`, `when` = "before" or "after" tet-cli runs."""
+        count = os.path.join(self.tmp, f"wrap-count-{os.getpid()}-{id(self)}")
+        with open(count, "w") as f:
+            f.write("0")
+        env = {"NB_WRAP_REAL": CLI, "NB_WRAP_COUNT": count, "NB_WRAP_AT": str(at), "NB_WRAP_WHEN": when,
+               "NB_WRAP_SRC": src, "NB_WRAP_DST": dst}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            yield
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        with open(count) as f:
+            self.assertGreaterEqual(int(f.read()), at, "the wrapper never reached the call it was set for")
+
+    def problems_via_wrapper(self, d):
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d, "--tet-cli", self.wrapper())
+        lines = out.splitlines()
+        return rc, lines[0], [ln.strip() for ln in lines[1:lines.index("Shows:")]], out
+
+    def forge_last_record(self, d):
+        """Record 3 with another reading, not re-signed, and chain.txt made to match it. Returns the
+        path of a saved copy of the genuine record 3."""
+        genuine = os.path.join(self.tmp, f"genuine-{os.path.basename(d)}")
+        shutil.copy(self.rec(d, 3), genuine)
+        with open(genuine, "rb") as f:
+            rec = json.loads(f.read())
+        rec["reading"]["value"] = 666
+        forged = notebook.canonical(rec)
+        with open(self.rec(d, 3), "wb") as f:
+            f.write(forged)
+        chain = notebook.chain_lines(d)
+        chain[2] = hashlib.sha256(forged).hexdigest()
+        with open(os.path.join(d, "chain.txt"), "w") as f:
+            f.write("\n".join(chain) + "\n")
+        return genuine, forged
+
+    def test_w_record_bytes_changed_while_tet_cli_reads_them_are_invalid(self):
+        d = self.copy()
+        genuine, _ = self.forge_last_record(d)
+        with self.swap_on_call(3, "before", genuine, self.rec(d, 3)):
+            rc, verdict, problems, out = self.problems_via_wrapper(d)
+        self.assertEqual((rc, verdict), (1, "INVALID"), out)
+        self.assertEqual(len(problems), 1, out)
+        self.assertTrue(problems[0].startswith("record 3: signature:"), out)
+
+    def test_w_an_envelope_changed_after_tet_cli_read_it_is_invalid(self):
+        d = self.copy()
+        genuine_env = os.path.join(self.tmp, "genuine-env")
+        shutil.copy(self.rec(d, 3) + ".sig.json", genuine_env)
+        self.forge_last_record(d)
+        # Another device signs the forged record: a whole, valid envelope that tet-cli accepts.
+        notebook.sign(CLI, self.other_device(), self.rec(d, 3), notebook.PAYLOAD_TYPE, out=self.rec(d, 3) + ".sig.json")
+        with open(self.rec(d, 3) + ".sig.json", "rb") as f:
+            other_ed = notebook.half_keyids(json.loads(f.read()))[0]
+        with self.swap_on_call(3, "after", genuine_env, self.rec(d, 3) + ".sig.json"):
+            rc, verdict, problems, out = self.problems_via_wrapper(d)
+        self.assertEqual((rc, verdict), (1, "INVALID"), out)
+        self.assertEqual(problems, [f"record 3: key: signed by {other_ed}, not this device's {self.keyid}",
+                                    "log: key: 2 different keys signed this log"], out)
+
+    def permit_forged(self, d):
+        """A permit open until record 3, cited by record 4 (one too late), and a copy of it edited to
+        stay open until 9. Returns (pid, genuine permit path, genuine envelope path)."""
+        pid = self.permit(d, 3)
+        gp, ge = os.path.join(self.tmp, "genuine-permit"), os.path.join(self.tmp, "genuine-permit-env")
+        shutil.copy(self.permit_path(d, pid), gp)
+        shutil.copy(self.permit_path(d, pid) + ".sig.json", ge)
+        with open(gp, "rb") as f:
+            edited = f.read().replace(b'"expires_seq":3', b'"expires_seq":9')
+        with open(self.permit_path(d, pid), "wb") as f:
+            f.write(edited)
+        self.assertEqual(self.cite(d, pid), 4)
+        return pid, gp, ge
+
+    def test_w_permit_bytes_changed_while_tet_cli_reads_them_are_invalid(self):
+        d = self.copy()
+        pid, gp, _ = self.permit_forged(d)
+        # calls 1 to 4 are the records; call 5 is the permit record 4 cites
+        with self.swap_on_call(5, "before", gp, self.permit_path(d, pid)):
+            rc, verdict, problems, out = self.problems_via_wrapper(d)
+        self.assertEqual((rc, verdict), (1, "INVALID"), out)
+        self.assertEqual(len(problems), 1, out)
+        self.assertTrue(problems[0].startswith(f"record 4: permit: {pid}: signature:"), out)
+
+    def test_w_a_permit_envelope_changed_after_tet_cli_read_it_is_invalid(self):
+        d = self.copy()
+        pid, _, ge = self.permit_forged(d)
+        notebook.sign(CLI, self.other_device(), self.permit_path(d, pid), notebook.PERMIT_PAYLOAD_TYPE)
+        with open(self.permit_path(d, pid) + ".sig.json", "rb") as f:
+            other_ed = notebook.half_keyids(json.loads(f.read()))[0]
+        with self.swap_on_call(5, "after", ge, self.permit_path(d, pid) + ".sig.json"):
+            rc, verdict, problems, out = self.problems_via_wrapper(d)
+        self.assertEqual((rc, verdict), (1, "INVALID"), out)
+        self.assertEqual(problems, [f"record 4: permit: {pid} is signed by {other_ed}, not this device's {self.keyid}"], out)
+
+    def test_w_a_record_that_is_not_a_regular_file_is_invalid(self):
+        # Record 3 is a FIFO with a writer behind it: verify refuses it as a file type, before reading.
+        d = self.copy()
+        genuine, forged = self.forge_last_record(d)
+        with open(genuine, "rb") as f:
+            served = [forged, f.read()]
+        p = self.rec(d, 3)
+        os.remove(p)
+        os.mkfifo(p)
+
+        def serve():
+            for b in served:
+                try:
+                    with open(p, "wb") as f:
+                        f.write(b)
+                except OSError:
+                    pass
+
+        t = threading.Thread(target=serve, daemon=True)
+        t.start()
+        try:
+            self.assertOnlyProblem(d, "record 3: record: not a regular file")
+        finally:
+            for _ in served:  # let the writer finish, so no thread is left waiting on the FIFO
+                if not t.is_alive():
+                    break
+                fd = os.open(p, os.O_RDONLY | os.O_NONBLOCK)
+                t.join(0.2)
+                os.close(fd)
+            t.join(2)
+
+
+# On call NB_WRAP_AT, copies NB_WRAP_SRC over NB_WRAP_DST, before or after the real tet-cli runs.
+WRAPPER = r"""import os, shutil, subprocess, sys
+c = os.environ["NB_WRAP_COUNT"]
+n = int(open(c).read()) + 1
+open(c, "w").write(str(n))
+hit = n == int(os.environ["NB_WRAP_AT"])
+if hit and os.environ["NB_WRAP_WHEN"] == "before":
+    shutil.copy(os.environ["NB_WRAP_SRC"], os.environ["NB_WRAP_DST"])
+p = subprocess.run([os.environ["NB_WRAP_REAL"]] + sys.argv[1:])
+if hit and os.environ["NB_WRAP_WHEN"] == "after":
+    shutil.copy(os.environ["NB_WRAP_SRC"], os.environ["NB_WRAP_DST"])
+sys.exit(p.returncode)
+"""
 
 
 def nb_any(*argv):

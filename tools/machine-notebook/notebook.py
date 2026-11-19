@@ -84,6 +84,45 @@ class Fail(Exception):
     pass
 
 
+class Unreadable(Exception):
+    """A file in the folder that is not a regular file of a sane size; the message says which."""
+
+
+# A record or envelope is a few KiB. Every file verify reads goes through read_file, once, so that a
+# FIFO, a device or a symlink cannot hang it, feed it without end, or give one read different bytes
+# from the next; chain.txt holds one 65-byte line per record.
+MAX_FILE = 1 << 20
+MAX_CHAIN_TXT = 16 << 20
+
+
+def read_file(path, cap=MAX_FILE):
+    """The bytes of the regular file at `path`, read once. FileNotFoundError if there is none;
+    Unreadable for a symlink, FIFO, device or directory (opened without following or blocking, then
+    checked on the open descriptor), or for more than `cap` bytes."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        raise
+    except OSError:
+        raise Unreadable("not a regular file")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Unreadable("not a regular file")
+        chunks, size = [], 0
+        while True:
+            b = os.read(fd, 65536)
+            if not b:
+                break
+            size += len(b)
+            if size > cap:
+                raise Unreadable(f"larger than {cap} bytes")
+            chunks.append(b)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
 def canonical(obj):
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
@@ -99,10 +138,9 @@ def tet_cli(args):
 def chain_env(d):
     """The chain binding from chain.json, so signing and verifying always use the same one."""
     try:
-        with open(os.path.join(d, "chain.json")) as f:
-            c = json.load(f)
+        c = json.loads(read_file(os.path.join(d, "chain.json")))
         return {"TET_CHAIN_ID": c["chain_id"], "TET_GENESIS_HASH": c["genesis_hash"]}
-    except (OSError, ValueError, KeyError):
+    except (OSError, Unreadable, ValueError, KeyError, TypeError):
         raise Fail(f"no chain.json in {d}; run init before this")
 
 
@@ -117,6 +155,34 @@ def run_cli(cli, argv, env_extra=None):
     except FileNotFoundError:
         raise Fail(f"tet-cli not found at {cli} (build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)")
     return p.returncode, p.stdout, p.stderr
+
+
+def verify_bytes(cli, cenv, sig_bytes, payload_bytes):
+    """tet-cli agent verify over exactly these bytes, copied to a private temporary folder: the
+    envelope and payload tet-cli checks are the ones the caller hashed and parses, never a second read
+    of a file someone else can change. Returns (exit code, stdout)."""
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, "payload")
+        with open(p, "wb") as f:
+            f.write(payload_bytes)
+        with open(p + ".sig.json", "wb") as f:
+            f.write(sig_bytes)
+        rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", p + ".sig.json", "--payload", p], cenv)
+    return rc, out
+
+
+def refusal(out):
+    """The FAIL line tet-cli agent verify printed, without colour codes."""
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    return next((ln.split(":", 1)[1].strip() for ln in plain.splitlines() if ln.startswith("FAIL")), "tet-cli agent verify refused it")
+
+
+def parse_env(sig_bytes):
+    try:
+        env = json.loads(sig_bytes)
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return env if isinstance(env, dict) else {}
 
 
 def read_phrase(d):
@@ -370,24 +436,24 @@ def permit_problem(d, cli, pid, seq, used, device):
     if not isinstance(pid, str) or not re.fullmatch(r"[0-9a-f]{32}", pid):
         return "permit: not a permit id (32 hex)", None
     path = os.path.join(d, "permits", f"{pid}.json")
-    sig = path + ".sig.json"
-    if not os.path.exists(path) or not os.path.exists(sig):
+    try:
+        body = read_file(path)
+        sig_bytes = read_file(path + ".sig.json")
+    except FileNotFoundError:
         return f"permit: {pid} is not in this notebook", None
-    rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", sig, "--payload", path], chain_env(d))
+    except Unreadable as e:
+        return f"permit: {pid}: {e}", None
+    rc, out = verify_bytes(cli, chain_env(d), sig_bytes, body)
     if rc != 0:
-        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
-        why = next((ln.split(":", 1)[1].strip() for ln in plain.splitlines() if ln.startswith("FAIL")), "tet-cli agent verify refused it")
-        return f"permit: {pid}: signature: {why}", None
-    # Only after tet-cli accepted the envelope: it has checked that each keyid names the key that signed.
-    with open(sig) as f:
-        env = json.load(f)
+        return f"permit: {pid}: signature: {refusal(out)}", None
+    # Only after tet-cli accepted these envelope bytes: it has checked that each keyid names the key
+    # that signed. The key ids are read from the same bytes.
+    env = parse_env(sig_bytes)
     if env.get("payloadType") != PERMIT_PAYLOAD_TYPE:
         return f"permit: {pid}: payload type is {env.get('payloadType')!r}, not {PERMIT_PAYLOAD_TYPE}", None
     why = pin_problem(half_keyids(env), device)
     if why:
         return f"permit: {pid} is {why}" if why.startswith("signed") else f"permit: {pid}: {why}", None
-    with open(path, "rb") as f:
-        body = f.read()
     try:
         permit = json.loads(body)
     except ValueError:
@@ -414,9 +480,8 @@ def cited_permits(d):
     rec_dir = os.path.join(d, "records")
     for seq in sorted(int(m.group(1)) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))):
         try:
-            with open(os.path.join(rec_dir, f"{seq}.json"), "rb") as f:
-                pid = json.loads(f.read()).get("permit")
-        except (ValueError, AttributeError):
+            pid = json.loads(read_file(os.path.join(rec_dir, f"{seq}.json"))).get("permit")
+        except (OSError, Unreadable, ValueError, AttributeError):
             continue
         if isinstance(pid, str):
             used.setdefault(pid, seq)
@@ -460,18 +525,22 @@ def read_source(source):
 
 
 def chain_lines(d):
-    p = os.path.join(d, "chain.txt")
-    if not os.path.exists(p):
+    """chain.txt's lines; [] if there is none. Unreadable if it is not a regular file."""
+    try:
+        text = read_file(os.path.join(d, "chain.txt"), MAX_CHAIN_TXT).decode("ascii", "replace")
+    except FileNotFoundError:
         return []
-    with open(p) as f:
-        return [ln.strip() for ln in f if ln.strip()]
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
 
 
 def record_once(a):
     d = a.dir
     if not os.path.exists(os.path.join(d, "device.key")):
         raise Fail(f"no device key in {d}; run init before this")
-    chain = chain_lines(d)
+    try:
+        chain = chain_lines(d)
+    except Unreadable as e:
+        raise Fail(f"chain.txt: {e}")
     seq = len(chain) + 1
     rec_dir = os.path.join(d, "records")
     os.makedirs(rec_dir, exist_ok=True)
@@ -542,44 +611,54 @@ def ed_keyid(env):
 
 def check_chain(d, cli, pin):
     """Every problem found, as (seq or None, reason). Empty means the log checks out. `pin` is both
-    key ids of the expected signer, from outside the folder (read_pin)."""
+    key ids of the expected signer, from outside the folder (read_pin). Each file is read once
+    (read_file), and every check, tet-cli's included, sees those same bytes. Also returns the record
+    bytes by seq, for check_stamps."""
     problems = []
     rec_dir = os.path.join(d, "records")
     names = sorted(
         (int(m.group(1)), n) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))
     ) if os.path.isdir(rec_dir) else []
     if not names:
-        return [(None, "no records")], [], []
-    chain = chain_lines(d)
+        return [(None, "no records")], [], [], {}
+    try:
+        chain = chain_lines(d)
+    except Unreadable as e:
+        problems.append((None, f"chain.txt: {e}"))
+        chain = []
     if len(chain) != len(names):
         problems.append((None, f"chain.txt lists {len(chain)} records, records/ holds {len(names)}"))
+    cenv = chain_env(d)
     signers = []
     used = {}  # permit id -> the record that cited it first
     uses = []  # (seq, permit) for every citation that checked out
+    bodies = {}
     prev_hash = ZERO
     for i, (n, name) in enumerate(names, start=1):
         k = None
         path = os.path.join(rec_dir, name)
-        with open(path, "rb") as f:
-            body = f.read()
-        h = sha256_hex(body)
         if n != i:
             problems.append((n, f"seq: file {name} where record {i} should be (a record is missing)"))
-        # 1. the envelope: both signature halves, and the payload is exactly this file
-        sig = path + ".sig.json"
-        if not os.path.exists(sig):
+        try:
+            body = read_file(path)
+        except (FileNotFoundError, Unreadable) as e:
+            problems.append((n, f"record: {e if isinstance(e, Unreadable) else 'gone while being read'}"))
+            prev_hash = None  # nothing can chain to a record that could not be read
+            continue
+        bodies[n] = body
+        h = sha256_hex(body)
+        # 1. the envelope: both signature halves, and the payload is exactly these bytes
+        try:
+            sig_bytes = read_file(path + ".sig.json")
+        except FileNotFoundError:
             problems.append((n, "signature: no envelope"))
+        except Unreadable as e:
+            problems.append((n, f"signature: envelope {e}"))
         else:
-            rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", sig, "--payload", path], chain_env(d))
+            rc, out = verify_bytes(cli, cenv, sig_bytes, body)
             if rc != 0:
-                plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
-                why = next((ln.split(":", 1)[1].strip() for ln in plain.splitlines() if ln.startswith("FAIL")), "tet-cli agent verify refused it")
-                problems.append((n, f"signature: {why}"))
-            try:
-                with open(sig) as f:
-                    env = json.load(f)
-            except ValueError:
-                env = {}
+                problems.append((n, f"signature: {refusal(out)}"))
+            env = parse_env(sig_bytes)
             if env.get("payloadType") != PAYLOAD_TYPE:
                 problems.append((n, f"signature: payload type is {env.get('payloadType')!r}, not {PAYLOAD_TYPE}"))
             k = ed_keyid(env)
@@ -596,6 +675,8 @@ def check_chain(d, cli, pin):
             continue
         if canonical(rec) != body:
             problems.append((n, "record: not canonical JSON"))
+        if not isinstance(rec, dict):
+            rec = {}
         if rec.get("v") != 1 or rec.get("kind") != KIND:
             problems.append((n, "record: not a tet_machine_log_v1 record"))
         if rec.get("seq") != i:
@@ -605,7 +686,7 @@ def check_chain(d, cli, pin):
         if i <= len(chain) and chain[i - 1] != h:
             problems.append((n, "chain.txt: hash differs from the record"))
         # 3. the permit it cites, if any: this device's own, still open at this seq, not cited before
-        if isinstance(rec, dict) and "permit" in rec:
+        if "permit" in rec:
             pid = rec["permit"]
             why, permit = permit_problem(d, cli, pid, i, used, pin)
             if why:
@@ -617,7 +698,7 @@ def check_chain(d, cli, pin):
         prev_hash = h
     if len(set(signers)) > 1:
         problems.append((None, f"key: {len(set(signers))} different keys signed this log"))
-    return problems, signers, uses
+    return problems, signers, uses, bodies
 
 
 def get_json(url):
@@ -654,16 +735,14 @@ def is_my_hash_record(d, cli, raw, log_sha, pin):
     return rc == 0
 
 
-def check_stamps(d, node, cli, pin):
+def check_stamps(d, node, cli, pin, bodies):
     """Every record: is it in this node's registry, and is its anchor real? The anchor is
-    re-checked the way checkStamp (lib/sign_anything.ts) does."""
+    re-checked the way checkStamp (lib/sign_anything.ts) does. `bodies` are the record bytes
+    check_chain read and checked, by seq: the folder is not read a second time."""
     node = node.rstrip("/")
     lines = []
-    rec_dir = os.path.join(d, "records")
-    seqs = sorted(int(m.group(1)) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n)))
-    for seq in seqs:
-        with open(os.path.join(rec_dir, f"{seq}.json"), "rb") as f:
-            log_record = f.read()
+    for seq in sorted(bodies):
+        log_record = bodies[seq]
         found = get_json(f"{node}/sigs/search?file={sha256_hex(log_record)}").get("records") or []
         mine = []
         for r in found:
@@ -700,7 +779,7 @@ def check_stamps(d, node, cli, pin):
 
 def cmd_verify(a):
     pin = read_pin(a.pin, a.dir)
-    problems, signers, uses = check_chain(a.dir, tet_cli(a), pin)
+    problems, signers, uses, bodies = check_chain(a.dir, tet_cli(a), pin)
     print("INVALID" if problems else "VALID")
     for seq, why in problems:
         print(f"  {'record ' + str(seq) if seq is not None else 'log'}: {why}")
@@ -715,7 +794,7 @@ def cmd_verify(a):
     for s in DOES_NOT_SHOW:
         print(f"  - {s}")
     if a.node:
-        for ln in check_stamps(a.dir, a.node, tet_cli(a), pin):
+        for ln in check_stamps(a.dir, a.node, tet_cli(a), pin, bodies):
             print(ln)
     else:
         print("stamp: not checked (no node)")
