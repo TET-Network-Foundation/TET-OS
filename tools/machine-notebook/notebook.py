@@ -162,10 +162,11 @@ def run_cli(cli, argv, env_extra=None):
     return p.returncode, p.stdout, p.stderr
 
 
-def verify_bytes(cli, cenv, sig_bytes, payload_bytes):
+def verify_bytes(cli, cenv, sig_bytes, payload_bytes, shown):
     """tet-cli agent verify over exactly these bytes, copied to a private temporary folder: the
     envelope and payload tet-cli checks are the ones the caller hashed and parses, never a second read
-    of a file someone else can change. Returns (exit code, stdout)."""
+    of a file someone else can change. `shown` is the payload's path in the folder: tet-cli's output
+    names it instead of the temporary copy. Returns (exit code, stdout)."""
     with tempfile.TemporaryDirectory() as t:
         p = os.path.join(t, "payload")
         with open(p, "wb") as f:
@@ -173,7 +174,7 @@ def verify_bytes(cli, cenv, sig_bytes, payload_bytes):
         with open(p + ".sig.json", "wb") as f:
             f.write(sig_bytes)
         rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", p + ".sig.json", "--payload", p], cenv)
-    return rc, out
+    return rc, out.replace(p, shown)
 
 
 def refusal(out):
@@ -449,7 +450,7 @@ def permit_problem(d, cli, pid, seq, used, device):
         return f"permit: {pid} is not in this notebook", None
     except Unreadable as e:
         return f"permit: {pid}: {e}", None
-    rc, out = verify_bytes(cli, chain_env(d), sig_bytes, body)
+    rc, out = verify_bytes(cli, chain_env(d), sig_bytes, body, path)
     if rc != 0:
         return f"permit: {pid}: signature: {refusal(out)}", None
     # Only after tet-cli accepted these envelope bytes: it has checked that each keyid names the key
@@ -709,7 +710,7 @@ def check_chain(d, cli, pin):
         except Unreadable as e:
             problems.append((n, f"signature: envelope {e}"))
         else:
-            rc, out = verify_bytes(cli, cenv, sig_bytes, body)
+            rc, out = verify_bytes(cli, cenv, sig_bytes, body, path)
             if rc != 0:
                 problems.append((n, f"signature: {refusal(out)}"))
             env = parse_env(sig_bytes)

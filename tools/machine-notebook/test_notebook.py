@@ -62,6 +62,7 @@ tet-cli changes ONE file in the folder on one call, so each input is broken on i
       a permit's bytes changed just before tet-cli reads them   -> INVALID, the permit's signature
       a permit's envelope changed just after tet-cli read it    -> INVALID, the permit's key
       record 3 is a FIFO                                        -> INVALID, "not a regular file"
+      tet-cli's reason names the record's path in the folder, not the temporary copy it was given
 
 The Shows / Does not show lists verify prints are pinned word for word, in notebook.py and in the
 README (the try page and /agents show the same words); a changed word, a dropped or swapped item and
@@ -1017,6 +1018,14 @@ class Notebook(unittest.TestCase):
             rc, verdict, problems, out = self.problems_via_wrapper(d)
         self.assertEqual((rc, verdict), (1, "INVALID"), out)
         self.assertEqual(problems, [f"record 4: permit: {pid} is signed by {other_ed}, not this device's {self.keyid}"], out)
+
+    def test_w_tet_clis_reason_names_the_file_in_the_folder_not_the_copy(self):
+        d = self.copy()
+        with open(self.rec(d, 2), "ab") as f:
+            f.write(b" ")
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual(rc, 1, out)
+        self.assertIn(f"record 2: signature: {self.rec(d, 2)} is not the ", out)
 
     def test_w_a_record_that_is_not_a_regular_file_is_invalid(self):
         # Record 3 is a FIFO with a writer behind it: verify refuses it as a file type, before reading.
