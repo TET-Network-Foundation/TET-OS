@@ -68,7 +68,7 @@ export const FEATURES: Feature[] = [
     status: "prototype",
     evidence: [{ path: "tools/machine-notebook/notebook.py" }, { path: "tools/machine-notebook/test_notebook.py" }],
     shows: ["which record used the permit", "that it was used once in this log, and not after it ran out", "that the machine's own key signed it"],
-    doesNot: ["that the action really happened: the log holds the machine's claim", "that a copied key did not use the same permission in another log", "that the action was a good idea"],
+    doesNot: ["that the action really happened: the log holds the machine's claim", "that the log is complete: its newest records may be missing, or rewritten by whoever holds the key", "that a copied key did not use the same permission in another log", "that the action was a good idea"],
   },
   {
     id: "agent-permit-once",

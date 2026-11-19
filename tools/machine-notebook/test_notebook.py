@@ -88,8 +88,8 @@ Text from the folder never begins a line of verify's report:
       a record whose seq holds a line break                          -> printed as \u000a, on the
                                                                         problem's own line
 
-The Shows / Does not show lists verify prints are pinned word for word, in notebook.py and in the
-README (the try page and /agents show the same words); a changed word, a dropped or swapped item and
+The Shows / Does not show lists verify prints are pinned word for word, in notebook.py, in the
+README and in QUICKSTART.md's verify output (the try page and /agents show the same words); a changed word, a dropped or swapped item and
 swapped lists are each caught.
 (g) to (m) build the bad log by hand, because `record` refuses a bad citation before writing it. In
 each, the permit passes every check except the one the case is named for, and the case asserts that
@@ -273,8 +273,8 @@ class Notebook(unittest.TestCase):
 
         return block(shows_head), block(does_not_head)
 
-    def lists_problems(self, verify_out, readme):
-        """Every place the printed lists or the README's lists differ from the pinned ones."""
+    def lists_problems(self, verify_out, readme, quickstart=None):
+        """Every place the printed lists, the README's or QUICKSTART.md's differ from the pinned ones."""
         want = (self.PINNED_SHOWS, self.PINNED_DOES_NOT_SHOW)
         out = []
         if (notebook.SHOWS, notebook.DOES_NOT_SHOW) != want:
@@ -283,6 +283,8 @@ class Notebook(unittest.TestCase):
             out.append("verify printed other lists")
         if self.printed_lists(readme, "Shows:", "Does not show:", "- ") != want:
             out.append("README.md quotes other lists")
+        if quickstart is not None and self.printed_lists(quickstart, "Shows:", "Does not show:", "  - ") != want:
+            out.append("QUICKSTART.md quotes other lists")
         return out
 
     def test_verify_prints_exactly_the_two_lists_and_the_readme_quotes_them(self):
@@ -290,7 +292,9 @@ class Notebook(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         with open(os.path.join(HERE, "README.md")) as f:
             readme = f.read()
-        self.assertEqual(self.lists_problems(out, readme), [])
+        with open(os.path.join(HERE, "QUICKSTART.md")) as f:
+            quick = f.read()
+        self.assertEqual(self.lists_problems(out, readme, quick), [])
         # Control: a changed word, a dropped item, swapped items and swapped lists are each caught,
         # in the printed output and in the README.
         s, d = self.PINNED_SHOWS, self.PINNED_DOES_NOT_SHOW
@@ -309,6 +313,15 @@ class Notebook(unittest.TestCase):
             }[name]
             self.assertNotEqual(bad_readme, readme, f"README control {name} did not take")
             self.assertTrue(self.lists_problems(out, bad_readme), f"README control {name} passed")
+            # QUICKSTART.md quotes verify's output inside a console block, with verify's own bullets.
+            bad_quick = {
+                "changed": quick.replace(s[2], s[2].replace("before", "after")),
+                "dropped": quick.replace(f"  - {d[-2]}\n", ""),
+                "swapped items": quick.replace(f"  - {s[0]}\n  - {s[1]}\n", f"  - {s[1]}\n  - {s[0]}\n"),
+                "swapped lists": quick.replace("Shows:", "X:").replace("Does not show:", "Shows:").replace("X:", "Does not show:"),
+            }[name]
+            self.assertNotEqual(bad_quick, quick, f"QUICKSTART control {name} did not take")
+            self.assertEqual(self.lists_problems(out, readme, bad_quick), ["QUICKSTART.md quotes other lists"], f"QUICKSTART control {name}")
 
     def test_b_one_flipped_byte_in_record_2_is_invalid(self):
         d = self.copy()
