@@ -216,7 +216,7 @@ Does not show:
   - who runs the machine
   - that the key was not copied
   - that a copied key did not use the same permission in another log
-  - that the log is complete: its newest records may be missing, or rewritten by whoever holds the key
+  - that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it
   - that the signature format is final: it is in outside review, and logs from this test may need re-signing
 end: record 3 is the newest in this folder, sha256 cdff2bf9e16ce5877a7a528c82a0227a0d094d281cf2afb4459840722cacb23e; records after it, if any, cannot be seen here
 stamp: not checked (no node)
@@ -299,7 +299,7 @@ The person who checks the log needs four things from you, and must never get a f
    ```
 
    This prints nothing. The archive holds `chain.json`, `chain.txt`, `device.head`, `device.keyid`,
-   `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`. To see
+   `device.lock` (empty), `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`. To see
    for yourself, `tar -tzf ~/tags-log.tgz | grep -cx 'tags/device.key'` should print `0`: no
    line is exactly `tags/device.key`. (grep then exits with 1, which here means "not found", the good
    result. Without `-x` it would also count `tags/device.keyid`, which is public and meant to be
