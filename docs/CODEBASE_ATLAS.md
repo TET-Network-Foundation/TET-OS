@@ -709,7 +709,6 @@ Consolidated from `CODEBASE_OVERVIEW.md`, `WHITEPAPER_v1.0_GAPS.md`, `STATUS.md`
 | `chaos.rs` | — | Chaos reroute tests | — | yes |
 | `metrics.rs` | — | Prometheus-style metrics | — | handler tests |
 | `models.rs` | — | Shared REST models | — | — |
-| `updater.rs` | — | System update probe | — | — |
 | `ai_filter.rs` / `ai_proxy.rs` | — | AI pipeline filters | §12 | unclear |
 | `attestation.rs` | — | Signer link attestation | §10 | used in wallet handler |
 | `invariant_tests.rs` | — | Supply cap invariants | §11 | 3 tests |

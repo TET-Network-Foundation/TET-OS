@@ -40,7 +40,6 @@ mod sigs;
 mod sites;
 mod search;
 mod tmail;
-mod updater;
 mod vision;
 mod wallet;
 mod workers;
