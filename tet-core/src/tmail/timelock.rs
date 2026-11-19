@@ -33,8 +33,7 @@ use crate::tmail::envelope::{TmailE2eeBlock, TmailEnvelopeV1, TmailFlags, TmailH
 /// the API docs and the operator guide. Do not soften it and do not describe this as a "time-lock"
 /// without it: the whole risk R6 exists because "time-lock" implies an enforcement this does not
 /// have.
-pub const TMAIL_TIME_LOCK_DISCLOSURE: &str =
-    "Scheduled release, not an enforced lock. The encrypted message reaches relaying nodes when it \
+pub const TMAIL_TIME_LOCK_DISCLOSURE: &str = "Scheduled release, not an enforced lock. The encrypted message reaches relaying nodes when it \
      is sent; cooperating nodes withhold it until the release time, and anyone holding the \
      recipient's keys could read it sooner.";
 
@@ -125,11 +124,7 @@ pub fn to_inbox_row_with_verdict(
         ttl_ms: env.ttl_ms,
         fee_paid_micro: env.fee_paid_micro,
         pin_stake_micro: env.pin_stake_micro,
-        e2ee: if locked {
-            None
-        } else {
-            Some(env.e2ee.clone())
-        },
+        e2ee: if locked { None } else { Some(env.e2ee.clone()) },
         hybrid_sig: env.hybrid_sig.clone(),
         locked,
         locked_note: if locked {
