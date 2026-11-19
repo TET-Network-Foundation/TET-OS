@@ -18,8 +18,9 @@ pub async fn serve(state: RestState, addr: SocketAddr) -> Result<(), std::io::Er
 /// `tests::removed_guardian_recover_route_is_not_reachable`.
 pub fn build_router(state: RestState) -> axum::Router {
     let mw_state = state.clone();
-    // NOTE: The actual route handlers remain in the parent module (`rest.rs`) for now.
-    // This file extracts only the router wiring and server lifecycle to de-monolith the module.
+    // NOTE: The route handlers live in `rest/handlers/`; the two custom middleware layers below
+    // (the global rate limit and the public-API gate) come from `rest/helpers.rs` and
+    // `rest/public_api.rs`. This file holds only the router wiring and the server lifecycle.
     //
     // Layer order (last `.layer` = **outermost**; runs first on incoming requests):
     //   Cors → default body limit → global rate limit → routes.
