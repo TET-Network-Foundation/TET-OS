@@ -5,12 +5,13 @@ TET node runs today, so this guide does not use one.
 
 This is for a hobby maker with a laptop or a Raspberry Pi who wants a device to keep its own signed
 log. By the end you will have a notebook folder with a few signed readings, a one-time permit that
-was used once and refused the second time, and a check that reads the log as VALID. The
+was used once and refused the second time, and a check that reads the log as VALID. Steps 6 and 7
+add thirty labelled items in a second notebook and a check by someone else on their own machine. The
 [README](README.md) has the details behind every step.
 
-Every command below is followed by what the tool printed when it was run on 2026-11-17 on a Mac
-(Apple silicon, macOS, Python 3.14.4). The only edit to that output is the home folder, shown as
-`~`. Your key id, permit id and load values will differ.
+Every command below is followed by what the tool printed when it was run on 2026-11-17 (Steps 6
+and 7: 2026-11-19) on a Mac (Apple silicon, macOS, Python 3.14.4). The only edit to that output is
+the home folder, shown as `~`. Your key id, permit id and load values will differ.
 
 ## What you need
 
@@ -33,13 +34,18 @@ cd TET-OS
 RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release
 ```
 
-**This block was not run for this guide**, so it has no output here. The guide was written with a
-`tet-cli` that had already been built from the same source. Cargo's own output ends with a line that
-starts `Finished`; if it ends with `error` instead, see "Where people get stuck" below.
+This block was run on 2026-11-19 from an empty folder, with a local copy of the repository in place
+of the URL and with the crates already downloaded. Cargo's output is long and is not copied here; it
+ends with a line that starts `Finished`. If it ends with `error` instead, see "Where people get
+stuck" below.
 
 How long that takes, honestly:
 
-- The build is not yet timed on a clean machine or a Pi. It is the long step of this guide.
+- On an Apple M3 Mac (8 cores, 16 GB), building into an empty `target/` took 2 min 43 s, and a
+  second person's clone and build on the same Mac took 2 min 50 s. In both runs the crates were already
+  downloaded. The first download on a new machine was not timed, so your first build will take
+  longer, by however long your connection needs.
+- It is the long step of this guide. It has not been timed on Linux or on a Pi.
 - On a Raspberry Pi it has not been tried; expect it to be much slower than on a laptop, to need a
   lot of memory (a Pi with 1 or 2 GB may need `cargo build -j1` or more swap), and several GB of
   free disk for `target/`.
@@ -221,8 +227,9 @@ error: --pin ~/notebook/device.pin is inside the folder being checked; give a co
 ```
 
 What a change looks like: copy the folder, then change the reading in record 1 of the copy. The run
-below changed the value `3.61` to `9.99` (your value will differ; `sed -i ''` is the macOS form, on
-Linux it is `sed -i`):
+below changed the value `3.61` to `9.99`. Your log has its own values: open
+`~/nb-copy/records/1.json`, pick the number after `"value":`, and use it in place of `3.61`. Any
+text editor works as well. (`sed -i ''` is the macOS form; on Linux it is `sed -i`.)
 
 ```console
 $ cp -R ~/notebook ~/nb-copy
@@ -235,6 +242,91 @@ INVALID
 ```
 
 (Only the top four lines are shown here; the Shows / Does not show lists follow.)
+
+`verify` exits with 0 when it prints VALID and 1 when it prints INVALID. It exits with 2 when it
+refuses to check at all, as with the pin inside the folder above.
+
+## Step 6: thirty items, one record each
+
+If you are labelling things you made, give each one a label and record it once. A new notebook keeps
+this log apart from the readings above. The labels here are `tag-01` to `tag-30`; use your own.
+
+```sh
+python3 tools/machine-notebook/notebook.py init --dir ~/tags
+cp ~/tags/device.pin ~/tags.pin
+for n in $(seq -w 1 30); do
+  echo "{\"value\": \"tag-$n\", \"unit\": \"tag\"}" | python3 tools/machine-notebook/notebook.py record --dir ~/tags --source stdin-json
+done
+```
+
+`init` prints a new key id, as in Step 2 (the chain variables must still be set in this shell).
+Then one line per item:
+
+```console
+seq 1: tag-01 tag
+seq 2: tag-02 tag
+seq 3: tag-03 tag
+...
+seq 30: tag-30 tag
+```
+
+This records a label you chose, signed by this notebook's key. It does not read a physical tag, and
+it does not show that the label is on the object.
+
+## Step 7: hand the log to someone who checks it
+
+The person who checks the log needs three things from you, and must never get a fourth.
+
+1. **The log without its key.** `device.key` can sign as the device. Leave it out:
+
+   ```sh
+   cd ~ && tar -czf tags-log.tgz --exclude device.key tags
+   ```
+
+   This prints nothing. The archive holds `chain.json`, `chain.txt`, `device.keyid`,
+   `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`.
+
+2. **The pin, by another route.** Send `~/tags.pin` separately from the archive: a different
+   message, a different channel, or read the first line out loud and let them compare it. If the
+   log and the pin travel together, whoever can change one can change both, and the check would
+   then read VALID for their key, not yours. The `device.pin` inside the archive does not help here,
+   for the same reason, and `verify` refuses it.
+
+3. **The same tools.** They need everything under "What you need" and Step 1 on their own machine:
+   the repository, the same build, Python. They run `verify` from their repository root.
+
+On their machine, in an empty folder (here `~/friend`), with the archive and the pin you sent saved
+as `~/tags-log.tgz` and `~/tags.pin` in their own home folder:
+
+```sh
+mkdir ~/friend && cd ~/friend && tar -xzf ~/tags-log.tgz
+cd <their repository root>
+python3 tools/machine-notebook/notebook.py verify --dir ~/friend/tags --pin ~/tags.pin
+```
+
+```console
+VALID
+  30 records, all signed by tet-ed25519:3d62b7357c558d229d43e86d79b29ce156c86ed091403ad4dbff78595a34d73b
+```
+
+(The Shows / Does not show lists follow.) They compare that key id with the one you sent. A match
+shows the thirty records were signed by the key whose pin they hold, in this order. It does not
+show which machine held the key.
+
+Then they change one record in a copy and see the check refuse it:
+
+```console
+$ cp -R ~/friend/tags ~/friend/tags-copy
+$ sed -i '' 's/tag-17/tag-71/' ~/friend/tags-copy/records/17.json
+$ python3 tools/machine-notebook/notebook.py verify --dir ~/friend/tags-copy --pin ~/tags.pin
+INVALID
+  record 17: signature: ~/friend/tags-copy/records/17.json is not the 217 bytes this envelope signed
+  record 17: chain.txt: hash differs from the record
+  record 18: prev: does not name the record before it
+```
+
+It exits with 1. The check is once per log: it reads this folder only, and a second log signed with
+the same key is a separate log it never sees.
 
 ## Read the two lists
 
@@ -252,7 +344,8 @@ Read "Shows" and "Does not show" before you rely on the log for anything.
 ## Where people get stuck
 
 Found by running this guide from an empty folder on 2026-11-17 (Mac only, with `tet-cli` already
-built, so the build step itself was not part of that run):
+built, so the build step itself was not part of that run), and again on 2026-11-19 (Mac only, with
+the build, thirty records and a second person's check):
 
 1. **The build.** It is the long step. Use the line in Step 1, with `RISC0_SKIP_BUILD=1`.
 2. **Not in the repository root.** From another folder every command stops with
@@ -266,5 +359,9 @@ built, so the build step itself was not part of that run):
    the copy outside the folder.
 5. **`run` in the evening.** With the default `--until 22:00`, a `run` started after 22:00 does
    nothing. Pass a later `--until`, before midnight.
+6. **Handing over the whole folder.** A plain copy of the notebook folder includes `device.key`, and
+   whoever holds it can sign as the device. Use the `tar --exclude device.key` line in Step 7.
+7. **The pin in the same message as the log.** Then the check shows only that the log matches the pin
+   that came with it. Send the pin by another route (Step 7).
 
 Not covered here: `publish` and `verify --node`. They need a TET node, and no public one runs today.
