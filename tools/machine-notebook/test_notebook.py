@@ -52,6 +52,8 @@ record continues a log only where the device last signed it (device.head, outsid
       a permit's record removed, then record --permit       -> refused, the permit is not cited again
       chain.txt's last line changed, same length            -> refused
       no device.head                                         -> refused
+      verify names the newest record and its hash; with the newest removed it still reads VALID
+      (nothing in the folder can tell) and names the one before
 
 Every file verify reads is read once, and tet-cli checks those same bytes. A wrapper around the real
 tet-cli changes ONE file in the folder on one call, so each input is broken on its own:
@@ -1158,6 +1160,20 @@ class DeviceHead(unittest.TestCase):
         self.assertEqual(rc, 2, out)
         self.assertIn("not recorded: this device last signed record 3, and the log does not end with it (chain.txt ends at record 3)", err)
         self.assertFalse(os.path.exists(self.rec(d, 4)))
+
+    def test_x_verify_names_the_newest_record_it_holds(self):
+        d = self.copy()
+        end = lambda n, h: f"end: record {n} is the newest in this folder, sha256 {h}; records after it, if any, cannot be seen here"
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual(rc, 0, out)
+        self.assertIn(end(3, notebook.chain_lines(d)[2]), out.splitlines())
+        # The newest record removed: still VALID (nothing in the folder can tell), and the end line
+        # now names record 2, so a reader who kept the first line can see the difference.
+        self.drop_newest(d)
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+        with open(self.rec(d, 2), "rb") as f:
+            self.assertIn(end(2, hashlib.sha256(f.read()).hexdigest()), out.splitlines())
 
     def test_x_record_refuses_without_device_head(self):
         d = self.copy()

@@ -30,6 +30,11 @@ Does not show:
 - that a copied key did not use the same permission in another log
 - that the signature format is final: it is in outside review, and logs from this test may need re-signing
 
+After the lists, a VALID `verify` prints the newest record it found:
+`end: record N is the newest in this folder, sha256 <hex>; records after it, if any, cannot be seen
+here`. Nothing in the folder says how long the log was, so this is the line to keep if you want to
+compare a later copy with this one.
+
 Known gaps in the check itself, not fixed yet:
 - the check that `--pin` lies outside the folder reads the whole folder, with no size limit, and
   does not report how much it read

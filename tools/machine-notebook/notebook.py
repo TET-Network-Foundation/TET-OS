@@ -847,6 +847,11 @@ def cmd_verify(a):
     print("Does not show:")
     for s in DOES_NOT_SHOW:
         print(f"  - {s}")
+    if not problems:
+        # What verify can say about the end: which record is the newest here. Nothing in the folder
+        # records how long the log was, so a reader who keeps this line can compare a later copy.
+        last = max(bodies)
+        print(f"end: record {last} is the newest in this folder, sha256 {sha256_hex(bodies[last])}; records after it, if any, cannot be seen here")
     if a.node:
         for ln in check_stamps(a.dir, a.node, tet_cli(a), pin, bodies):
             print(ln)
