@@ -82,6 +82,7 @@ DOES_NOT_SHOW = [
     "who runs the machine",
     "that the key was not copied",
     "that a copied key did not use the same permission in another log",
+    "that the log is complete: its newest records may be missing, or rewritten by whoever holds the key",
     "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
 ]
 

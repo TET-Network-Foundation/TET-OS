@@ -21,6 +21,7 @@ const NOTEBOOK_DOES_NOT = [
   "who runs the machine",
   "that the key was not copied",
   "that a copied key did not use the same permission in another log",
+  "that the log is complete: its newest records may be missing, or rewritten by whoever holds the key",
   "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
 ];
 
@@ -46,7 +47,7 @@ export const FEATURES: Feature[] = [
       { pr: 179, what: "the machine-log tab on /try" },
     ],
     shows: ["whether the log checks out, by the same rules as the notebook's own check", "the reason, when it does not"],
-    doesNot: ["that the reading is true", "who runs the machine", "anything about a log you were not given"],
+    doesNot: ["that the reading is true", "that the log is complete: its newest records may be missing, or rewritten by whoever holds the key", "who runs the machine", "anything about a log you were not given"],
     link: { href: "/try?tab=machine-log", label: "Check a machine's log" },
   },
   {
@@ -101,7 +102,7 @@ export const FEATURES: Feature[] = [
     status: "prototype",
     evidence: [{ pr: 183, what: "the /agents page" }],
     shows: ["each machine's result, VALID or INVALID", "which permits are used, still open, or run out"],
-    doesNot: ["that the reading is true", "that a copied key did not use the same permission in another log", "anything about a machine whose folder you did not add"],
+    doesNot: ["that the reading is true", "that the log is complete: its newest records may be missing, or rewritten by whoever holds the key", "that a copied key did not use the same permission in another log", "anything about a machine whose folder you did not add"],
     link: { href: "/agents", label: "Open the machines page" },
   },
   {
