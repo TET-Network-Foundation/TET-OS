@@ -25,13 +25,13 @@ the commit and the release notes; if you would rather not be named, say so.
 ## Scope
 
 **In scope:** the node (`tet-core`), the Sovereign OS UI, the RISC0 guest and verifier, the Tmail
-and Files protocols, the public seed node, and defects in the specs where the design itself is
-unsound.
+and Files protocols, the public seed nodes (none runs today; see below), and defects in the specs
+where the design itself is unsound.
 
 **Out of scope:** the known limitations below — they are documented, not undiscovered; anything
 requiring physical access to a user's unlocked device; denial of service by brute traffic volume
-against a testnet with one seed; dependency CVEs with no demonstrated path to impact here (send a
-report if you can show the path); and social engineering.
+against a testnet with one block producer; dependency CVEs with no demonstrated path to impact here
+(send a report if you can show the path); and social engineering.
 
 ## Known limitations
 
@@ -47,10 +47,12 @@ small crate that has not itself been audited, and it carries every signature in 
 is Kyber Round-3, not the final FIPS-203 ML-KEM; migrating is a Phase 1 item because it invalidates
 every existing messaging identity.
 
-**Two seeds, one block producer.** There are two public seeds, in Helsinki and Nuremberg, and either
-is enough for a new node to join and sync. Only Helsinki produces blocks, so liveness depends on one
-machine: if it is down, the network stops making blocks. It is also a single point of censorship and a
-single operator's machine. There is no committee and no failover.
+**No public seed today; one block producer.** The two public seeds, in Helsinki and Nuremberg, were
+closed in November 2026 with the demo host, and the chain they ran is not restored. Testnet-2 is being
+prepared and has no public seed yet. On that network either seed was enough for a new node to join and
+sync, but only Helsinki produced blocks, so liveness depended on one machine: when it was down, the
+network stopped making blocks. It was also a single point of censorship and a single operator's
+machine. The code on main still runs one block producer, with no committee and no failover.
 
 **The producer can wedge, and it did for 33 hours.** On 2026-10-03 the producer's block-plane
 event loop stopped, and the network made no blocks for 32 h 53 m. Monitoring went red at once;

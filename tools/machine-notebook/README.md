@@ -2,6 +2,8 @@
 
 **Status: prototype.** Local only. Not for military or dual-use systems.
 
+New here? [QUICKSTART.md](QUICKSTART.md) walks through the opening half hour on your own machine.
+
 A machine keeps its own notebook: a device (a Mac today, a Raspberry Pi or Jetson later) records
 sensor readings, signs each one with its own TET key, and chains every record to the one before it.
 Anyone holding the folder can later replay the log and see whether it is intact and in order. It adds
@@ -40,6 +42,9 @@ goes near this tool. The device's 12 words are written to `<dir>/device.key` wit
 the key id is printed. tet-cli receives the words through the `TET_MNEMONIC` environment variable,
 never as an argument (arguments are visible to every process through `ps`). Anyone who copies
 `device.key` can sign as the device, which is why "the key was not copied" is on the list above.
+To hand a log to someone who checks it, leave the key out (from the folder that holds `notebook`:
+`tar -czf notebook-log.tgz --exclude device.key notebook`) and send them the pin by another route,
+so that whoever could change the log in transit could not also change the pin.
 
 Every TET signature has two halves, Ed25519 and ML-DSA-44, each under its own public key. `init` also
 writes `<dir>/device.pin`: the device's two key ids, one per line (`tet-ed25519:<hex>`,
@@ -49,9 +54,24 @@ hard link, or another spelling of the path): the check pins both keys of the exp
 
 ## Run it on the Mac
 
+Build `tet-cli` with `RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release`.
+`RISC0_SKIP_BUILD=1` skips the zk guest. Without it the build needs the RISC Zero toolchain.
+The notebook does not use the guest. The build also needs a Rust toolchain and a C compiler (on
+macOS the Xcode Command Line Tools, on Debian or Raspberry Pi OS `build-essential`); it does not
+need OpenSSL, because `tet-cli` uses rustls. The notebook needs Python 3.9 or newer. The first build
+downloads its crates. With the crates already downloaded, six builds into an empty `target/` took
+between 2 min 43 s and 4 min 17 s on an Apple M3 Mac (2026-11-19; QUICKSTART.md, Step 1); the
+download itself, Linux and the Pi are not timed.
+
+No public node runs today, so there is no chain to read from `GET /chain`. For a log on your own
+machine, any chain id and any 64 hex characters work, as long as you keep the same pair:
+`export TET_CHAIN_ID=maker-local TET_GENESIS_HASH=$(printf 'maker local' | shasum -a 256 | cut -c1-64)`
+(on Linux, `sha256sum` instead of `shasum -a 256`). Records signed this way cannot be published to a
+node later; they check only against that made-up pair.
+
 ```sh
-cargo build -p tet-cli --release        # the only build step
-export TET_CHAIN_ID=… TET_GENESIS_HASH=…  # the chain to sign for: a node's GET /chain shows both
+RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release   # the only build step
+export TET_CHAIN_ID=… TET_GENESIS_HASH=…  # the chain to sign for: a node's GET /chain shows both, or a made-up pair (above)
 python3 tools/machine-notebook/notebook.py init   --dir ~/notebook          # prints the key id
 cp ~/notebook/device.pin ~/notebook.pin                                     # the pin, kept outside the folder
 python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg
@@ -68,10 +88,12 @@ and checked against the same chain. `run` loops in the foreground and stops by i
 
 ## Run it on a Pi
 
-The same commands. Build `tet-cli` on the Pi (`cargo build -p tet-cli --release`) or copy an aarch64
-build to it, then pass `--tet-cli /path/to/tet-cli` or set `TET_CLI`. On Linux `--source cpu-temp`
-reads `/sys/class/thermal/thermal_zone0`; on macOS it refuses. Python 3 with the standard library
-is all it needs.
+The same commands, but not yet run on a Pi: every recorded run is on a Mac (2026-11-07 below; QUICKSTART.md, 2026-11-19). Build
+`tet-cli` on the Pi (`RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release`; not timed there, expect a
+long first build) or copy an aarch64 build to it, then pass `--tet-cli /path/to/tet-cli` or set
+`TET_CLI`. On Linux `--source cpu-temp` reads `/sys/class/thermal/thermal_zone0`; on macOS it refuses.
+Python 3.9 or newer with the standard library is all the notebook itself needs. Windows is not supported (`loadavg`
+uses `os.getloadavg`, which Windows does not have).
 
 ## What a record holds
 
