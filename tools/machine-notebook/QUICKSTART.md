@@ -29,10 +29,14 @@ There is no tagged release of `tet-cli` yet. Until v0.1 is tagged with binaries,
 building it from the repository:
 
 ```sh
+cd ~
 git clone https://github.com/TET-Network-Foundation/TET-OS.git
 cd TET-OS
 RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release
 ```
+
+The `cd ~` puts the repository in your home folder, at `~/TET-OS`; this guide calls that folder the
+repository root. Any other folder works if you remember where it is.
 
 This block was run on 2026-11-19 from an empty folder, with a local copy of the repository in place
 of the URL and with the crates already downloaded. Cargo's output is long and is not copied here; it
@@ -41,9 +45,9 @@ stuck" below.
 
 How long that takes, honestly:
 
-- On an Apple M3 Mac (8 cores, 16 GB), building into an empty `target/` took 2 min 43 s, and a
-  second person's clone and build on the same Mac took 2 min 50 s. In both runs the crates were already
-  downloaded. The first download on a new machine was not timed, so your first build will take
+- On an Apple M3 Mac (8 cores, 16 GB), four builds into an empty `target/` took between 2 min 43 s
+  and 4 min 17 s (two people, two runs, 2026-11-19; the slower ones while the Mac was busy with other
+  work). In all four the crates were already downloaded. The first download on a new machine was not timed, so your first build will take
   longer, by however long your connection needs.
 - It is the long step of this guide. It has not been timed on Linux or on a Pi.
 - On a Raspberry Pi it has not been tried; expect it to be much slower than on a laptop, to need a
@@ -187,7 +191,8 @@ $ python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source lo
 error: not recorded: permit: 5b63a530876366e9c5be23c1afbe3c2c was already used by record 3
 ```
 
-Use your own permit id, the one `permit` printed for you.
+Use your own permit id, the one `permit` printed for you; copy it from the screen into both
+`record` lines. A refused `record` exits with 2.
 
 ## Step 5: check the log, with the pin kept outside
 
@@ -278,7 +283,7 @@ it does not show that the label is on the object.
 
 ## Step 7: hand the log to someone who checks it
 
-The person who checks the log needs three things from you, and must never get a fourth.
+The person who checks the log needs four things from you, and must never get a fifth.
 
 1. **The log without its key.** `device.key` can sign as the device. Leave it out:
 
@@ -287,7 +292,9 @@ The person who checks the log needs three things from you, and must never get a 
    ```
 
    This prints nothing. The archive holds `chain.json`, `chain.txt`, `device.keyid`,
-   `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`.
+   `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`. To see
+   for yourself, `tar -tzf ~/tags-log.tgz | grep -c device.key` should print `0` (grep then exits
+   with 1, which here means "not found", the good result).
 
 2. **The pin, by another route.** Send `~/tags.pin` separately from the archive: a different
    message, a different channel, or read the first line out loud and let them compare it. If the
@@ -295,15 +302,20 @@ The person who checks the log needs three things from you, and must never get a 
    then read VALID for their key, not yours. The `device.pin` inside the archive does not help here,
    for the same reason, and `verify` refuses it.
 
-3. **The same tools.** They need everything under "What you need" and Step 1 on their own machine:
-   the repository, the same build, Python. They run `verify` from their repository root.
+3. **The key id.** The line `init` printed for `~/tags`, which is also the first line of
+   `~/tags.pin`. Send it with the pin, or say it to them, so they can compare it with what `verify`
+   prints.
+
+4. **The same tools.** They need everything under "What you need" on their own machine, and Step 1
+   run there in their own home folder: the same `cd ~`, `git clone` and `cargo build` lines, which
+   give them `~/TET-OS`. They run `verify` from that folder.
 
 On their machine, in an empty folder (here `~/friend`), with the archive and the pin you sent saved
 as `~/tags-log.tgz` and `~/tags.pin` in their own home folder:
 
 ```sh
 mkdir ~/friend && cd ~/friend && tar -xzf ~/tags-log.tgz
-cd <their repository root>
+cd ~/TET-OS
 python3 tools/machine-notebook/notebook.py verify --dir ~/friend/tags --pin ~/tags.pin
 ```
 
@@ -327,6 +339,8 @@ INVALID
   record 17: chain.txt: hash differs from the record
   record 18: prev: does not name the record before it
 ```
+
+(On Linux the `sed` line is `sed -i 's/tag-17/tag-71/' ...`, as in Step 5.)
 
 It exits with 1. The check is once per log: it reads this folder only, and a second log signed with
 the same key is a separate log it never sees.
