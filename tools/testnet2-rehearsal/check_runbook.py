@@ -3,8 +3,9 @@
     python3 -I tools/testnet2-rehearsal/check_runbook.py [--doc PATH] [--root PATH]
 
 It reads the ```bash blocks of the section "## Part 2" and checks, against the repository at --root:
-1. settings: every TET_* name the blocks set is read by the node (it appears as "NAME" in
-   tet-core/src). TET_CORE_BIN is the runbook's own variable and is not checked.
+1. settings: every TET_* name the blocks set appears as "NAME" in tet-core/src. That is a text
+   search over the whole source, tests included: it catches a rename, not a setting that is
+   still named somewhere but no longer read. TET_CORE_BIN is the runbook's own variable and is not checked.
 2. files: every $REPO/<path> exists.
 3. log lines: every grep 'pattern' on a node.log matches text the node prints. The literal part of
    the pattern (up to the first [ or \\ that is not an escaped ]) must appear in tet-core/src; a

@@ -128,7 +128,8 @@ for a hash that step 2 did not print. After those changes every block below ran 
 order, and printed what each step says it must.
 
 `python3 tools/testnet2-rehearsal/test_runbook_commands.py` (also run in CI) checks that every
-setting, file, log line, REST route and command these blocks use still exists, and that it fails,
+setting, log line and REST route these blocks use still appears in the node's source, that every
+file and command exists, and that it fails,
 naming the item, when one is renamed.
 
 You need: macOS (for `sandbox-exec`), `bash`, `python3`, `curl`, `lsof`, and a `TET-Core` release
@@ -136,8 +137,10 @@ binary. Ports 18101, 18102, 18201 and 18202 must be free.
 
 **Why the sandbox.** With P2P on, the node always starts mDNS, which sends on every network
 interface, not only loopback. `tools/testnet2-rehearsal/no-mdns.sb` refuses port 5353, so mDNS
-cannot start (the log shows `failed to create InterfaceState` once per interface; that is expected)
-and every socket the node keeps is on 127.0.0.1. Step 3 and step 5 check this with `lsof`.
+cannot start (the log shows `failed to create InterfaceState` once per interface; that is expected).
+The other sockets are on 127.0.0.1 because every listen setting below names 127.0.0.1, not because
+of the sandbox; step 3 and step 5 check this with `lsof`. The one-off run in step 2 has P2P off and
+is not sandboxed.
 
 ### Step 1. Set up (both operators, one terminal)
 
@@ -334,6 +337,8 @@ It prints `n1 stopped` and `removed …`. If node 2 was left running (a step sto
 - **No deploy.** Neither node ran through `deploy/provision-seed.sh`, Docker or Caddy. The real
   second operator follows `deploy/demo/README.md` (`TET_NODE_ROLE=demo` or `seed`, with
   `TET_BOOTNODES` and `TET_PRODUCER_PEERS`), which part 2 does not run.
+- **No peer discovery.** Node 2 is given node 1's address and pins its key, so finding peers
+  any other way (Kademlia, mDNS) is not tested.
 - **No mDNS.** The sandbox turns mDNS off. A real host runs it; what it finds there is not tested.
 - **A hand-over within one folder.** The genesis file, the settings and the bootnode line were
   copied, not sent between two people. Whether the second operator receives the right ones is a
