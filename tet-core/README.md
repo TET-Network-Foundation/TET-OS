@@ -103,7 +103,7 @@ In another terminal:
 
 ```bash
 cd ../tet-network/ui
-npm install
+npm ci --ignore-scripts
 npm run dev
 # Open http://localhost:3000
 ```
