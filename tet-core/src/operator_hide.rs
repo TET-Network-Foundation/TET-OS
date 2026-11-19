@@ -49,9 +49,19 @@ pub fn normalize_id(kind: HideKind, id: &str) -> Result<String, String> {
     let ok = match kind {
         HideKind::Wallet => id.len() == 64 && id.chars().all(|c| c.is_ascii_hexdigit()),
         HideKind::File => uuid::Uuid::parse_str(&id).is_ok(),
-        HideKind::Msg => !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
+        HideKind::Msg => {
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        }
     };
-    if ok { Ok(id) } else { Err(format!("not a valid {kind:?} id")) }
+    if ok {
+        Ok(id)
+    } else {
+        Err(format!("not a valid {kind:?} id"))
+    }
 }
 
 #[derive(Clone)]
@@ -61,7 +71,9 @@ pub struct OperatorHide {
 
 impl OperatorHide {
     pub fn open(db: &sled::Db) -> Result<Self, sled::Error> {
-        Ok(Self { tree: db.open_tree(TREE)? })
+        Ok(Self {
+            tree: db.open_tree(TREE)?,
+        })
     }
 
     fn key(kind: HideKind, id: &str) -> Vec<u8> {
@@ -84,24 +96,55 @@ impl OperatorHide {
     }
 
     /// Hide an item and log it. Returns the stored row.
-    pub fn hide(&self, kind: HideKind, id: &str, reason: &str, now_ms: u64) -> Result<HiddenItem, String> {
+    pub fn hide(
+        &self,
+        kind: HideKind,
+        id: &str,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<HiddenItem, String> {
         let id = normalize_id(kind, id)?;
         let reason: String = reason.trim().chars().take(500).collect();
-        let row = HiddenItem { kind, id: id.clone(), reason, hidden_at_ms: now_ms };
+        let row = HiddenItem {
+            kind,
+            id: id.clone(),
+            reason,
+            hidden_at_ms: now_ms,
+        };
         let bytes = serde_json::to_vec(&row).map_err(|e| e.to_string())?;
-        self.tree.insert(Self::key(kind, &id), bytes).map_err(|e| e.to_string())?;
+        self.tree
+            .insert(Self::key(kind, &id), bytes)
+            .map_err(|e| e.to_string())?;
         self.tree.flush().map_err(|e| e.to_string())?;
         log_operator_action("hide", &row);
         Ok(row)
     }
 
     /// Serve an item again and log it. `Ok(false)` if it wasn't hidden.
-    pub fn unhide(&self, kind: HideKind, id: &str, reason: &str, now_ms: u64) -> Result<bool, String> {
+    pub fn unhide(
+        &self,
+        kind: HideKind,
+        id: &str,
+        reason: &str,
+        now_ms: u64,
+    ) -> Result<bool, String> {
         let id = normalize_id(kind, id)?;
-        let was = self.tree.remove(Self::key(kind, &id)).map_err(|e| e.to_string())?.is_some();
+        let was = self
+            .tree
+            .remove(Self::key(kind, &id))
+            .map_err(|e| e.to_string())?
+            .is_some();
         self.tree.flush().map_err(|e| e.to_string())?;
         let reason: String = reason.trim().chars().take(500).collect();
-        log_operator_action("unhide", &HiddenItem { kind, id, reason, hidden_at_ms: now_ms });
+        log_operator_action(
+            "unhide",
+            &HiddenItem {
+                kind,
+                id,
+                reason,
+                hidden_at_ms: now_ms,
+            },
+        );
         Ok(was)
     }
 
@@ -116,18 +159,28 @@ impl OperatorHide {
 
 /// Where the operator's log goes: `TET_OPERATOR_LOG`, else `operator.log` next to the database.
 pub fn operator_log_path() -> std::path::PathBuf {
-    if let Some(p) = std::env::var("TET_OPERATOR_LOG").ok().filter(|p| !p.trim().is_empty()) {
+    if let Some(p) = std::env::var("TET_OPERATOR_LOG")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
+    {
         return p.into();
     }
     let db = std::env::var("TET_DB_DIR").unwrap_or_else(|_| "tet.db".into());
-    std::path::Path::new(&db).parent().map(|d| d.join("operator.log")).unwrap_or_else(|| "operator.log".into())
+    std::path::Path::new(&db)
+        .parent()
+        .map(|d| d.join("operator.log"))
+        .unwrap_or_else(|| "operator.log".into())
 }
 
 fn log_operator_action(action: &str, row: &HiddenItem) {
     let line = serde_json::json!({ "action": action, "kind": row.kind, "id": row.id, "reason": row.reason, "at_ms": row.hidden_at_ms }).to_string();
     log::warn!("[operator] {line}");
     let path = operator_log_path();
-    match std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         Ok(mut f) => {
             if let Err(e) = writeln!(f, "{line}") {
                 log::error!("[operator] could not write {}: {e}", path.display());

@@ -3,10 +3,10 @@
 //! node's container (`deploy/operator-hide.sh`). Every hide/unhide is written to the operator log.
 
 use axum::{
+    Json,
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    Json,
 };
 use serde::Deserialize;
 use std::net::SocketAddr;
@@ -23,9 +23,16 @@ pub struct HideReq {
 }
 
 #[allow(clippy::result_large_err)]
-fn operator_only(peer: Option<ConnectInfo<SocketAddr>>, headers: &HeaderMap) -> Result<(), Response> {
+fn operator_only(
+    peer: Option<ConnectInfo<SocketAddr>>,
+    headers: &HeaderMap,
+) -> Result<(), Response> {
     if !peer.map(|c| c.0.ip().is_loopback()).unwrap_or(false) {
-        return Err((StatusCode::FORBIDDEN, "operator routes answer only on loopback").into_response());
+        return Err((
+            StatusCode::FORBIDDEN,
+            "operator routes answer only on loopback",
+        )
+            .into_response());
     }
     crate::rest::helpers::require_admin_bearer(headers)
 }
@@ -53,10 +60,21 @@ pub async fn post_operator_hide(
         Err(e) => return (StatusCode::BAD_REQUEST, format!("body: {e}")).into_response(),
     };
     if req.reason.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "a reason is required (it goes in the operator log)").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            "a reason is required (it goes in the operator log)",
+        )
+            .into_response();
     }
-    match state.operator_hide.hide(req.kind, &req.id, &req.reason, now_ms()) {
-        Ok(row) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "hidden": row }))).into_response(),
+    match state
+        .operator_hide
+        .hide(req.kind, &req.id, &req.reason, now_ms())
+    {
+        Ok(row) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "hidden": row })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
@@ -76,8 +94,15 @@ pub async fn post_operator_unhide(
         Ok(r) => r,
         Err(e) => return (StatusCode::BAD_REQUEST, format!("body: {e}")).into_response(),
     };
-    match state.operator_hide.unhide(req.kind, &req.id, &req.reason, now_ms()) {
-        Ok(was) => (StatusCode::OK, Json(serde_json::json!({ "ok": true, "was_hidden": was }))).into_response(),
+    match state
+        .operator_hide
+        .unhide(req.kind, &req.id, &req.reason, now_ms())
+    {
+        Ok(was) => (
+            StatusCode::OK,
+            Json(serde_json::json!({ "ok": true, "was_hidden": was })),
+        )
+            .into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
@@ -91,5 +116,9 @@ pub async fn get_operator_hidden(
     if let Err(r) = operator_only(peer, &headers) {
         return r;
     }
-    (StatusCode::OK, Json(serde_json::json!({ "ok": true, "hidden": state.operator_hide.list() }))).into_response()
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "ok": true, "hidden": state.operator_hide.list() })),
+    )
+        .into_response()
 }
