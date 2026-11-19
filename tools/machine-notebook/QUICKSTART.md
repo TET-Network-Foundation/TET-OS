@@ -293,8 +293,10 @@ The person who checks the log needs four things from you, and must never get a f
 
    This prints nothing. The archive holds `chain.json`, `chain.txt`, `device.keyid`,
    `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`. To see
-   for yourself, `tar -tzf ~/tags-log.tgz | grep -c device.key` should print `0` (grep then exits
-   with 1, which here means "not found", the good result).
+   for yourself, `tar -tzf ~/tags-log.tgz | grep -cx 'tags/device.key'` should print `0`: no
+   line is exactly `tags/device.key`. (grep then exits with 1, which here means "not found", the good
+   result. Without `-x` it would also count `tags/device.keyid`, which is public and meant to be
+   there.)
 
 2. **The pin, by another route.** Send `~/tags.pin` separately from the archive: a different
    message, a different channel, or read the first line out loud and let them compare it. If the
@@ -303,8 +305,9 @@ The person who checks the log needs four things from you, and must never get a f
    for the same reason, and `verify` refuses it.
 
 3. **The key id.** The line `init` printed for `~/tags`, which is also the first line of
-   `~/tags.pin`. Send it with the pin, or say it to them, so they can compare it with what `verify`
-   prints.
+   `~/tags.pin`. It may travel with the pin, by the same route, as long as that route is not the
+   archive's: put it in the same message as the pin, or read it out to them. They compare it with
+   what `verify` prints.
 
 4. **The same tools.** They need everything under "What you need" on their own machine, and Step 1
    run there in their own home folder: the same `cd ~`, `git clone` and `cargo build` lines, which
