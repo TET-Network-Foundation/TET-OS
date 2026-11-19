@@ -6,7 +6,8 @@ New here? [QUICKSTART.md](QUICKSTART.md) walks through the opening half hour on 
 
 A machine keeps its own notebook: a device (a Mac today, a Raspberry Pi or Jetson later) records
 sensor readings, signs each one with its own TET key, and chains every record to the one before it.
-Anyone holding the folder can later replay the log and see whether it is intact and in order. It adds
+Anyone handed an export of the folder (the records, without the device's key) can later replay the
+log and see whether it is intact and in order. It adds
 no new cryptography: signing and checking are `tet-cli agent sign` and `tet-cli agent verify` (the
 agent envelope in [docs/AGENT_IDENTITY.md](../../docs/AGENT_IDENTITY.md)).
 
@@ -46,6 +47,17 @@ To hand a log to someone who checks it, leave the key out (from the folder that 
 `tar -czf notebook-log.tgz --exclude device.key notebook`) and send them the pin by another route,
 so that whoever could change the log in transit could not also change the pin.
 
+**Never hand over the folder itself: it holds `device.key`.** Hand over an export and, separately, the
+pin:
+
+```sh
+python3 tools/machine-notebook/notebook.py export --dir ~/notebook --out ~/notebook-export
+```
+
+`export` writes a new folder with `chain.json`, `chain.txt`, `records/` and `permits/`, byte for byte,
+and nothing else: no `device.key`, `device.head`, `device.pin` or `device.keyid`. `verify` run on a
+folder that holds `device.key` says so on its last line.
+
 Every TET signature has two halves, Ed25519 and ML-DSA-44, each under its own public key. `init` also
 writes `<dir>/device.pin`: the device's two key ids, one per line (`tet-ed25519:<hex>`,
 `tet-mldsa44:<hex>`). **Copy it somewhere outside the folder when you run `init`.** `verify` needs that
@@ -80,6 +92,7 @@ python3 tools/machine-notebook/notebook.py run    --dir ~/notebook --source load
 python3 tools/machine-notebook/notebook.py verify --dir ~/notebook --pin ~/notebook.pin
 python3 tools/machine-notebook/notebook.py permit --dir ~/notebook --action open-valve --expires-seq 20   # prints the permit id
 python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit <permit id>
+python3 tools/machine-notebook/notebook.py export --dir ~/notebook --out ~/notebook-export  # to hand over: no key
 ```
 
 `init` saves the chain in `<dir>/chain.json`; every later command uses it, so a log is always signed
@@ -231,7 +244,8 @@ cited once at its last open seq is VALID; cited twice, cited after `expires_seq`
 key, edited after signing, copied under a second name, missing, or signed as a log record, each reads
 INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. `record` refuses a log that no longer ends at
 the last record the device signed (records removed from the end, or chain.txt's last line changed).
-Every file is read once and tet-cli checks those bytes: a file changed in the folder during a check,
+`export` copies exactly the chain, records and permits, and verify's last line names a `device.key` in
+the folder it checked. Every file is read once and tet-cli checks those bytes: a file changed in the folder during a check,
 and a record that is not a regular file, each read INVALID for that reason. For the
 pin, one case per half: a record and a permit whose Ed25519 or ML-DSA-44 half is another device's valid
 signature each read INVALID for that half; another device's intact log reads INVALID against this

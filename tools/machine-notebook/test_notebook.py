@@ -42,6 +42,11 @@ only the pin can refuse it.
   verify --node: a hash record with one half from another device does not count as this device's,
   and neither does another device's hash record saved in the folder.
 
+What a handed-over folder holds:
+  (y) export                                               -> chain, records and permits only, the
+      same bytes, VALID; no device.key, device.head or pin
+      verify on a folder holding device.key                -> its last line says to hand over an export
+
 record continues a log only where the device last signed it (device.head, outside chain.txt):
   (x) the newest record removed, then record               -> refused, nothing written
       a permit's record removed, then record --permit       -> refused, the permit is not cited again
@@ -1041,6 +1046,55 @@ class Notebook(unittest.TestCase):
                 t.join(0.2)
                 os.close(fd)
             t.join(2)
+
+
+class Export(unittest.TestCase):
+    """What a handed-over folder holds: export copies what verify reads and leaves the device's own
+    files out, and verify says so when it is run on a folder that holds device.key."""
+
+    @classmethod
+    def setUpClass(cls):
+        Notebook.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    copy, permit = Notebook.copy, Notebook.permit
+
+    @staticmethod
+    def tree(d):
+        return sorted(os.path.relpath(os.path.join(r, n), d) for r, _, fs in os.walk(d) for n in fs)
+
+    def test_y_an_export_holds_no_device_file_and_reads_valid(self):
+        d = self.copy()
+        pid = self.permit(d, 9)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", "--permit", pid, stdin=Notebook.READING)
+        self.assertEqual(rc, 0, out)
+        out_dir = os.path.join(self.tmp, "handed-over")
+        rc, out = nb("export", "--dir", d, "--out", out_dir)
+        self.assertEqual(rc, 0, out)
+        want = ["chain.json", "chain.txt", f"permits/{pid}.json", f"permits/{pid}.json.sig.json"] + [
+            f"records/{n}.json{s}" for n in range(1, 5) for s in ("", ".sig.json")]
+        self.assertEqual(self.tree(out_dir), sorted(want))
+        for name in self.tree(out_dir):
+            with open(os.path.join(d, name), "rb") as a, open(os.path.join(out_dir, name), "rb") as b:
+                self.assertEqual(a.read(), b.read(), name)
+        rc, out = nb("verify", "--pin", self.pin, "--dir", out_dir)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+        self.assertIn(f"4 records, all signed by {self.keyid}", out)
+        self.assertNotIn(notebook.KEY_NOTE, out)
+        rc, _, err = nb_err("export", "--dir", d, "--out", out_dir)
+        self.assertEqual(rc, 2, "export must not write into an existing folder")
+
+    def test_y_verify_on_a_folder_with_device_key_says_to_hand_over_an_export(self):
+        d = self.copy()
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[-1]), (0, notebook.KEY_NOTE), out)
+        os.remove(os.path.join(d, "device.key"))
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn(notebook.KEY_NOTE, out)
 
 
 class DeviceHead(unittest.TestCase):

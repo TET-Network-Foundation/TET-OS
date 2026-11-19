@@ -8,6 +8,7 @@ one-time permits that a record may cite. Prototype.
     python3 notebook.py run     --dir DIR --source ... --every SECONDS [--until HH:MM]
     python3 notebook.py verify  --dir DIR --pin PINFILE [--node URL]
     python3 notebook.py publish --dir DIR --seq N --node URL
+    python3 notebook.py export  --dir DIR --out NEWDIR
 
 No new cryptography: every signature is `tet-cli agent sign` (the agent envelope in
 docs/AGENT_IDENTITY.md) and every check is `tet-cli agent verify`. The device phrase reaches tet-cli
@@ -851,7 +852,44 @@ def cmd_verify(a):
             print(ln)
     else:
         print("stamp: not checked (no node)")
+    if os.path.lexists(os.path.join(a.dir, "device.key")):
+        print(KEY_NOTE)
     return 1 if problems else 0
+
+
+# ── export: what to hand over ─────────────────────────────────────────────────────────────────
+
+KEY_NOTE = "note: this folder holds device.key, and whoever has a copy can sign as this device; to hand the log over, give an export (notebook.py export), which leaves it out"
+# Exactly what verify reads, and nothing of the device's own (device.key, device.head, device.pin,
+# device.keyid): the reader takes the pin from a copy of their own.
+EXPORT_TOP = ("chain.json", "chain.txt")
+EXPORT_IN = {
+    "records": re.compile(r"[0-9]+\.json(\.sig\.json)?|[0-9]+\.hash\.sig\.json"),
+    "permits": re.compile(r"[0-9a-f]{32}\.json(\.sig\.json)?"),
+}
+
+
+def cmd_export(a):
+    d, out = a.dir, a.out
+    if os.path.lexists(out):
+        raise Fail(f"{out} exists; export writes a new folder")
+    files = [n for n in EXPORT_TOP if os.path.lexists(os.path.join(d, n))]
+    for sub, pat in EXPORT_IN.items():
+        if os.path.isdir(os.path.join(d, sub)):
+            files += [os.path.join(sub, n) for n in sorted(os.listdir(os.path.join(d, sub))) if pat.fullmatch(n)]
+    if "chain.json" not in files:
+        raise Fail(f"no chain.json in {d}; nothing to export")
+    try:
+        data = {n: read_file(os.path.join(d, n), MAX_CHAIN_TXT if n == "chain.txt" else MAX_FILE) for n in files}
+    except (OSError, Unreadable) as e:
+        raise Fail(f"export: {e}")
+    os.makedirs(out, mode=0o700)
+    for sub in EXPORT_IN:
+        os.makedirs(os.path.join(out, sub), exist_ok=True)
+    for n, b in data.items():
+        with open(os.path.join(out, n), "xb") as f:
+            f.write(b)
+    print(f"exported {len(files)} files to {out}; device.key is not among them. Give the reader the pin (device.pin) separately.")
 
 
 # ── publish ───────────────────────────────────────────────────────────────────────────────────
@@ -934,6 +972,9 @@ def main(argv=None):
     s.add_argument("--dir", required=True)
     s.add_argument("--pin", required=True, help="the device's pin file (device.pin, written by init), kept OUTSIDE --dir")
     s.add_argument("--node", help="also check published records' anchors on this node")
+    s = sub.add_parser("export")
+    s.add_argument("--dir", required=True)
+    s.add_argument("--out", required=True, help="a new folder: the records, permits and chain, without device.key")
     s = sub.add_parser("publish")
     s.add_argument("--dir", required=True)
     s.add_argument("--seq", type=int, required=True)
@@ -944,7 +985,7 @@ def main(argv=None):
     if a.cmd == "run" and a.source == "stdin-json":
         p.error("run reads a source repeatedly; stdin-json is for record")
     try:
-        return {"init": cmd_init, "record": cmd_record, "permit": cmd_permit, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish}[a.cmd](a) or 0
+        return {"init": cmd_init, "record": cmd_record, "permit": cmd_permit, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish, "export": cmd_export}[a.cmd](a) or 0
     except Fail as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
