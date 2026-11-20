@@ -151,7 +151,8 @@ python3 tools/machine-notebook/notebook.py set-head --dir ~/notebook
 
 `set-head` checks the whole log against the folder's own device key, as `verify` would. Only if the log
 is VALID does it write `device.head`, naming the newest record in the folder; otherwise it lists what
-is wrong and writes nothing.
+is wrong and writes nothing. It also writes nothing when a record's signature is in `records/`
+without the record itself.
 
 One `record` runs at a time in a folder: a `run` loop and a manual `record` take turns on
 `<dir>/device.lock`. A run waits up to 30 seconds for the other to finish, then gives up and says so

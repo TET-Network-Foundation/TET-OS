@@ -71,6 +71,9 @@ record continues a log only where the device last signed it (device.head, outsid
       set-head on a log with one flipped byte                -> refused, no device.head written
       set-head on a log signed by another device's key       -> refused, no device.head written
       set-head on a folder with no records                   -> device.head "0 <zeros>"
+      set-head where the newest record was removed but its signature left -> refused, no
+                                                                device.head; record refuses that
+                                                                number too
       two record runs at once citing one permit (tet-cli slowed so both are inside the check)
                                                              -> one records, the other is refused
                                                                 because the permit is used: one
@@ -1465,6 +1468,30 @@ class SetHead(unittest.TestCase):
         self.assertIn("device.head not written: the log is not VALID against this device's key", err)
         self.assertIn("key:", err)
         self.assertFalse(os.path.lexists(os.path.join(d, "device.head")))
+
+    def test_x_set_head_refuses_a_signature_whose_record_is_gone(self):
+        # Record 3 removed with its chain.txt line, its envelope left: records 1 and 2 alone read
+        # VALID, so only the look at the envelopes can refuse.
+        d = self.old_folder()
+        chain = notebook.chain_lines(d)
+        os.remove(self.rec(d, 3))
+        with open(os.path.join(d, "chain.txt"), "w") as f:
+            f.write("".join(ln + "\n" for ln in chain[:2]))
+        sig = self.rec(d, 3) + ".sig.json"
+        with open(sig, "rb") as f:
+            env_before = f.read()
+        rc, _, err = nb_err("set-head", "--dir", d)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("device.head not written: records/3.json.sig.json is a signature with no record beside it", err)
+        self.assertFalse(os.path.lexists(os.path.join(d, "device.head")))
+        # And record, given a head at 2, does not sign a second record 3 over that envelope.
+        notebook.write_head(d, 2, chain[1])
+        rc, _, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=Notebook.READING)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("3.json.sig.json exists, so this device already signed a record 3", err)
+        self.assertFalse(os.path.exists(self.rec(d, 3)))
+        with open(sig, "rb") as f:
+            self.assertEqual(f.read(), env_before, "the signed envelope was replaced")
 
     def test_x_set_head_on_a_folder_with_no_records_starts_at_zero(self):
         d = self.old_folder()

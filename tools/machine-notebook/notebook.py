@@ -566,7 +566,7 @@ def read_head(d):
         st = os.lstat(p)
     except FileNotFoundError:
         raise Fail(
-            f"no device.head in {d}, so the device cannot tell where its log ended. For a folder made "
+            f"no device.head in {one_line(d)}, so the device cannot tell where its log ended. For a folder made "
             f"before device.head existed, run once: {set_head_line(d)}"
         )
     if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077:
@@ -662,6 +662,8 @@ def record_locked(a, reading):
     path = os.path.join(rec_dir, f"{seq}.json")
     if os.path.exists(path):
         raise Fail(f"{path} exists but chain.txt has {len(chain)} entries; run verify")
+    if os.path.lexists(path + ".sig.json"):
+        raise Fail(f"not recorded: {path}.sig.json exists, so this device already signed a record {seq}; run verify")
     record = {
         "v": 1,
         "kind": KIND,
@@ -709,10 +711,19 @@ def cmd_set_head(a):
     device.head exists, so it never moves a head the device already keeps."""
     d = a.dir
     if not os.path.exists(os.path.join(d, "device.key")):
-        raise Fail(f"no device key in {d}; set-head is for the device's own folder")
+        raise Fail(one_line(f"no device key in {d}; set-head is for the device's own folder"))
     with record_lock(d):
         if os.path.lexists(os.path.join(d, "device.head")):
-            raise Fail(f"device.head exists in {d}; set-head writes one only for a folder that has none")
+            raise Fail(one_line(f"device.head exists in {d}; set-head writes one only for a folder that has none"))
+        # A signed envelope whose record is gone is a record this device signed: taking the end from
+        # the records alone would let the device sign that number a second time.
+        rec_dir = os.path.join(d, "records")
+        orphans = sorted(
+            n for n in (os.listdir(rec_dir) if os.path.isdir(rec_dir) else ())
+            if (m := re.fullmatch(r"([0-9]+)\.json\.sig\.json", n)) and not os.path.lexists(os.path.join(rec_dir, m.group(1) + ".json"))
+        )
+        if orphans:
+            raise Fail(one_line(f"device.head not written: records/{orphans[0]} is a signature with no record beside it; the device signed a record that is not in this folder"))
         cli = tet_cli(a)
         problems, _, _, bodies = check_chain(d, cli, derive_pin(cli, d))
         if problems == [(None, "no records")] and not chain_lines(d):
