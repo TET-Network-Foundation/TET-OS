@@ -11,6 +11,8 @@
 //    HTML's CSP says connect-src 'none' and pins its one inline script by hash.
 // 5. The CLI, run with networking disabled (every net, dns, http and fetch entry point throws),
 //    verifies the paper's mark; a tampered paper and a tampered record do not verify.
+// 6. A record cut to one signature half is refused by the offline verifier, the page's verifier and
+//    the published CLI, each case for its own reason.
 // Negative controls (run by hand, recorded in the commit): the offline verifier skipping the ML-DSA
 // check → 1 FAILED; the build keeping the glue's network loader → 4 FAILED.
 
@@ -141,6 +143,46 @@ globalThis.fetch = no; globalThis.WebSocket = undefined;`,
   r.payload = btoa(String.fromCharCode(...new Uint8Array(32).fill(1)));
   writeFileSync(join(dir, "rec.json"), JSON.stringify(r));
   assert.equal(run(join(dir, "rec.json")).status, 1, "a tampered record verified");
+});
+
+// A record cut down to one signature half (tet-core/src/testdata/agent_halves_v1.json: one record
+// signed by tet-cli agent sign, and that record with exactly ONE half removed, emptied or relabelled).
+// The offline verifier, the page's verifier and the published CLI file accept the uncut record and
+// refuse each case for the reason pinned here.
+await check("SECURITY: a record cut to one signature half is refused, for its own reason", async () => {
+  const halves = JSON.parse(readFileSync(new URL("../../tet-core/src/testdata/agent_halves_v1.json", UI), "utf8"));
+  const hc = { chainId: halves.chain.chain_id, genesisHash: halves.chain.genesis_hash };
+  const reasons = {
+    ed25519_only: "expected exactly 2 signatures, got 1",
+    mldsa44_only: "expected exactly 2 signatures, got 1",
+    ed25519_sig_empty: "ed25519 signature does not verify (on this chain binding)",
+    mldsa44_sig_empty: "ml-dsa signature is not ML-DSA-44",
+    ed25519_label_changed: "missing or duplicated ed25519 signature",
+    mldsa44_label_changed: "missing or duplicated ml-dsa-44 signature",
+  };
+  assert.deepEqual(halves.cases.map((c) => c.name), Object.keys(reasons), "the fixture's cases changed; pin a reason for each");
+  const dir = mkdtempSync(join(tmpdir(), "tethalves-"));
+  const cli = (e) => {
+    const f = join(dir, "rec.json");
+    writeFileSync(f, JSON.stringify(e));
+    return spawnSync("node", ["public/verify/tet-verify.mjs", f, "--chain", hc.chainId, hc.genesisHash], { cwd: UI, encoding: "utf8" });
+  };
+  const verdicts = async (e) => [
+    await ov.verifyRecordOffline({ recordBytes: enc(e), file: null, chain: hc, mldsa44Verify }),
+    await va.verifyEnvelope({ envelope: e, content: new Uint8Array(), recordOnly: true, chain: hc, mldsa44Verify }),
+  ];
+  const [a0, b0] = await verdicts(halves.base);
+  assert.ok(a0.ok && b0.ok, `the uncut record didn't verify: offline=${a0.reason} page=${b0.reason}`);
+  const c0 = cli(halves.base);
+  assert.equal(c0.status, 0, `the published CLI refused the uncut record: ${c0.stdout}${c0.stderr}`);
+  for (const c of halves.cases) {
+    const [a, b] = await verdicts(c.envelope);
+    assert.deepEqual([a.ok, a.reason], [false, reasons[c.name]], `offline verifier, ${c.name}`);
+    assert.deepEqual([b.ok, b.reason], [false, reasons[c.name]], `page verifier, ${c.name}`);
+    const r = cli(c.envelope);
+    assert.equal(r.status, 1, `published CLI, ${c.name}: exit ${r.status}`);
+    assert.equal(r.stdout.trim(), `DOES NOT VERIFY: ${reasons[c.name]}`, `published CLI, ${c.name}`);
+  }
 });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
