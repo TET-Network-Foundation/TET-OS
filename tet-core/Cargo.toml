@@ -54,7 +54,7 @@ rand_new = { package = "rand", version = "0.10" }
 # this reqwest through feature unification.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "rustls-tls-native-roots", "stream", "charset", "http2", "macos-system-configuration"] }
 ureq = { version = "2.12", default-features = false, features = ["json"] }
-rand_chacha = "0.3"
+rand_chacha = "0.9"
 dilithium-rs = { version = "0.2", default-features = false }
 candle-core = "0.10.2"
 candle-transformers = "0.10.2"
