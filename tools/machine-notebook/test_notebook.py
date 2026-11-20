@@ -673,6 +673,130 @@ class Notebook(unittest.TestCase):
                     else:
                         self.assertEqual(got, expected, name)
 
+    # ── each refusal of verify on its own (one change per case; every earlier check passes) ──────
+
+    def test_u_a_log_with_no_records_is_invalid(self):
+        d = self.copy()
+        for n in os.listdir(os.path.join(d, "records")):
+            os.remove(os.path.join(d, "records", n))
+        self.assertOnlyProblem(d, "log: no records")
+
+    def test_v_a_chain_txt_listing_a_record_that_is_not_there_is_invalid(self):
+        d = self.copy()
+        with open(os.path.join(d, "chain.txt"), "a") as f:
+            f.write("ab" * 32 + "\n")
+        self.assertOnlyProblem(d, "log: chain.txt lists 4 records, records/ holds 3")
+
+    def test_w_a_record_without_its_envelope_is_invalid(self):
+        d = self.copy()
+        os.remove(self.rec(d, 2) + ".sig.json")
+        self.assertOnlyProblem(d, "record 2: signature: no envelope")
+
+    def test_x_a_record_signed_by_this_device_as_a_permit_is_invalid(self):
+        d = self.copy()
+        # The device's own key over the record's exact bytes, under the permit type: tet-cli accepts the
+        # envelope and the pin matches, so only the payload-type check can refuse it.
+        notebook.sign(CLI, d, self.rec(d, 2), notebook.PERMIT_PAYLOAD_TYPE)
+        self.assertOnlyProblem(d, f"record 2: signature: payload type is {notebook.PERMIT_PAYLOAD_TYPE!r}, not {notebook.PAYLOAD_TYPE}")
+
+    def resign_record(self, d, n, body):
+        """Replace record `n` with `body`, signed with this device's key, and chain.txt's line for it:
+        the envelope verifies and the pin matches, so only the record checks can refuse it."""
+        with open(self.rec(d, n), "wb") as f:
+            f.write(body)
+        notebook.sign(CLI, d, self.rec(d, n), notebook.PAYLOAD_TYPE)
+        chain = notebook.chain_lines(d)
+        chain[n - 1] = hashlib.sha256(body).hexdigest()
+        with open(os.path.join(d, "chain.txt"), "w") as f:
+            f.write("\n".join(chain) + "\n")
+
+    def last_record(self, d):
+        with open(self.rec(d, 3), "rb") as f:
+            return json.loads(f.read())
+
+    # Record 3 is the last, so no later record's prev link can add a second problem.
+    def test_y_a_signed_record_that_is_not_json_is_invalid(self):
+        d = self.copy()
+        self.resign_record(d, 3, b"not json")
+        self.assertOnlyProblem(d, "record 3: record: not JSON")
+
+    def test_y_a_signed_record_that_is_not_canonical_json_is_invalid(self):
+        d = self.copy()
+        self.resign_record(d, 3, json.dumps(self.last_record(d)).encode())  # ", " and ": " separators
+        self.assertOnlyProblem(d, "record 3: record: not canonical JSON")
+
+    def test_y_a_signed_record_of_another_kind_is_invalid(self):
+        d = self.copy()
+        rec = self.last_record(d)
+        rec["kind"] = "tet_machine_log_v2"
+        self.resign_record(d, 3, notebook.canonical(rec))
+        self.assertOnlyProblem(d, "record 3: record: not a tet_machine_log_v1 record")
+
+    def test_y_a_signed_record_of_another_version_is_invalid(self):
+        d = self.copy()
+        rec = self.last_record(d)
+        rec["v"] = 2  # the kind is unchanged, so only the version comparison can refuse it
+        self.resign_record(d, 3, notebook.canonical(rec))
+        self.assertOnlyProblem(d, "record 3: record: not a tet_machine_log_v1 record")
+
+    def test_y_a_chain_txt_line_that_differs_from_its_record_is_invalid(self):
+        d = self.copy()
+        chain = notebook.chain_lines(d)
+        chain[1] = "cd" * 32
+        with open(os.path.join(d, "chain.txt"), "w") as f:
+            f.write("\n".join(chain) + "\n")
+        self.assertOnlyProblem(d, "record 2: chain.txt: hash differs from the record")
+
+    # ── each refusal of a permit on its own ───────────────────────────────────────────────────
+
+    def signed_permit_body(self, d, pid, body):
+        """A permit file holding `body`, signed by this device as a permit: only the body checks can refuse it."""
+        os.makedirs(os.path.join(d, "permits"), exist_ok=True)
+        with open(self.permit_path(d, pid), "wb") as f:
+            f.write(body)
+        notebook.sign(CLI, d, self.permit_path(d, pid), notebook.PERMIT_PAYLOAD_TYPE)
+
+    def test_z_a_citation_that_is_not_a_permit_id_is_invalid(self):
+        d = self.copy()
+        self.assertEqual(self.cite(d, "AB" * 16), 4)  # upper-case: 32 characters, not 32 lower-case hex
+        self.assertOnlyProblem(d, "record 4: permit: not a permit id (32 hex)")
+
+    def test_z_a_signed_permit_of_another_kind_is_invalid(self):
+        d = self.copy()
+        pid = "ef" * 16
+        self.signed_permit_body(d, pid, notebook.canonical({"kind": "tet_machine_permit_v2", "permit_id": pid, "action": "open-valve", "expires_seq": 9}))
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not a {notebook.PERMIT_KIND} permit")
+
+    def test_z_a_signed_permit_with_an_extra_field_is_invalid(self):
+        d = self.copy()
+        pid = "ef" * 16
+        self.signed_permit_body(d, pid, notebook.canonical({"kind": notebook.PERMIT_KIND, "permit_id": pid, "action": "open-valve", "expires_seq": 9, "note": "x"}))
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not a {notebook.PERMIT_KIND} permit")
+
+    def test_z_a_signed_permit_whose_action_is_not_text_is_invalid(self):
+        d = self.copy()
+        pid = "ef" * 16
+        self.signed_permit_body(d, pid, notebook.canonical({"kind": notebook.PERMIT_KIND, "permit_id": pid, "action": 5, "expires_seq": 9}))
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not a {notebook.PERMIT_KIND} permit")
+
+    def test_z_a_signed_permit_that_is_not_canonical_json_is_invalid(self):
+        d = self.copy()
+        pid = "ef" * 16
+        body = {"kind": notebook.PERMIT_KIND, "permit_id": pid, "action": "open-valve", "expires_seq": 9}
+        self.signed_permit_body(d, pid, json.dumps(body).encode())
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not a {notebook.PERMIT_KIND} permit")
+
+    def test_z_a_signed_permit_whose_expiry_is_not_an_integer_is_invalid(self):
+        d = self.copy()
+        pid = "ef" * 16
+        self.signed_permit_body(d, pid, notebook.canonical({"kind": notebook.PERMIT_KIND, "permit_id": pid, "action": "open-valve", "expires_seq": 9.0}))
+        self.assertEqual(self.cite(d, pid), 4)
+        self.assertOnlyProblem(d, f"record 4: permit: {pid} is not a {notebook.PERMIT_KIND} permit")
+
     def test_s_the_pin_comes_from_outside_the_folder(self):
         # Another device's intact log, with its own device.keyid and device.pin inside: INVALID against
         # this pin, VALID against its own.
