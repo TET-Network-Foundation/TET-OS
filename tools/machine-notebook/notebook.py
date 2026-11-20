@@ -662,8 +662,9 @@ def record_locked(a, reading):
     path = os.path.join(rec_dir, f"{seq}.json")
     if os.path.exists(path):
         raise Fail(f"{path} exists but chain.txt has {len(chain)} entries; run verify")
-    if os.path.lexists(path + ".sig.json"):
-        raise Fail(f"not recorded: {path}.sig.json exists, so this device already signed a record {seq}; run verify")
+    for left in (path + ".sig.json", os.path.join(rec_dir, f"{seq}.hash.sig.json")):
+        if os.path.lexists(left):
+            raise Fail(f"not recorded: {left} exists, so this device already signed a record {seq}; run verify")
     record = {
         "v": 1,
         "kind": KIND,
@@ -715,12 +716,13 @@ def cmd_set_head(a):
     with record_lock(d):
         if os.path.lexists(os.path.join(d, "device.head")):
             raise Fail(one_line(f"device.head exists in {d}; set-head writes one only for a folder that has none"))
-        # A signed envelope whose record is gone is a record this device signed: taking the end from
-        # the records alone would let the device sign that number a second time.
+        # A signed envelope whose record is gone (the record's own, or the hash-only one publish
+        # writes) is a record this device signed: taking the end from the records alone would let
+        # the device sign that number a second time.
         rec_dir = os.path.join(d, "records")
         orphans = sorted(
             n for n in (os.listdir(rec_dir) if os.path.isdir(rec_dir) else ())
-            if (m := re.fullmatch(r"([0-9]+)\.json\.sig\.json", n)) and not os.path.lexists(os.path.join(rec_dir, m.group(1) + ".json"))
+            if (m := re.fullmatch(r"([0-9]+)\.(?:json|hash)\.sig\.json", n)) and not os.path.lexists(os.path.join(rec_dir, m.group(1) + ".json"))
         )
         if orphans:
             raise Fail(one_line(f"device.head not written: records/{orphans[0]} is a signature with no record beside it; the device signed a record that is not in this folder"))
