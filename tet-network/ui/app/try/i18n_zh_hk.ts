@@ -1177,6 +1177,8 @@ export const ZH_HK: Record<string, string> = {
   "where the machine was": "機器當時在哪裏",
   "who runs the machine": "誰在操作這部機器",
   "that a copied key did not use the same permission in another log": "被複製的金鑰沒有在另一份日誌中使用同一個許可",
+  // Not native-reviewed yet: the next line waits for a fluent reader.
+  "that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it": "日誌是完整而且未被改動的（最新的紀錄可能缺漏，而持有密鑰的人可以改寫其中任何部分）",
   "that a permit was used only here: it does not stop a copied key from writing a second log": "許可證只在這裏使用過：許可證無法阻止被複製的金鑰寫出第二份日誌",
   // /signin (app/signin), checked by scripts/signin_demo_guard.mjs.
   "Second option: a server on this computer": "第二個選擇：這部電腦上的伺服器",

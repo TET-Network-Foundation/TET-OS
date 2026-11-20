@@ -89,6 +89,7 @@ def forced_record(d, value, unit, permit_id, clock="2026-11-12T08:00:00Z"):
     nb.sign(CLI, d, path, nb.PAYLOAD_TYPE)
     with open(os.path.join(d, "chain.txt"), "a") as f:
         f.write(nb.sha256_hex(body) + "\n")
+    nb.write_head(d, seq, nb.sha256_hex(body))  # as record does after signing
 
 
 def snapshot(d):
@@ -269,6 +270,9 @@ def main():
                 lines = f.read().splitlines()[:3]
             with open(os.path.join(d, "chain.txt"), "w") as f:
                 f.write("".join(x + "\n" for x in lines))
+            # record continues only from where the device last signed (device.head): this case is a
+            # folder whose key and end were both changed, so device.head is set to the new end too.
+            nb.write_head(d, 3, lines[-1])
             record(d, "ok", "状態")
 
         case("record_other_key", "record 4 signed by another device's key", other_key)

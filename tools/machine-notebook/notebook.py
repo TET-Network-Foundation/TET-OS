@@ -8,6 +8,8 @@ one-time permits that a record may cite. Prototype.
     python3 notebook.py run     --dir DIR --source ... --every SECONDS [--until HH:MM]
     python3 notebook.py verify  --dir DIR --pin PINFILE [--node URL]
     python3 notebook.py publish --dir DIR --seq N --node URL
+    python3 notebook.py export  --dir DIR --out NEWDIR
+    python3 notebook.py set-head --dir DIR       (once, for a folder made before device.head)
 
 No new cryptography: every signature is `tet-cli agent sign` (the agent envelope in
 docs/AGENT_IDENTITY.md) and every check is `tet-cli agent verify`. The device phrase reaches tet-cli
@@ -17,6 +19,9 @@ every process via `ps`). Stdlib only.
 Layout of DIR:
   device.key              the device's own 12-word phrase, mode 0600. Never the owner's.
   device.keyid            its Ed25519 key id (tet-ed25519:<hex>)
+  device.head             "<seq> <sha256>" of the last record this device signed, mode 0600. record
+                          appends only to a log that still ends there, so the device never signs a
+                          second record under a number it has already used.
   device.pin              both of its key ids, one per line: tet-ed25519:<hex>, tet-mldsa44:<hex>.
                           verify takes the pin from --pin, a copy kept OUTSIDE the folder: the check
                           pins both keys of the expected signer.
@@ -34,13 +39,16 @@ the device clock in UTC. No hostname, IP, location or name is written to a recor
 
 import argparse
 import base64
+import contextlib
 import datetime as dt
+import fcntl
 import glob
 import hashlib
 import json
 import math
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -76,12 +84,55 @@ DOES_NOT_SHOW = [
     "who runs the machine",
     "that the key was not copied",
     "that a copied key did not use the same permission in another log",
+    "that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it",
     "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
 ]
 
 
 class Fail(Exception):
     pass
+
+
+class Unreadable(Exception):
+    """A file in the folder that is not a regular file of a sane size; the message says which."""
+
+
+# A record or envelope is a few KiB. Every file verify reads goes through read_file, once, so that a
+# FIFO, a device or a symlink cannot hang it, feed it without end, or give one read different bytes
+# from the next; chain.txt holds one 65-byte line per record.
+MAX_FILE = 1 << 20
+MAX_CHAIN_TXT = 16 << 20
+
+
+def read_file(path, cap=MAX_FILE, forbid=()):
+    """The bytes of the regular file at `path`, read once. FileNotFoundError if there is none;
+    Unreadable for a symlink, FIFO, device or directory (opened without following or blocking, then
+    checked on the open descriptor), for more than `cap` bytes, or for a file whose (device, inode)
+    is in `forbid` (a hard link to it)."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        raise
+    except OSError:
+        raise Unreadable("not a regular file")
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Unreadable("not a regular file")
+        if (st.st_dev, st.st_ino) in forbid:
+            raise Unreadable("is the same file as one of the device's own files (a hard link)")
+        chunks, size = [], 0
+        while True:
+            b = os.read(fd, 65536)
+            if not b:
+                break
+            size += len(b)
+            if size > cap:
+                raise Unreadable(f"larger than {cap} bytes")
+            chunks.append(b)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
 
 
 def canonical(obj):
@@ -99,10 +150,9 @@ def tet_cli(args):
 def chain_env(d):
     """The chain binding from chain.json, so signing and verifying always use the same one."""
     try:
-        with open(os.path.join(d, "chain.json")) as f:
-            c = json.load(f)
+        c = json.loads(read_file(os.path.join(d, "chain.json")))
         return {"TET_CHAIN_ID": c["chain_id"], "TET_GENESIS_HASH": c["genesis_hash"]}
-    except (OSError, ValueError, KeyError):
+    except (OSError, Unreadable, ValueError, KeyError, TypeError):
         raise Fail(f"no chain.json in {d}; run init before this")
 
 
@@ -117,6 +167,35 @@ def run_cli(cli, argv, env_extra=None):
     except FileNotFoundError:
         raise Fail(f"tet-cli not found at {cli} (build it: RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release, or pass --tet-cli)")
     return p.returncode, p.stdout, p.stderr
+
+
+def verify_bytes(cli, cenv, sig_bytes, payload_bytes, shown):
+    """tet-cli agent verify over exactly these bytes, copied to a private temporary folder: the
+    envelope and payload tet-cli checks are the ones the caller hashed and parses, never a second read
+    of a file someone else can change. `shown` is the payload's path in the folder: tet-cli's output
+    names it instead of the temporary copy. Returns (exit code, stdout)."""
+    with tempfile.TemporaryDirectory() as t:
+        p = os.path.join(t, "payload")
+        with open(p, "wb") as f:
+            f.write(payload_bytes)
+        with open(p + ".sig.json", "wb") as f:
+            f.write(sig_bytes)
+        rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", p + ".sig.json", "--payload", p], cenv)
+    return rc, out.replace(p, shown)
+
+
+def refusal(out):
+    """The FAIL line tet-cli agent verify printed, without colour codes."""
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    return next((ln.split(":", 1)[1].strip() for ln in plain.splitlines() if ln.startswith("FAIL")), "tet-cli agent verify refused it")
+
+
+def parse_env(sig_bytes):
+    try:
+        env = json.loads(sig_bytes)
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return env if isinstance(env, dict) else {}
 
 
 def read_phrase(d):
@@ -179,6 +258,7 @@ def cmd_init(a):
     with open(os.path.join(d, "device.pin"), "w") as f:
         f.write(f"{pin[0]}\n{pin[1]}\n")
     os.makedirs(os.path.join(d, "records"), exist_ok=True)
+    write_head(d, 0, ZERO)
     print(keyid)
 
 
@@ -335,12 +415,17 @@ def derive_pin(cli, d):
     return pin
 
 
+# The writer's rule for an action, checked again by verify: a permit's fields are printed in verify's
+# report, so a signed permit holding anything else is not a permit.
+ACTION_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
 def cmd_permit(a):
     d = a.dir
     if not os.path.exists(os.path.join(d, "device.key")):
         raise Fail(f"no device key in {d}; run init before this")
     # A short name for the action, not a sentence: like a record, a permit carries no name or place.
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", a.action):
+    if not ACTION_RE.fullmatch(a.action):
         raise Fail("--action is a short name: 1 to 64 of A-Z a-z 0-9 . _ -")
     if a.expires_seq < 1:
         raise Fail("--expires-seq is the last record number that may cite the permit; it must be 1 or more")
@@ -370,31 +455,33 @@ def permit_problem(d, cli, pid, seq, used, device):
     if not isinstance(pid, str) or not re.fullmatch(r"[0-9a-f]{32}", pid):
         return "permit: not a permit id (32 hex)", None
     path = os.path.join(d, "permits", f"{pid}.json")
-    sig = path + ".sig.json"
-    if not os.path.exists(path) or not os.path.exists(sig):
+    try:
+        body = read_file(path)
+        sig_bytes = read_file(path + ".sig.json")
+    except FileNotFoundError:
         return f"permit: {pid} is not in this notebook", None
-    rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", sig, "--payload", path], chain_env(d))
+    except Unreadable as e:
+        return f"permit: {pid}: {e}", None
+    rc, out = verify_bytes(cli, chain_env(d), sig_bytes, body, path)
     if rc != 0:
-        plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
-        why = next((ln.split(":", 1)[1].strip() for ln in plain.splitlines() if ln.startswith("FAIL")), "tet-cli agent verify refused it")
-        return f"permit: {pid}: signature: {why}", None
-    # Only after tet-cli accepted the envelope: it has checked that each keyid names the key that signed.
-    with open(sig) as f:
-        env = json.load(f)
+        return f"permit: {pid}: signature: {refusal(out)}", None
+    # Only after tet-cli accepted these envelope bytes: it has checked that each keyid names the key
+    # that signed. The key ids are read from the same bytes.
+    env = parse_env(sig_bytes)
     if env.get("payloadType") != PERMIT_PAYLOAD_TYPE:
         return f"permit: {pid}: payload type is {env.get('payloadType')!r}, not {PERMIT_PAYLOAD_TYPE}", None
     why = pin_problem(half_keyids(env), device)
     if why:
         return f"permit: {pid} is {why}" if why.startswith("signed") else f"permit: {pid}: {why}", None
-    with open(path, "rb") as f:
-        body = f.read()
     try:
         permit = json.loads(body)
     except ValueError:
         permit = None
     if (
         not isinstance(permit, dict) or set(permit) != PERMIT_KEYS or permit["kind"] != PERMIT_KIND or canonical(permit) != body
-        or not isinstance(permit["action"], str) or type(permit["expires_seq"]) is not int
+        or not isinstance(permit["action"], str) or not ACTION_RE.fullmatch(permit["action"])
+        or not isinstance(permit["permit_id"], str) or not re.fullmatch(r"[0-9a-f]{32}", permit["permit_id"])
+        or type(permit["expires_seq"]) is not int
     ):
         return f"permit: {pid} is not a {PERMIT_KIND} permit", None
     # The id inside the signed bytes, not the file name, is the permit: a copy of one permit under a
@@ -408,18 +495,23 @@ def permit_problem(d, cli, pid, seq, used, device):
     return None, permit
 
 
-def cited_permits(d):
-    """{permit id: seq of the first record citing it}, read from the records on disk."""
+def cited_permits(d, head_seq, head_hash):
+    """{permit id: seq of the first record citing it}, for the device's own side. Walked back from
+    device.head through each record's prev, so every record counted is one whose bytes this device's
+    head pins; a record missing or changed is refused, not skipped."""
     used = {}
-    rec_dir = os.path.join(d, "records")
-    for seq in sorted(int(m.group(1)) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))):
+    want = head_hash
+    for seq in range(head_seq, 0, -1):
         try:
-            with open(os.path.join(rec_dir, f"{seq}.json"), "rb") as f:
-                pid = json.loads(f.read()).get("permit")
-        except (ValueError, AttributeError):
-            continue
-        if isinstance(pid, str):
-            used.setdefault(pid, seq)
+            body = read_file(os.path.join(d, "records", f"{seq}.json"))
+            rec = json.loads(body)
+        except (OSError, Unreadable, ValueError):
+            body, rec = None, None
+        if body is None or sha256_hex(body) != want or not isinstance(rec, dict):
+            raise Fail(f"not recorded: record {seq} is missing or is not the one this device signed; run verify")
+        if isinstance(rec.get("permit"), str):
+            used[rec["permit"]] = seq  # walking back, so the earliest citation is kept
+        want = rec.get("prev")
     return used
 
 
@@ -459,31 +551,126 @@ def read_source(source):
     raise Fail(f"unknown source {source}")
 
 
+HEAD_RE = re.compile(r"(0|[1-9][0-9]{0,17}) ([0-9a-f]{64})\n")
+
+
+def set_head_line(d):
+    """The exact command that writes device.head for folder `d` (cmd_set_head)."""
+    return one_line(f"python3 {shlex.quote(os.path.abspath(__file__))} set-head --dir {shlex.quote(d)}")
+
+
+def read_head(d):
+    """(seq, sha256) of the last record this device signed, from device.head."""
+    p = os.path.join(d, "device.head")
+    try:
+        st = os.lstat(p)
+    except FileNotFoundError:
+        raise Fail(
+            f"no device.head in {one_line(d)}, so the device cannot tell where its log ended. For a folder made "
+            f"before device.head existed, run once: {set_head_line(d)}"
+        )
+    if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077:
+        raise Fail("device.head must be a regular file only its owner can read and write; chmod 600 it")
+    try:
+        m = HEAD_RE.fullmatch(read_file(p, 128).decode("ascii"))
+    except (OSError, Unreadable, UnicodeDecodeError):
+        m = None
+    if not m:
+        raise Fail('device.head is not "<seq> <sha256>"')
+    return int(m.group(1)), m.group(2)
+
+
+def write_head(d, seq, h):
+    """Replace device.head in one step: a crash leaves the old one or the new one, never half."""
+    p = os.path.join(d, "device.head")
+    tmp = p + ".tmp"
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(f"{seq} {h}\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, p)
+
+
 def chain_lines(d):
-    p = os.path.join(d, "chain.txt")
-    if not os.path.exists(p):
+    """chain.txt's lines; [] if there is none. Unreadable if it is not a regular file."""
+    try:
+        text = read_file(os.path.join(d, "chain.txt"), MAX_CHAIN_TXT).decode("ascii", "replace")
+    except FileNotFoundError:
         return []
-    with open(p) as f:
-        return [ln.strip() for ln in f if ln.strip()]
+    return [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+
+# How long a record run waits for another one in the same folder (a `run` loop and a manual
+# `record`, say) before it gives up; the refusal names the wait.
+LOCK_WAIT_S = 30
+
+
+@contextlib.contextmanager
+def record_lock(d):
+    """One record run at a time in folder `d`: an exclusive lock on device.lock, held from reading
+    device.head until chain.txt and device.head are written. Without it, two runs can both read the
+    same head and each sign a record under the same number."""
+    try:
+        fd = os.open(os.path.join(d, "device.lock"), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as e:
+        raise Fail(f"not recorded: cannot open device.lock ({e.strerror})")
+    try:
+        end = time.monotonic() + LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= end:
+                    raise Fail(f"not recorded: another record run in {d} held device.lock for {LOCK_WAIT_S}s")
+                time.sleep(0.05)
+        yield
+    finally:
+        os.close(fd)  # closing the descriptor releases the lock
 
 
 def record_once(a):
     d = a.dir
     if not os.path.exists(os.path.join(d, "device.key")):
         raise Fail(f"no device key in {d}; run init before this")
-    chain = chain_lines(d)
+    # The reading is taken before the lock: a run waiting for its input (stdin) must not hold up another.
+    reading = read_source(a.source)
+    with record_lock(d):
+        record_locked(a, reading)
+
+
+def record_locked(a, reading):
+    d = a.dir
+    try:
+        chain = chain_lines(d)
+    except Unreadable as e:
+        raise Fail(f"chain.txt: {e}")
+    # The device's own memory of where its log ended, not chain.txt's: chain.txt is not signed, and a
+    # log that ends earlier than the device remembers is refused, not continued.
+    head_seq, head_hash = read_head(d)
+    if (len(chain), chain[-1] if chain else ZERO) != (head_seq, head_hash):
+        raise Fail(
+            f"not recorded: this device last signed record {head_seq}, and the log does not end with it "
+            f"(chain.txt ends at record {len(chain)}); run verify"
+        )
     seq = len(chain) + 1
     rec_dir = os.path.join(d, "records")
     os.makedirs(rec_dir, exist_ok=True)
     path = os.path.join(rec_dir, f"{seq}.json")
     if os.path.exists(path):
         raise Fail(f"{path} exists but chain.txt has {len(chain)} entries; run verify")
+    for left in (path + ".sig.json", os.path.join(rec_dir, f"{seq}.hash.sig.json")):
+        if os.path.lexists(left):
+            raise Fail(f"not recorded: {left} exists, so this device already signed a record {seq}; run verify")
     record = {
         "v": 1,
         "kind": KIND,
         "seq": seq,
         "prev": chain[-1] if chain else ZERO,
-        "reading": read_source(a.source),
+        "reading": reading,
         # UTC, so the record carries no time-zone offset (an offset narrows down where a device is).
         "clock_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
     }
@@ -491,21 +678,67 @@ def record_once(a):
     if pid is not None:
         # The same check verify makes, before anything is written: a log is append-only, so one record
         # citing a used or expired permit would leave the whole log INVALID for good.
-        why, _ = permit_problem(d, tet_cli(a), pid, seq, cited_permits(d), derive_pin(tet_cli(a), d))
+        why, _ = permit_problem(d, tet_cli(a), pid, seq, cited_permits(d, head_seq, head_hash), derive_pin(tet_cli(a), d))
         if why:
             raise Fail(f"not recorded: {why}")
         record["permit"] = pid
     body = canonical(record)
-    with open(path, "wb") as f:
-        f.write(body)
+    # "x": created here or not at all. The lock already keeps a second run out; a record file that
+    # appeared some other way since the check above is not overwritten and signed.
+    try:
+        with open(path, "xb") as f:
+            f.write(body)
+    except FileExistsError:
+        raise Fail(f"not recorded: {path} appeared while this record was being made; run verify")
+    # device.head moves to this record BEFORE it is signed: if anything stops this run after the
+    # signature exists (a crash, a timeout, chain.txt not writable), the log no longer ends at the
+    # head, and the next record is refused instead of signing a second record under this number.
+    write_head(d, seq, sha256_hex(body))
     try:
         sign(tet_cli(a), d, path, PAYLOAD_TYPE)
     except Fail:
+        # tet-cli refused and wrote no envelope: nothing was signed, so the old head stands.
         os.remove(path)
+        write_head(d, head_seq, head_hash)
         raise
     with open(os.path.join(d, "chain.txt"), "a") as f:
         f.write(sha256_hex(body) + "\n")
-    print(f"seq {seq}: {record['reading']['value']} {record['reading']['unit']}" + (f" (permit {pid})" if pid else ""))
+    print(one_line(f"seq {seq}: {record['reading']['value']} {record['reading']['unit']}") + (f" (permit {pid})" if pid else ""))
+
+
+def cmd_set_head(a):
+    """Write device.head for a folder made before it existed: check the whole log against this
+    folder's own device key, and only if it is VALID take its newest record as the end. Refuses when
+    device.head exists, so it never moves a head the device already keeps."""
+    d = a.dir
+    if not os.path.exists(os.path.join(d, "device.key")):
+        raise Fail(one_line(f"no device key in {d}; set-head is for the device's own folder"))
+    with record_lock(d):
+        if os.path.lexists(os.path.join(d, "device.head")):
+            raise Fail(one_line(f"device.head exists in {d}; set-head writes one only for a folder that has none"))
+        # A signed envelope whose record is gone (the record's own, or the hash-only one publish
+        # writes) is a record this device signed: taking the end from the records alone would let
+        # the device sign that number a second time.
+        rec_dir = os.path.join(d, "records")
+        orphans = sorted(
+            n for n in (os.listdir(rec_dir) if os.path.isdir(rec_dir) else ())
+            if (m := re.fullmatch(r"([0-9]+)\.(?:json|hash)\.sig\.json", n)) and not os.path.lexists(os.path.join(rec_dir, m.group(1) + ".json"))
+        )
+        if orphans:
+            raise Fail(one_line(f"device.head not written: records/{orphans[0]} is a signature with no record beside it; the device signed a record that is not in this folder"))
+        cli = tet_cli(a)
+        problems, _, _, bodies = check_chain(d, cli, derive_pin(cli, d))
+        if problems == [(None, "no records")] and not chain_lines(d):
+            seq, h = 0, ZERO
+        elif problems:
+            lines = [f"  {'record ' + str(n) if n is not None else 'log'}: {one_line(why)}" for n, why in problems]
+            raise Fail("device.head not written: the log is not VALID against this device's key\n" + "\n".join(lines))
+        else:
+            seq = max(bodies)
+            h = sha256_hex(bodies[seq])
+        write_head(d, seq, h)
+    print(f"device.head: record {seq}, sha256 {h}")
+    print("the device had no note of where its log ended, so it takes the newest record in this folder")
 
 
 def cmd_record(a):
@@ -542,44 +775,54 @@ def ed_keyid(env):
 
 def check_chain(d, cli, pin):
     """Every problem found, as (seq or None, reason). Empty means the log checks out. `pin` is both
-    key ids of the expected signer, from outside the folder (read_pin)."""
+    key ids of the expected signer, from outside the folder (read_pin). Each file is read once
+    (read_file), and every check, tet-cli's included, sees those same bytes. Also returns the record
+    bytes by seq, for check_stamps."""
     problems = []
     rec_dir = os.path.join(d, "records")
     names = sorted(
-        (int(m.group(1)), n) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n))
+        (int(m.group(1)), n) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"([0-9]+)\.json", n))
     ) if os.path.isdir(rec_dir) else []
     if not names:
-        return [(None, "no records")], [], []
-    chain = chain_lines(d)
+        return [(None, "no records")], [], [], {}
+    try:
+        chain = chain_lines(d)
+    except Unreadable as e:
+        problems.append((None, f"chain.txt: {e}"))
+        chain = []
     if len(chain) != len(names):
         problems.append((None, f"chain.txt lists {len(chain)} records, records/ holds {len(names)}"))
+    cenv = chain_env(d)
     signers = []
     used = {}  # permit id -> the record that cited it first
     uses = []  # (seq, permit) for every citation that checked out
+    bodies = {}
     prev_hash = ZERO
     for i, (n, name) in enumerate(names, start=1):
         k = None
         path = os.path.join(rec_dir, name)
-        with open(path, "rb") as f:
-            body = f.read()
-        h = sha256_hex(body)
         if n != i:
             problems.append((n, f"seq: file {name} where record {i} should be (a record is missing)"))
-        # 1. the envelope: both signature halves, and the payload is exactly this file
-        sig = path + ".sig.json"
-        if not os.path.exists(sig):
+        try:
+            body = read_file(path)
+        except (FileNotFoundError, Unreadable) as e:
+            problems.append((n, f"record: {e if isinstance(e, Unreadable) else 'gone while being read'}"))
+            prev_hash = None  # nothing can chain to a record that could not be read
+            continue
+        bodies[n] = body
+        h = sha256_hex(body)
+        # 1. the envelope: both signature halves, and the payload is exactly these bytes
+        try:
+            sig_bytes = read_file(path + ".sig.json")
+        except FileNotFoundError:
             problems.append((n, "signature: no envelope"))
+        except Unreadable as e:
+            problems.append((n, f"signature: envelope {e}"))
         else:
-            rc, out, _ = run_cli(cli, ["agent", "verify", "--sig", sig, "--payload", path], chain_env(d))
+            rc, out = verify_bytes(cli, cenv, sig_bytes, body, path)
             if rc != 0:
-                plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
-                why = next((ln.split(":", 1)[1].strip() for ln in plain.splitlines() if ln.startswith("FAIL")), "tet-cli agent verify refused it")
-                problems.append((n, f"signature: {why}"))
-            try:
-                with open(sig) as f:
-                    env = json.load(f)
-            except ValueError:
-                env = {}
+                problems.append((n, f"signature: {refusal(out)}"))
+            env = parse_env(sig_bytes)
             if env.get("payloadType") != PAYLOAD_TYPE:
                 problems.append((n, f"signature: payload type is {env.get('payloadType')!r}, not {PAYLOAD_TYPE}"))
             k = ed_keyid(env)
@@ -596,6 +839,8 @@ def check_chain(d, cli, pin):
             continue
         if canonical(rec) != body:
             problems.append((n, "record: not canonical JSON"))
+        if not isinstance(rec, dict):
+            rec = {}
         if rec.get("v") != 1 or rec.get("kind") != KIND:
             problems.append((n, "record: not a tet_machine_log_v1 record"))
         if rec.get("seq") != i:
@@ -605,7 +850,7 @@ def check_chain(d, cli, pin):
         if i <= len(chain) and chain[i - 1] != h:
             problems.append((n, "chain.txt: hash differs from the record"))
         # 3. the permit it cites, if any: this device's own, still open at this seq, not cited before
-        if isinstance(rec, dict) and "permit" in rec:
+        if "permit" in rec:
             pid = rec["permit"]
             why, permit = permit_problem(d, cli, pid, i, used, pin)
             if why:
@@ -617,7 +862,7 @@ def check_chain(d, cli, pin):
         prev_hash = h
     if len(set(signers)) > 1:
         problems.append((None, f"key: {len(set(signers))} different keys signed this log"))
-    return problems, signers, uses
+    return problems, signers, uses, bodies
 
 
 def get_json(url):
@@ -654,16 +899,14 @@ def is_my_hash_record(d, cli, raw, log_sha, pin):
     return rc == 0
 
 
-def check_stamps(d, node, cli, pin):
+def check_stamps(d, node, cli, pin, bodies):
     """Every record: is it in this node's registry, and is its anchor real? The anchor is
-    re-checked the way checkStamp (lib/sign_anything.ts) does."""
+    re-checked the way checkStamp (lib/sign_anything.ts) does. `bodies` are the record bytes
+    check_chain read and checked, by seq: the folder is not read a second time."""
     node = node.rstrip("/")
     lines = []
-    rec_dir = os.path.join(d, "records")
-    seqs = sorted(int(m.group(1)) for n in os.listdir(rec_dir) if (m := re.fullmatch(r"(\d+)\.json", n)))
-    for seq in seqs:
-        with open(os.path.join(rec_dir, f"{seq}.json"), "rb") as f:
-            log_record = f.read()
+    for seq in sorted(bodies):
+        log_record = bodies[seq]
         found = get_json(f"{node}/sigs/search?file={sha256_hex(log_record)}").get("records") or []
         mine = []
         for r in found:
@@ -698,28 +941,116 @@ def check_stamps(d, node, cli, pin):
     return lines
 
 
+def one_line(s):
+    """`s` with every character that is not printable (a line break, a carriage return, a terminal
+    escape) written as \\u<hex>: text from the folder or a node is printed inside verify's report, and
+    must never begin a line of its own there."""
+    return "".join(c if c.isprintable() else f"\\u{ord(c):04x}" for c in str(s))
+
+
 def cmd_verify(a):
     pin = read_pin(a.pin, a.dir)
-    problems, signers, uses = check_chain(a.dir, tet_cli(a), pin)
+    problems, signers, uses, bodies = check_chain(a.dir, tet_cli(a), pin)
     print("INVALID" if problems else "VALID")
     for seq, why in problems:
-        print(f"  {'record ' + str(seq) if seq is not None else 'log'}: {why}")
+        print(f"  {'record ' + str(seq) if seq is not None else 'log'}: {one_line(why)}")
     if not problems:
-        print(f"  {len(signers)} records, all signed by {signers[0]}")
+        print(f"  {len(signers)} records, all signed by {one_line(signers[0])}")
         for seq, permit in uses:
-            print(f"  permit {permit['permit_id']} ({permit['action']}): used once, by record {seq}; open until seq {permit['expires_seq']}")
+            print(one_line(f"  permit {permit['permit_id']} ({permit['action']}): used once, by record {seq}; open until seq {permit['expires_seq']}"))
     print("Shows:")
     for s in SHOWS:
         print(f"  - {s}")
     print("Does not show:")
     for s in DOES_NOT_SHOW:
         print(f"  - {s}")
+    if not problems:
+        # What verify can say about the end: which record is the newest here. Nothing in the folder
+        # records how long the log was, so a reader who keeps this line can compare a later copy.
+        last = max(bodies)
+        print(f"end: record {last} is the newest in this folder, sha256 {sha256_hex(bodies[last])}; records after it, if any, cannot be seen here")
     if a.node:
-        for ln in check_stamps(a.dir, a.node, tet_cli(a), pin):
-            print(ln)
+        for ln in check_stamps(a.dir, a.node, tet_cli(a), pin, bodies):
+            print(one_line(ln))
     else:
         print("stamp: not checked (no node)")
+    if os.path.lexists(os.path.join(a.dir, "device.key")):
+        print(KEY_NOTE)
     return 1 if problems else 0
+
+
+# ── export: what to hand over ─────────────────────────────────────────────────────────────────
+
+KEY_NOTE = "note: this folder holds device.key, and whoever has a copy can sign as this device; to hand the log over, give an export (notebook.py export), which leaves it out"
+# Exactly what verify reads, and nothing of the device's own (device.key, device.head, device.pin,
+# device.keyid): the reader takes the pin from a copy of their own.
+EXPORT_TOP = ("chain.json", "chain.txt")
+EXPORT_IN = {
+    "records": re.compile(r"[0-9]+\.json(\.sig\.json)?|[0-9]+\.hash\.sig\.json"),
+    "permits": re.compile(r"[0-9a-f]{32}\.json(\.sig\.json)?"),
+}
+
+
+def export_problem(name, b):
+    """Why bytes `b` are not the file `name` says they are, or None. Export copies only files that
+    parse as what their name claims, so a file of another kind moved or linked under a log file's
+    name (the device key's phrase is not JSON and not a hash line) is refused, whatever its inode."""
+    if name == "chain.txt":
+        return None if re.fullmatch(rb"([0-9a-f]{64}\n)*", b) else "is not lines of 64 hex"
+    try:
+        obj = json.loads(b)
+    except (ValueError, UnicodeDecodeError):
+        return "is not JSON"
+    if not isinstance(obj, dict):
+        return "is not a JSON object"
+    base = os.path.basename(name)
+    if name == "chain.json":
+        ok = set(obj) == {"chain_id", "genesis_hash"} and all(isinstance(v, str) for v in obj.values())
+        return None if ok else "is not a chain.json"
+    if base.endswith(".sig.json"):
+        ok = isinstance(obj.get("payload"), str) and isinstance(obj.get("payloadType"), str) and isinstance(obj.get("signatures"), list)
+        return None if ok else "is not a signature envelope"
+    if canonical(obj) != b:
+        return "is not canonical JSON"
+    stem = base[: -len(".json")]
+    if name.startswith("records" + os.sep):
+        return None if obj.get("kind") == KIND and obj.get("seq") == int(stem) else "is not this record"
+    return None if obj.get("kind") == PERMIT_KIND and obj.get("permit_id") == stem else "is not this permit"
+
+
+def cmd_export(a):
+    d, out = a.dir, a.out
+    if os.path.lexists(out):
+        raise Fail(f"{out} exists; export writes a new folder")
+    files = [n for n in EXPORT_TOP if os.path.lexists(os.path.join(d, n))]
+    for sub, pat in EXPORT_IN.items():
+        if os.path.isdir(os.path.join(d, sub)):
+            files += [os.path.join(sub, n) for n in sorted(os.listdir(os.path.join(d, sub))) if pat.fullmatch(n)]
+    if "chain.json" not in files:
+        raise Fail(f"no chain.json in {d}; nothing to export")
+    own = set()
+    for n in ("device.key", "device.head", "device.pin", "device.keyid"):
+        # The name itself and, when it is a symlink, the file it points to.
+        for look in (os.lstat, os.stat):
+            with contextlib.suppress(OSError):
+                st = look(os.path.join(d, n))
+                own.add((st.st_dev, st.st_ino))
+    data = {}
+    for n in files:
+        try:
+            data[n] = read_file(os.path.join(d, n), MAX_CHAIN_TXT if n == "chain.txt" else MAX_FILE, own)
+        except (OSError, Unreadable) as e:
+            raise Fail(f"export: {n}: {e}")
+        why = export_problem(n, data[n])
+        if why:
+            raise Fail(f"export: {n} {why}; export copies only the log's own files, and wrote nothing")
+    os.makedirs(out, mode=0o700)
+    for sub in EXPORT_IN:
+        os.makedirs(os.path.join(out, sub), exist_ok=True)
+    for n, b in data.items():
+        with open(os.path.join(out, n), "xb") as f:
+            f.write(b)
+    print(f"exported {len(files)} files to {out}; device.key is not among them. Give the reader the pin (device.pin) separately.")
 
 
 # ── publish ───────────────────────────────────────────────────────────────────────────────────
@@ -802,6 +1133,11 @@ def main(argv=None):
     s.add_argument("--dir", required=True)
     s.add_argument("--pin", required=True, help="the device's pin file (device.pin, written by init), kept OUTSIDE --dir")
     s.add_argument("--node", help="also check published records' anchors on this node")
+    s = sub.add_parser("export")
+    s.add_argument("--dir", required=True)
+    s.add_argument("--out", required=True, help="a new folder: the records, permits and chain, without device.key")
+    s = sub.add_parser("set-head")
+    s.add_argument("--dir", required=True)
     s = sub.add_parser("publish")
     s.add_argument("--dir", required=True)
     s.add_argument("--seq", type=int, required=True)
@@ -812,7 +1148,7 @@ def main(argv=None):
     if a.cmd == "run" and a.source == "stdin-json":
         p.error("run reads a source repeatedly; stdin-json is for record")
     try:
-        return {"init": cmd_init, "record": cmd_record, "permit": cmd_permit, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish}[a.cmd](a) or 0
+        return {"init": cmd_init, "record": cmd_record, "permit": cmd_permit, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish, "export": cmd_export, "set-head": cmd_set_head}[a.cmd](a) or 0
     except Fail as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

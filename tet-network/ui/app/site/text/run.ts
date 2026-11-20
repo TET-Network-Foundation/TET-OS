@@ -40,6 +40,7 @@ export const JA: Record<string, string> = {
   "Record 2 taken out of the log.": "記録 2 をログから抜きました。",
   "A record changed after it was signed is caught, and so is a record taken out.": "署名のあとで書き換えた記録も、抜き取った記録も見つかります。",
   "That the readings are true.": "測った値が本当かどうか。",
+  "That the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it.": "ログが完全で、書き換えられていないこと。最新の記録が欠けている場合があり、鍵を持つ人はどの記録でも書き換えられます。",
   "Which record was the original, when two copies of a log disagree.": "ログの 2 つのコピーが食い違うとき、どちらが元の記録か。",
 
   // log-fingerprint

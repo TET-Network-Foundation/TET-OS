@@ -85,7 +85,7 @@ python3 tools/machine-notebook/notebook.py init --dir ~/notebook
 ```
 
 ```console
-tet-ed25519:eb08915b26807d3e7f7a9869260b8fb0baf4981fbb88d5bf259c2fc46e1b6e14
+tet-ed25519:9c72cd060b20b164204b3602cbd4f47d6b2cc91fa2e646f289fb5758c5d2ccbd
 ```
 
 That line is the device's public key id. `init` made a **new** key just for this device. Its 12
@@ -116,7 +116,7 @@ python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source load
 ```
 
 ```console
-seq 1: 3.61 load-1m
+seq 1: 3.32 load-1m
 ```
 
 A reading from your own sensor or script: pipe exactly `{"value", "unit"}` into `stdin-json`. The
@@ -171,24 +171,24 @@ python3 tools/machine-notebook/notebook.py permit --dir ~/notebook --action open
 ```
 
 ```console
-5b63a530876366e9c5be23c1afbe3c2c
+4ecf4f96cc62734589cf7ed5a867ec04
 ```
 
 Cite it once. The record is written:
 
 ```sh
-python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit 5b63a530876366e9c5be23c1afbe3c2c
+python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit 4ecf4f96cc62734589cf7ed5a867ec04
 ```
 
 ```console
-seq 3: 3.64 load-1m (permit 5b63a530876366e9c5be23c1afbe3c2c)
+seq 3: 3.32 load-1m (permit 4ecf4f96cc62734589cf7ed5a867ec04)
 ```
 
 Cite it again. It is refused, and nothing is written:
 
 ```console
-$ python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit 5b63a530876366e9c5be23c1afbe3c2c
-error: not recorded: permit: 5b63a530876366e9c5be23c1afbe3c2c was already used by record 3
+$ python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit 4ecf4f96cc62734589cf7ed5a867ec04
+error: not recorded: permit: 4ecf4f96cc62734589cf7ed5a867ec04 was already used by record 3
 ```
 
 Use your own permit id, the one `permit` printed for you; copy it from the screen into both
@@ -202,12 +202,12 @@ python3 tools/machine-notebook/notebook.py verify --dir ~/notebook --pin ~/noteb
 
 ```console
 VALID
-  3 records, all signed by tet-ed25519:eb08915b26807d3e7f7a9869260b8fb0baf4981fbb88d5bf259c2fc46e1b6e14
-  permit 5b63a530876366e9c5be23c1afbe3c2c (open-valve): used once, by record 3; open until seq 20
+  3 records, all signed by tet-ed25519:9c72cd060b20b164204b3602cbd4f47d6b2cc91fa2e646f289fb5758c5d2ccbd
+  permit 4ecf4f96cc62734589cf7ed5a867ec04 (open-valve): used once, by record 3; open until seq 20
 Shows:
   - which key signed each record
   - that the records are in this order
-  - that each record was written before the next one
+  - that each record names the hash of the one before it
   - that no one-time permission was used twice in this log, or after it ran out
 Does not show:
   - that the reading is true
@@ -216,11 +216,16 @@ Does not show:
   - who runs the machine
   - that the key was not copied
   - that a copied key did not use the same permission in another log
+  - that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it
   - that the signature format is final: it is in outside review, and logs from this test may need re-signing
+end: record 3 is the newest in this folder, sha256 cdff2bf9e16ce5877a7a528c82a0227a0d094d281cf2afb4459840722cacb23e; records after it, if any, cannot be seen here
 stamp: not checked (no node)
+note: this folder holds device.key, and whoever has a copy can sign as this device; to hand the log over, give an export (notebook.py export), which leaves it out
 ```
 
-The last line is about anchoring a record on a node. No public node runs today, so it stays "not
+The `end:` line names the newest record in this folder and its hash; the check cannot see records
+after it. The `note:` line is there because this folder still holds `device.key` (Step 7 hands
+a log over without it). The `stamp:` line is about anchoring a record on a node. No public node runs today, so it stays "not
 checked" (see the end of this guide).
 
 The check refuses the pin that sits inside the folder, because whoever can edit the folder could
@@ -232,13 +237,13 @@ error: --pin ~/notebook/device.pin is inside the folder being checked; give a co
 ```
 
 What a change looks like: copy the folder, then change the reading in record 1 of the copy. The run
-below changed the value `3.61` to `9.99`. Your log has its own values: open
-`~/nb-copy/records/1.json`, pick the number after `"value":`, and use it in place of `3.61`. Any
+below changed the value `3.32` to `9.99`. Your log has its own values: open
+`~/nb-copy/records/1.json`, pick the number after `"value":`, and use it in place of `3.32`. Any
 text editor works as well. (`sed -i ''` is the macOS form; on Linux it is `sed -i`.)
 
 ```console
 $ cp -R ~/notebook ~/nb-copy
-$ sed -i '' 's/3.61/9.99/' ~/nb-copy/records/1.json
+$ sed -i '' 's/3.32/9.99/' ~/nb-copy/records/1.json
 $ python3 tools/machine-notebook/notebook.py verify --dir ~/nb-copy --pin ~/notebook.pin
 INVALID
   record 1: signature: ~/nb-copy/records/1.json is not the 213 bytes this envelope signed
@@ -293,8 +298,8 @@ The person who checks the log needs four things from you, and must never get a f
    cd ~ && tar -czf tags-log.tgz --exclude device.key tags
    ```
 
-   This prints nothing. The archive holds `chain.json`, `chain.txt`, `device.keyid`,
-   `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`. To see
+   This prints nothing. The archive holds `chain.json`, `chain.txt`, `device.head`, `device.keyid`,
+   `device.lock` (empty), `device.pin` and `records/` (and `permits/`, if you made any), and no `device.key`. To see
    for yourself, `tar -tzf ~/tags-log.tgz | grep -cx 'tags/device.key'` should print `0`: no
    line is exactly `tags/device.key`. (grep then exits with 1, which here means "not found", the good
    result. Without `-x` it would also count `tags/device.keyid`, which is public and meant to be

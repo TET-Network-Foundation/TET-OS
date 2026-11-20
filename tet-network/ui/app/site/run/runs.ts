@@ -61,7 +61,7 @@ export const RUNS: Record<string, Run> = {
 
   "machine-log-check": {
     shows: ["A record changed after it was signed is caught, and so is a record taken out."],
-    doesNot: ["That the readings are true.", "Which record was the original, when two copies of a log disagree."],
+    doesNot: ["That the readings are true.", "That the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it.", "Which record was the original, when two copies of a log disagree."],
     async run({ t, log, c }) {
       const key = await makeTestKey();
       await log(t(TEST_KEY_NOTE, { key: shortKey(key.keyid) }));
@@ -114,7 +114,7 @@ export const RUNS: Record<string, Run> = {
 
   "one-time-permits": {
     shows: ["A permit is accepted once. A second use, a use after it ran out, and a permit signed by another key are each refused, with the reason."],
-    doesNot: ["That a copied key did not use the same permit in another log.", "That the action itself happened."],
+    doesNot: ["That a copied key did not use the same permit in another log.", "That the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it.", "That the action itself happened."],
     async run({ t, log, c }) {
       const key = await makeTestKey();
       await log(t(TEST_KEY_NOTE, { key: shortKey(key.keyid) }));

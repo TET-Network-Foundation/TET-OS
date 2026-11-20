@@ -6,7 +6,8 @@ New here? [QUICKSTART.md](QUICKSTART.md) walks through the opening half hour on 
 
 A machine keeps its own notebook: a device (a Mac today, a Raspberry Pi or Jetson later) records
 sensor readings, signs each one with its own TET key, and chains every record to the one before it.
-Anyone holding the folder can later replay the log and see whether it is intact and in order. It adds
+Anyone handed an export of the folder (the records, without the device's key) can later replay the
+log and see whether it is intact and in order. It adds
 no new cryptography: signing and checking are `tet-cli agent sign` and `tet-cli agent verify` (the
 agent envelope in [docs/AGENT_IDENTITY.md](../../docs/AGENT_IDENTITY.md)).
 
@@ -27,13 +28,21 @@ Does not show:
 - who runs the machine
 - that the key was not copied
 - that a copied key did not use the same permission in another log
+- that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it
 - that the signature format is final: it is in outside review, and logs from this test may need re-signing
 
-Known gaps in the check itself, not fixed yet:
-- the check that `--pin` lies outside the folder reads the whole folder, with no size limit, and
-  does not report how much it read
-- that check is not complete in every case
-- `publish` does not check again everything it sends
+After the lists, a VALID `verify` prints the newest record it found:
+`end: record N is the newest in this folder, sha256 <hex>; records after it, if any, cannot be seen
+here`. Nothing in the folder says how long the log was, so this is the line to keep if you want to
+compare a later copy with this one.
+
+What verify relies on, beyond the folder:
+- the computer and the user account it runs as. A check run on a machine you do not trust tells you
+  nothing; run it where only you can run programs as that user.
+- a pin you keep outside the folder you check. Put the copy in a folder of its own, not inside or
+  next to the log.
+- `publish` sends records as they are in the folder. Run `verify` first, and publish only a log it
+  reads as VALID.
 
 ## The device key
 
@@ -45,6 +54,19 @@ never as an argument (arguments are visible to every process through `ps`). Anyo
 To hand a log to someone who checks it, leave the key out (from the folder that holds `notebook`:
 `tar -czf notebook-log.tgz --exclude device.key notebook`) and send them the pin by another route,
 so that whoever could change the log in transit could not also change the pin.
+
+**Never hand over the folder itself: it holds `device.key`.** Hand over an export and, separately, the
+pin:
+
+```sh
+python3 tools/machine-notebook/notebook.py export --dir ~/notebook --out ~/notebook-export
+```
+
+`export` writes a new folder with `chain.json`, `chain.txt`, `records/` and `permits/`, byte for byte,
+and nothing else: no `device.key`, `device.head`, `device.pin` or `device.keyid`. It copies a file only
+if it is what its name says (a record, a permit, an envelope, hash lines), and not one of the device's
+own files under another name; otherwise it writes nothing and names the file. `verify` run on a
+folder that holds `device.key` says so on its last line.
 
 Every TET signature has two halves, Ed25519 and ML-DSA-44, each under its own public key. `init` also
 writes `<dir>/device.pin`: the device's two key ids, one per line (`tet-ed25519:<hex>`,
@@ -80,6 +102,7 @@ python3 tools/machine-notebook/notebook.py run    --dir ~/notebook --source load
 python3 tools/machine-notebook/notebook.py verify --dir ~/notebook --pin ~/notebook.pin
 python3 tools/machine-notebook/notebook.py permit --dir ~/notebook --action open-valve --expires-seq 20   # prints the permit id
 python3 tools/machine-notebook/notebook.py record --dir ~/notebook --source loadavg --permit <permit id>
+python3 tools/machine-notebook/notebook.py export --dir ~/notebook --out ~/notebook-export  # to hand over: no key
 ```
 
 `init` saves the chain in `<dir>/chain.json`; every later command uses it, so a log is always signed
@@ -109,6 +132,32 @@ exactly `{"value", "unit"}`, so nothing else can ride along, and refuses a value
 number, string or bool (NaN and Infinity are not JSON). A record that cites a permit also carries
 `"permit":"<permit id>"`.
 
+`chain.txt` is not signed, so `record` does not take the next number from it alone. The device keeps
+`<dir>/device.head` (mode 0600): the number and SHA-256 of the last record it signed. `record` appends
+only to a log that still ends there; a log made shorter, or whose last line was changed, is refused
+(`not recorded: this device last signed record N, …`), so the device never signs a second record under
+a number it has used. `device.head` moves to a record before that record is signed, so a run stopped
+after signing (a crash, a timeout, `chain.txt` not writable) leaves the device refusing to record
+and saying so, rather than signing a number twice. `record --permit` reads the earlier records
+back from `device.head` through each record's `prev`, so a record moved out of `records/` is refused,
+not skipped.
+
+A folder made before `device.head` existed has none, and `record` refuses it and prints the line to
+run, once:
+
+```sh
+python3 tools/machine-notebook/notebook.py set-head --dir ~/notebook
+```
+
+`set-head` checks the whole log against the folder's own device key, as `verify` would. Only if the log
+is VALID does it write `device.head`, naming the newest record in the folder; otherwise it lists what
+is wrong and writes nothing. It also writes nothing when a record's signature is in `records/`
+without the record itself.
+
+One `record` runs at a time in a folder: a `run` loop and a manual `record` take turns on
+`<dir>/device.lock`. A run waits up to 30 seconds for the other to finish, then gives up and says so
+(`not recorded: another record run … held device.lock for 30s`).
+
 ## One-time permits
 
 A permit is the device's own signed note that one action may be recorded once. `permit` writes it and
@@ -125,7 +174,9 @@ the permit. `--action` is a short name (letters, digits, `. _ -`), so no name or
 
 `verify` reads the log INVALID if any permit is cited twice, cited after its `expires_seq`, or not
 signed by this device's key (both halves, against the pin). It also refuses a cited permit that is missing, was edited after signing,
-was signed as something other than a permit, or sits under a file name that is not its own id.
+was signed as something other than a permit, sits under a file name that is not its own id, or whose
+action or id is not in the form `permit` writes. Text from the folder that `verify` prints stays on its
+own line: a line break or other control character in it is printed as `\u000a` and the like.
 `record` makes the same check before it writes anything, because one bad citation would leave an
 append-only log INVALID for good.
 
@@ -223,7 +274,13 @@ records under a temporary key; one byte flipped, two records swapped, one delete
 with a `prev` that skips its predecessor must each read INVALID for their own reason. For permits: one
 cited once at its last open seq is VALID; cited twice, cited after `expires_seq`, signed by another
 key, edited after signing, copied under a second name, missing, or signed as a log record, each reads
-INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. For the
+INVALID with exactly that one problem; and `record` refuses a used permit and writes nothing. `record` refuses a log that no longer ends at
+the last record the device signed (records removed from the end, or chain.txt's last line changed).
+Two `record` runs at once on one permit sign one record, and the other is refused. `export` copies
+exactly the chain, records and permits, refuses the device key moved or linked under a log file's name,
+and verify's last line names a `device.key` in the folder it checked. A permit whose action or id is
+not in the form `permit` writes is not a permit, and a line break in a record is printed escaped. Every file is read once and tet-cli checks those bytes: a file changed in the folder during a check,
+and a record that is not a regular file, each read INVALID for that reason. For the
 pin, one case per half: a record and a permit whose Ed25519 or ML-DSA-44 half is another device's valid
 signature each read INVALID for that half; another device's intact log reads INVALID against this
 device's pin; a pin file inside the folder is refused. It also checks

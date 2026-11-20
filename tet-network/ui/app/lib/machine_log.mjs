@@ -41,6 +41,7 @@ export const DOES_NOT_SHOW = [
   "who runs the machine",
   "that the key was not copied",
   "that a copied key did not use the same permission in another log",
+  "that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it",
   "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
 ];
 

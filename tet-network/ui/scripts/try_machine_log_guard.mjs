@@ -4,7 +4,8 @@
 //   node --experimental-strip-types scripts/try_machine_log_guard.mjs
 //
 // A. The two lists, Shows and Does not show, are notebook.py verify's, word for word and in order:
-//    1. machine_log.mjs's SHOWS / DOES_NOT_SHOW equal the lists in tools/machine-notebook/notebook.py,
+//    1. machine_log.mjs's SHOWS / DOES_NOT_SHOW, and the site's machine-notebook card
+//       (app/site/features/machines.ts), equal the lists in tools/machine-notebook/notebook.py,
 //       and the copies pinned below (so neither side can change without this file changing too);
 //    2. they equal what the real `notebook.py verify` printed (the fixture's captured output);
 //    3. the panel renders exactly these constants, under "Shows" and "Does not show", and keeps no
@@ -86,6 +87,7 @@ const PINNED_DOES_NOT_SHOW = [
   "who runs the machine",
   "that the key was not copied",
   "that a copied key did not use the same permission in another log",
+  "that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it",
   "that the signature format is final: it is in outside review, and logs from this test may need re-signing",
 ];
 // The translations are pinned too: a key that exists with a value that says something else (the old
@@ -102,6 +104,7 @@ const PINNED_JA = [
   "誰が機械を動かしているか",
   "鍵がコピーされていないこと",
   "コピーされた鍵が、同じ許可を別のログで使っていないこと",
+  "ログが完全で、書き換えられていないこと（最新の記録が欠けている場合があり、鍵を持つ人はどの記録でも書き換えられます）",
   "署名の形式が最終版であること（外部の審査中で、このテストのログは署名し直しが必要になる場合があります）",
 ];
 const PINNED_ZH_HK = [
@@ -115,6 +118,7 @@ const PINNED_ZH_HK = [
   "誰在操作這部機器",
   "金鑰沒有被複製",
   "被複製的金鑰沒有在另一份日誌中使用同一個許可",
+  "日誌是完整而且未被改動的（最新的紀錄可能缺漏，而持有密鑰的人可以改寫其中任何部分）",
   "簽名格式已經定案（格式正在接受外部審查，這次測試的日誌可能需要重新簽署）",
 ];
 
