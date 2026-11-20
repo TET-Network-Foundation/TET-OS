@@ -17048,3 +17048,127 @@ async fn webrtc_direct_connects_and_refuses_a_wrong_certhash() {
     let why = refused.expect_err("a dial naming the wrong certificate hash connected");
     assert!(!why.contains("no active listeners"), "refused before any handshake: {why}");
 }
+
+// ---------------------------------------------------------------------------
+// A record cut down to one signature half is refused.
+//
+// The signer always makes both halves, so a verifier that only requires "every half that is
+// present verifies" accepts a record with one half cut away. testdata/agent_halves_v1.json is one
+// record signed by `tet-cli agent sign` and that record with exactly ONE half removed, emptied or
+// relabelled (tet-cli/scripts/make_halves_fixture.py). The same fixture is read by the CLI, the
+// agent SDK and the offline verifier guards.
+// ---------------------------------------------------------------------------
+
+const AGENT_HALVES: &str = include_str!("testdata/agent_halves_v1.json");
+
+fn agent_halves_doc() -> serde_json::Value {
+    let doc: serde_json::Value = serde_json::from_str(AGENT_HALVES).expect("fixture JSON must parse");
+    let names: Vec<&str> = doc["cases"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap()).collect();
+    assert_eq!(
+        names,
+        [
+            "ed25519_only",
+            "mldsa44_only",
+            "ed25519_sig_empty",
+            "mldsa44_sig_empty",
+            "ed25519_label_changed",
+            "mldsa44_label_changed"
+        ],
+        "the fixture's cases changed; pin a reason for each new one"
+    );
+    doc
+}
+
+/// **SECURITY REGRESSION GUARD.** The agent envelope check (`AgentSigEnvelopeV1::verify`, what
+/// `tet-cli agent verify` runs) refuses a record missing either half, each for its own reason.
+#[test]
+fn agent_envelope_cut_to_one_signature_half_is_refused() {
+    use crate::agent::{AgentEnvelopeError as E, AgentError as A, AgentSigEnvelopeV1};
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_halves_doc();
+    let _bound = agent_fixture_chain(&doc);
+
+    let base: AgentSigEnvelopeV1 = serde_json::from_value(doc["base"].clone()).unwrap();
+    base.verify().expect("the uncut record must verify, or every refusal below is for nothing");
+
+    for c in doc["cases"].as_array().unwrap() {
+        let name = c["name"].as_str().unwrap();
+        let env: AgentSigEnvelopeV1 = serde_json::from_value(c["envelope"].clone()).unwrap();
+        let err = env.verify().expect_err(&format!("{name}: a record cut to one half verified"));
+        let own_reason = match name {
+            "ed25519_only" | "mldsa44_only" => err == E::SignatureCount(1),
+            "ed25519_sig_empty" => matches!(err, E::Agent(A::Ed25519(_))),
+            "mldsa44_sig_empty" => matches!(err, E::Agent(A::Mldsa44(_))),
+            "ed25519_label_changed" => err == E::SignatureSet("ed25519"),
+            "mldsa44_label_changed" => err == E::SignatureSet("ml-dsa-44"),
+            other => panic!("no pinned reason for case {other}"),
+        };
+        assert!(own_reason, "{name}: refused, but for another reason: {err:?}");
+    }
+}
+
+/// **SECURITY REGRESSION GUARD.** The node's signature registry (`sigs::verify_record`, behind the
+/// publish route) refuses a record missing either half.
+#[test]
+fn signature_registry_refuses_a_record_cut_to_one_half() {
+    use crate::sigs::{verify_record, SigsError};
+    let _g = env_lock();
+    set_test_env_base();
+    let doc = agent_halves_doc();
+    let _bound = agent_fixture_chain(&doc);
+    let bytes = |v: &serde_json::Value| serde_json::to_vec(v).unwrap();
+
+    verify_record(&bytes(&doc["base"])).expect("the uncut record must be accepted, or every refusal below is for nothing");
+
+    let set = "expected exactly one ed25519 and one ml-dsa-44 signature";
+    for c in doc["cases"].as_array().unwrap() {
+        let name = c["name"].as_str().unwrap();
+        let err = verify_record(&bytes(&c["envelope"])).expect_err(&format!("{name}: a record cut to one half was accepted"));
+        let own_reason = match (name, &err) {
+            ("ed25519_only" | "mldsa44_only" | "ed25519_label_changed" | "mldsa44_label_changed", SigsError::Malformed(m)) => m == set,
+            ("ed25519_sig_empty", SigsError::Signature(m)) => m.starts_with("Ed25519("),
+            ("mldsa44_sig_empty", SigsError::Signature(m)) => m.starts_with("Mldsa44("),
+            _ => false,
+        };
+        assert!(own_reason, "{name}: refused, but for another reason: {err:?}");
+    }
+}
+
+/// **SECURITY REGRESSION GUARD.** A transaction envelope (`verify_envelope_v1`, what REST and
+/// gossip run) refuses one with either half missing or empty. Its halves are named fields rather
+/// than a list, so "missing" is a field left out of the JSON, which must not parse, and "empty" is
+/// a field set to "".
+#[test]
+fn tx_envelope_cut_to_one_signature_half_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let words = w.mnemonic_12.clone().unwrap();
+    let wallet_id = w.address_hex.to_ascii_lowercase();
+    let tx = crate::protocol::TxV1::InitialAirdrop { wallet_id: wallet_id.clone() };
+    let good = signed_env_for_tests(tx, &words, &wallet_id);
+    crate::rest::helpers::verify_envelope_v1(&good).expect("the uncut envelope must verify, or every refusal below is for nothing");
+
+    for field in ["ed25519_sig_b64", "mldsa_sig_b64", "mldsa_pubkey_b64"] {
+        let mut v = serde_json::to_value(&good).unwrap();
+        v["sig"].as_object_mut().unwrap().remove(field).unwrap();
+        let parsed = serde_json::from_value::<crate::protocol::SignedTxEnvelopeV1>(v);
+        let err = parsed.expect_err(&format!("an envelope without sig.{field} parsed")).to_string();
+        assert!(err.contains(&format!("missing field `{field}`")), "without sig.{field}: {err}");
+    }
+
+    let refusal = "invalid signature or missing chain_id/genesis_hash binding";
+    for (name, cut) in [
+        ("ed25519 sig empty", (|e: &mut crate::protocol::SignedTxEnvelopeV1| e.sig.ed25519_sig_b64.clear()) as fn(&mut _)),
+        ("ml-dsa sig empty", |e| e.sig.mldsa_sig_b64.clear()),
+    ] {
+        let mut env = good.clone();
+        cut(&mut env);
+        match crate::rest::helpers::verify_envelope_v1(&env) {
+            Ok(_) => panic!("{name}: an envelope cut to one half verified"),
+            Err(err) => assert_eq!(err, refusal, "{name}"),
+        }
+    }
+}

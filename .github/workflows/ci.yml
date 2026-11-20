@@ -328,6 +328,9 @@ jobs:
             removed_mint_demo_route_is_not_reachable
             removed_guardian_recover_route_is_not_reachable
             removed_dex_routes_are_not_reachable
+            agent_envelope_cut_to_one_signature_half_is_refused
+            signature_registry_refuses_a_record_cut_to_one_half
+            tx_envelope_cut_to_one_signature_half_is_refused
             zkcourt_challenge_without_signature_is_rejected_and_locks_no_bond
             caac_complete_without_signature_is_rejected_and_writes_no_record
             bare_json_signed_envelope_is_rejected_off_mainnet
@@ -876,8 +879,8 @@ jobs:
           # jest exits 0 when a filter matches nothing, so the counts are asserted rather than the
           # exit code. The skipped suite is tests/slashing_audit.test.ts, which posts to a route the
           # September clean-up removed; the reason is recorded in the file.
-          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 52 passed, 53 total' || {
-            echo "::error::the agent SDK guards did not run — expected 52 passed and 1 skipped"
+          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 60 passed, 61 total' || {
+            echo "::error::the agent SDK guards did not run — expected 60 passed and 1 skipped"
             exit 1
           }
 

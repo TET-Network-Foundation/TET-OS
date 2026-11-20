@@ -535,6 +535,68 @@ class Notebook(unittest.TestCase):
         self.assertEqual(self.cite(d, pid), 4)
         self.assertOnlyProblem(d, f"record 4: permit: {pid} is signed by {other_ed}, not this device's {self.keyid}")
 
+    # The cuts of tet-core/src/testdata/agent_halves_v1.json (one signature half removed, emptied or
+    # relabelled), applied here to a record this notebook signed. Removing a half needs no key, so the
+    # record is cut, not re-signed.
+    HALVES_FIXTURE = os.path.join(ROOT, "tet-core", "src", "testdata", "agent_halves_v1.json")
+
+    def test_u_a_record_cut_to_one_signature_half_is_invalid(self):
+        ed, ml = notebook.ED, notebook.ML
+
+        def half(env, prefix):
+            return next(s for s in env["signatures"] if s["keyid"].startswith(prefix))
+
+        def relabel(env, prefix, new):
+            h = half(env, prefix)
+            h["keyid"] = new + h["keyid"][len(prefix):]
+
+        cuts = {
+            "ed25519_only": lambda e: e.__setitem__("signatures", [half(e, ed)]),
+            "mldsa44_only": lambda e: e.__setitem__("signatures", [half(e, ml)]),
+            "ed25519_sig_empty": lambda e: half(e, ed).__setitem__("sig", ""),
+            "mldsa44_sig_empty": lambda e: half(e, ml).__setitem__("sig", ""),
+            "ed25519_label_changed": lambda e: relabel(e, ed, "tet-ed448:"),
+            "mldsa44_label_changed": lambda e: relabel(e, ml, "tet-mldsa65:"),
+        }
+        with open(self.HALVES_FIXTURE) as f:
+            names = [c["name"] for c in json.load(f)["cases"]]
+        self.assertEqual(names, list(cuts), "the fixture's cases changed; add each new cut here")
+        with open(self.pin) as f:
+            pin_ed, pin_ml = f.read().split()
+        count = "record 2: signature: expected exactly 2 signatures (ed25519 + ml-dsa-44), got 1"
+        # tet-cli refuses the envelope, and the pin check refuses the half it cannot find: two checks,
+        # each naming the half, so both lines are asserted. With no Ed25519 half, record 2 has no
+        # signer, and the log reads as signed by two keys.
+        two_keys = "log: key: 2 different keys signed this log"
+        want = {
+            "ed25519_only": [count, f"record 2: key: its ML-DSA-44 half is signed by None, not this device's {pin_ml}"],
+            "mldsa44_only": [count, f"record 2: key: signed by None, not this device's {pin_ed}", two_keys],
+            "ed25519_sig_empty": ["record 2: signature: ed25519 signature verification failed:"],
+            "mldsa44_sig_empty": ["record 2: signature: ml-dsa-44 signature verification failed: mldsa signature must be 2420 bytes for this level (got 0)"],
+            "ed25519_label_changed": ["record 2: signature: missing or duplicated ed25519 signature", f"record 2: key: signed by None, not this device's {pin_ed}", two_keys],
+            "mldsa44_label_changed": ["record 2: signature: missing or duplicated ml-dsa-44 signature", f"record 2: key: its ML-DSA-44 half is signed by None, not this device's {pin_ml}"],
+        }
+        for name, cut in cuts.items():
+            with self.subTest(name):
+                d = self.copy()
+                sig = self.rec(d, 2) + ".sig.json"
+                with open(sig) as f:
+                    env = json.load(f)
+                cut(env)
+                with open(sig, "w") as f:
+                    json.dump(env, f)
+                rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+                self.assertEqual(rc, 1, out)
+                lines = out.splitlines()
+                self.assertEqual(lines[0], "INVALID", out)
+                problems = [ln.strip() for ln in lines[1:lines.index("Shows:")]]
+                self.assertEqual(len(problems), len(want[name]), f"{name}:\n{out}")
+                for got, expected in zip(problems, want[name]):
+                    if expected.endswith(":"):
+                        self.assertTrue(got.startswith(expected), f"{name}: {got!r}")
+                    else:
+                        self.assertEqual(got, expected, name)
+
     def test_s_the_pin_comes_from_outside_the_folder(self):
         # Another device's intact log, with its own device.keyid and device.pin inside: INVALID against
         # this pin, VALID against its own.
