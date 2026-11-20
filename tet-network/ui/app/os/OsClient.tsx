@@ -70,7 +70,7 @@ import { mldsa44KeypairFromMnemonic, pqcInit } from "../lib/pqc";
 import { unlockVault } from "../lib/pin_vault";
 import type { OsWalletStorageKind } from "../lib/wallet_bootstrap";
 import { detectOsWalletStorageKind } from "../lib/wallet_bootstrap";
-import { TET_WHITEPAPER_FULL_TEXT, TET_WHITEPAPER_TITLE } from "../lib/tetWhitepaper";
+import { TET_WHITEPAPER_FULL_TEXT, TET_WHITEPAPER_TITLE } from "../lib/tet_whitepaper";
 import {
   filterInboxMessagesForRecipient,
   normalizePubkeyHex,
