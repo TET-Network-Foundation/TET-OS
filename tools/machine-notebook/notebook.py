@@ -9,6 +9,7 @@ one-time permits that a record may cite. Prototype.
     python3 notebook.py verify  --dir DIR --pin PINFILE [--node URL]
     python3 notebook.py publish --dir DIR --seq N --node URL
     python3 notebook.py export  --dir DIR --out NEWDIR
+    python3 notebook.py set-head --dir DIR       (once, for a folder made before device.head)
 
 No new cryptography: every signature is `tet-cli agent sign` (the agent envelope in
 docs/AGENT_IDENTITY.md) and every check is `tet-cli agent verify`. The device phrase reaches tet-cli
@@ -47,6 +48,7 @@ import json
 import math
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -552,6 +554,11 @@ def read_source(source):
 HEAD_RE = re.compile(r"(0|[1-9][0-9]{0,17}) ([0-9a-f]{64})\n")
 
 
+def set_head_line(d):
+    """The exact command that writes device.head for folder `d` (cmd_set_head)."""
+    return one_line(f"python3 {shlex.quote(os.path.abspath(__file__))} set-head --dir {shlex.quote(d)}")
+
+
 def read_head(d):
     """(seq, sha256) of the last record this device signed, from device.head."""
     p = os.path.join(d, "device.head")
@@ -559,9 +566,8 @@ def read_head(d):
         st = os.lstat(p)
     except FileNotFoundError:
         raise Fail(
-            f"no device.head in {d}, so the device cannot tell where its log ended. A folder made before "
-            "device.head existed: run verify, and if the log is VALID and whole, write "
-            '"<number of records> <sha256 of the newest record>" to device.head, mode 600'
+            f"no device.head in {d}, so the device cannot tell where its log ended. For a folder made "
+            f"before device.head existed, run once: {set_head_line(d)}"
         )
     if not stat.S_ISREG(st.st_mode) or st.st_mode & 0o077:
         raise Fail("device.head must be a regular file only its owner can read and write; chmod 600 it")
@@ -695,6 +701,31 @@ def record_locked(a, reading):
     with open(os.path.join(d, "chain.txt"), "a") as f:
         f.write(sha256_hex(body) + "\n")
     print(one_line(f"seq {seq}: {record['reading']['value']} {record['reading']['unit']}") + (f" (permit {pid})" if pid else ""))
+
+
+def cmd_set_head(a):
+    """Write device.head for a folder made before it existed: check the whole log against this
+    folder's own device key, and only if it is VALID take its newest record as the end. Refuses when
+    device.head exists, so it never moves a head the device already keeps."""
+    d = a.dir
+    if not os.path.exists(os.path.join(d, "device.key")):
+        raise Fail(f"no device key in {d}; set-head is for the device's own folder")
+    with record_lock(d):
+        if os.path.lexists(os.path.join(d, "device.head")):
+            raise Fail(f"device.head exists in {d}; set-head writes one only for a folder that has none")
+        cli = tet_cli(a)
+        problems, _, _, bodies = check_chain(d, cli, derive_pin(cli, d))
+        if problems == [(None, "no records")] and not chain_lines(d):
+            seq, h = 0, ZERO
+        elif problems:
+            lines = [f"  {'record ' + str(n) if n is not None else 'log'}: {one_line(why)}" for n, why in problems]
+            raise Fail("device.head not written: the log is not VALID against this device's key\n" + "\n".join(lines))
+        else:
+            seq = max(bodies)
+            h = sha256_hex(bodies[seq])
+        write_head(d, seq, h)
+    print(f"device.head: record {seq}, sha256 {h}")
+    print("the device had no note of where its log ended, so it takes the newest record in this folder")
 
 
 def cmd_record(a):
@@ -1092,6 +1123,8 @@ def main(argv=None):
     s = sub.add_parser("export")
     s.add_argument("--dir", required=True)
     s.add_argument("--out", required=True, help="a new folder: the records, permits and chain, without device.key")
+    s = sub.add_parser("set-head")
+    s.add_argument("--dir", required=True)
     s = sub.add_parser("publish")
     s.add_argument("--dir", required=True)
     s.add_argument("--seq", type=int, required=True)
@@ -1102,7 +1135,7 @@ def main(argv=None):
     if a.cmd == "run" and a.source == "stdin-json":
         p.error("run reads a source repeatedly; stdin-json is for record")
     try:
-        return {"init": cmd_init, "record": cmd_record, "permit": cmd_permit, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish, "export": cmd_export}[a.cmd](a) or 0
+        return {"init": cmd_init, "record": cmd_record, "permit": cmd_permit, "run": cmd_run, "verify": cmd_verify, "publish": cmd_publish, "export": cmd_export, "set-head": cmd_set_head}[a.cmd](a) or 0
     except Fail as e:
         print(f"error: {e}", file=sys.stderr)
         return 2

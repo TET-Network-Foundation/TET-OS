@@ -36,11 +36,13 @@ After the lists, a VALID `verify` prints the newest record it found:
 here`. Nothing in the folder says how long the log was, so this is the line to keep if you want to
 compare a later copy with this one.
 
-Known gaps in the check itself, not fixed yet:
-- the check that `--pin` lies outside the folder reads the whole folder, with no size limit, and
-  does not report how much it read
-- that check is not complete in every case
-- `publish` does not check again everything it sends
+What verify relies on, beyond the folder:
+- the computer and the user account it runs as. A check run on a machine you do not trust tells you
+  nothing; run it where only you can run programs as that user.
+- a pin you keep outside the folder you check. Put the copy in a folder of its own, not inside or
+  next to the log.
+- `publish` sends records as they are in the folder. Run `verify` first, and publish only a log it
+  reads as VALID.
 
 ## The device key
 
@@ -139,6 +141,17 @@ after signing (a crash, a timeout, `chain.txt` not writable) leaves the device r
 and saying so, rather than signing a number twice. `record --permit` reads the earlier records
 back from `device.head` through each record's `prev`, so a record moved out of `records/` is refused,
 not skipped.
+
+A folder made before `device.head` existed has none, and `record` refuses it and prints the line to
+run, once:
+
+```sh
+python3 tools/machine-notebook/notebook.py set-head --dir ~/notebook
+```
+
+`set-head` checks the whole log against the folder's own device key, as `verify` would. Only if the log
+is VALID does it write `device.head`, naming the newest record in the folder; otherwise it lists what
+is wrong and writes nothing.
 
 One `record` runs at a time in a folder: a `run` loop and a manual `record` take turns on
 `<dir>/device.lock`. A run waits up to 30 seconds for the other to finish, then gives up and says so

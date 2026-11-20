@@ -61,7 +61,16 @@ record continues a log only where the device last signed it (device.head, outsid
       record stopped after signing (chain.txt not writable), that record removed -> refused
       record --permit with an earlier record moved out of records/ -> refused, not cited again
       a record named in non-ASCII digits                     -> not a record (verify: count differs)
-      no device.head                                         -> refused
+      no device.head                                         -> refused, and the refusal names the
+                                                                exact set-head line to run
+  a folder made before device.head (no device.head, no device.lock):
+      set-head                                               -> device.head names the newest record,
+                                                                mode 600; record then continues at the
+                                                                next number and the log reads VALID
+      set-head on a folder that already has device.head      -> refused, device.head unchanged
+      set-head on a log with one flipped byte                -> refused, no device.head written
+      set-head on a log signed by another device's key       -> refused, no device.head written
+      set-head on a folder with no records                   -> device.head "0 <zeros>"
       two record runs at once citing one permit (tet-cli slowed so both are inside the check)
                                                              -> one records, the other is refused
                                                                 because the permit is used: one
@@ -1362,6 +1371,108 @@ class DeviceHead(unittest.TestCase):
         self.assertEqual(rc, 2, err)
         self.assertIn("no device.head in", err)
         self.assertFalse(os.path.exists(self.rec(d, 4)))
+
+
+class SetHead(unittest.TestCase):
+    """A folder made before device.head existed: record refuses it and names set-head, and set-head
+    writes device.head only from a log that is VALID against the folder's own device key."""
+
+    @classmethod
+    def setUpClass(cls):
+        Notebook.setUpClass.__func__(cls)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    copy, rec = Notebook.copy, Notebook.rec
+
+    def old_folder(self):
+        """What an earlier notebook.py left: everything but device.head and device.lock."""
+        d = self.copy()
+        for n in ("device.head", "device.lock"):
+            os.remove(os.path.join(d, n))
+        return d
+
+    def head(self, d):
+        with open(os.path.join(d, "device.head")) as f:
+            return f.read()
+
+    def test_x_an_old_folder_is_refused_with_the_line_to_run_and_set_head_lets_it_continue(self):
+        d = self.old_folder()
+        rc, _, err = nb_err("record", "--dir", d, "--source", "stdin-json", stdin=Notebook.READING)
+        self.assertEqual(rc, 2, err)
+        self.assertIn(f"run once: python3 {os.path.abspath(notebook.__file__)} set-head --dir {d}\n", err)
+        self.assertFalse(os.path.exists(self.rec(d, 4)))
+        newest = notebook.chain_lines(d)[-1]
+        rc, out, err = nb_err("set-head", "--dir", d)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(out.splitlines()[0], f"device.head: record 3, sha256 {newest}")
+        self.assertEqual(self.head(d), f"3 {newest}\n")
+        self.assertEqual(os.stat(os.path.join(d, "device.head")).st_mode & 0o777, 0o600)
+        rc, out = nb("record", "--dir", d, "--source", "stdin-json", stdin=Notebook.READING)
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(out.startswith("seq 4:"), out)
+        rc, out = nb("verify", "--pin", self.pin, "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), out)
+
+    def test_x_set_head_does_not_move_a_head_the_device_keeps(self):
+        d = self.copy()
+        before = self.head(d)
+        # Even a head that no longer matches the log: set-head is not a way to accept a shortened log.
+        DeviceHead.drop_newest(self, d)
+        rc, _, err = nb_err("set-head", "--dir", d)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("device.head exists in", err)
+        self.assertEqual(self.head(d), before)
+
+    def test_x_set_head_refuses_a_log_that_is_not_valid(self):
+        d = self.old_folder()
+        with open(self.rec(d, 2), "r+b") as f:
+            b = f.read()
+            f.seek(0)
+            f.write(b.replace(b"21.5", b"21.6"))
+        rc, _, err = nb_err("set-head", "--dir", d)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("device.head not written: the log is not VALID against this device's key", err)
+        self.assertIn("record 2: signature:", err)
+        self.assertFalse(os.path.lexists(os.path.join(d, "device.head")))
+
+    def test_x_set_head_refuses_a_log_signed_by_another_devices_key(self):
+        # Another device's whole, intact log under this folder's device.key: VALID against its own
+        # pin, so only the check against THIS folder's key can refuse it.
+        d = self.old_folder()
+        o = tempfile.mkdtemp(dir=self.tmp)
+        os.rmdir(o)
+        old = {k: os.environ.get(k) for k in CHAIN}
+        os.environ.update(CHAIN)
+        try:
+            rc, out = nb("init", "--dir", o)
+            self.assertEqual(rc, 0, out)
+            for v in (1, 2):
+                rc, out = nb("record", "--dir", o, "--source", "stdin-json", stdin=json.dumps({"value": v, "unit": "count"}))
+                self.assertEqual(rc, 0, out)
+        finally:
+            for k, v in old.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        shutil.rmtree(os.path.join(d, "records"))
+        shutil.copytree(os.path.join(o, "records"), os.path.join(d, "records"))
+        shutil.copy(os.path.join(o, "chain.txt"), os.path.join(d, "chain.txt"))
+        rc, out = nb("verify", "--pin", os.path.join(o, "device.pin"), "--dir", d)
+        self.assertEqual((rc, out.splitlines()[0]), (0, "VALID"), "the case needs a log that is VALID for its own key")
+        rc, _, err = nb_err("set-head", "--dir", d)
+        self.assertEqual(rc, 2, err)
+        self.assertIn("device.head not written: the log is not VALID against this device's key", err)
+        self.assertIn("key:", err)
+        self.assertFalse(os.path.lexists(os.path.join(d, "device.head")))
+
+    def test_x_set_head_on_a_folder_with_no_records_starts_at_zero(self):
+        d = self.old_folder()
+        shutil.rmtree(os.path.join(d, "records"))
+        os.remove(os.path.join(d, "chain.txt"))
+        rc, out, err = nb_err("set-head", "--dir", d)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(self.head(d), f"0 {notebook.ZERO}\n")
 
 
 # On call NB_WRAP_AT, copies NB_WRAP_SRC over NB_WRAP_DST, before or after the real tet-cli runs.

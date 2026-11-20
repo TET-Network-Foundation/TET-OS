@@ -1177,6 +1177,7 @@ export const JA: Record<string, string> = {
   "where the machine was": "機械がどこにあったか",
   "who runs the machine": "誰が機械を動かしているか",
   "that a copied key did not use the same permission in another log": "コピーされた鍵が、同じ許可を別のログで使っていないこと",
+  // Not native-reviewed yet: the next line waits for a fluent reader.
   "that the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it": "ログが完全で、書き換えられていないこと（最新の記録が欠けている場合があり、鍵を持つ人はどの記録でも書き換えられます）",
   "that a permit was used only here: it does not stop a copied key from writing a second log": "許可証がここでだけ使われたこと：許可証は、コピーされた鍵が2つ目のログを書くことを防げません",
   // /signin (app/signin), checked by scripts/signin_demo_guard.mjs.
