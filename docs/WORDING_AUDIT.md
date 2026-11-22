@@ -7,6 +7,8 @@ Read-only. Every user-facing string in `tet-network/ui/app` that says *prove*, *
 
 The wording rule this checks against: a mark shows which key signed and before which block. It never proves, never names a date, never says who.
 
+The same rule for headlines and status lines: a block carries no date, so say "existed before block N", never a day; never a claim about who made a file; and anything not running today is "planned" (no public node runs today, so there is no "public testnet" in the present tense). A record of an old headline stays as a record, with a line under it saying it was replaced.
+
 | Group | Rows (a page translation sits under its English row; the paper's translations are rows of their own) | Decision |
 |---|---|---|
 | **A**: claims authorship, or says who | 8 | must change |
