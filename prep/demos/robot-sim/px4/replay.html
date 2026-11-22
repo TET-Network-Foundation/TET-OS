@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A simulated drone flight, its log signed in chunks, replayed from the checked copy</title>
+<script type="importmap">{"imports": {"three": "./vendor/three/three.module.js"}}</script>
+<style>
+  :root { --ink:#1d2327; --dim:#5c666d; --rule:#d5d9dc; --paper:#fbfbf9; --accent:#1f5f8b; --accent-bg:#e9f1f7;
+          --ok:#2e7d4f; --bad:#b3261e; --warn:#8a5a00; --warn-bg:#fbf3e2; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 Georgia, "Hiragino Mincho ProN", serif; color:var(--ink); background:#f3f3ef; }
+  header { padding:14px 20px 4px; }
+  h1 { font:600 22px/1.25 -apple-system, "Helvetica Neue", Arial, sans-serif; margin:0 0 4px; }
+  .lede { margin:0; max-width:70em; color:var(--dim); }
+  .sim { display:inline-block; font:700 12px/1.3 -apple-system, Arial, sans-serif; padding:2px 7px; margin-right:8px; border:1px solid var(--bad); color:var(--bad); }
+  .horizon { display:inline-block; font:600 11px/1.3 -apple-system, Arial, sans-serif; padding:2px 6px; margin-right:8px; border:1px solid var(--accent); color:var(--accent); background:var(--accent-bg); }
+  main { display:grid; grid-template-columns:minmax(0, 1fr) 380px; gap:14px; padding:8px 20px; }
+  #view { position:relative; height:560px; background:#dfe6ea; border:1px solid var(--rule); }
+  #view canvas { display:block; }
+  #hud { position:absolute; left:8px; top:8px; font:12px/1.4 ui-monospace, Menlo, monospace; background:rgba(255,255,255,.85); padding:4px 8px; }
+  #legend { position:absolute; right:8px; bottom:8px; font:12px/1.4 -apple-system, Arial, sans-serif; background:rgba(255,255,255,.85); padding:4px 8px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin:0 4px 0 8px; }
+  aside { background:var(--paper); border:1px solid var(--rule); padding:10px 12px; font-size:14px; }
+  aside h2 { font:600 13px/1.3 -apple-system, Arial, sans-serif; margin:10px 0 4px; color:var(--dim); text-transform:uppercase; letter-spacing:.03em; }
+  #verdict { font:700 20px/1.2 -apple-system, Arial, sans-serif; }
+  #verdict.VALID { color:var(--ok); } #verdict.INVALID { color:var(--bad); }
+  button { font:13px -apple-system, Arial, sans-serif; margin:2px 4px 2px 0; padding:4px 8px; }
+  #reasons { font:12px/1.4 ui-monospace, Menlo, monospace; max-height:150px; overflow:auto; }
+  #reasons div.bad { color:var(--bad); }
+  .boxes { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; margin:4px 20px 0; }
+  .boxes > div { background:var(--paper); border:1px solid var(--rule); border-top:3px solid var(--accent); padding:8px 10px; font-size:14px; }
+  .boxes h3 { margin:0 0 4px; font:600 12px/1.3 -apple-system, Arial, sans-serif; color:var(--dim); text-transform:uppercase; }
+  .boxes p { margin:0; }
+  .not { margin:12px 20px 20px; padding:8px 12px; border-left:3px solid var(--warn); background:var(--warn-bg); max-width:80em; }
+  .not ul { margin:4px 0 0 18px; padding:0; }
+  #contact { font-size:13px; }
+  @media (max-width: 900px) { main { grid-template-columns:1fr; } .boxes { grid-template-columns:1fr; } #view { height:420px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>A simulated drone flight: its log, signed in one-second chunks, replayed from the checked copy alone</h1>
+  <p class="lede"><span class="sim">simulation: no flight happened</span><span class="horizon">today, in simulation</span>
+    The log's header names: <b id="source">…</b> (who wrote it: not judged). The track and each chunk's verdict are drawn from the checker's folder.</p>
+</header>
+<div class="boxes" aria-label="why TET fits, what changes, how it differs">
+  <div><h3>Why TET fits this</h3><p>The flight log reaches an inspector or a client through hands that do not hold the aircraft's key: the pilot's laptop, an upload, an email. The signing key is pinned once; every later copy can be checked offline against it.</p></div>
+  <div><h3>What changes with a signed log</h3><p>The ULog file stays standard and opens in the usual tools. Beside it, one signed record per chunk (about one second of log time) holds the hash of that chunk's bytes. An altitude lowered under the ceiling, or a fence exit moved back inside, is refused on the chunk that held it.</p></div>
+  <div><h3>How this differs from what exists</h3><p>PX4 can encrypt its log (XChaCha20, key wrapped with RSA-2048): that keeps the log secret from whoever lacks the private key; it does not let a third party check who wrote it. MAVLink signing protects the radio link, not the stored file (both from PX4's own documentation in its source tree). Signing is the other way round: the log stays readable by anyone, and anyone holding the pin can check which key signed each chunk. The two can be combined; this demo does not encrypt.</p></div>
+</div>
+<main>
+  <div id="view"><div id="hud">…</div>
+    <div id="legend"><span class="dot" style="background:#2e7d4f"></span>chunk checked<span class="dot" style="background:#b3261e"></span>chunk refused<span class="dot" style="background:#e0a100"></span>120 m ceiling, geofence</div></div>
+  <aside>
+    <h2>The check, in the folder with no key</h2>
+    <div id="verdict">…</div>
+    <div id="summary"></div>
+    <h2>Change the checker's copy</h2>
+    <button id="t-near">Near miss: lower the peak altitude to 118 m</button>
+    <button id="t-fence">Geofence exit: move it back inside</button>
+    <button id="t-reset">Reset the copy</button>
+    <div id="reasons"></div>
+    <h2>Replay</h2>
+    <button id="play">Play</button><input id="scrub" type="range" min="0" max="1000" value="0" style="width:200px" aria-label="replay position">
+    <h2>Contact, in MuJoCo</h2>
+    <div id="contact">not run (contact.py)</div>
+  </aside>
+</main>
+<div class="not"><b>What this does not show</b>
+  <ul>
+    <li>That anything flew: this is a simulation; no flight happened. In the PX4 run, PX4 flew a simulated vehicle (its built-in SIH simulator) on this computer.</li>
+    <li>That PX4 wrote the log: the check judges that these bytes are the signed ones, not who wrote them.</li>
+    <li>That the autopilot signed it: the chunks were signed after the flight, on the same computer, by the notebook tool. Signing inside PX4 while it flies is not built.</li>
+    <li>That the vehicle kept to the ceiling or the fence: they are this demo's lines, drawn and checked against the log afterwards. In the PX4 run, PX4's own geofence was not set, and the mission flew past both on purpose.</li>
+    <li>Which machine signed: the check judges which key signed each chunk; it does not judge which machine or person held that key.</li>
+    <li>That a sensor told the truth: the log holds what was measured (here, simulated).</li>
+    <li>That the log is complete at its end: the check does not judge whether the last chunks are present.</li>
+    <li>When a chunk was written: the check judges which key signed each chunk; it does not judge when the signing happened.</li>
+  </ul>
+</div>
+<script type="module" src="./replay.js"></script>
+</body>
+</html>
