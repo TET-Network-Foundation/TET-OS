@@ -115,6 +115,7 @@ Nothing here is merged or deployed unless it says so. I merge only after you say
 - **What changed:** 「AIで何でも作れる時代に。」「『これを、この日に出したのは自分』を、10秒で証明。」, with the limit right under it: 「証明できるのは『いつ・誰の印か』まで。作者本人かどうかまでは証明しません。」 The same in en and zh-HK.
 - **To see it:** the home screen.
 - **Risk:** "10秒" is a claim. `scripts/try_ten_seconds_e2e.mjs` measured pick file → mark → code shown, plus the verify lookup, at worst 2.6 s of machine time on a laptop profile in Japan using a node in Germany. That run used my local node with emulated latency, because the demo itself isn't reachable from here; re-run it against the demo once it's up. A guard bans "proves you made it" / 「作ったことを証明」 everywhere.
+- **Since replaced.** This headline is no longer used: it named a day and a speed, and a mark shows which key signed and that it existed before block N, not who made a file and not a date. The README now opens: "A key you own · a membership proof that does not say who · a shared clock."
 
 ### #87–#94 (stacked, not in the last guide)
 

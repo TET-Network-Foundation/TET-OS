@@ -1,6 +1,6 @@
 # Security Policy
 
-TET is a **Phase 0 public testnet and developer preview**. It has not been audited. The token has
+TET is a **Phase 0 developer preview**; a public testnet is planned, and no public node runs today. It has not been audited. The token has
 no value. Run it on hardware and with keys you are willing to lose.
 
 ## Reporting a vulnerability
@@ -57,7 +57,8 @@ machine. The code on main still runs one block producer, with no committee and n
 **The producer can wedge, and it did for 33 hours.** On 2026-10-03 the producer's block-plane
 event loop stopped, and the network made no blocks for 32 h 53 m. Monitoring went red at once;
 nothing restarted the node and nobody saw the alert. The node now exits after 180 s of stall so its
-supervisor restarts it, the host probe restarts a producer it cannot read, and alerts go to a phone.
+supervisor restarts it; on the old seeds the host probe also restarted a producer it could not read,
+and alerts went to a phone.
 The wedge's cause is not yet fixed. See
 [the postmortem](docs/postmortems/2026-10-04-producer-wedge-33h.md).
 
@@ -73,7 +74,7 @@ producer takes no blocks from peers unless its operator names one. The full prod
 at Phase 1.
 
 **Anonymity is weak today, by construction.** An anonymous sender is anonymous among the
-registrations *their node has seen*. On today's testnet that set is small, so the anonymity set is
+registrations *their node has seen*. On a small testnet that set is small, so the anonymity set is
 small. Registration is free, so there is no sybil resistance until the Phase 1 escrow. This is
 disclosed in the product itself, not only here.
 
@@ -182,7 +183,7 @@ and that variant does not exist yet, so an invalid receipt is rejected without p
 Win95 boot sequence are specified and not built. Their tests are marked #[ignore] on purpose and stay red until
 the Phase 1 genesis (AT-5(b), AT-7(b)), so a green suite cannot be read as Pin or escrow working.
 
-**The testnet runs on a development chain id.** The public testnet runs with chain_id tet-local-dev
+**An earlier public testnet used a development chain id.** It ran with chain_id tet-local-dev
 and a placeholder treasury address. Renaming the chain is a genesis change and lands at Phase 1;
 every signature, including the devlog's, is bound to the current id and will be re-signed then.
 
@@ -214,7 +215,7 @@ does not touch, and those refs still served the keys.
 
 **All of that material is treated as compromised permanently, and none of it is reused.** It was
 verified before the rewrite that none of it corresponds to anything in use: the seed node's libp2p
-identity was never committed at all, the seed's node key does not match any of the four, and the
+identity was never committed at all, the seed's node key did not match any of the four, and the
 wallet address holds a zero balance and is not the genesis founder or the treasury. Removal reduces
 casual exposure; it does not un-publish anything. If you find those keys in a mirror or a cached
 clone, they are known and dead.

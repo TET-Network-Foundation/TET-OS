@@ -2,7 +2,7 @@
 
 **A key you own · a membership proof that does not say who · a shared clock.**
 
-TET is a public test network. You hold your own key, made in your browser. You can show you are a
+TET is a developer preview; a public test network is planned. You hold your own key, made in your browser. You can show you are a
 member of a group without saying which member. Records are ordered by one shared chain, so anyone
 can check that something existed before block N. Every signature is two signatures, Ed25519 and
 ML-DSA-44, and the page checks them in your browser instead of trusting a server.
@@ -28,7 +28,7 @@ testnet-2 runs, you can run a node of your own (below).
 | Running today | Prototype (code public, tests green) | In design |
 |---|---|---|
 | **No public node today.** The demo at tetnet.org and the two seeds were closed in November 2026; testnet-2 is being prepared. What follows ran on them, and runs on a node of your own | Tag verifier `tet-tag-verify`: NTAG 424 DNA tap check (AN12196), per-tag keys (AN10922 `derive`), a `serve` prototype; 50 tests (PR #150, draft) | Tag registration and owners on TET (`GENUINE_TAG.md`, PR #149) |
-| Sign a file or text; stamp it on chain to show it existed before block N (the signed file is stored on the node, encrypted to you, for 7 days) | Hash-only stamp (the file never leaves your device): merged on main (#148), not yet confirmed on the demo | A new chain on Phase 1's blocks, with the time in the block header; today's records archived |
+| Sign a file or text; stamp it on chain to show it existed before block N (the signed file is stored on the node, encrypted to you, for 7 days) | Hash-only stamp (the file never leaves your device): merged on main (#148), not confirmed on the demo before it closed | A new chain on Phase 1's blocks, with the time in the block header; today's records archived |
 | Verify a signature, a proof code or a stamp, also offline | Phase 1 (PR #151, open, not merged): blocks carry a producer signature and a timestamp (`ts_ms`); the validator set is read from genesis | `wallet_id_v2`: the ML-DSA key bound to the wallet ID |
 | Boards: anonymous posts that show a member wrote them, not which one (RISC Zero membership proof) | | Moving the message key exchange from Kyber-768 (Round 3) to ML-KEM (FIPS 203) |
 | End-to-end encrypted messages, and encrypted files up to 100 MB kept 7 days | | More block producers, and an external audit |
@@ -72,8 +72,9 @@ Maintained by Steve (Kazuma Sengoku).
 - **No public node today.** The three hosts were closed in November 2026 and their chain is not
   restored; testnet-2 is being prepared. Signatures made for the old chain still verify offline, but
   its blocks can no longer be looked up, so a stamp's "existed before block N" can't be checked online.
-- **Testnet.** One block producer and one operator; a sustained attack, or the operator, can stop it.
-  The chain may be reset, and it has been.
+- **One block producer.** The old testnet had one block producer and one operator; a sustained
+  attack, or the operator, could stop it. The code on main still runs one block producer. The chain
+  may be reset, and it has been.
 - **No external audit yet.**
 - **Quantum resistance is incomplete.** Every signature is hybrid, but the wallet ID is the Ed25519
   key until `wallet_id_v2`. Messages use X25519 + Kyber-768 (Round 3), not the final ML-KEM standard.
@@ -102,24 +103,25 @@ Maintained by Steve (Kazuma Sengoku).
 - [`methods/`](./methods), [`prover/`](./prover): the RISC Zero membership proof (anonymous posts).
 - [`deploy/`](./deploy): the seed and demo host setup.
 
-## Quick start: run a node on the public testnet
+## Quick start: run a node (public testnet planned)
 
 > **No public seed runs today.** The bootnodes below are the closed hosts and will not answer, so
 > this node has nothing to sync from until testnet-2 lists its own address. Until then, run a single
 > node or the local three-node stack ([`tet-core/README.md`](./tet-core/README.md)).
 
-This brings up a node that syncs from the public seeds, plus the web app. Most of the ten minutes
-is the Docker build.
+This brings up a node and the web app; until testnet-2 lists a seed, the node has no peer to sync
+from. Most of the ten minutes is the Docker build.
 
 ```bash
 git clone https://github.com/TET-Network-Foundation/TET-OS.git
 cd TET-OS
 
-# Follow the public seeds. Two are listed: Helsinki produces the blocks, Nuremberg is a
-# full node and bootnode that does not mine. Either will catch you up; listing both means
-# one being down does not stop you joining.
-# TET_AUTO_MINE=0 because the seed produces the blocks -- a second producer on the same
-# genesis just races it. TET_PRODUCER_PEERS is the compose default, written out so you can see it:
+# These are the two closed seeds of the old network: Helsinki produced the blocks, Nuremberg
+# was a full node and bootnode that did not mine. They no longer answer; testnet-2 is planned
+# and is to list its own seed here.
+# TET_AUTO_MINE=0 because a follower leaves block production to a seed -- a second producer
+# on the same genesis just races it.
+# TET_PRODUCER_PEERS is the compose default, written out so you can see it:
 # your node takes gossiped blocks only from Helsinki's PeerId.
 cat >> .env <<'EOF'
 TET_ENABLE_P2P=1
@@ -131,7 +133,7 @@ EOF
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
 ```
 
-Then confirm you are actually on the seed's chain. Equal height is **not** enough (a fork can sit
+Once a seed answers, confirm you are actually on its chain. Equal height is **not** enough (a fork can sit
 at the same height), so compare `block_id` and `state_root`:
 
 ```bash
@@ -140,14 +142,15 @@ H=$(curl -sf http://127.0.0.1:5010/ledger/blocks | jq '.[0].height')
 curl -sf http://127.0.0.1:5010/ledger/block/$H | jq '.block | {height, block_id, state_root}'
 ```
 
-Open **http://localhost:3000/try** for the same page as tetnet.org, against your own node.
+Open **http://localhost:3000/try** for the same page tetnet.org served, against your own node.
 
-Leave the genesis variables in the committed compose alone: they are what the seed runs, and a
-mismatch changes the genesis hash, which makes every signed request fail with
+For a local node, leave the genesis variables in the committed compose alone: they define the local
+dev chain (TET_CHAIN_ID=tet-dev-local), which no seed runs. To follow a seed, set the genesis values
+that seed lists; a mismatch changes the genesis hash, which makes every signed request fail with
 `401 ed25519 verification failed`.
 
-**The seeds' REST API is deliberately not public**: only `8002/tcp` is open, so port 5010 in the
-commands above is *your* node, not the seed's.
+**The old seeds' REST API was deliberately not public**: only `8002/tcp` was open, so port 5010 in
+the commands above is *your* node, not a seed's.
 
 Single node with no network, or the full three-node local stack: [`tet-core/README.md`](./tet-core/README.md).
 Operator detail, env reference and troubleshooting: [`docs/RUNNING_A_NODE.md`](./docs/RUNNING_A_NODE.md).
