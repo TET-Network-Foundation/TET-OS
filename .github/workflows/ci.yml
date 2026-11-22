@@ -367,6 +367,14 @@ jobs:
             sdk_question_envelope_verifies_in_rust
             ui_answer_envelope_verifies_in_rust
             signature_registry_refuses_each_case_for_its_own_reason
+            tx_envelope_of_another_version_is_refused_for_its_version
+            tx_envelope_on_mainnet_with_attestation_stubs_allowed_is_refused
+            tx_envelope_with_one_signature_half_from_another_tx_is_refused
+            tx_envelope_without_a_required_attestation_is_refused
+            tx_envelope_with_an_attestation_for_another_tx_is_refused
+            agent_payload_signer_that_is_not_64_hex_is_refused_for_its_form
+            agent_payload_signature_naming_another_signer_is_refused
+            agent_payload_with_one_signature_half_from_another_payload_is_refused
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block
