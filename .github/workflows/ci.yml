@@ -230,6 +230,59 @@ jobs:
           TET_CLI: target/debug/tet-cli
         run: node tet-agent-sdk/examples/agent_permit_once.mjs
 
+      # The simulated robot and drone demo (prep/demos/robot-sim) writes its logs through the machine
+      # notebook and checks them with tet-cli. Each of its twelve buttons (three for the ground robot, four
+      # for the drone's two scenarios, three for the cold-chain box, two for the plate reader) must be
+      # refused for its own reason.
+      - if: needs.gate.outputs.code == 'true'
+        name: simulated robot and drone demo — each tamper button is refused for its reason
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 prep/demos/robot-sim/test_robotsim.py
+
+      # The demo page's 3D view (view3d.js) draws its markers and its signed-log line only from the
+      # records the checker read; these tests fail if either moves with the simulation's own data, and
+      # if the page has no 2D view without WebGL. (test_robotsim.py runs the view on a real log too.)
+      - if: needs.gate.outputs.code == 'true'
+        name: simulated robot and drone demo — the 3D view's markers and log line come only from the checked records
+        run: node prep/demos/robot-sim/test_view3d.mjs
+
+      # The simulated drone's ULog (prep/demos/robot-sim/px4) is signed in one-second chunks through the
+      # machine notebook. The two kept cases' tampers (the near-miss altitude, the geofence exit) must be
+      # refused on exactly the chunks that held them, on the stand-in log and on a committed excerpt of a
+      # log PX4 SITL wrote (fixtures/px4-sitl-excerpt.ulg, 261 KB). The tests on the whole 45 MB PX4 log
+      # and on PX4's own sample log skip here (neither is in CI); the MuJoCo contact tests are not run.
+      - if: needs.gate.outputs.code == 'true'
+        name: simulated drone ULog — chunk-signed, each kept case refused on its chunks
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 prep/demos/robot-sim/px4/test_px4.py
+
+      # Two simulated drones meet and each signs the same encounter record (prep/demos/robot-sim/encounter),
+      # through the machine notebook and tet-cli. A removed encounter must be shown by the other copy; an
+      # edited altitude, a replay, a third key and one swapped signature half must each be refused for
+      # their own reason.
+      - if: needs.gate.outputs.code == 'true'
+        name: simulated drone encounter — two-party record, each tamper shown or refused
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 prep/demos/robot-sim/encounter/test_encounter.py
+
+      # The agent console demo (prep/demos/agent-console) gives permits and checks logs only through
+      # the machine notebook and tet-cli. Each "try to cheat" row must be refused for its own reason.
+      - if: needs.gate.outputs.code == 'true'
+        name: agent console demo — each cheat is refused for its reason
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 prep/demos/agent-console/test_console.py
+
+      # The demo folders: a file of a listed video type, a flight log outside a
+      # fixtures/ folder or over 300 KiB, and any file over 1 MiB (except a vendored file whose sha256 its
+      # SHA256SUMS lists) are refused. Videos are kept outside git.
+      - if: needs.gate.outputs.code == 'true'
+        name: demo folders — listed video types, and files over 1 MiB other than the pinned vendored file, are refused
+        run: python3 prep/demos/guards/test_demo_files.py
+
       # Sign in with TET, the local-only prototype (tools/sign-in): signs and checks only through
       # tet-cli, so it runs here on the same binary. A replayed nonce, another domain and an expired
       # challenge must each be refused for that reason; scripts/run_guards.sh picks this line up too.

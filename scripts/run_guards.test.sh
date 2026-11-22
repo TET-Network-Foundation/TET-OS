@@ -3,11 +3,21 @@
 # non-zero, never runs the guards after it, and exits 0 only when every guard ran green.
 set -uo pipefail
 cd "$(dirname "$0")/.." || exit 1
+unset TET_CLI   # a caller's TET_CLI would reach the runner in the throwaway repos; the cases set their own
+# The run below that repeats this whole test is marked by its own argument, never by the environment:
+# a RUN_GUARDS_TEST_INNER exported by the caller would otherwise skip that case without saying so.
+unset RUN_GUARDS_TEST_INNER
+inner=0; [ "${1:-}" = "--inner" ] && inner=1
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 mkdir -p tet-network/ui/node_modules 2>/dev/null   # the runner refuses to start without it
-failed=0
-pass() { echo "ok   $1"; }
-flunk() { echo "FAIL $1"; [ -n "${2:-}" ] && echo "     $2"; failed=$((failed + 1)); }
+# The number of cases this test must run. Each pass or flunk below is one case; a case that silently
+# stops running (an `if` that is never entered) turns the count wrong and the test red. The run with
+# --inner skips exactly one case: the one that starts it.
+CASES=34
+expected=$CASES; [ "$inner" = 1 ] && expected=$((CASES - 1))
+failed=0; ran=0
+pass() { echo "ok   $1"; ran=$((ran + 1)); }
+flunk() { echo "FAIL $1"; [ -n "${2:-}" ] && echo "     $2"; failed=$((failed + 1)); ran=$((ran + 1)); }
 
 # The runner refuses to run with untracked files, so the cases below run it in a throwaway repo
 # holding a copy of it (a developer's own untracked files can't decide them), committed and clean.
@@ -85,4 +95,88 @@ printf 'Messages are untraceable.\n' > "$R/notes.ignored"
 TET_GUARDS_LIST="$W/list2" bash "$RUNNER" > "$W/o8" 2>&1; rc=$?
 if [ "$rc" = 0 ]; then pass "an ignored file does not stop the run"; else flunk "an ignored file does not stop the run" "rc=$rc $(cat "$W/o8")"; fi
 
+# Every single-line python3 or node step of ci.yml's rust, ui and wasm jobs reaches the runner,
+# whatever folder it lives in.
+gaps=$(awk '/^  [A-Za-z0-9_-]+:[[:space:]]*$/ { job = $1; sub(":", "", job) } (job == "rust" || job == "ui" || job == "wasm") && /^[[:space:]]+run: (python3|node) / { sub(/^[[:space:]]+run: /, ""); sub(/[[:space:]]+$/, ""); print }' .github/workflows/ci.yml \
+  | while IFS= read -r step; do cut -f2- <<<"$listed" | grep -qxF -- "$step" || echo "$step"; done)
+if [ -z "$gaps" ]; then pass "every single-line rust/ui/wasm step of ci.yml reaches the runner"; else flunk "every single-line rust/ui/wasm step of ci.yml reaches the runner" "left out: $gaps"; fi
+
+# In a repo whose ci.yml has a demo step under prep/demos, the runner (reading ci.yml, no list
+# override) runs that step.
+mkdir -p "$R/prep/demos/x"
+printf 'open(%s, "w").close()\n' "'$W/demo-ran'" > "$R/prep/demos/x/test_x.py"
+printf 'jobs:\n  rust:\n    steps:\n      - name: a demo\n        run: python3 prep/demos/x/test_x.py\n' > "$R/.github/workflows/ci.yml"
+(cd "$R" && git add prep/demos/x/test_x.py .github/workflows/ci.yml && git -c user.name=t -c user.email=t@t.invalid commit -qm demo)
+bash "$RUNNER" > "$W/o9" 2>&1; rc=$?
+if [ "$rc" = 0 ] && [ -e "$W/demo-ran" ] && grep -q "^ok   python3 prep/demos/x/test_x.py" "$W/o9"; then pass "a prep/demos step in ci.yml is run"; else flunk "a prep/demos step in ci.yml is run" "rc=$rc $(cat "$W/o9")"; fi
+
+# A step the parser does not take stops the run: exit 2, the step named, no guard run.
+rm -f "$W/demo-ran"
+printf '      - name: elsewhere\n        run: python3 elsewhere/check.py\n' >> "$R/.github/workflows/ci.yml"
+(cd "$R" && git add .github/workflows/ci.yml && git -c user.name=t -c user.email=t@t.invalid commit -qm elsewhere)
+bash "$RUNNER" > "$W/o10" 2>&1; rc=$?
+if [ "$rc" = 2 ] && grep -q "ci.yml steps this runner would not run" "$W/o10" && grep -qF "  python3 elsewhere/check.py" "$W/o10" && [ ! -e "$W/demo-ran" ]; then pass "a ci.yml step the runner would not run: exit 2, named, nothing run"; else flunk "a ci.yml step the runner would not run: exit 2, named, nothing run" "rc=$rc $(cat "$W/o10")"; fi
+
+# A step is seen however it is written: `- run:` and a job header with a comment are run; a step
+# spaced, tabbed or quoted differently from what the parser takes stops the run, named. Each case
+# writes a ci.yml with one plain guard (so the list is never empty) and the guard under test, which
+# leaves a mark when it runs.
+printf 'open(%s, "w").close()\n' "'$W/form-ran'" > "$R/prep/demos/x/test_x.py"
+printf 'pass\n' > "$R/prep/demos/x/test_plain.py"
+form() {  # name, rust job header, step lines (printf %b), expected: run | stop
+  rm -f "$W/form-ran"
+  { printf 'jobs:\n%s\n    steps:\n      - name: plain\n        run: python3 prep/demos/x/test_plain.py\n' "$2"; printf '%b\n' "$3"; } > "$R/.github/workflows/ci.yml"
+  (cd "$R" && git add prep/demos/x/test_x.py prep/demos/x/test_plain.py .github/workflows/ci.yml && git -c user.name=t -c user.email=t@t.invalid commit -qm "$1")
+  bash "$RUNNER" > "$W/o-$1" 2>&1; rc=$?
+  if [ "$4" = run ]; then
+    if [ "$rc" = 0 ] && [ -e "$W/form-ran" ]; then pass "$1: the step is run"; else flunk "$1: the step is run" "rc=$rc $(cat "$W/o-$1")"; fi
+  else
+    if [ "$rc" = 2 ] && grep -q "ci.yml steps this runner would not run" "$W/o-$1" && grep -qF "prep/demos/x/test_x.py" "$W/o-$1" && [ ! -e "$W/form-ran" ]; then pass "$1: exit 2, named, nothing run"; else flunk "$1: exit 2, named, nothing run" "rc=$rc $(cat "$W/o-$1")"; fi
+  fi
+}
+form dash-run        '  rust:'                '      - run: python3 prep/demos/x/test_x.py'                    run
+form header-comment  '  rust:  # build, test' '      - name: a demo\n        run: python3 prep/demos/x/test_x.py' run
+form two-spaces      '  rust:'                '      - name: a demo\n        run:  python3 prep/demos/x/test_x.py' stop
+form tab             '  rust:'                '      - name: a demo\n        run: python3\tprep/demos/x/test_x.py' stop
+form quoted          '  rust:'                '      - name: a demo\n        run: "python3 prep/demos/x/test_x.py"' stop
+form quoted-job      '  "rust":'              '      - name: a demo\n        run: python3 prep/demos/x/test_x.py' run
+form space-job       '  rust :'               '      - name: a demo\n        run: python3 prep/demos/x/test_x.py' run
+form flow-map        '  rust:'                '      - { name: a demo, run: python3 prep/demos/x/test_x.py }' stop
+form quoted-key      '  rust:'                '      - name: a demo\n        "run": python3 prep/demos/x/test_x.py' stop
+form python-version  '  rust:'                '      - name: a demo\n        run: python3.12 prep/demos/x/test_x.py' stop
+
+# TET_CLI reaches every step in the form CI hands it: to a step run from the root, relative to the
+# repository root, whether the caller gives an absolute path, a path relative to where it stands, or
+# none; to a step run from tet-network/ui, not at all. A binary outside the
+# repository stops the run (exit 2) and no step is run.
+printf 'jobs:\n' > "$R/.github/workflows/ci.yml"   # no ci.yml step of its own: only the list runs
+(cd "$R" && git add .github/workflows/ci.yml && git -c user.name=t -c user.email=t@t.invalid commit -qm cli)
+# shellcheck disable=SC2016  # $TET_CLI is expanded by the step, not here
+printf '.\tprintf %%s "$TET_CLI" > %s/cli-seen\n' "$W" > "$W/list-cli"
+# shellcheck disable=SC2016  # expanded by the step
+printf 'tet-network/ui\tprintf %%s "${TET_CLI-unset}" > %s/cli-seen\n' "$W" > "$W/list-cli-ui"
+cli_case() {  # name, expected TET_CLI in the step, command...
+  local name="$1" want="$2"; shift 2
+  rm -f "$W/cli-seen"
+  "$@" > "$W/o-cli" 2>&1; rc=$?
+  seen=$(cat "$W/cli-seen" 2>/dev/null)
+  if [ "$rc" = 0 ] && [ "$seen" = "$want" ]; then pass "$name: a step receives TET_CLI=$want"; else flunk "$name: a step receives TET_CLI=$want" "rc=$rc seen=$seen $(cat "$W/o-cli")"; fi
+}
+cli_case "an absolute TET_CLI" target/debug/tet-cli env TET_GUARDS_LIST="$W/list-cli" TET_CLI="$R/target/debug/tet-cli" bash "$RUNNER"
+# shellcheck disable=SC2016  # expanded by sh -c
+cli_case "a TET_CLI relative to the caller" target/debug/tet-cli sh -c 'cd "$1/scripts" && TET_GUARDS_LIST="$2" TET_CLI=../target/debug/tet-cli bash "$3"' x "$R" "$W/list-cli" "$RUNNER"
+cli_case "no TET_CLI" target/release/tet-cli env -u TET_CLI TET_GUARDS_LIST="$W/list-cli" bash "$RUNNER"
+cli_case "a step run from tet-network/ui (ci.yml's ui job sets none)" unset env TET_GUARDS_LIST="$W/list-cli-ui" TET_CLI="$R/target/debug/tet-cli" bash "$RUNNER"
+rm -f "$W/cli-seen"
+TET_GUARDS_LIST="$W/list-cli" TET_CLI="$W/elsewhere/tet-cli" bash "$RUNNER" > "$W/o-cli" 2>&1; rc=$?
+if [ "$rc" = 2 ] && grep -q "TET_CLI names a file outside the repository" "$W/o-cli" && [ ! -e "$W/cli-seen" ]; then pass "a TET_CLI outside the repository: exit 2, nothing run"; else flunk "a TET_CLI outside the repository: exit 2, nothing run" "rc=$rc $(cat "$W/o-cli")"; fi
+
+# The result does not depend on the caller's TET_CLI: this whole test, run again with one in its
+# environment (the form a developer exports for the demo steps), passes as it does without one.
+if [ "$inner" = 0 ]; then
+  TET_CLI=target/debug/tet-cli bash scripts/run_guards.test.sh --inner > "$W/o-inner" 2>&1; rc=$?
+  if [ "$rc" = 0 ] && [ "$(tail -n 1 "$W/o-inner")" = "all passed" ] && ! grep -q '^FAIL' "$W/o-inner"; then pass "the whole test passes with a TET_CLI in the caller's environment"; else flunk "the whole test passes with a TET_CLI in the caller's environment" "rc=$rc $(grep '^FAIL' "$W/o-inner" | head -n 3)"; fi
+fi
+
+if [ "$ran" -ne "$expected" ]; then echo "expected $expected cases, ran $ran"; exit 1; fi
 if [ "$failed" -eq 0 ]; then echo "all passed"; exit 0; else echo "$failed FAILED"; exit 1; fi

@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two simulated drones meet, and each signs the same encounter record</title>
+<style>
+  :root { --ink:#1d2327; --dim:#5c666d; --rule:#d5d9dc; --paper:#fbfbf9; --accent:#1f5f8b; --accent-bg:#e9f1f7;
+          --ok:#2e7d4f; --bad:#b3261e; --warn:#8a5a00; --warn-bg:#fbf3e2; --a:#1f5f8b; --b:#8a4fb0; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:15px/1.45 Georgia, "Hiragino Mincho ProN", serif; color:var(--ink); background:#f3f3ef; }
+  header { padding:14px 20px 4px; }
+  h1 { font:600 22px/1.25 -apple-system, "Helvetica Neue", Arial, sans-serif; margin:0 0 4px; }
+  .lede { margin:0; max-width:75em; color:var(--dim); }
+  .sim { display:inline-block; font:700 12px/1.3 -apple-system, Arial, sans-serif; padding:2px 7px; margin-right:8px; border:1px solid var(--bad); color:var(--bad); }
+  .horizon { display:inline-block; font:600 11px/1.3 -apple-system, Arial, sans-serif; padding:2px 6px; margin-right:8px; border:1px solid var(--accent); color:var(--accent); background:var(--accent-bg); }
+  .horizon.future { border-color:var(--warn); color:var(--warn); background:var(--warn-bg); }
+  main { display:grid; grid-template-columns:minmax(0, 1fr) 470px; gap:14px; padding:8px 20px; }
+  .fig { background:var(--paper); border:1px solid var(--rule); padding:8px; }
+  .fig canvas { display:block; width:100%; }
+  .cap { font:12px/1.4 -apple-system, Arial, sans-serif; color:var(--dim); margin:4px 2px 0; }
+  .ctl { font:13px -apple-system, Arial, sans-serif; margin:6px 0 0; display:flex; gap:8px; align-items:center; }
+  .ctl input { flex:1; }
+  aside { background:var(--paper); border:1px solid var(--rule); padding:10px 12px; font-size:14px; }
+  aside h2, section h2 { font:600 13px/1.3 -apple-system, Arial, sans-serif; margin:10px 0 4px; color:var(--dim); text-transform:uppercase; letter-spacing:.03em; }
+  button { font:13px -apple-system, Arial, sans-serif; margin:2px 4px 2px 0; padding:4px 8px; background:#fff; border:1px solid var(--rule); cursor:pointer; }
+  button.on { border-color:var(--accent); background:var(--accent-bg); }
+  #note { font-size:13px; color:var(--dim); min-height:2.8em; }
+  .verdict { font:700 16px/1.2 -apple-system, Arial, sans-serif; margin:6px 0 2px; }
+  .VALID, .AGREE { color:var(--ok); } .INVALID, .MISMATCH { color:var(--bad); }
+  pre { font:11.5px/1.4 ui-monospace, Menlo, monospace; white-space:pre-wrap; word-break:break-all; margin:2px 0; }
+  pre .bad { color:var(--bad); }
+  .two { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:14px; margin:4px 20px; }
+  section { background:var(--paper); border:1px solid var(--rule); padding:8px 12px; font-size:14px; }
+  section p { margin:4px 0; }
+  .not { border-left:3px solid var(--warn); background:var(--warn-bg); }
+  ul { margin:4px 0 0 18px; padding:0; }
+  table { border-collapse:collapse; font-size:13px; width:100%; }
+  td, th { border-bottom:1px solid var(--rule); padding:3px 4px; text-align:left; vertical-align:top; }
+  @media (max-width: 1000px) { main, .two { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Two simulated drones meet, and each signs the same encounter record</h1>
+  <p class="lede"><span class="sim">simulation: no flight happened</span><span class="horizon">today: for the record, afterwards</span><span class="horizon future">about 10 years: shared airspace (a forecast, not a fact)</span>
+    Two quadcopters from two operators cross. Within <b id="range">…</b> m they talk directly, over a simulated link that loses and delays messages. Each signs "I see you" (its key id, its position and altitude as it believes them, a fresh number from the other), then both sign the same record of the pair. Each keeps it in its own notebook. This is evidence afterwards. <b>It is not collision avoidance and not a safety system.</b></p>
+</header>
+<main>
+  <div>
+    <div class="fig"><canvas id="top" width="900" height="520" aria-label="top view of both flights"></canvas>
+      <div class="cap">Figure 1. Top view, metres east and north of a made-up origin. Lines: true path (solid) and what each aircraft believed (dots, GPS noise). Grey circle: the link range around A. Square: where each recorded the encounter.</div>
+      <div class="ctl"><button id="play">Play</button><input id="t" type="range" min="0" max="1000" value="0" aria-label="time"><span id="clock">t = 0.0 s</span></div>
+    </div>
+    <div class="fig" style="margin-top:10px"><canvas id="alt" width="900" height="170" aria-label="altitude against time"></canvas>
+      <div class="cap">Figure 2. Altitude against time, true (solid) and believed (dots). Vertical bars: the exchange, from first contact until each wrote its record. The altitude each signed is marked with a ring; where the two copies differ, both are marked.</div>
+    </div>
+  </div>
+  <aside>
+    <h2>The exchange in this run</h2>
+    <div id="run"></div>
+    <h2>Check afterwards: pick a case</h2>
+    <div id="cases"></div>
+    <div id="note"></div>
+    <div id="out"></div>
+  </aside>
+</main>
+<div class="two">
+  <section class="not">
+    <h2>What this does not show</h2>
+    <ul>
+      <li>That either position was true: the check judges what each aircraft signed as its believed position, not whether it was correct.</li>
+      <li>That the aircraft were near each other: the check judges whether the two believed positions are within 100 m of each other (the 80 m link range plus 20 m); it does not judge the distance between the aircraft.</li>
+      <li>Which aircraft: the check judges which keys signed; it does not judge who held a key.</li>
+      <li>An encounter absent from both copies: the check judges encounters that at least one copy holds.</li>
+      <li>With one log, the check judges that log's records and signatures; whether an encounter was removed from it is judged only against the other aircraft's copy (case "one log only").</li>
+      <li>When it happened: each message's time is the aircraft's own clock, signed by that aircraft; nothing here is checked against another clock.</li>
+      <li>Anything in real time. The record exists after the exchange; nothing here steers, warns or separates aircraft.</li>
+      <li>That an exchange cut short is kept: if the link drops before both signatures arrive, nothing is recorded in this demo.</li>
+      <li>That the message format is a standard: it is a demo format (kind tags <code>tet_demo_encounter_seen_v1</code>, <code>tet_demo_encounter_v1</code>), not a protocol anyone has agreed to.</li>
+    </ul>
+  </section>
+  <section>
+    <h2>What exists, compared (from memory, unchecked)</h2>
+    <table>
+      <tr><th>Remote identification</th><td>Each drone broadcasts its id and position for anyone near to receive. One-way, in real time; as far as I know it is not signed in the common schemes, and I know of no scheme that keeps a two-party record of it.</td></tr>
+      <tr><th>ADS-B</th><td>Crewed aircraft broadcast position from their own navigation; receivers on the ground and in the air hear it. Not authenticated in its common form (from memory, unchecked).</td></tr>
+      <tr><th>Detect and avoid</th><td>On-board sensing and logic that keeps aircraft apart, in real time. That is the safety function; this record is not one and does not replace it.</td></tr>
+      <tr><th>Flight logs</th><td>Each aircraft keeps its own log, held by its operator. No other party's signature is in it.</td></tr>
+      <tr><th>This record</th><td>Not real time. After the fact, each operator's copy carries the other's signature on the same record, so an edit or a removal in one copy is shown against the other.</td></tr>
+    </table>
+  </section>
+  <section>
+    <h2>Why not a chain between the drones</h2>
+    <p>A chain makes many parties agree on one order of events. Two aircraft that meet are two parties, and they only need to agree on one record: two signatures over the same bytes do that, in three short messages each (a fresh number, an "I see you", a signature), over a link that loses and delays them. Consensus between aircraft would need more messages, more rounds and more time in range, and a third party to break a tie; none of that makes this record harder to forge. So: peer to peer in the air, yes; a chain in the air, no.</p>
+  </section>
+  <section>
+    <h2>What a stamp on the ground would add</h2>
+    <p>Later, on the ground, either operator could publish the record's hash to a chain (the notebook's <code>publish</code>, not run here). That would add one thing: the record existed before block N. A stamp would show that the record existed before block N. Not judged here: when the record existed. It would let either side show that its copy was fixed early. It would not show that a position was true, and it is not needed for the check on this page. Not done in this demo.</p>
+  </section>
+</div>
+<script src="data.js"></script>
+<script>
+const D = window.ENC;
+const $ = (id) => document.getElementById(id);
+$("range").textContent = D.range_m;
+const T = D.track, N = Math.min(T.A.length, T.B.length);
+const ev = Object.fromEntries(D.events.map((e) => [e.who, e]));
+const first = T.A.findIndex((p, i) => i < N && Math.hypot(p[1] - T.B[i][1], p[2] - T.B[i][2], p[3] - T.B[i][3]) <= D.range_m);
+$("run").innerHTML = `<p>Key ids (test keys): A <code>${D.keyids.A}</code>, B <code>${D.keyids.B}</code>. Closest approach ${D.closest.m} m at t = ${D.closest.t} s.
+  ${D.sent} messages sent, ${D.lost} lost (loss ${Math.round(D.loss * 100)} %, delay ${D.delay_s[0] * 1000}-${D.delay_s[1] * 1000} ms).
+  First in range at t = ${(first * D.dt).toFixed(1)} s; A recorded at ${ev.A.t} s, B at ${ev.B.t} s, the same record <code>${ev.A.sha256}</code>.</p>
+  <p>In the air, B refused: an old "I see you" from A sent again: <i>${D.air.replay}</i>; one claiming to be A, signed by a third aircraft: <i>${D.air.impostor.replace(/([0-9a-f]{8})[0-9a-f]{56}/g, "$1…")}</i>.</p>`;
+
+const LABEL = { honest: "Honest: both logs", removed: "A removes the encounter", altitude: "A edits its altitude",
+  replay: "A records it twice", forged: "B invents a meeting (key C)", "removed-one-log": "One log only (A's, removed)" };
+let cur = "honest";
+function esc(s) { return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c])); }
+function block(title, ls) { return `<div class="verdict ${ls[0].split(" ")[0]}">${title}: ${ls[0].split(" ")[0]}</div><pre>${ls.map((l) => (/^\s{2,}(?!record \d+: encounter \w+ checked)/.test(l) ? `<span class="bad">${esc(l)}</span>` : esc(l))).join("\n")}</pre>`; }
+function show(name) {
+  cur = name;
+  const c = D.cases.find((x) => x.name === name);
+  document.querySelectorAll("#cases button").forEach((b) => b.classList.toggle("on", b.dataset.k === name));
+  $("note").textContent = c.note || "Nothing changed: the two logs as the aircraft wrote them.";
+  let h = block("A's log", c.A);
+  if (c.B) {
+    h += block("B's log", c.B);
+    h += `<div class="verdict ${c.compare}">Both copies: ${c.compare}${c.met ? "; both keys signed the same record" : ""}</div><pre>${c.rows.map((r) => (r.includes("mismatch") ? `<span class="bad">${esc(r)}</span>` : esc(r))).join("\n")}</pre>`;
+  } else {
+    h += `<pre>One log only: the check judges this log's records and signatures; whether an encounter was removed from it is judged only against the other aircraft's copy.</pre>`;
+  }
+  $("out").innerHTML = h;
+  draw();
+}
+$("cases").innerHTML = D.cases.map((c) => `<button data-k="${c.name}">${LABEL[c.name]}</button>`).join("");
+document.querySelectorAll("#cases button").forEach((b) => b.addEventListener("click", () => show(b.dataset.k)));
+
+const tv = $("top").getContext("2d"), alt = $("alt").getContext("2d");
+let k = 0;
+const xs = [...T.A, ...T.B].map((p) => p[1]), ys = [...T.A, ...T.B].map((p) => p[2]);
+const pad = 40, W = 900, H = 520;
+const sx = (W - 2 * pad) / (Math.max(...xs) - Math.min(...xs) + 40), sy = (H - 2 * pad) / (Math.max(...ys) - Math.min(...ys) + 40), s = Math.min(sx, sy);
+const cx = (Math.max(...xs) + Math.min(...xs)) / 2, cy = (Math.max(...ys) + Math.min(...ys)) / 2;
+const X = (x) => W / 2 + (x - cx) * s, Y = (y) => H / 2 - (y - cy) * s;
+const COL = { A: "#1f5f8b", B: "#8a4fb0" };
+function signedAlts(who) {
+  // the altitude each copy holds for aircraft `who`: one value when the copies agree, two when they do not
+  const c = D.cases.find((x) => x.name === cur);
+  const out = [];
+  for (const copy of ["A", "B"]) {
+    const v = c.alts && c.alts[copy] && c.alts[copy][D.keyids[who]];
+    if (v != null && !out.some((o) => o.v === v)) out.push({ v, copy });
+  }
+  return out;
+}
+function draw() {
+  tv.clearRect(0, 0, W, H);
+  tv.strokeStyle = "#e3e6e8"; tv.lineWidth = 1; tv.font = "11px -apple-system, Arial";
+  tv.fillStyle = "#5c666d";
+  for (let g = -300; g <= 400; g += 100) {
+    tv.beginPath(); tv.moveTo(X(g), 0); tv.lineTo(X(g), H); tv.stroke();
+    tv.beginPath(); tv.moveTo(0, Y(g)); tv.lineTo(W, Y(g)); tv.stroke();
+    tv.fillText(`${g} m`, X(g) + 2, H - 4); tv.fillText(`${g} m`, 2, Y(g) - 2);
+  }
+  tv.fillText("east →", W - 50, H - 16); tv.fillText("north ↑", 60, 14);
+  for (const w of ["A", "B"]) {
+    tv.strokeStyle = COL[w]; tv.lineWidth = 2; tv.globalAlpha = 0.35; tv.beginPath();
+    T[w].forEach((p, i) => (i ? tv.lineTo(X(p[1]), Y(p[2])) : tv.moveTo(X(p[1]), Y(p[2])))); tv.stroke();
+    tv.globalAlpha = 1; tv.beginPath();
+    T[w].slice(0, k + 1).forEach((p, i) => (i ? tv.lineTo(X(p[1]), Y(p[2])) : tv.moveTo(X(p[1]), Y(p[2])))); tv.stroke();
+    tv.fillStyle = COL[w];
+    for (let i = 0; i <= Math.min(k, T[w].length - 1); i += 10) tv.fillRect(X(T[w][i][4]) - 1, Y(T[w][i][5]) - 1, 2, 2);
+    const e = ev[w], ie = Math.round(e.t / D.dt);
+    if (k >= ie) { tv.strokeStyle = COL[w]; tv.lineWidth = 2; tv.strokeRect(X(T[w][ie][1]) - 6, Y(T[w][ie][2]) - 6, 12, 12); }
+    const p = T[w][Math.min(k, T[w].length - 1)];
+    tv.beginPath(); tv.arc(X(p[1]), Y(p[2]), 6, 0, 7); tv.fill();
+    tv.font = "bold 13px -apple-system, Arial"; tv.fillText(`${w} (${D.keyids[w]})  ${p[3].toFixed(1)} m`, X(p[1]) + 9, Y(p[2]) - 8);
+  }
+  const pa = T.A[Math.min(k, N - 1)], pb = T.B[Math.min(k, N - 1)];
+  const dist = Math.hypot(pa[1] - pb[1], pa[2] - pb[2], pa[3] - pb[3]);
+  tv.strokeStyle = dist <= D.range_m ? "#2e7d4f" : "#9aa3a8"; tv.lineWidth = 1; tv.setLineDash([4, 4]);
+  tv.beginPath(); tv.arc(X(pa[1]), Y(pa[2]), D.range_m * s, 0, 7); tv.stroke(); tv.setLineDash([]);
+  if (dist <= D.range_m) { tv.beginPath(); tv.moveTo(X(pa[1]), Y(pa[2])); tv.lineTo(X(pb[1]), Y(pb[2])); tv.stroke(); }
+  tv.font = "12px ui-monospace, Menlo"; tv.fillStyle = "#1d2327";
+  tv.fillText(`distance ${dist.toFixed(1)} m ${dist <= D.range_m ? "(in link range)" : ""}`, 10, 30);
+  // altitude
+  const AW = 900, AH = 170, ap = 34, tmax = (Math.max(T.A.length, T.B.length) - 1) * D.dt;
+  const AX = (t) => ap + (t / tmax) * (AW - ap - 10), AY = (a) => AH - 22 - ((a - 40) / 60) * (AH - 34);
+  alt.clearRect(0, 0, AW, AH); alt.font = "11px -apple-system, Arial"; alt.fillStyle = "#5c666d"; alt.strokeStyle = "#e3e6e8";
+  for (let a = 40; a <= 100; a += 20) { alt.beginPath(); alt.moveTo(ap, AY(a)); alt.lineTo(AW, AY(a)); alt.stroke(); alt.fillText(`${a} m`, 2, AY(a) + 4); }
+  for (let t = 0; t <= tmax; t += 10) alt.fillText(`${t} s`, AX(t) - 8, AH - 6);
+  alt.fillStyle = "rgba(46,125,79,.15)"; alt.fillRect(AX(first * D.dt), 4, AX(Math.max(ev.A.t, ev.B.t)) - AX(first * D.dt), AH - 30);
+  for (const w of ["A", "B"]) {
+    alt.strokeStyle = COL[w]; alt.fillStyle = COL[w]; alt.lineWidth = 1.5; alt.beginPath();
+    T[w].forEach((p, i) => (i ? alt.lineTo(AX(p[0]), AY(p[3])) : alt.moveTo(AX(p[0]), AY(p[3])))); alt.stroke();
+    for (let i = 0; i < T[w].length; i += 10) alt.fillRect(AX(T[w][i][0]) - 1, AY(T[w][i][6]) - 1, 2, 2);
+    const sa = signedAlts(w);
+    for (const o of sa) {
+      const y = AY(Math.min(100, o.v)), txt = sa.length > 1 ? `${w}, in ${o.copy}'s copy: ${o.v} m` : `${w} signed ${o.v} m`;
+      alt.beginPath(); alt.arc(AX(ev[w].t), y, 6, 0, 7); alt.stroke(); alt.fillText(txt, AX(ev[w].t) + 9, y + 4);
+    }
+  }
+  alt.strokeStyle = "#1d2327"; alt.beginPath(); alt.moveTo(AX(k * D.dt), 4); alt.lineTo(AX(k * D.dt), AH - 26); alt.stroke();
+  $("clock").textContent = `t = ${(k * D.dt).toFixed(1)} s`;
+}
+const slider = $("t");
+slider.max = String(N - 1);
+slider.addEventListener("input", () => { k = +slider.value; draw(); });
+let timer = null;
+$("play").addEventListener("click", () => {
+  if (timer) { clearInterval(timer); timer = null; $("play").textContent = "Play"; return; }
+  $("play").textContent = "Pause";
+  timer = setInterval(() => { k = Math.min(N - 1, k + 1); slider.value = k; draw(); if (k >= N - 1) { clearInterval(timer); timer = null; $("play").textContent = "Play"; } }, 40);
+});
+window.demo = { show, seek: (t) => { k = Math.max(0, Math.min(N - 1, Math.round(t / D.dt))); slider.value = k; draw(); }, play: () => $("play").click() };
+show("honest");
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+# Videos and full flight logs are kept outside git (guards/test_demo_files.py refuses them).
+*.webm
+*.mp4
+*.mov
+*.mkv
+*.avi
+*.m4v
+*.ulg
+!**/fixtures/*.ulg

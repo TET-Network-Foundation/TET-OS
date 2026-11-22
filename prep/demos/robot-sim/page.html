@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en" data-lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<title>Simulation bench: simulated machines, each with a signed log</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Style: see DESIGN.md. Contrast (WCAG, measured): light dim/bg 6.4, ok/bg 4.7, ok/paper 5.1, bad/bad-bg 5.5,
+     warn/bad-bg 5.0, warn/warn-bg 5.1, accent/accent-bg 6.9; dark dim/bg 7.1, ok/paper 6.2, bad/bad-bg 4.7,
+     warn/warn-bg 5.7, accent/accent-bg 5.4. Every pair is at least AA (4.5). */
+  :root, [data-theme="light"] { --bg:#f6f4ef; --paper:#ffffff; --ink:#1d1f23; --dim:#55595f; --rule:#c9c6be; --soft:#ece9e2;
+    --accent:#1f4e8c; --accent-bg:#e3ebf5; --ok:#2e7d32; --bad:#b3261e; --bad-bg:#f8e7e5; --warn:#8a5a00; --warn-bg:#f6edd9; }
+  [data-theme="dark"] { --bg:#1b1d21; --paper:#23262b; --ink:#e4e6ea; --dim:#a3a8b0; --rule:#3b3f46; --soft:#2b2e34;
+    --accent:#80adeb; --accent-bg:#26354a; --ok:#5cb86b; --bad:#ee6b61; --bad-bg:#3a2424; --warn:#d9a640; --warn-bg:#3a3222; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5 Charter, "Bitstream Charter", "Iowan Old Style", Georgia, "Hiragino Mincho ProN", "Yu Mincho", serif; }
+  .mono, code, .tel, .log, .statusbar, .cite { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .sans, button, .sub, .cap, .switch span, .vhint { font-family: -apple-system, "Helvetica Neue", "Hiragino Sans", Arial, sans-serif; }
+  [data-lang="en"] .ja, [data-lang="ja"] .en { display:none !important; }
+  .wrap { max-width:1360px; margin:0 auto; padding:0 20px; }
+
+  .mast { border-bottom:2px solid var(--ink); background:var(--paper); }
+  .mast .wrap { display:flex; justify-content:space-between; align-items:baseline; gap:12px; flex-wrap:wrap; padding-top:10px; padding-bottom:8px; }
+  .mast .org { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim); }
+  .mast .org b { color:var(--ink); }
+  .prefs { display:flex; gap:6px; align-items:center; }
+  .statusbar { background:var(--soft); border-bottom:1px solid var(--rule); font-size:11.5px; color:var(--dim); }
+  .statusbar .wrap { display:flex; gap:4px 18px; flex-wrap:wrap; padding-top:5px; padding-bottom:5px; }
+  .statusbar b { color:var(--ink); font-weight:600; }
+
+  header.title .wrap { padding-top:16px; padding-bottom:6px; }
+  h1 { font-size:24px; line-height:1.25; font-weight:600; margin:0 0 6px; max-width:60em; }
+  .lede { margin:0 0 4px; max-width:62em; }
+  .lede.ja { color:var(--dim); }
+  .controls { display:flex; gap:10px 22px; flex-wrap:wrap; margin-top:10px; }
+  .switch { display:flex; gap:6px; flex-wrap:wrap; align-items:center; }
+  .switch span { color:var(--dim); font-size:12px; margin-right:2px; }
+  .story { margin:10px 0 0; max-width:62em; padding-left:10px; border-left:3px solid var(--rule); }
+  .story small { color:var(--dim); }
+  .horizon { display:inline-block; font:600 11px/1.3 -apple-system, "Helvetica Neue", Arial, sans-serif; padding:2px 6px; margin-right:8px; border:1px solid var(--accent); color:var(--accent); background:var(--accent-bg); }
+  .horizon.future { border-color:var(--warn); color:var(--warn); background:var(--warn-bg); }
+  .boxes { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:12px; margin:12px 0 0; max-width:1320px; }
+  .boxes > div { background:var(--paper); border:1px solid var(--rule); border-top:3px solid var(--accent); padding:8px 10px; font-size:14px; }
+  .boxes h3 { margin:0 0 4px; font:600 12px/1.3 -apple-system, "Helvetica Neue", "Hiragino Sans", Arial, sans-serif; letter-spacing:.03em; color:var(--dim); text-transform:uppercase; }
+  .boxes p { margin:0; }
+  @media (max-width: 760px) { .boxes { grid-template-columns:1fr; } }
+
+  main.wrap { display:grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap:16px; padding-top:14px; padding-bottom:24px; }
+  .fig, .panel, .methods { background:var(--paper); border:1px solid var(--rule); padding:12px 14px; min-width:0; }
+  .c7 { grid-column: span 7; } .c5 { grid-column: span 5; } .c4 { grid-column: span 4; } .c12 { grid-column: 1 / -1; }
+  h2 { font-size:17px; font-weight:600; margin:0 0 4px; }
+  h2 .no { color:var(--dim); font-weight:normal; margin-right:4px; }
+  h3 { font-size:13px; font-weight:600; margin:12px 0 4px; letter-spacing:.02em; }
+  .sub { color:var(--dim); font-size:12.5px; margin:0 0 8px; }
+  .cap { font-size:12.5px; color:var(--dim); margin:6px 0 0; }
+  .cap b { color:var(--ink); }
+
+  .view { position:relative; border:1px solid var(--rule); }
+  canvas { width:100%; display:block; background:var(--bg); }
+  .view canvas { aspect-ratio: 1 / 0.72; height:auto; }
+  #c3 { touch-action:none; }
+  [hidden] { display:none !important; }
+  .banner { position:absolute; top:8px; left:8px; background:var(--warn-bg); color:var(--warn); border:1px solid var(--warn); font:600 11px/1 -apple-system, "Helvetica Neue", Arial, sans-serif; letter-spacing:.12em; padding:4px 7px; pointer-events:none; }
+  .vhint { position:absolute; bottom:0; left:0; right:0; color:var(--dim); font-size:11px; padding:3px 8px; background:color-mix(in srgb, var(--paper) 82%, transparent); pointer-events:none; }
+  .viewbar { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-top:8px; }
+  .viewbar .selrec { font-family: ui-monospace, Menlo, monospace; font-size:12px; color:var(--dim); }
+  #strip { margin-top:10px; height:140px; border:1px solid var(--rule); }
+  .tel { font-size:12px; margin-top:8px; display:grid; grid-template-columns: repeat(3, 1fr); border-top:1px solid var(--rule); }
+  .tel div { padding:3px 6px 3px 0; border-bottom:1px solid var(--soft); }
+  .tel b { color:var(--dim); font-weight:normal; display:inline-block; min-width:7.5em; }
+  .events { font-size:12px; color:var(--dim); margin-top:8px; max-height:88px; overflow:auto; }
+
+  .verdict { font:600 15px/1.3 -apple-system, "Helvetica Neue", Arial, sans-serif; margin:6px 0 8px; padding:6px 8px; border:1px solid var(--rule); background:var(--soft); }
+  .verdict.VALID { color:var(--ok); border-color:var(--ok); } .verdict.INVALID { color:var(--bad); border-color:var(--bad); background:var(--bad-bg); }
+  .log { font-size:11.5px; height:360px; overflow:auto; border:1px solid var(--rule); }
+  .loghead, .row { display:grid; grid-template-columns: 44px 1fr 92px; gap:6px; padding:2px 6px; }
+  .loghead { position:sticky; top:0; background:var(--soft); color:var(--dim); border-bottom:1px solid var(--rule); font-size:11px; }
+  .row { border-bottom:1px solid var(--soft); cursor:pointer; }
+  .row.checked .st { color:var(--ok); }
+  .row.refused { background:var(--bad-bg); }
+  .row.refused .st { color:var(--bad); font-weight:bold; }
+  .row .why { grid-column: 2 / 4; color:var(--bad); overflow-wrap:anywhere; }
+  .row.sel { outline:2px solid var(--accent); outline-offset:-2px; background:var(--accent-bg); }
+  .diff { color:var(--warn); }
+  .buttons { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }
+  .msg { color:var(--warn); font-size:12px; min-height:16px; margin-top:6px; }
+
+  button { background:var(--paper); color:var(--ink); border:1px solid var(--rule); border-radius:2px; padding:6px 10px; min-height:34px; font-size:13px; cursor:pointer; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button[aria-pressed="true"] { border-color:var(--accent); background:var(--accent-bg); color:var(--accent); font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; color:var(--dim); border-color:var(--rule); }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .panel ul { margin:4px 0 0 0; padding:0; list-style:none; }
+  .panel li { margin:0 0 7px; padding-left:16px; position:relative; }
+  .panel li::before { content:"–"; position:absolute; left:0; color:var(--dim); }
+  .panel li .ja, .panel li.ja { color:var(--dim); }
+  .tag { display:inline-block; font:600 10.5px/1 -apple-system, "Helvetica Neue", Arial, sans-serif; letter-spacing:.04em; color:var(--warn); border:1px solid var(--warn); padding:2px 4px; margin-right:6px; vertical-align:1px; }
+  .panel .own { margin-top:10px; border-top:1px solid var(--rule); padding-top:6px; }
+  .panel .own li { font-size:13.5px; }
+  .methods ol { margin:4px 0 0 20px; padding:0; }
+  .methods li { margin:0 0 4px; }
+  .cite { font-size:12px; background:var(--soft); border:1px solid var(--rule); padding:6px 8px; overflow-wrap:anywhere; margin:6px 0 0; }
+  footer.wrap { color:var(--dim); font-size:12px; padding-bottom:30px; }
+
+  @media (max-width: 1000px) { .c7, .c5, .c4 { grid-column: 1 / -1; } }
+  @media (max-width: 820px) {
+    .wrap { padding:0 10px; }
+    h1 { font-size:20px; }
+    .log { height:280px; font-size:12.5px; }
+    .cap, .sub { font-size:13px; }
+    button { min-height:40px; padding:8px 11px; }
+    .tel { grid-template-columns: repeat(2, 1fr); }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; scroll-behavior:auto !important; } }
+</style>
+</head>
+<body>
+<div class="mast"><div class="wrap">
+  <div class="org sans"><b>TET</b> · machine notebook · simulation bench</div>
+  <div class="prefs">
+    <button id="lang-en" aria-pressed="true" lang="en">EN</button>
+    <button id="lang-ja" aria-pressed="false" lang="ja">日本語</button>
+    <button id="theme" aria-pressed="false" title="dark or light page">Dark</button>
+  </div>
+</div></div>
+<div class="statusbar" aria-label="run details"><div class="wrap" id="statusbar"></div></div>
+
+<header class="title"><div class="wrap">
+  <h1 class="en">Simulated machines keep signed logs. A second folder checks each.</h1>
+  <h1 class="ja">シミュレーション上の機械が、署名つきのログを残します。別のフォルダがそれぞれを確認します。</h1>
+  <p class="lede en">The check shows which key signed which record, in the order of the log it is given, and that none was taken out of its middle; checked offline. A simulator: nothing here flew or drove.</p>
+  <p class="lede ja">確認でわかるのは、どの鍵がどの記録に署名したか(順序は渡されたログの順序として)、そしてログの途中から記録が抜かれていないことです。オフラインで確認します。シミュレーターです。ここでは何も飛んでおらず、走ってもいません。</p>
+  <div class="controls">
+    <div class="switch" id="vehicles"><span>Machine:</span></div>
+    <div class="switch" id="scenarios"><span>Scenario:</span></div>
+  </div>
+  <p class="story" id="story"></p>
+  <div class="boxes" id="boxes" aria-label="this scenario: why TET fits, what changes with a signed log, how it differs from what exists">
+    <div><h3><span class="en">Why TET fits this</span><span class="ja">TET が合う理由</span></h3><p id="box-fits"></p></div>
+    <div><h3><span class="en">What changes with a signed log</span><span class="ja">署名つきログで変わること</span></h3><p id="box-changes"></p></div>
+    <div><h3><span class="en">How this differs from what exists</span><span class="ja">既存のものとの違い</span></h3><p id="box-differs"></p></div>
+  </div>
+</div></header>
+
+<main class="wrap">
+  <section class="fig c7" aria-labelledby="f1">
+    <h2 id="f1"><span class="no">Fig. 1</span><span id="lefttitle">the simulated robot, live</span></h2>
+    <p class="sub" id="simsub">a two-wheeled simulated robot drives a course; its range sensor is noisy</p>
+    <div class="view">
+      <canvas id="c3" width="800" height="576" tabindex="0" aria-label="3D view of the simulated vehicle and one marker per signed record. Arrow keys turn the camera, plus and minus zoom."></canvas>
+      <canvas id="c" width="800" height="576" hidden aria-label="2D top view of the simulated vehicle and one marker per signed record"></canvas>
+      <div class="banner">SIMULATION</div>
+      <div class="vhint" id="vhint">markers: the records in the checker's copy; red = refused. Drag, wheel or pinch to move the camera; arrow keys and + - when the view has focus.</div>
+    </div>
+    <div class="viewbar">
+      <button id="v-follow" aria-pressed="true">Follow</button>
+      <button id="v-top" aria-pressed="false">Top</button>
+      <button id="v-prev" aria-label="previous record">&#9664; record</button>
+      <button id="v-next" aria-label="next record">record &#9654;</button>
+      <span class="selrec" id="v-sel" aria-live="polite"></span>
+      <button id="v-2d" aria-pressed="false">2D</button>
+    </div>
+    <p class="cap" id="vnote"><b>Fig. 1.</b> Path and vehicle from the simulator's own telemetry; one marker per record in the checker's copy (green = checked; red with a stem in 3D, a red cross in 2D = refused; blue = the record picked in Fig. 3, named under the view). The motion is the simulator's own and simple; the 3D shapes are drawn around it and take no part in it.</p>
+    <canvas id="strip" width="800" height="140" aria-label="the same quantity twice: from the live simulation and from the signed log; a changed copy makes the two lines part"></canvas>
+    <p class="cap" id="f2cap"><b>Fig. 2.</b> The same quantity twice: solid, from the live simulation; dashed, from the signed log as the checker read it. A copy changed in this quantity makes the two lines part.</p>
+    <div class="tel" id="tel"></div>
+    <div class="events" id="events"></div>
+  </section>
+
+  <section class="fig c5" aria-labelledby="f3">
+    <h2 id="f3"><span class="no">Fig. 3</span>the signed log, as the checker sees it</h2>
+    <p class="sub">a copy in a second folder, with no key; each record turns "checked" when <code>notebook.py verify</code> (tet-cli, both signature halves, against the pin) passes it</p>
+    <div class="verdict" id="verdict" role="status">waiting</div>
+    <div class="log" id="log"></div>
+    <div class="buttons"><span id="tries"></span>
+      <button id="b-reset" title="throw the checker's copy away and copy the log again">Reset the copy</button>
+    </div>
+    <div class="msg" id="msg"></div>
+    <p class="cap"><b>Fig. 3.</b> One row per record: number, value, status (● checked, × refused, ▲ the copy differs from the live value). The buttons change only the checker's copy.</p>
+  </section>
+
+  <section class="panel c4" aria-labelledby="p1">
+    <h2 id="p1"><span class="en">What this shows</span><span class="ja">これが示すこと</span></h2>
+    <ul>
+      <li><span class="en">Which key signed which record, in the order of the log it is given.</span><span class="ja">どの鍵がどの記録に署名したか。順序は、渡されたログの順序として。</span></li>
+      <li><span class="en">That no record was taken out of the middle of that log, and that a changed record is refused by its number.</span><span class="ja">ログの途中から記録が抜かれていないこと。書き換えた記録は、番号を名指しして拒否されること。</span></li>
+      <li><span class="en">That a one-time permit was not used twice in this log.</span><span class="ja">一回限りの許可が、このログの中で二度使われていないこと。</span></li>
+      <li><span class="en">Checked offline, in a folder with no key. Every record carries two signatures, Ed25519 and ML-DSA-44; replace either one alone and the record is refused.</span><span class="ja">鍵のないフォルダで、オフラインで確認します。各記録には Ed25519 と ML-DSA-44 の二つの署名があり、どちらか一方だけを差し替えても拒否されます。</span></li>
+      <li><span class="en">The permit sits in the same signed log as the action that uses it, and the check lists what it does not show.</span><span class="ja">許可は、それを使う動作と同じ署名つきログの中にあります。確認は、示さないことも書き出します。</span></li>
+    </ul>
+    <div class="own"><h3 class="sans"><span class="en">The checker's own words</span><span class="ja">確認ツール自身の出力(英語)</span></h3><ul id="shows"></ul></div>
+  </section>
+
+  <section class="panel c4" aria-labelledby="p2">
+    <h2 id="p2"><span class="en">What this does not show, as it stands today</span><span class="ja">これが示さないこと(現時点)</span></h2>
+    <ul>
+      <li><span class="en">It is a simulation: nothing flew or drove, and no real sensor was used.</span><span class="ja">シミュレーションです。何も飛んでおらず走ってもおらず、実際のセンサーも使っていません。</span></li>
+      <li><span class="en">Which machine signed: the check judges which key signed each record; it does not judge which machine held that key.</span><span class="ja">どの機械が署名したか：確認するのは各記録にどの鍵が署名したかで、その鍵をどの機械が持っていたかは判断しません。</span></li>
+      <li><span class="en">When each record was written: the check judges the order of records in the log it is given; it does not judge when each record was written. That the log is complete at its end: not judged.</span><span class="ja">各記録がいつ書かれたか：確認するのは記録の順番で、いつ書かれたかは判断しません。ログが最後までそろっていること：判断しません。</span></li>
+      <li><span class="en">Use of a permit in another log: the permit check judges reuse of a permit within one log; it does not judge use of that permit in another log. Today the vehicle signs its own permits.</span><span class="ja">別のログでの許可の使用：許可の確認は一つのログの中での再使用を判断し、別のログでの使用は判断しません。今は、機械が自分で自分の許可に署名しています。</span></li>
+      <li><span class="en">No public node runs today, and nobody uses this yet.</span><span class="ja">現在、公開ノードは動いておらず、まだ誰も使っていません。</span></li>
+    </ul>
+    <div class="own"><h3 class="sans"><span class="en">For this scenario, the page's list</span><span class="ja">このシナリオについての一覧(英語)</span></h3><ul id="notshown"></ul></div>
+  </section>
+
+  <section class="panel c4" aria-labelledby="p3">
+    <h2 id="p3"><span class="en">Where this is going</span><span class="ja">これから</span></h2>
+    <p class="sub"><span class="en">Each line is planned work, not a promise, and carries no date.</span><span class="ja">どれも計画中の作業で、約束ではなく、日付もありません。</span></p>
+    <ul>
+      <li><span class="tag">設計中 / planned</span><span class="en">Permits signed by the owner, not by the machine itself.</span><span class="ja">機械自身ではなく、持ち主が署名する許可。</span></li>
+      <li><span class="tag">設計中 / planned</span><span class="en">A check another project can run without TET, from a written note of the format.</span><span class="ja">形式を書いた文書だけをもとに、TET なしで他のプロジェクトが実行できる確認。</span></li>
+      <li><span class="tag">設計中 / planned</span><span class="en">A real machine instead of a simulation.</span><span class="ja">シミュレーションではなく、実際の機械。</span></li>
+      <li><span class="tag">設計中 / planned</span><span class="en">Keys held in hardware instead of in a file.</span><span class="ja">ファイルではなく、ハードウェアの中に保持される鍵。</span></li>
+    </ul>
+  </section>
+
+  <section class="methods c12" aria-labelledby="m1">
+    <h2 id="m1"><span class="en">Methods</span><span class="ja">方法</span></h2>
+    <ol class="en">
+      <li>Each simulated vehicle has its own machine notebook (<code>tools/machine-notebook</code>) and a new test key made for this run. The simulators use fixed seeds; the status bar names them.</li>
+      <li>Every step of the simulation becomes one record, signed by <code>tet-cli</code> with both halves (Ed25519 and ML-DSA-44) and linked to the record before it.</li>
+      <li>The checker copies the log into a second folder that holds no key and runs <code>notebook.py verify</code> against a pin of the key kept outside both folders.</li>
+      <li>The buttons change only the checker's copy; the next check says what it finds. Every signature and every signature check goes through <code>notebook.py</code> and <code>tet-cli</code>; the page's "≠ live" mark is a comparison the page makes itself.</li>
+      <li>The page runs on 127.0.0.1 only and loads nothing from anywhere else.</li>
+    </ol>
+    <ol class="ja">
+      <li>シミュレーション上の各機体は、それぞれ専用のマシンノートブック(<code>tools/machine-notebook</code>)と、この実行のために作った新しいテスト鍵を持ちます。シミュレーターは固定のシードを使います。シードは上の状態表示にあります。</li>
+      <li>シミュレーションの1ステップが1つの記録になり、<code>tet-cli</code> が二つの署名(Ed25519 と ML-DSA-44)を付け、前の記録とつなぎます。</li>
+      <li>確認側は、鍵のない別のフォルダにログをコピーし、両方のフォルダの外に置いた鍵のピンに対して <code>notebook.py verify</code> を実行します。</li>
+      <li>ボタンが変えるのは確認側のコピーだけです。次の確認が、見つけたことを報告します。署名と確認はすべて <code>notebook.py</code> と <code>tet-cli</code> を通ります。</li>
+      <li>このページは 127.0.0.1 だけで動き、外部から何も読み込みません。</li>
+    </ol>
+    <h3 class="sans"><span class="en">How to cite this run</span><span class="ja">この実行の引用のしかた</span></h3>
+    <p class="cite" id="cite"></p>
+  </section>
+</main>
+<footer class="wrap sans"><span class="en">Simulated data. Style and wording: prep/demos/robot-sim/DESIGN.md.</span><span class="ja">シミュレーションのデータです。デザインと文言: prep/demos/robot-sim/DESIGN.md。</span></footer>
+
+<script>const META = /*META*/null;</script>
+<script>/*VIEW3D*/</script>
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let S = null, listsDone = "", V = "drone", SC = "near-miss";
+const store = (k, v) => { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } };
+
+// language and theme: page preferences only, kept in this browser
+function setLang(l) {
+  document.documentElement.dataset.lang = l; document.documentElement.lang = l;
+  $("lang-en").setAttribute("aria-pressed", String(l === "en")); $("lang-ja").setAttribute("aria-pressed", String(l === "ja"));
+  store("bench.lang", l);
+}
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  if (window.View3D) View3D.setTheme(t);
+  $("theme").textContent = t === "dark" ? "Light" : "Dark"; $("theme").setAttribute("aria-pressed", String(t === "dark"));
+  store("bench.theme", t); listsDone = "";
+}
+$("lang-en").onclick = () => setLang("en"); $("lang-ja").onclick = () => setLang("ja");
+$("theme").onclick = () => setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+setLang(store("bench.lang") === "ja" ? "ja" : "en");
+setTheme(store("bench.theme") === "dark" ? "dark" : "light");
+
+// the run's details, put into the page by the server that served it
+(function runDetails() {
+  const m = META || {}, seeds = m.seeds ? Object.entries(m.seeds).map(([k, v]) => `${k} ${v}`).join(", ") : "not given";
+  const items = [["run", m.run_id || "not given"], ["seeds", seeds], ["Python", m.python || "?"], ["tet-cli", m.tet_cli || "?"], ["commit", m.commit || "not given"], ["started", m.started || "?"]];
+  $("statusbar").innerHTML = items.map(([k, v]) => `<span>${k} <b>${esc(v)}</b></span>`).join("") + `<span><b>SIMULATED</b></span>`;
+  $("cite").textContent = `TET machine-notebook simulation bench, run ${m.run_id || "?"} (${m.started || "?"}), commit ${m.commit || "?"}, seeds ${seeds}, tet-cli ${m.tet_cli || "?"}. Simulated data: no vehicle flew or drove.`;
+})();
+
+const VIEW = window.View3D ? View3D.mount({ canvas3d: $("c3"), canvas2d: $("c"), strip: $("strip"),
+  want: new URLSearchParams(location.search).get("view") === "2d" ? "2d" : null, onchange: viewbar }) : null;
+function viewbar() {
+  if (!VIEW) return;
+  $("v-follow").setAttribute("aria-pressed", String(VIEW.mode === "follow"));
+  $("v-top").setAttribute("aria-pressed", String(VIEW.mode === "top"));
+  $("v-2d").setAttribute("aria-pressed", String(VIEW.kind === "2d"));
+  $("v-top").disabled = $("v-follow").disabled = VIEW.kind === "2d";
+  $("vhint").textContent = VIEW.kind === "2d" ? "markers: the records in the checker's copy; red cross = refused. 2D top view: the camera does not move."
+    : "markers: the records in the checker's copy; red with a stem = refused. Drag, wheel or pinch to move the camera; arrow keys and + - when the view has focus.";
+  const m = VIEW.P && VIEW.P.markers.find((x) => x.file === VIEW.selected);
+  $("v-sel").textContent = m ? `record ${m.file}: ${m.refused ? "refused" : m.status}` : "";
+  if (S) render();
+}
+
+function switches() {
+  $("vehicles").innerHTML = "<span>Machine:</span>" + [["drone", "simulated drone"], ["robot", "ground robot"], ["coldchain", "cold-chain box"], ["lab", "lab instrument"]].filter(([v]) => S.vehicles.includes(v)).map(([v, l]) =>
+    `<button data-v="${v}" aria-pressed="${v === V}">${l}</button>`).join("");
+  const mine = S.scenarios.filter((x) => x.vehicle === V);
+  if (!mine.some((x) => x.id === SC)) SC = mine[0].id;
+  $("scenarios").innerHTML = "<span>Scenario:</span>" + mine.map((x) => `<button data-s="${x.id}" aria-pressed="${x.id === SC}">${esc(x.title)}</button>`).join("");
+  const sc = mine.find((x) => x.id === SC);
+  const future = sc.horizon && sc.horizon !== "today";
+  $("story").innerHTML = `<span class="horizon${future ? " future" : ""}">${esc(sc.horizon || "today")}</span>${esc(sc.story)} <small>(${esc(sc.case)})</small>`;
+  $("box-fits").textContent = sc.fits || ""; $("box-changes").textContent = sc.changes || ""; $("box-differs").textContent = sc.differs || "";
+  $("tries").innerHTML = "<span class=\"sub\">What someone would try (each button opens once the record it needs is checked): </span>" + sc.buttons.map(([id, label]) =>
+    `<button data-b="${id}" title="changes the checker's copy only">${esc(label)}</button>`).join(" ");
+  document.querySelectorAll("[data-v]").forEach((b) => b.onclick = () => { V = b.dataset.v; S = null; listsDone = ""; $("msg").textContent = ""; });
+  document.querySelectorAll("[data-s]").forEach((b) => b.onclick = () => { SC = b.dataset.s; listsDone = ""; $("msg").textContent = ""; });
+  document.querySelectorAll("[data-b]").forEach((b) => b.onclick = () => { const [n, t] = b.dataset.b.split(":"); act(`/tamper/${n}?v=${V}` + (t ? `&t=${t}` : "")); });
+  return sc;
+}
+
+const MARK = { checked: "●", refused: "×" };
+function render() {
+  const key = V + "/" + SC;
+  let sc = S.scenarios.find((x) => x.id === SC && x.vehicle === V);
+  if (listsDone !== key) sc = switches();
+  if (VIEW) VIEW.update(S);
+  const t = S.live[S.live.length - 1];
+  if (S.vehicle === "drone") {
+    $("lefttitle").textContent = "the simulated drone, live";
+    $("f2cap").innerHTML = "<b>Fig. 2.</b> Altitude, m, against record number: solid, from the live simulation; dashed, from the signed log as the checker read it. A copy changed in this quantity makes the two lines part.";
+    $("simsub").textContent = `a simulated quadcopter flies a survey mission: take-off, four waypoints, return, landing; wind as noise. Step ${S.live.length}, 2 s of flight each (bound ${S.max_steps}, cap ${S.steps_cap})` + (S.running ? "" : " — landed or stopped");
+    if (t) $("tel").innerHTML = [["seq", t.seq], ["phase", t.phase], ["alt, m", t.alt.toFixed(1)], ["x, m", t.x.toFixed(1)], ["y, m", t.y.toFixed(1)],
+      ["wind, m/s", t.wind.toFixed(1)], ["battery, %", t.batt.toFixed(1)], ["geofence", t.fence], ["", ""]].map(([k, v]) => `<div><b>${k}</b> ${esc(v)}</div>`).join("");
+  } else if (S.vehicle === "coldchain") {
+    $("lefttitle").textContent = "the simulated cold-chain box, live";
+    $("f2cap").innerHTML = "<b>Fig. 2.</b> Temperature inside the box, °C, against record number, with the 8 °C limit: solid, from the live simulation; dashed, from the signed log as the checker read it. A copy changed in this quantity makes the two lines part.";
+    $("simsub").textContent = `a simulated refrigerated box on a road journey, depot to hub to receiver, drawn on its route map (km); 15 minutes per record. Record ${S.live.length} (bound ${S.max_steps}, cap ${S.steps_cap})` + (S.running ? "" : " — arrived or stopped");
+    if (t) $("tel").innerHTML = [["seq", t.seq], ["minutes", t.min], ["temperature, °C", t.temp.toFixed(2)], ["door", t.door], ["carrier (on paper)", t.leg],
+      ["x, km", t.x.toFixed(1)], ["y, km", t.y.toFixed(1)], ["battery, %", t.batt.toFixed(1)], ["", ""]].map(([k, v]) => `<div><b>${k}</b> ${esc(v)}</div>`).join("");
+  } else if (S.vehicle === "lab") {
+    $("lefttitle").textContent = "the simulated plate reader, live";
+    $("f2cap").innerHTML = "<b>Fig. 2.</b> Optical density (OD600) of one culture well against record number: solid, from the live simulation; dashed, from the signed log as the checker read it. A copy changed in this quantity makes the two lines part.";
+    $("simsub").textContent = `a simulated plate reader reads one well every 5 minutes for 2 hours; it does not move, so Fig. 1 draws the run along a time axis (one unit = 10 minutes). Record ${S.live.length} (bound ${S.max_steps}, cap ${S.steps_cap})` + (S.running ? "" : " — run finished or stopped");
+    if (t) $("tel").innerHTML = [["seq", t.seq], ["minutes", t.min], ["OD600", t.od600.toFixed(3)], ["incubator, °C", t.temp.toFixed(2)],
+      ["bubble (simulator only, not logged)", t.bubble ? "yes" : "no"], ["", ""]].map(([k, v]) => `<div><b>${k}</b> ${esc(v)}</div>`).join("");
+  } else {
+  $("lefttitle").textContent = "the simulated robot, live";
+  $("f2cap").innerHTML = "<b>Fig. 2.</b> Distance from the start, m, against record number: solid, from the live simulation; dashed, from the signed log as the checker read it. A copy changed in this quantity makes the two lines part.";
+  $("simsub").textContent = `a two-wheeled simulated robot drives a course; its range sensor is noisy. Step ${S.live.length} of ${S.max_steps} (bound ${S.max_steps}, cap ${S.steps_cap}), ${S.step_s} s per step` + (S.running ? "" : " — stopped");
+  if (t) $("tel").innerHTML = [["seq", t.seq], ["x, m", t.x.toFixed(3)], ["y, m", t.y.toFixed(3)], ["heading, °", t.heading.toFixed(1)],
+    ["range measured, m", t.range.toFixed(3)], ["range true, m", t.range_true.toFixed(3)]].map(([k, v]) => `<div><b>${k}</b> ${v}</div>`).join("");
+  }
+  $("events").innerHTML = S.events.slice().reverse().map((e) => `<div>${e.t} ${esc(e.s)}</div>`).join("");
+  const C = S.check, live = Object.fromEntries(S.live.map((l) => [l.seq, l.value]));
+  $("verdict").className = "verdict " + C.verdict;
+  $("verdict").textContent = (C.verdict === "VALID" ? `● VALID: ${C.checked_n} records checked` : C.verdict === "INVALID" ? "× INVALID: the check refuses the log" : C.verdict)
+    + (C.ms ? `  (verify took ${C.ms} ms)` : "") + (S.tampered ? `  — copy changed: ${S.tampered}` : "");
+  const box = $("log"), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 30;
+  let html = `<div class="loghead"><span>no.</span><span>value as signed</span><span>status</span></div>`;
+  html += C.log.map((l) => `<div class="row refused"><span>log</span><span class="why">× ${esc(l)}</span></div>`).join("");
+  html += C.records.map((r) => {
+    const v = r.value == null ? "" : String(r.value), lv = live[r.file];
+    const differs = lv !== undefined && lv !== v;
+    return `<div class="row ${r.status}${VIEW && VIEW.selected === r.file ? " sel" : ""}" data-file="${r.file}" tabindex="0" role="button" aria-label="record ${r.file}, ${r.status}: show it in the view"><span>${r.file}</span><span class="${differs ? "diff" : ""}" title="${differs ? "live: " + esc(lv) : ""}">${esc(v)}${r.permit ? " [permit]" : ""}${differs ? " ▲ ≠ live" : ""}</span><span class="st">${MARK[r.status] || "○"} ${r.status}</span>`
+      + r.reasons.map((w) => `<span class="why">${esc(w)}</span>`).join("") + `</div>`;
+  }).join("");
+  const had = document.activeElement && document.activeElement.closest && document.activeElement.closest("#log .row[data-file]");
+  box.innerHTML = html;
+  if (had) { const back = box.querySelector(`.row[data-file="${had.dataset.file}"]`); if (back) back.focus({ preventScroll: true }); }
+  const firstBad = box.querySelector(".row.refused[data-file]");
+  if (S.tampered && firstBad) firstBad.scrollIntoView({ block: "nearest" }); else if (atBottom) box.scrollTop = box.scrollHeight;
+  const n = C.checked_n, t1 = !!S.tampered;
+  document.querySelectorAll("[data-b]").forEach((b) => {
+    const [name, target] = b.dataset.b.split(":");
+    const need = target ? (S.marks[target] ? S.marks[target] + 1 : Infinity) : (name === "replay" ? (S.permit_seq || Infinity) : 3);
+    b.disabled = t1 || n < need;
+  });
+  $("b-reset").disabled = !t1;
+  if (listsDone !== key) {
+    $("shows").innerHTML = S.shows.map((s) => `<li>${esc(s)}</li>`).join("");
+    $("notshown").innerHTML = sc.not_shown.map((s) => `<li>${esc(s)}</li>`).join("");
+    listsDone = key;
+  }
+}
+
+async function poll() {
+  // V null: ask for the server's first machine, whichever it runs, and take that one.
+  try { const v = V, s = await (await fetch(v ? `/state?v=${v}` : "/state", { cache: "no-store" })).json();
+    if (s.error) { V = null; } else if (v === null || v === V) { if (v === null) V = s.vehicle; S = s; render(); } } catch (e) { $("msg").textContent = "the demo server stopped"; }
+  setTimeout(poll, 300);
+}
+async function act(path) {
+  $("msg").textContent = "";
+  const r = await fetch(path, { method: "POST" }), j = await r.json();
+  if (!r.ok) $("msg").textContent = j.error;
+}
+$("b-reset").onclick = () => act(`/reset?v=${V}`);
+// Clicking a log line (or Enter on it) moves the camera to that record's marker.
+const pickRow = (e) => { const row = e.target.closest(".row[data-file]"); if (row && VIEW) VIEW.focus(Number(row.dataset.file)); };
+$("log").addEventListener("click", pickRow);
+$("log").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickRow(e); } });
+if (VIEW) {
+  $("v-follow").onclick = () => VIEW.setMode("follow");
+  $("v-top").onclick = () => VIEW.setMode("top");
+  $("v-prev").onclick = () => VIEW.step(-1);
+  $("v-next").onclick = () => VIEW.step(1);
+  $("v-2d").onclick = () => VIEW.toggle2d();
+  viewbar();
+} else document.querySelector(".viewbar").hidden = true;
+poll();
+</script>
+</body>
+</html>
