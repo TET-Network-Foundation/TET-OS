@@ -17285,3 +17285,217 @@ fn signature_registry_refuses_each_case_for_its_own_reason() {
     assert_eq!(verify_consent(&rec, &ed_other), consent("signed by a different key than the record"));
     assert_eq!(verify_consent(&rec, &consent_for_tests(&words, &rec_b)), consent("it's for a different record"));
 }
+
+// ---------------------------------------------------------------------------
+// Each refusal of verify_envelope_v1 (tx envelope) and verify_agent_payload fires for its own reason.
+//
+// Every input starts from a correctly signed envelope and changes ONE thing, so every check before
+// the one under test passes; each assertion names the exact refusal. Hybrid signatures are broken
+// one half at a time by swapping in a VALID signature made by the same key over another tx/payload.
+// ---------------------------------------------------------------------------
+
+/// A wallet and a transfer it signs for itself: verifies as-is, so any refusal below is the change.
+fn own_transfer_for_tests() -> (String, String, crate::protocol::TxV1) {
+    let w = crate::wallet::generate_mnemonic_12().unwrap();
+    let (words, me) = (w.mnemonic_12.clone().unwrap(), w.address_hex.to_ascii_lowercase());
+    let tx = crate::protocol::TxV1::Transfer { from_wallet: me.clone(), to_wallet: "ab".repeat(32), amount_micro: 7, fee_bps: 100 };
+    (words, me, tx)
+}
+
+/// A P-256 report in the macos-se format, signed over `challenge` (`verify_macos_se_v1` checks an
+/// ECDSA P-256 signature over SHA-256 of the challenge).
+fn macos_se_report_for_tests(challenge: &[u8]) -> crate::protocol::AttestationV1 {
+    use ring::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING};
+    let rng = ring::rand::SystemRandom::new();
+    let pkcs8 = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, &rng).unwrap();
+    let kp = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_ASN1_SIGNING, pkcs8.as_ref(), &rng).unwrap();
+    let digest = sha2::Sha256::digest(challenge);
+    let sig = kp.sign(&rng, digest.as_slice()).unwrap();
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let report = crate::attestation::MacSecureEnclaveReportV1 {
+        v: 1,
+        pubkey_spki_der_b64: b64.encode(kp.public_key().as_ref()),
+        sig_der_b64: b64.encode(sig.as_ref()),
+    };
+    crate::protocol::AttestationV1 { platform: "macos-se".into(), report_b64: b64.encode(serde_json::to_vec(&report).unwrap()) }
+}
+
+/// Judges that an envelope of another version is refused for its version; does not judge which versions a node accepts.
+#[test]
+fn tx_envelope_of_another_version_is_refused_for_its_version() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let (words, me, tx) = own_transfer_for_tests();
+    let env = signed_env_for_tests(tx, &words, &me);
+    crate::rest::helpers::verify_envelope_v1(&env).expect("the honest envelope verifies");
+    let mut v2 = env.clone();
+    v2.v = 2;
+    assert_eq!(crate::rest::helpers::verify_envelope_v1(&v2), Err("unsupported envelope version".to_string()));
+}
+
+/// Judges that on mainnet, once attestation stubs are allowed, a correctly signed envelope with a
+/// real attestation is refused for the stubs; does not judge any other envelope.
+#[test]
+fn tx_envelope_on_mainnet_with_attestation_stubs_allowed_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::set("TET_MAINNET", "1");
+    let _stub = EnvVarGuard::unset("TET_ATTESTATION_ALLOW_STUB");
+    let (words, me, tx) = own_transfer_for_tests();
+    let mut env = signed_env_for_tests(tx, &words, &me);
+    let challenge = crate::wallet::tx_v1_auth_message_bytes(&env.tx, &env.sig.mldsa_pubkey_b64).unwrap();
+    env.attestation = macos_se_report_for_tests(&challenge);
+    crate::rest::helpers::verify_envelope_v1(&env).expect("signed and attested, on mainnet without stubs, it verifies");
+    let _stub = EnvVarGuard::set("TET_ATTESTATION_ALLOW_STUB", "1");
+    assert_eq!(crate::rest::helpers::verify_envelope_v1(&env), Err("attestation stubs are forbidden on mainnet".to_string()));
+}
+
+/// Both halves of the tx signature are checked, each on its own: a VALID signature by the same key
+/// over another tx, swapped into one half, leaves the other half valid.
+#[test]
+fn tx_envelope_with_one_signature_half_from_another_tx_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let (words, me, tx) = own_transfer_for_tests();
+    let env = signed_env_for_tests(tx.clone(), &words, &me);
+    crate::rest::helpers::verify_envelope_v1(&env).expect("the honest envelope verifies");
+    let crate::protocol::TxV1::Transfer { from_wallet, to_wallet, fee_bps, .. } = tx else { unreachable!() };
+    let other = signed_env_for_tests(crate::protocol::TxV1::Transfer { from_wallet, to_wallet, amount_micro: 8, fee_bps }, &words, &me);
+    assert_eq!(other.sig.mldsa_pubkey_b64, env.sig.mldsa_pubkey_b64, "same key, so only the signature differs");
+    let refusal = Err("invalid signature or missing chain_id/genesis_hash binding".to_string());
+
+    let mut ml = env.clone();
+    ml.sig.mldsa_sig_b64 = other.sig.mldsa_sig_b64.clone();
+    assert_eq!(crate::rest::helpers::verify_envelope_v1(&ml), refusal, "ML-DSA half from another tx");
+
+    let mut ed = env.clone();
+    ed.sig.ed25519_sig_b64 = other.sig.ed25519_sig_b64.clone();
+    assert_eq!(crate::rest::helpers::verify_envelope_v1(&ed), refusal, "Ed25519 half from another tx");
+}
+
+/// When attestation is required, an envelope without one is refused for that reason, whichever of
+/// its two fields is empty. The tx is correctly signed for its own wallet.
+#[test]
+fn tx_envelope_without_a_required_attestation_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let _require = EnvVarGuard::set("TET_REQUIRE_ATTESTATION", "1");
+    let (words, me, tx) = own_transfer_for_tests();
+    let mut env = signed_env_for_tests(tx, &words, &me);
+    let challenge = crate::wallet::tx_v1_auth_message_bytes(&env.tx, &env.sig.mldsa_pubkey_b64).unwrap();
+    env.attestation = macos_se_report_for_tests(&challenge);
+    crate::rest::helpers::verify_envelope_v1(&env).expect("signed and attested, it verifies");
+
+    let mut no_platform = env.clone();
+    no_platform.attestation.platform = String::new();
+    assert_eq!(crate::rest::helpers::verify_envelope_v1(&no_platform), Err("attestation required".to_string()), "no platform");
+    let mut no_report = env.clone();
+    no_report.attestation.report_b64 = String::new();
+    assert_eq!(crate::rest::helpers::verify_envelope_v1(&no_report), Err("attestation required".to_string()), "no report");
+}
+
+/// A required attestation is verified against this tx: a well-formed report, validly signed by its
+/// own key over ANOTHER tx's bytes, is refused. The same report built over this tx verifies (above
+/// and here), so the refusal is the binding to the challenge, not the report's form.
+#[test]
+fn tx_envelope_with_an_attestation_for_another_tx_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let _mainnet = EnvVarGuard::unset("TET_MAINNET");
+    let _require = EnvVarGuard::set("TET_REQUIRE_ATTESTATION", "1");
+    let (words, me, tx) = own_transfer_for_tests();
+    let mut env = signed_env_for_tests(tx, &words, &me);
+    let challenge = crate::wallet::tx_v1_auth_message_bytes(&env.tx, &env.sig.mldsa_pubkey_b64).unwrap();
+    env.attestation = macos_se_report_for_tests(&challenge);
+    crate::rest::helpers::verify_envelope_v1(&env).expect("attested over this tx, it verifies");
+
+    let mut other_challenge = challenge.clone();
+    other_challenge.push(b'x');
+    env.attestation = macos_se_report_for_tests(&other_challenge);
+    assert_eq!(
+        crate::rest::helpers::verify_envelope_v1(&env),
+        Err("invalid attestation: secure enclave signature verification failed".to_string())
+    );
+}
+
+/// Judges that `verify_agent_payload` refuses a signer that is not 64 lower-case hex, before any
+/// signature check. Does not judge the envelope callers.
+#[test]
+fn agent_payload_signer_that_is_not_64_hex_is_refused_for_its_form() {
+    let _g = env_lock();
+    set_test_env_base();
+    let agent = agent_test_wallet();
+    let payload = b"one entry";
+    let sig = crate::agent::sign_agent_payload(&agent.mnemonic, "text/plain", payload).unwrap();
+    crate::agent::verify_agent_payload(&agent.wallet_id, &sig, "text/plain", payload).expect("the honest signature verifies");
+    // 64 characters, not hex; the signature names the same signer, so the signer-match check passes.
+    let not_hex = "zz".repeat(32);
+    let mut named = sig.clone();
+    named.ed25519_pubkey_hex = not_hex.clone();
+    assert_eq!(
+        crate::agent::verify_agent_payload(&not_hex, &named, "text/plain", payload),
+        Err(crate::agent::AgentError::InvalidAgentEd25519)
+    );
+}
+
+/// `verify_agent_payload` refuses a signature whose named signer differs from the one asked for,
+/// even when the signature is valid under the asked-for key: here A really signed, the signature's
+/// own field names B, and A is asked for. The signature is valid under A's key; the refusal
+/// asserted is for the named signer.
+/// Judges `verify_agent_payload` only; does not judge the envelope callers.
+#[test]
+fn agent_payload_signature_naming_another_signer_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let a = agent_test_wallet();
+    let b = agent_test_wallet();
+    let payload = b"one entry";
+    let sig = crate::agent::sign_agent_payload(&a.mnemonic, "text/plain", payload).unwrap();
+    crate::agent::verify_agent_payload(&a.wallet_id, &sig, "text/plain", payload).expect("the honest signature verifies");
+    let mut named_b = sig.clone();
+    named_b.ed25519_pubkey_hex = b.wallet_id.clone();
+    assert_eq!(
+        crate::agent::verify_agent_payload(&a.wallet_id, &named_b, "text/plain", payload),
+        Err(crate::agent::AgentError::SignerMismatch)
+    );
+}
+
+/// Both halves of an agent signature are checked, each on its own, at the function and through the
+/// envelope: a VALID signature by the same key over another payload, swapped into one half.
+#[test]
+fn agent_payload_with_one_signature_half_from_another_payload_is_refused() {
+    let _g = env_lock();
+    set_test_env_base();
+    let agent = agent_test_wallet();
+    let (payload, other_payload) = (b"one entry".as_slice(), b"another entry".as_slice());
+    let sig = crate::agent::sign_agent_payload(&agent.mnemonic, "text/plain", payload).unwrap();
+    let other = crate::agent::sign_agent_payload(&agent.mnemonic, "text/plain", other_payload).unwrap();
+    crate::agent::verify_agent_payload(&agent.wallet_id, &sig, "text/plain", payload).expect("the honest signature verifies");
+    let msg = crate::agent::agent_payload_auth_message_bytes("text/plain", payload);
+
+    let mut ml = sig.clone();
+    ml.mldsa_sig_b64 = other.mldsa_sig_b64.clone();
+    let ml_refusal = crate::wallet::verify_mldsa44_b64(&ml.mldsa_pubkey_b64, &ml.mldsa_sig_b64, &msg).unwrap_err();
+    assert_eq!(crate::agent::verify_agent_payload(&agent.wallet_id, &ml, "text/plain", payload), Err(crate::agent::AgentError::Mldsa44(ml_refusal.clone())));
+
+    let mut ed = sig.clone();
+    ed.ed25519_sig_b64 = other.ed25519_sig_b64.clone();
+    let ed_refusal = crate::quantum_shield::verify_ed25519(&agent.wallet_id, &ed.ed25519_sig_b64, &msg).unwrap_err();
+    assert_eq!(crate::agent::verify_agent_payload(&agent.wallet_id, &ed, "text/plain", payload), Err(crate::agent::AgentError::Ed25519(format!("{ed_refusal:?}"))));
+
+    // Through the envelope.
+    let env = crate::agent::sign_agent_payload_envelope(&agent.mnemonic, "text/plain", payload).unwrap();
+    let other_env = crate::agent::sign_agent_payload_envelope(&agent.mnemonic, "text/plain", other_payload).unwrap();
+    env.verify().expect("the honest envelope verifies");
+    let swap = |prefix: &str| {
+        let mut e = env.clone();
+        let from = other_env.signatures.iter().find(|s| s.keyid.starts_with(prefix)).unwrap().sig.clone();
+        e.signatures.iter_mut().find(|s| s.keyid.starts_with(prefix)).unwrap().sig = from;
+        e
+    };
+    assert_eq!(swap("tet-mldsa44:").verify(), Err(crate::agent::AgentEnvelopeError::Agent(crate::agent::AgentError::Mldsa44(ml_refusal))));
+    assert_eq!(swap("tet-ed25519:").verify(), Err(crate::agent::AgentEnvelopeError::Agent(crate::agent::AgentError::Ed25519(format!("{ed_refusal:?}")))));
+}
