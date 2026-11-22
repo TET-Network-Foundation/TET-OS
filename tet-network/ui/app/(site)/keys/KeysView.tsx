@@ -141,12 +141,12 @@ export default function KeysView() {
                 <Figure
                   src="/site/keys/phone-2-inside.svg"
                   alt="A generic phone with a secure chip inside; the key is locked in the chip, and an arrow leaving the phone is crossed out."
-                  caption="2. You unlock with the phone's own lock. The key stays inside the phone's secure hardware; it is never copied out."
+                  caption="2. You unlock with the phone's own lock. In this idea, the key would stay inside the phone's secure hardware and never be copied out."
                 />
                 <Figure
                   src="/site/keys/phone-3-answer.svg"
                   alt="A generic phone sends an answer; below it, the site sees a key with a check mark, and a person crossed out."
-                  caption="3. Only the answer leaves the phone. The site sees that this key answered, not your name."
+                  caption="3. In this idea, only the answer would leave the phone. The site would see that this key answered, not your name."
                 />
               </div>
             </div>

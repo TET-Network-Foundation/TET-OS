@@ -27,8 +27,8 @@ export const JA: Record<string, string> = {
   "This is a real run of TET's command-line tool. It checks a machine's signed record, then a copy where one reading was changed. The original passes; the edited copy is refused.":
     "これは TET のコマンドラインツールを実際に動かした出力です。機械が署名した記録を確かめ、次に測定値を一つ変えたコピーを確かめます。元の記録は通り、変えたコピーは断られます。",
   Measured: "計測した数字",
-  "A few numbers, each measured and each with where it comes from. A zero-knowledge receipt is the proof TET's anonymous features attach; it is large, and making one takes time.":
-    "いくつかの数字です。どれも計測したもので、出どころを書いています。ゼロ知識レシートは、TET の匿名の機能が付ける証明です。大きく、作るのに時間がかかります。",
+  "A few numbers, each measured and each with where it comes from. A zero-knowledge receipt is the proof that TET's privacy prototypes attach; it is large, and making one takes time.":
+    "いくつかの数字です。どれも計測したもので、出どころを書いています。ゼロ知識レシートは、TET のプライバシーの試作が付ける証明です。大きく、作るのに時間がかかります。",
   "Why this matters later": "これから必要になる理由",
   "Three reasons we think keys with limits will be needed. They are our reasoning, not a promise, and each links to what it rests on.":
     "制限つきの鍵が必要になると私たちが考える三つの理由です。私たちの推論であって約束ではありません。それぞれ、根拠にしているものへのリンクがあります。",
@@ -80,14 +80,14 @@ export const JA: Record<string, string> = {
     "多くのブロックチェーン",
   "Purpose":
     "目的",
-  "A shared record of accounts and transfers that many independent nodes agree on.":
-    "独立した多くのノードが合意する、口座と送金の共有記録。",
+  "A shared record of entries that many independent nodes agree on.":
+    "独立した多くのノードが合意する、記録の共有台帳。",
   "A shared record of keys: what each key may do, how many times, and before which block it signed.":
     "鍵の共有記録。それぞれの鍵に何が許され、何回使えて、どのブロックより前に署名したか。",
   "Token":
     "トークン",
-  "Most have one. It rewards the nodes that keep the record.":
-    "多くは持っています。記録を保つノードへの報酬になります。",
+  "Most have one. It goes to the nodes that keep the record.":
+    "多くは持っています。記録を保つノードに渡ります。",
   "TET has none.":
     "TET にはありません。",
   "Signatures":
@@ -193,8 +193,8 @@ export const JA: Record<string, string> = {
   "What each one is, and the TET part it is near. Near is not the same as solved.": "それぞれが何か、そして TET のどの部分に近いか。近いことは、解決したことと同じではありません。",
   "Near in TET": "TET で近い部分",
   "OpenAI Agentic Commerce, delegated token spec": "OpenAI Agentic Commerce の委任トークン仕様",
-  "Part of OpenAI's Agentic Commerce Protocol: an agent hands a merchant a token marked one_time, tied to one checkout session and one merchant, with an expiry time. The service that holds the token checks those limits.":
-    "OpenAI の Agentic Commerce Protocol の一部です。エージェントは、one_time と記されたトークンを店に渡します。トークンは 1 つのチェックアウトと 1 つの店に結びつき、期限があります。その制限を確かめるのは、トークンを預かるサービスです。",
+  "Part of OpenAI's Agentic Commerce Protocol: an agent hands a service a token marked one_time, tied to one session and one service, with an expiry time. The service that holds the token checks those limits.":
+    "OpenAI の Agentic Commerce Protocol の一部です。エージェントは、one_time と記されたトークンをサービスに渡します。トークンは 1 つのセッションと 1 つのサービスに結びつき、期限があります。その制限を確かめるのは、トークンを預かるサービスです。",
   "IETF draft-singla-agent-identity-protocol-02": "IETF draft-singla-agent-identity-protocol-02",
   "An individual Internet-Draft, work in progress and not a standard: agent identities from Ed25519 keys, delegation tokens with a scope and an expiry, and a replay check by the site that receives them. A newer version, -03, has replaced it.":
     "個人が出した Internet-Draft で、作業中の文書であり標準ではありません。Ed25519 の鍵から作るエージェントの ID、範囲と期限のある委任トークン、そしてそれを受け取るサイトによる使い回しのチェックを定めています。今は新しい版の -03 に置き換わっています。",

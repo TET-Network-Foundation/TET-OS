@@ -4,7 +4,7 @@ import type { Evidence, Feature, Section } from "../types";
 export const SECTION: Section = {
   href: "/services",
   title: "Everyday services",
-  sentence: "Bookings, deliveries and reviews that rest on signed records instead of trust in one platform.",
+  sentence: "Bookings, deliveries and reviews that would rest on signed records instead of trust in one platform.",
 };
 
 /** All three run on /market, a prototype on branch ui/market (no PR yet). Its own Shows / Does not show are the basis. */
@@ -25,7 +25,7 @@ export const FEATURES: Feature[] = [
       "Their record at any other shop: there they use another pseudonym.",
       "That they did not start over: a person can drop a pseudonym with no-shows and start a new one, which looks like someone new.",
       "That the shop marked \"did not come\" fairly: these are the shop's own records.",
-      "How anyone settles up: that happens outside TET.",
+      "Anything beyond the signed records: that stays outside TET.",
     ],
     link: TRY,
   },
@@ -47,7 +47,7 @@ export const FEATURES: Feature[] = [
       "What is inside the parcel: the contents line is what the sender wrote.",
       "Who holds each key.",
       "That nobody with a copy of the courier's key used the permit somewhere else: only this record keeper's list is checked.",
-      "How anyone settles up: that happens outside TET.",
+      "Anything beyond the signed records: that stays outside TET.",
     ],
     link: TRY,
   },
@@ -64,7 +64,7 @@ export const FEATURES: Feature[] = [
       "Each receipt carries one review at most.",
     ],
     doesNot: [
-      "That the buyer settled up: that happens outside TET, and the receipt says only that the shop issued it.",
+      "What passed between the buyer and the shop beyond the signed records: that stays outside TET, and the receipt says only that the shop issued it.",
       "That the shop did not give receipts to friends.",
       "That a review is true, or who wrote it.",
     ],

@@ -18,6 +18,6 @@ export const CHANGES: Change[] = [
   { pr: 166, merged: "2026-11-08", summary: "The machine log says plainly that it cannot yet put its fingerprint on the chain by itself." },
   { pr: 156, merged: "2026-11-08", summary: "A machine's log works against a real node on the same computer." },
   { pr: 155, merged: "2026-11-08", summary: "A device keeps its own signed log (a prototype)." },
-  { pr: 148, merged: "2026-10-15", summary: "Mark a file as genuine and anchor it on the chain without sending the file." },
+  { pr: 148, merged: "2026-10-15", summary: "Record a file's fingerprint on a local test chain without sending the file (prototype)." },
   { pr: 143, merged: "2026-10-14", summary: "A limit on how many requests one address can send to a node." },
 ];

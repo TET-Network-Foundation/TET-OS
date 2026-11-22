@@ -11,8 +11,8 @@ export const JA: Record<string, string> = {
   "A key beside an open notebook under a magnifying glass: an idea being studied, not a thing that runs.":
     "開いたノートと虫めがね、その横に鍵。調べているアイデアで、動いているものではありません。",
   "Keys that sign once": "一度だけ署名できる鍵",
-  "Today, when TET allows something only once, a second use can still be made, and whoever keeps the record refuses it. A one-shot key would make the second signature impossible to make.":
-    "今の TET では、一度だけ許されたことでも二度目を行うことはでき、記録を持つ側がそれを拒否します。ワンショット鍵なら、二度目の署名はそもそも作れません。",
+  "Today, when TET allows something only once, a second use can still be made, and whoever keeps the record refuses it. A one-shot key is meant to make a second signature impossible, but only if its setup can be trusted.":
+    "今の TET では、一度だけ許されたことでも二度目を行うことはでき、記録を持つ側がそれを拒否します。ワンショット鍵は二度目の署名を作れなくすることを目指しますが、それが成り立つのは、そのセットアップを信頼できる場合だけです。",
   "Top: an ordinary key signs twice and a record book crosses out the second signature. Bottom: a one-shot key signs once and is used up, so there is no second signature.":
     "上：普通の鍵が二回署名し、記録帳が二つ目の署名に×を付けます。下：ワンショット鍵は一回署名すると使い切られ、二つ目の署名はありません。",
   "Top: today, a second use is caught by whoever keeps the record. Bottom: a one-shot key cannot sign a second time.":
@@ -43,15 +43,15 @@ export const JA: Record<string, string> = {
     "論文の第3節から第6節の証明と付録は、一行ずつは読んでいません。",
   "That no scheme with a transparent setup exists. The note searched; it did not survey the field, and a scheme it missed may exist.":
     "透明なセットアップを持つ方式が存在しないこと。研究ノートは検索しましたが、分野を網羅的に調べたわけではなく、見落とした方式があるかもしれません。",
-  "Try the idea on a sample wallet": "サンプルのウォレットで試す",
-  "A concept page lets you hand over notes from sample keys that each work once. It is a model, not a key.":
-    "構想ページでは、一度ずつしか使えないサンプルの鍵からメモを渡してみられます。これは模型で、鍵ではありません。",
-  "The sample wallet after two hand-overs: two keys are struck through and marked Used, and the other sample person holds two notes.":
-    "二回渡した後のサンプルのウォレット。二つの鍵に取り消し線と「使用済み」が付き、相手側のサンプルの人は二つのメモを持っています。",
+  "Try the idea on a sample key set": "サンプルの鍵セットで試す",
+  "A concept page lets you hand over messages signed by sample keys that each work once. It is a model, not a key.":
+    "構想ページでは、それぞれ一度しか使えないサンプルの鍵で署名したメッセージを渡してみられます。これは模型で、鍵ではありません。",
+  "The sample key set after two hand-overs: two keys are struck through and marked Used, and the other sample person holds two signed messages.":
+    "二回渡した後のサンプルの鍵セット。二つの鍵に取り消し線と「使用済み」が付き、相手側のサンプルの人は署名されたメッセージを二つ持っています。",
   "The /future concept page, light theme. Screenshot from its pull request.":
     "/future の構想ページ（ライトテーマ）。プルリクエストのスクリーンショットです。",
-  "The same sample wallet on a phone, dark theme, after a note was handed over once.":
-    "同じサンプルのウォレットをスマートフォンで、ダークテーマで表示したもの。メモを一回渡した後です。",
+  "The same sample key set on a phone, dark theme, after one signed message was handed over.":
+    "同じサンプルの鍵セットをスマートフォンで、ダークテーマで表示したもの。署名したメッセージを一回渡した後です。",
   "The same page on a phone, dark theme.": "同じページをスマートフォンで（ダークテーマ）。",
   "Signatures": "署名",
   "Every TET signature today is two signatures made together, Ed25519 and ML-DSA-44. A second post-quantum one is an idea, waiting for the FIPS 206 standard.":
@@ -101,8 +101,8 @@ export const JA: Record<string, string> = {
   "arXiv 2411.00529": "arXiv 2411.00529",
 
   // Features
-  "A research note on one-shot signatures: a quantum key that can sign one message and is then used up. Today every \"once\" in TET is caught afterwards by whoever keeps the record; a one-shot key would make the second signature impossible to make.":
-    "ワンショット署名についての研究ノートです。ワンショット署名とは、一つのメッセージに署名すると使い切られる量子の鍵です。今の TET の「一度だけ」は、どれも記録を持つ側が後から見つけるものです。ワンショット鍵なら、二度目の署名はそもそも作れません。",
+  "A research note on one-shot signatures: a quantum key that can sign one message and is then used up. Today every \"once\" in TET is caught afterwards by whoever keeps the record; a one-shot key is meant to make a second signature impossible, but only if its setup can be trusted.":
+    "ワンショット署名についての研究ノートです。ワンショット署名とは、一つのメッセージに署名すると使い切られる量子の鍵です。今の TET の「一度だけ」は、どれも記録を持つ側が後から見つけるものです。ワンショット鍵は二度目の署名を作れなくすることを目指しますが、それが成り立つのは、そのセットアップを信頼できる場合だけです。",
   "Where TET already limits a permission to one use, and who catches a second use today.":
     "TET がすでに許可を一回に限っている場所と、今は誰が二度目の使用を見つけるか。",
   "What the papers that were read prove, and under which assumptions.": "読んだ論文が何を、どの仮定のもとで証明しているか。",
@@ -112,15 +112,15 @@ export const JA: Record<string, string> = {
     "ワンショット鍵が今作れる、または使えること。TET で量子的なものは何も動いていません。",
   "That TET will adopt them. Nothing here is proposed or planned.": "TET がそれを採用すること。ここでは何も提案も予定もしていません。",
   "The proofs in the papers. Those were not read line by line.": "論文の証明。一行ずつは読んでいません。",
-  "A sample wallet of one-time keys": "一度だけ使える鍵のサンプルウォレット",
-  "A concept page where you can hand over notes from a sample wallet whose keys each work once. It is a model on an ordinary computer, not a key.":
-    "鍵がそれぞれ一度だけ使えるサンプルのウォレットから、メモを渡してみられる構想ページです。普通のコンピューター上の模型で、鍵ではありません。",
-  "What the idea would change: a used key refuses a second hand-over.": "このアイデアで変わること：使った鍵は二度目の受け渡しを拒みます。",
+  "A sample set of one-time keys": "一度だけ使える鍵のサンプルセット",
+  "A concept page where you can hand over messages signed by a sample key set whose keys each work once. It is a model on an ordinary computer, not a key.":
+    "鍵がそれぞれ一度だけ使えるサンプルの鍵セットで署名したメッセージを、渡してみられる構想ページです。普通のコンピューター上の模型で、鍵ではありません。",
+  "What the idea would change: a used sample key refuses a second hand-over.": "このアイデアで変わること：使ったサンプルの鍵は二度目の受け渡しを拒みます。",
   "What it would not change, in the page's own Shows and Does not show.":
     "変わらないこと。ページ自身の「示すもの」「示さないもの」に書いてあります。",
   "A real one-shot key. A copy of this model could be used twice.": "本物のワンショット鍵。この模型は、写せば二回使えてしまいます。",
   "Anything real: no request leaves the page, and nothing is stored.": "本物の何か。ページから通信は出ず、何も保存されません。",
-  "Open the sample wallet": "サンプルのウォレットを開く",
+  "Open the sample key set": "サンプルの鍵セットを開く",
   "An idea for a small model with a few simulated qubits: it would show why a copied simulation can sign twice, and why a real one-shot key could not.":
     "いくつかの量子ビットをシミュレートする小さな模型のアイデアです。写したシミュレーションはなぜ二回署名できてしまうのか、本物のワンショット鍵はなぜできないのかを見せます。",
   "What the model is meant to teach: a simulation can be copied, so its key can sign twice; a real one-shot key cannot be copied.":

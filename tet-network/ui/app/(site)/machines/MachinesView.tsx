@@ -13,7 +13,7 @@ export default function MachinesView() {
   const { t } = useSite();
   return (
     <>
-      <Notice text="Nothing here runs on a server today. Every check on this page runs on your own computer, and each card's Run it button runs it now." />
+      <Notice text="Nothing here runs on a server today. Every check on this page runs on your own computer, and a card's Run it button, where it has one, runs it now." />
       <Hero
         title={SECTION.title}
         sentence={SECTION.sentence}

@@ -117,7 +117,7 @@ const PINNED = {
     lines: [
       /^\[step\] Test key created/,
       /^\[step\] Record 1 signed\. Its fingerprint: [0-9a-f]{64}$/,
-      /^\[step\] On a real node/,
+      /^\[step\] On a node this fingerprint would be stamped; no public node runs today\. This page sends it nowhere\.$/,
       /^\[step\] Changed copy's fingerprint: [0-9a-f]{64}$/,
       /^\[refused\] Log checked: INVALID\. record 1: signature: the content differs from what was signed \(signed \d+ bytes, given \d+\); record 1: chain\.txt: hash differs from the record$/,
     ],

@@ -17,6 +17,6 @@ export const JA: Record<string, string> = {
   "The machine log says plainly that it cannot yet put its fingerprint on the chain by itself.": "機械のログが、まだ自分ではチェーンに指紋を残せないことをはっきり書くようになりました。",
   "A machine's log works against a real node on the same computer.": "機械のログが、同じパソコン上の本物のノードで動くようになりました。",
   "A device keeps its own signed log (a prototype).": "装置が自分で署名したログを持てるようになりました（試作）。",
-  "Mark a file as genuine and anchor it on the chain without sending the file.": "ファイルを送らずに、本物の印を付けてチェーンに記録できるようになりました。",
+  "Record a file's fingerprint on a local test chain without sending the file (prototype).": "ファイルを送らずに、その指紋をローカルのテスト用チェーンに記録できるようになりました（試作）。",
   "A limit on how many requests one address can send to a node.": "一つのアドレスがノードに送れるリクエストの数に上限ができました。",
 };

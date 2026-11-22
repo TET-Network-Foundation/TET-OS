@@ -60,7 +60,7 @@ export const RUNS: Record<string, Run> = {
   },
 
   "machine-log-check": {
-    shows: ["A record changed after it was signed is caught, and so is a record taken out."],
+    shows: ["A record changed after it was signed is caught, and so is a record taken from the middle of the log."],
     doesNot: ["That the readings are true.", "That the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it.", "Which record was the original, when two copies of a log disagree."],
     async run({ t, log, c }) {
       const key = await makeTestKey();
@@ -100,7 +100,7 @@ export const RUNS: Record<string, Run> = {
       const nb = newNotebook(key, RUN_CHAIN);
       await addRecord(nb, { value: 21, unit: "celsius" }, c);
       await log(t("Record 1 signed. Its fingerprint: {hash}", { hash: nb.hashes[0] }));
-      await log(t("On a real node this fingerprint would be stamped. This page sends it nowhere."));
+      await log(t("On a node this fingerprint would be stamped; no public node runs today. This page sends it nowhere."));
       const changed = new Map(nb.files);
       const body = new TextDecoder().decode(changed.get("records/1.json")!).replace('"value":21', '"value":27');
       changed.set("records/1.json", enc.encode(body));
@@ -160,7 +160,7 @@ export const RUNS: Record<string, Run> = {
         const claim = await addRecord(nb, { value: "send-weekly-report", unit: "action" }, c, pid);
         if (claim.ok) {
           done++;
-          await log(t("Claim written to the log as record {seq}. The agent acts: report sent (counted, nothing is sent).", { seq: claim.seq }), "ok");
+          await log(t("Claim written to the log as record {seq}. The agent acts: the report is counted, not sent.", { seq: claim.seq }), "ok");
         } else await log(t("Claim refused, so the agent does nothing: {why}", { why: claim.why.join("; ") }), "refused");
       }
       await log(t("Actions taken: {n}.", { n: done }), done === 1 ? "ok" : "refused");
@@ -246,7 +246,7 @@ export const RUNS: Record<string, Run> = {
 /** Features with nothing in the page to run, and why. Shown on the card instead of the button. */
 export const NO_RUN: Record<string, string> = {
   "sign-in-as-member": "Nothing to run: an idea, and no sign-in code uses the membership proof.",
-  "key-on-device": "Nothing to run: an idea, and no code keeps a key in a phone's secure hardware.",
+  "key-on-device": "Nothing to run: an idea, and no code keeps a key in a phone's dedicated key hardware.",
   "agents-control": "Nothing to run here yet: its code is in an open pull request, not on main.",
   "once-in-the-world": "Nothing to run: an idea with an open question, not built.",
   "agent-permit-demo": "Run it in the demo below this card.",
