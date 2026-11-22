@@ -205,6 +205,9 @@ const BANNED = [
   [/\b(?:compan(?:y|ies)|teams?|customers?|pricing)\b|会社|企業|チーム|顧客/i, "company / team / customers / pricing"],
   [MONEY, "money wording"],
   [MONEY_WORDS, "money words"],
+  // The site's own money and shop words, taken out of its text: rewards, merchants and checkouts,
+  // transfers, wallets, and in Japanese 報酬, 送金, 口座 (accounts) and ウォレット. (The pattern lists of try_money_guard.mjs are shared with /try.)
+  [/\b(?:rewards?|rewarded|merchants?|checkouts?|transfers?|wallets?)\b|報酬|送金|口座|ウォレット/i, "site money words"],
   [/\bfirst\b|世界初|業界初|初の/i, "\"first\""],
   [/testimonial|お客様の声|利用者の声|[“"「][^”"」]{8,}[”"」]\s*[—–-]{1,2}\s*[A-Z][a-z]+/i, "a testimonial or a quoted user"],
   [/\b(?:soon|coming soon|next (?:week|month|quarter|year)|later this year|by (?:the )?(?:end of )?20\d\d|in 20[2-9]\d|(?:Q[1-4]|H[12]) 20\d\d)\b|まもなく|近日|来年|来月|今年中|年内|20[2-9]\d年(?:に|まで)/i, "a promised date"],
@@ -242,7 +245,7 @@ await check(`W1 no company/team/customers/pricing, money, testimonial or promise
   assert.deepEqual(bad, []);
 });
 await check("W control: each kind of banned wording is caught, in English and Japanese", () => {
-  for (const s of ["The first chain for machines.", "世界初の仕組み", "Built by a small team.", "Our customers love it.", "See pricing.", "Earn TET by posting.", "Pay with TET.", "“It changed my life,” — Maria", "Coming soon.", "Ships in 2027.", "会社について", "お金", "まもなく公開"]) {
+  for (const s of ["The first chain for machines.", "世界初の仕組み", "Built by a small team.", "Our customers love it.", "See pricing.", "Earn TET by posting.", "Pay with TET.", "“It changed my life,” — Maria", "Coming soon.", "Ships in 2027.", "会社について", "お金", "まもなく公開", "It rewards the nodes that keep the record.", "a merchant's checkout", "accounts and transfers", "a sample wallet", "ノードへの報酬", "口座と送金", "サンプルのウォレット"]) {
     assert.ok(wordingProblems([["x", s]]).length > 0, s);
   }
   assert.deepEqual(wordingProblems([["x", "Keys for machines and agents: what each key may do, and how many times."]]), []);

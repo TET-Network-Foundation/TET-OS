@@ -1,31 +1,31 @@
 /** Japanese for the services section's English strings (features, page text). EN is the key. */
 export const JA: Record<string, string> = {
   "Everyday services": "身近なサービス",
-  "Bookings, deliveries and reviews that rest on signed records instead of trust in one platform.":
-    "予約、配達、レビューを、一つのプラットフォームへの信頼ではなく、署名された記録で支えます。",
+  "Bookings, deliveries and reviews that would rest on signed records instead of trust in one platform.":
+    "予約、配達、レビューを、一つのプラットフォームへの信頼ではなく、署名された記録で支えるという構想です。",
 
   // page
   "Nothing on this page runs for anyone today. All three services are one prototype, /market, that runs only on your own computer, with sample keys.":
     "このページのものは、今日まだ誰にも動いていません。3つのサービスはどれも1つの試作品 /market で、サンプルの鍵を使い、あなた自身のパソコンの中だけで動きます。",
   "A calendar, a parcel and a review, each joined to one check mark: each rests on a signed record.":
     "カレンダー、荷物、レビューが、それぞれ1つのチェックマークにつながっています。どれも署名された記録に支えられています。",
-  "Settling up stays outside TET": "精算はTETの外で",
-  "No record here carries an amount. The records say which key signed what, and settling up happens outside TET (cash, bank, …).":
-    "ここの記録には金額が一切入りません。記録が示すのはどの鍵が何に署名したかで、精算はTETの外で行われます（現金、銀行振込など）。",
-  "Settling up happens outside TET (cash, bank, …).": "精算はTETの外で行われます（現金、銀行振込など）。",
+  "What stays outside TET": "TETの外にあるもの",
+  "The records here say only which key signed what. Anything beyond the signed records stays outside TET.":
+    "ここの記録が示すのは、どの鍵が何に署名したかだけです。署名された記録以外のことは、TETの範囲外です。",
+  "Anything beyond the signed records stays outside TET.": "署名された記録以外のことは、TETの範囲外です。",
 
   // booking
   Booking: "予約",
   "Booking with a different name at each shop": "お店ごとに別の名前で予約",
-  "Your device makes a different key for each shop you book with. Two shops cannot match those keys to each other.":
-    "あなたの端末は、予約するお店ごとに別の鍵を作ります。2つのお店は、その鍵を互いに突き合わせられません。",
+  "Your device makes a different key for each shop you book with. Whether two shops can link you by other details: not judged.":
+    "あなたの端末は、予約するお店ごとに別の鍵を作ります。鍵以外の手がかりで2つのお店があなたを結びつけられるかどうかは、判定していません。",
   "A phone holds two different keys, one for each of two shops. Each shop keeps its own record for its key; the two keys cannot be matched.":
     "スマートフォンが、2つのお店それぞれのための別々の鍵を持っています。お店はどちらも自分の鍵の記録だけを持ち、2つの鍵は突き合わせられません。",
   "1 Your device makes a different key for each shop. 2 Each shop keeps its own signed record for that key: came, or did not come. 3 The two keys cannot be matched to each other.":
     "1 あなたの端末が、お店ごとに別の鍵を作ります。2 お店はそれぞれ、その鍵について自分で署名した記録（来た、来なかった）を持ちます。3 2つの鍵は互いに突き合わせられません。",
-  "Shops cannot compare notes": "お店どうしで照らし合わせられない",
-  "Each shop gets a different key from you, so two shops cannot match their records to each other.":
-    "お店ごとに受け取る鍵が違うので、2つのお店は記録を互いに突き合わせられません。",
+  "Different key for each shop": "お店ごとに別の鍵",
+  "Each shop gets a different key from you. Whether shops can match records by other details: not judged.":
+    "お店ごとに受け取る鍵が違います。鍵以外の手がかりで記録を突き合わせられるかどうかは、判定していません。",
   "A key, not your name": "名前ではなく鍵",
   "A booking names a key, a shop and a time. Your name and number are not in it.":
     "予約に書かれるのは、鍵とお店と時間です。あなたの名前や電話番号は入りません。",
@@ -42,14 +42,14 @@ export const JA: Record<string, string> = {
     "その人がやり直していないこと。来なかった記録のある仮名を捨てて新しい仮名を始めることができ、新しい仮名は別の人に見えます。",
   "That the shop marked \"did not come\" fairly: these are the shop's own records.":
     "お店が「来なかった」を公正に付けたこと。これはお店自身の記録です。",
-  "How anyone settles up: that happens outside TET.": "誰がどう精算したか。精算はTETの外で行われます。",
+  "Anything beyond the signed records: that stays outside TET.": "署名された記録以外のこと。それはTETの範囲外です。",
   "Try it on /market": "/market で試す",
 
   // delivery
   Delivery: "配達",
   "Delivery handover records": "配達の受け渡し記録",
-  "A parcel's journey ends with one record that both the courier and the receiver signed, for the parcel the sender signed.":
-    "荷物の旅は、送り主が署名した荷物について、配達員と受取人の両方が署名した1つの記録で終わります。",
+  "A parcel's journey would end with one record that both the courier and the receiver signed, for the parcel the sender signed.":
+    "荷物の旅は、送り主が署名した荷物について、配達員と受取人の両方が署名した1つの記録で終わる、という構想です。",
   "A parcel with a signed tag, a permit marked 1× from the courier service, a van, and at the door a handover with two signatures.":
     "署名されたタグの付いた荷物、配送サービスが出した「1×」の許可、配達の車、そして玄関先で2つの署名が入った受け渡し。",
   "1 The sender signs the parcel's tag. 2 The courier service gives one courier a permit that works once, for this parcel. 3 At the door, the courier and the receiver both sign the handover.":
@@ -100,8 +100,8 @@ export const JA: Record<string, string> = {
   "Each review shown cites a receipt this shop's key signed, and is signed by the key that receipt names.":
     "表示されたレビューはどれも、このお店の鍵が署名したレシートを示し、そのレシートに書かれた鍵で署名されていること。",
   "Each receipt carries one review at most.": "レシート1枚につきレビューは多くても1件であること。",
-  "That the buyer settled up: that happens outside TET, and the receipt says only that the shop issued it.":
-    "買い手が精算を済ませたこと。精算はTETの外で行われ、レシートが示すのはお店が発行したことだけです。",
+  "What passed between the buyer and the shop beyond the signed records: that stays outside TET, and the receipt says only that the shop issued it.":
+    "署名された記録以外で、買い手とお店の間に何があったか。それはTETの範囲外で、レシートが示すのはお店が発行したことだけです。",
   "That the shop did not give receipts to friends.": "お店が知り合いにレシートを配っていないこと。",
   "That a review is true, or who wrote it.": "レビューが本当かどうか、誰が書いたか。",
 

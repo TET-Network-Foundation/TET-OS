@@ -36,12 +36,12 @@ export const JA: Record<string, string> = {
     "1. サイトが質問します。どのサイトが尋ねているかが見え、答えるかどうかを選べます。",
   "A generic phone with a secure chip inside; the key is locked in the chip, and an arrow leaving the phone is crossed out.":
     "中に安全なチップがある、一般的なスマートフォン。鍵はチップの中に閉じ込められていて、外へ出る矢印には×が付いています。",
-  "2. You unlock with the phone's own lock. The key stays inside the phone's secure hardware; it is never copied out.":
-    "2. スマートフォン自身のロックで解除します。鍵はスマートフォンの安全なハードウェアの中にとどまり、外へコピーされることはありません。",
+  "2. You unlock with the phone's own lock. In this idea, the key would stay inside the phone's secure hardware and never be copied out.":
+    "2. スマートフォン自身のロックで解除します。このアイデアでは、鍵はスマートフォンの安全なハードウェアの中にとどまり、外へコピーされることはない想定です。",
   "A generic phone sends an answer; below it, the site sees a key with a check mark, and a person crossed out.":
     "一般的なスマートフォンが答えを送ります。その下で、サイトに見えるのはチェックの付いた鍵で、人には×が付いています。",
-  "3. Only the answer leaves the phone. The site sees that this key answered, not your name.":
-    "3. スマートフォンから出るのは答えだけです。サイトに見えるのは、この鍵が答えたことで、あなたの名前ではありません。",
+  "3. In this idea, only the answer would leave the phone. The site would see that this key answered, not your name.":
+    "3. このアイデアでは、スマートフォンから出るのは答えだけになる想定です。サイトに見えるのも、この鍵が答えたことだけで、あなたの名前は見えない想定です。",
   "Passwords, passkeys and TET": "パスワード、パスキー、そして TET",
   "Passkeys already do the hard parts of signing in well. They resist fake sites, use a new key for every site, and are built into the phones and browsers you have today. TET does not claim to do these better.":
     "パスキーは、サインインの難しいところをすでにうまくこなしています。偽サイトにだまされにくく、サイトごとに別の鍵を使い、今お使いのスマートフォンやブラウザに組み込まれています。TET は、これらをパスキーよりうまくできるとは言いません。",

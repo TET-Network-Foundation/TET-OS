@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 type Benefit = { title: string; text: string };
 
 const BOOKING: Benefit[] = [
-  { title: "Shops cannot compare notes", text: "Each shop gets a different key from you, so two shops cannot match their records to each other." },
+  { title: "Different key for each shop", text: "Each shop gets a different key from you. Whether shops can match records by other details: not judged." },
   { title: "A key, not your name", text: "A booking names a key, a shop and a time. Your name and number are not in it." },
   { title: "Shops still see no-shows", text: "A shop can count how often this pseudonym booked and did not come, from its own signed records." },
 ];
@@ -49,7 +49,7 @@ function Service(props: { diagram: ReactNode; items: Benefit[]; card: ReactNode 
         {props.diagram}
         <Benefits items={props.items} />
       </div>
-      <p className="max-w-prose font-semibold">{t("Settling up happens outside TET (cash, bank, …).")}</p>
+      <p className="max-w-prose font-semibold">{t("Anything beyond the signed records stays outside TET.")}</p>
       {props.card}
     </div>
   );
@@ -59,7 +59,7 @@ function SettleUp() {
   const { t } = useSite();
   return (
     <p className="max-w-prose leading-relaxed text-slate-700 dark:text-slate-300">
-      {t("No record here carries an amount. The records say which key signed what, and settling up happens outside TET (cash, bank, …).")}
+      {t("The records here say only which key signed what. Anything beyond the signed records stays outside TET.")}
     </p>
   );
 }
@@ -73,14 +73,14 @@ export default function Services() {
         sentence={SECTION.sentence}
       />
       <SiteSection
-        title="Settling up stays outside TET"
+        title="What stays outside TET"
       >
         <SettleUp />
       </SiteSection>
       <SiteSection
         id="booking"
         title="Booking"
-        lead="Your device makes a different key for each shop you book with. Two shops cannot match those keys to each other."
+        lead="Your device makes a different key for each shop you book with. Whether two shops can link you by other details: not judged."
       >
         <Service
           items={BOOKING}
@@ -97,7 +97,7 @@ export default function Services() {
       <SiteSection
         id="delivery"
         title="Delivery"
-        lead="A parcel's journey ends with one record that both the courier and the receiver signed, for the parcel the sender signed."
+        lead="A parcel's journey would end with one record that both the courier and the receiver signed, for the parcel the sender signed."
       >
         <Service
           items={DELIVERY}

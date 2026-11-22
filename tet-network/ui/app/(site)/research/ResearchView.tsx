@@ -83,7 +83,7 @@ export default function ResearchView() {
 
       <SiteSection
         title="Keys that sign once"
-        lead="Today, when TET allows something only once, a second use can still be made, and whoever keeps the record refuses it. A one-shot key would make the second signature impossible to make."
+        lead="Today, when TET allows something only once, a second use can still be made, and whoever keeps the record refuses it. A one-shot key is meant to make a second signature impossible, but only if its setup can be trusted."
       >
         <div className="grid items-start gap-6 md:grid-cols-2">
           <Figure
@@ -116,18 +116,18 @@ export default function ResearchView() {
         </div>
       </SiteSection>
 
-      <SiteSection title="Try the idea on a sample wallet" lead="A concept page lets you hand over notes from sample keys that each work once. It is a model, not a key.">
+      <SiteSection title="Try the idea on a sample key set" lead="A concept page lets you hand over messages signed by sample keys that each work once. It is a model, not a key.">
         <div className="grid items-start gap-6 md:grid-cols-2">
           <FeatureCard id="future-concept" />
           <div className="flex flex-col gap-6">
             <Figure
               src="/site/research/future-desktop.png"
-              alt="The sample wallet after two hand-overs: two keys are struck through and marked Used, and the other sample person holds two notes."
+              alt="The sample key set after two hand-overs: two keys are struck through and marked Used, and the other sample person holds two signed messages."
               caption="The /future concept page, light theme. Screenshot from its pull request."
             />
             <Figure
               src="/site/research/future-phone-dark.png"
-              alt="The same sample wallet on a phone, dark theme, after a note was handed over once."
+              alt="The same sample key set on a phone, dark theme, after one signed message was handed over."
               caption="The same page on a phone, dark theme."
             />
           </div>

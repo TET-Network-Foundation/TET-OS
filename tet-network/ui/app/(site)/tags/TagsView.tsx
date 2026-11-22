@@ -45,7 +45,7 @@ export default function TagsView() {
             title="I make things"
             steps={[
               { text: "Mark a photo or a description of your work, and share its code.", href: "#tags-mark-genuine" },
-              { text: "Register a chip tag under your ID.", href: "#tags-maker-register" },
+              { text: "Register a chip tag under your ID (planned, not built).", href: "#tags-maker-register" },
               { text: "Check taps with your own checker, keeping the tag's key yourself.", href: "#tags-tap-check" },
             ]}
           />
@@ -53,8 +53,8 @@ export default function TagsView() {
             title="I bought something"
             steps={[
               { text: "Check that a file or text is the one the maker marked.", href: "#tags-mark-genuine" },
-              { text: "Tap the tag and read what the tap shows.", href: "#tags-scan-page" },
-              { text: "Record yourself as the one who holds it now.", href: "#tags-owner-record" },
+              { text: "Tap the tag and read what the tap shows (planned, not built).", href: "#tags-scan-page" },
+              { text: "Record yourself as the one who holds it now (planned, not built).", href: "#tags-owner-record" },
             ]}
           />
         </CardGrid>

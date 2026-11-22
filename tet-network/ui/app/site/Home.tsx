@@ -44,7 +44,7 @@ const SOURCES: { label: string; href: string; text: string; part: string }[] = [
   {
     label: "OpenAI Agentic Commerce, delegated token spec",
     href: "https://developers.openai.com/commerce/specs/payment",
-    text: "Part of OpenAI's Agentic Commerce Protocol: an agent hands a merchant a token marked one_time, tied to one checkout session and one merchant, with an expiry time. The service that holds the token checks those limits.",
+    text: "Part of OpenAI's Agentic Commerce Protocol: an agent hands a service a token marked one_time, tied to one session and one service, with an expiry time. The service that holds the token checks those limits.",
     part: "one-time-permits",
   },
   {
@@ -97,10 +97,10 @@ export default function Home() {
   const rows = [
     {
       label: t("Purpose"),
-      chain: t("A shared record of accounts and transfers that many independent nodes agree on."),
+      chain: t("A shared record of entries that many independent nodes agree on."),
       tet: t("A shared record of keys: what each key may do, how many times, and before which block it signed."),
     },
-    { label: t("Token"), chain: t("Most have one. It rewards the nodes that keep the record."), tet: t("TET has none.") },
+    { label: t("Token"), chain: t("Most have one. It goes to the nodes that keep the record."), tet: t("TET has none.") },
     {
       label: t("Signatures"),
       chain: t("Usually one elliptic-curve scheme, such as ECDSA or Ed25519."),
@@ -188,7 +188,7 @@ export default function Home() {
       <SiteSection
         id="measured"
         title="Measured"
-        lead="A few numbers, each measured and each with where it comes from. A zero-knowledge receipt is the proof TET's anonymous features attach; it is large, and making one takes time."
+        lead="A few numbers, each measured and each with where it comes from. A zero-knowledge receipt is the proof that TET's privacy prototypes attach; it is large, and making one takes time."
       >
         <div className="grid gap-8 sm:grid-cols-2">
           <Measured id="ci-tests" />

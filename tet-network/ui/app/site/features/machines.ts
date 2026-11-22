@@ -122,10 +122,11 @@ export const FEATURES: Feature[] = [
       "A scripted agent reads a message with hidden instructions asking for ten emails. With a one-time permit, the permit check lets one through and refuses the other nine. Without permits, the same agent sends all ten. It runs on this page; nothing is sent.",
     status: "prototype",
     evidence: [{ path: "tet-network/ui/app/site/run/agent_demo.ts" }, { path: "tet-network/ui/app/lib/machine_log.mjs" }],
-    shows: ["That a one-time permit limits how many times an agent acts, whatever the text in front of it says."],
+    shows: ["That each one-time permit lets one action through within one log, when every action goes through that log's permit check."],
     doesNot: [
       "How a real language model behaves: the agent here is a script.",
       "Which action was the right one: a permit limits how many, not which.",
+      "Who issued a permit, or whether the log is complete: the agent's own key signs both the permits and the records.",
     ],
   },
 ];

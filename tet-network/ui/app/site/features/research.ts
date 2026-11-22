@@ -12,7 +12,7 @@ export const FEATURES: Feature[] = [
     id: "one-shot-tet",
     title: "Keys that sign once",
     summary:
-      "A research note on one-shot signatures: a quantum key that can sign one message and is then used up. Today every \"once\" in TET is caught afterwards by whoever keeps the record; a one-shot key would make the second signature impossible to make.",
+      "A research note on one-shot signatures: a quantum key that can sign one message and is then used up. Today every \"once\" in TET is caught afterwards by whoever keeps the record; a one-shot key is meant to make a second signature impossible, but only if its setup can be trusted.",
     status: "idea",
     evidence: [{ path: "docs/research/ONE_SHOT_TET.md" }, { branch: "docs/one-shot-research", what: "the setup finding" }],
     shows: [
@@ -28,20 +28,20 @@ export const FEATURES: Feature[] = [
   },
   {
     id: "future-concept",
-    title: "A sample wallet of one-time keys",
+    title: "A sample set of one-time keys",
     summary:
-      "A concept page where you can hand over notes from a sample wallet whose keys each work once. It is a model on an ordinary computer, not a key.",
+      "A concept page where you can hand over messages signed by a sample key set whose keys each work once. It is a model on an ordinary computer, not a key.",
     status: "idea",
     evidence: [{ pr: 182, what: "the /future concept page" }],
     shows: [
-      "What the idea would change: a used key refuses a second hand-over.",
+      "What the idea would change: a used sample key refuses a second hand-over.",
       "What it would not change, in the page's own Shows and Does not show.",
     ],
     doesNot: [
       "A real one-shot key. A copy of this model could be used twice.",
       "Anything real: no request leaves the page, and nothing is stored.",
     ],
-    link: { href: "/future", label: "Open the sample wallet" },
+    link: { href: "/future", label: "Open the sample key set" },
   },
   {
     id: "learning-model",

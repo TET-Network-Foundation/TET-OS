@@ -2,8 +2,8 @@
 export const JA: Record<string, string> = {
   // section
   "Genuine tags": "本物のタグ",
-  "A maker puts a chip tag on what they make, and a buyer's tap shows whether that chip knows the maker's key.":
-    "作り手が作ったものにチップ入りのタグを付け、買った人がタップすると、そのチップが作り手の鍵を知っているかどうかがわかります。",
+  "A maker would put a chip tag on what they make, and a buyer's tap would show whether that chip knows the maker's key.":
+    "作り手が作ったものにチップ入りのタグを付け、買い手がタップすると、そのチップが作り手の鍵を知っているかどうかがわかる、という構想です。",
 
   // page
   "Nothing on this page runs for anyone yet. Two parts are built and run only on your own computer.":
@@ -15,12 +15,12 @@ export const JA: Record<string, string> = {
     "それぞれの段階から、それを担う部分へ移れます。その部分がどこまで進んでいるかも書いてあります。",
   "I make things": "ものを作っている",
   "Mark a photo or a description of your work, and share its code.": "作品の写真や説明に印を付けて、そのコードを伝える。",
-  "Register a chip tag under your ID.": "チップ入りのタグを、自分の ID で登録する。",
+  "Register a chip tag under your ID (planned, not built).": "チップ入りのタグを、自分の ID で登録する（計画中・まだ作っていません）。",
   "Check taps with your own checker, keeping the tag's key yourself.": "タグの鍵を自分で持ったまま、自分の確認プログラムでタップを確かめる。",
   "I bought something": "ものを買った",
   "Check that a file or text is the one the maker marked.": "ファイルや文章が、作り手が印を付けたものと同じか確かめる。",
-  "Tap the tag and read what the tap shows.": "タグにタップして、そのタップが示すことを読む。",
-  "Record yourself as the one who holds it now.": "今それを持っているのは自分だと記録する。",
+  "Tap the tag and read what the tap shows (planned, not built).": "タグをタップして、そのタップが示すことを読む（計画中・まだ作っていません）。",
+  "Record yourself as the one who holds it now (planned, not built).": "今それを持っているのは自分だと記録する（計画中・まだ作っていません）。",
   "What happens in a tap": "タップで起きること",
   "The tag holds a secret key that never leaves the chip. Each tap, it writes a fresh link with a number that only goes up.":
     "タグは、チップの外に出ない秘密の鍵を持っています。タップのたびに、増えるだけの番号の入った新しいリンクを作ります。",
@@ -59,7 +59,7 @@ export const JA: Record<string, string> = {
     "タップの確認は作ってあり、公開されている例で試してあります。タグの登録、タップで開くページ、持ち主の記録は、設計はできていますが、まだ作っていません。",
 
   // features
-  "Mark a file or text as genuine, and check a copy": "ファイルや文章に本物の印を付け、手元のものを確かめる",
+  "Mark a file or text with your ID, and check a copy": "ファイルや文章に自分の ID で印を付け、手元のものを確かめる",
   "A maker marks a photo or a written description of their work with their ID and gets a short code. Anyone with the code can check whether their copy is exactly the one that was marked. It works on files and text, not on tags, and it runs on your own computer with a local node.":
     "作り手が作品の写真や説明に自分の ID で印を付け、短いコードを受け取ります。コードがあれば誰でも、手元のものが印を付けたものとまったく同じかを確かめられます。対象はファイルと文章で、タグではありません。自分のパソコンの中のノードで動きます。",
   "This ID marked this exact file or text.": "この ID が、このファイルや文章そのものに印を付けたこと。",
@@ -71,8 +71,8 @@ export const JA: Record<string, string> = {
   "Open Mark as genuine": "本物の印を付けるページを開く",
 
   "Check one tap of a chip tag": "チップ入りタグの1回のタップを確かめる",
-  "A small program checks the link a secure NFC chip (NXP NTAG 424 DNA) writes each time it is tapped, using that tag's key, and refuses a counter it has already seen. It runs on your own computer. No phone page uses it yet, and it has been tested on published examples, not on a physical tag.":
-    "小さなプログラムが、安全な NFC チップ（NXP NTAG 424 DNA）がタップのたびに作るリンクを、そのタグの鍵で確かめ、すでに見たカウンターは受け付けません。自分のパソコンの中で動きます。まだスマホのページからは使われておらず、試したのは公開されている例で、実際のタグではありません。",
+  "A small program checks the link an NFC chip (NXP NTAG 424 DNA) writes each time it is tapped, using that tag's key, and refuses a counter it has already seen. It runs on your own computer. No phone page uses it yet, and it has been tested on published examples, not on a physical tag.":
+    "小さなプログラムが、NFC チップ（NXP NTAG 424 DNA）がタップのたびに作るリンクを、そのタグの鍵で確かめ、すでに見たカウンターは受け付けません。自分のパソコンの中で動きます。まだスマホのページからは使われておらず、試したのは公開されている例で、実際のタグではありません。",
   "The chip that made this link knew the tag's key when it was tapped.": "このリンクを作ったチップは、タップされたときにタグの鍵を知っていたこと。",
   "The tap's counter was higher than any this checker had accepted for that tag before.":
     "このタップのカウンターが、この確認プログラムがそのタグについて受け付けてきたどれよりも大きかったこと。",

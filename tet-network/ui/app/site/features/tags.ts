@@ -4,13 +4,13 @@ import type { Feature, Section } from "../types";
 export const SECTION: Section = {
   href: "/tags",
   title: "Genuine tags",
-  sentence: "A maker puts a chip tag on what they make, and a buyer's tap shows whether that chip knows the maker's key.",
+  sentence: "A maker would put a chip tag on what they make, and a buyer's tap would show whether that chip knows the maker's key.",
 };
 
 export const FEATURES: Feature[] = [
   {
     id: "tags-mark-genuine",
-    title: "Mark a file or text as genuine, and check a copy",
+    title: "Mark a file or text with your ID, and check a copy",
     summary:
       "A maker marks a photo or a written description of their work with their ID and gets a short code. Anyone with the code can check whether their copy is exactly the one that was marked. It works on files and text, not on tags, and it runs on your own computer with a local node.",
     status: "prototype",
@@ -27,7 +27,7 @@ export const FEATURES: Feature[] = [
     id: "tags-tap-check",
     title: "Check one tap of a chip tag",
     summary:
-      "A small program checks the link a secure NFC chip (NXP NTAG 424 DNA) writes each time it is tapped, using that tag's key, and refuses a counter it has already seen. It runs on your own computer. No phone page uses it yet, and it has been tested on published examples, not on a physical tag.",
+      "A small program checks the link an NFC chip (NXP NTAG 424 DNA) writes each time it is tapped, using that tag's key, and refuses a counter it has already seen. It runs on your own computer. No phone page uses it yet, and it has been tested on published examples, not on a physical tag.",
     status: "prototype",
     evidence: [{ pr: 150, what: "tet-tag-verify: the tap check, its tests, and a local-only serve prototype" }],
     shows: [

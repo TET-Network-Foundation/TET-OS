@@ -38,14 +38,14 @@ export const JA: Record<string, string> = {
   "Three records signed.": "3 件の記録に署名しました。",
   "Record 2's reading changed from 22 to 25, without signing it again.": "記録 2 の値を 22 から 25 に書き換えました。署名はし直していません。",
   "Record 2 taken out of the log.": "記録 2 をログから抜きました。",
-  "A record changed after it was signed is caught, and so is a record taken out.": "署名のあとで書き換えた記録も、抜き取った記録も見つかります。",
+  "A record changed after it was signed is caught, and so is a record taken from the middle of the log.": "署名のあとで書き換えた記録も、ログの途中から抜き取った記録も見つかります。",
   "That the readings are true.": "測った値が本当かどうか。",
   "That the log is complete and unchanged: its newest records may be missing, and whoever holds the key can rewrite any of it.": "ログが完全で、書き換えられていないこと。最新の記録が欠けている場合があり、鍵を持つ人はどの記録でも書き換えられます。",
   "Which record was the original, when two copies of a log disagree.": "ログの 2 つのコピーが食い違うとき、どちらが元の記録か。",
 
   // log-fingerprint
   "Record 1 signed. Its fingerprint: {hash}": "記録 1 に署名しました。指紋：{hash}",
-  "On a real node this fingerprint would be stamped. This page sends it nowhere.": "本物のノードなら、この指紋に印を押します。このページはどこにも送りません。",
+  "On a node this fingerprint would be stamped; no public node runs today. This page sends it nowhere.": "ノードがあれば、この指紋にはそこで印が押されます。公開ノードは今は動いていません。このページはどこにも送りません。",
   "Changed copy's fingerprint: {hash}": "書き換えたコピーの指紋：{hash}",
   "A record's fingerprint is the SHA-256 of its exact bytes: one changed digit gives a different fingerprint, and the checker notices.":
     "記録の指紋は、そのバイト列そのものの SHA-256 です。数字が 1 つ変わるだけで指紋が変わり、チェッカーが気づきます。",
@@ -72,8 +72,8 @@ export const JA: Record<string, string> = {
   // agent-permit-once
   "The owner gives the agent a permit: send-weekly-report, once.": "持ち主がエージェントに許可証を渡します：send-weekly-report、1 回だけ。",
   "The agent is asked to send the weekly report (request {n}).": "エージェントが週報の送信を頼まれます（依頼 {n}）。",
-  "Claim written to the log as record {seq}. The agent acts: report sent (counted, nothing is sent).":
-    "使用の申告を記録 {seq} としてログに書きました。エージェントが動きます：週報を送信（数えるだけで、実際には何も送りません）。",
+  "Claim written to the log as record {seq}. The agent acts: the report is counted, not sent.":
+    "使用の申告を記録 {seq} としてログに書きました。エージェントが動きます：週報は数えるだけで、送りません。",
   "Claim refused, so the agent does nothing: {why}": "申告が拒否されたので、エージェントは何もしません：{why}",
   "Actions taken: {n}.": "行った動作：{n} 回。",
   "The agent writes its claim to the log before it acts. A second claim of the same permit is refused before anything happens.":
@@ -120,7 +120,7 @@ export const JA: Record<string, string> = {
 
   // Nothing to run
   "Nothing to run: an idea, and no sign-in code uses the membership proof.": "動かせるものはありません。アイデアの段階で、メンバーの証明を使うログインのコードはありません。",
-  "Nothing to run: an idea, and no code keeps a key in a phone's secure hardware.": "動かせるものはありません。アイデアの段階で、スマートフォンのセキュアなハードウェアに鍵を置くコードはありません。",
+  "Nothing to run: an idea, and no code keeps a key in a phone's dedicated key hardware.": "動かせるものはありません。アイデアの段階で、スマートフォンの鍵専用のハードウェアに鍵を置くコードはありません。",
   "Nothing to run here yet: its code is in an open pull request, not on main.": "ここで動かせるものはまだありません。コードはまだマージされていないプルリクエストの中にあります。",
   "Nothing to run: an idea with an open question, not built.": "動かせるものはありません。答えの出ていない問いがあるアイデアで、作られていません。",
   "Run it in the demo below this card.": "このカードの下のデモで動かせます。",
@@ -213,8 +213,8 @@ export const JA: Record<string, string> = {
   "Anything beyond one action, once: no conditions, no groups, no amounts.": "1 つの動作を 1 回、より先のこと。条件も、グループも、量もありません。",
 
   // Page text
-  "Nothing here runs on a server today. Every check on this page runs on your own computer, and each card's Run it button runs it now.":
-    "ここにあるものは、今はどれもサーバーでは動いていません。このページのチェックはすべてあなたのコンピューターで動き、各カードの「動かしてみる」ボタンで今すぐ動かせます。",
+  "Nothing here runs on a server today. Every check on this page runs on your own computer, and a card's Run it button, where it has one, runs it now.":
+    "ここにあるものは、今はどれもサーバーでは動いていません。このページのチェックはすべてあなたのコンピューターで動きます。「動かしてみる」ボタンのあるカードは、そのボタンで今すぐ動かせます。",
   "None of these ideas is built. The two models on this page run in your browser and send nothing.": "ここにあるアイデアは、どれも作られていません。このページの 2 つのモデルはブラウザの中で動き、何も送りません。",
   "A few simulated qubits, to show what a one-shot key would change and why a simulation cannot be one.":
     "いくつかのシミュレーションの量子ビットで、1 回だけの鍵が何を変えるのか、そしてシミュレーションがなぜそれになれないのかを示します。",
@@ -224,9 +224,10 @@ export const JA: Record<string, string> = {
   "An agent talked into too much": "言いくるめられたエージェント",
   "A scripted agent reads a message with hidden instructions asking for ten emails. With a one-time permit, the permit check lets one through and refuses the other nine. Without permits, the same agent sends all ten. It runs on this page; nothing is sent.":
     "台本どおりに動くエージェントが、メール 10 通を求める隠れた指示を含むメッセージを読みます。1 回限りの許可証があれば、許可証のチェックは 1 通だけを通し、残りの 9 通を拒否します。許可証がなければ、同じエージェントが 10 通すべてを送ります。このページで動き、何も送りません。",
-  "That a one-time permit limits how many times an agent acts, whatever the text in front of it says.": "目の前のテキストに何が書かれていても、1 回限りの許可証がエージェントの動く回数を限ること。",
+  "That each one-time permit lets one action through within one log, when every action goes through that log's permit check.": "すべての動作が 1 つのログの許可証のチェックを通る場合に、そのログの中で 1 回限りの許可証 1 枚につき 1 つの動作だけが通ること。",
   "How a real language model behaves: the agent here is a script.": "本物の言語モデルがどう動くか。ここのエージェントは台本です。",
   "Which action was the right one: a permit limits how many, not which.": "どの動作が正しかったか。許可証が限るのは回数で、どれかではありません。",
+  "Who issued a permit, or whether the log is complete: the agent's own key signs both the permits and the records.": "誰が許可証を出したか、ログに抜けがないか。許可証も記録も、エージェント自身の鍵で署名しています。",
   "Ideas we are studying. None of them is built; the two small models on this page run in your browser.": "研究中のアイデアです。どれも作られていません。このページの 2 つの小さなモデルは、ブラウザの中で動きます。",
   'A small model with a few simulated qubits, on this page: signing uses the key up, and a "copy the key" button works only because it is a simulation. It shows why a real one-shot key could not be copied.':
     "このページにある、いくつかのシミュレーションの量子ビットを使った小さなモデルです。署名すると鍵を使い切り、「鍵をコピーする」ボタンが使えるのはシミュレーションだからです。本物の 1 回だけの鍵がなぜコピーできないのかを示します。",
