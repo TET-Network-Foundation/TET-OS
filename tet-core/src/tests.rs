@@ -17172,3 +17172,116 @@ fn tx_envelope_cut_to_one_signature_half_is_refused() {
         }
     }
 }
+
+/// A `.sig.json` envelope whose Ed25519 half is signed with `ed_words` and whose ML-DSA-44 half is
+/// signed with `ml_words`. Both halves verify, each under the key it names, so a check that compares
+/// only one half with another envelope's keys cannot tell it from an honest one.
+fn mixed_envelope_for_tests(ed_words: &str, ml_words: &str, payload_type: &str, payload: &[u8]) -> Vec<u8> {
+    let ed: serde_json::Value = serde_json::from_slice(&envelope_for_tests(ed_words, payload_type, payload)).unwrap();
+    let mut ml: serde_json::Value = serde_json::from_slice(&envelope_for_tests(ml_words, payload_type, payload)).unwrap();
+    ml["signatures"][0] = ed["signatures"][0].clone();
+    ml["tet"]["agent_ed25519_pubkey_hex"] = ed["tet"]["agent_ed25519_pubkey_hex"].clone();
+    serde_json::to_vec(&ml).unwrap()
+}
+
+/// **SECURITY REGRESSION GUARD: every refusal in the signature registry fires for its own reason.**
+///
+/// `sigs::verify_record` and `sigs::verify_consent`, driven directly with real hybrid-signed records.
+/// Each case changes one thing in a valid record so that every earlier check passes, and asserts the
+/// exact error, never just its variant: several checks share `Malformed` or `Consent`, so matching the
+/// variant would pass with any one of them deleted. Hybrid halves are broken one at a time with a VALID
+/// signature from another record (signatures) or another key (consent), so exactly one half is wrong.
+/// Negative controls (by hand, recorded in the commit): each check removed in turn → this FAILS.
+#[test]
+fn signature_registry_refuses_each_case_for_its_own_reason() {
+    use crate::sigs::{verify_consent, verify_record, SigsError, CONSENT_PAYLOAD_TYPE, HASH_PAYLOAD_TYPE};
+    use sha2::Digest as _;
+    let _g = env_lock();
+    set_test_env_base();
+    let words = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let other = crate::wallet::generate_mnemonic_12().unwrap().mnemonic_12.unwrap();
+    let rec = hash_record_for_tests(&words, b"a drawing, final", HASH_PAYLOAD_TYPE);
+    let rec_b = hash_record_for_tests(&words, b"another drawing", HASH_PAYLOAD_TYPE);
+    let (file, signer) = verify_record(&rec).expect("baseline: the record verifies");
+    assert_eq!(file, hex::encode(sha2::Sha256::digest(b"a drawing, final")));
+    verify_record(&rec_b).expect("baseline: the second record verifies");
+    verify_consent(&rec, &consent_for_tests(&words, &rec)).expect("baseline: the consent verifies");
+
+    let j = |b: &[u8]| -> serde_json::Value { serde_json::from_slice(b).unwrap() };
+    let v = |x: serde_json::Value| serde_json::to_vec(&x).unwrap();
+    let malformed = |s: &str| Err(SigsError::Malformed(s.to_string()));
+
+    // Size: a valid record padded past the cap with JSON whitespace still parses and still verifies.
+    let mut big = rec.clone();
+    big.resize(crate::sigs::RECORD_MAX_BYTES + 1, b' ');
+    assert_eq!(verify_record(&big), Err(SigsError::TooBig));
+
+    let mut e = j(&rec);
+    e["tet"]["v"] = serde_json::json!(2);
+    assert_eq!(verify_record(&v(e)), malformed("unsupported envelope version"));
+    let mut e = j(&rec);
+    e["tet"]["pae"] = serde_json::json!("DSSEv1");
+    assert_eq!(verify_record(&v(e)), malformed("unsupported envelope version"));
+
+    // Upper-case hex in both places it appears, so the key id matches and only the form check refuses.
+    let mut e = j(&rec);
+    let up = signer.to_ascii_uppercase();
+    e["tet"]["agent_ed25519_pubkey_hex"] = serde_json::json!(up);
+    e["signatures"][0]["keyid"] = serde_json::json!(format!("tet-ed25519:{up}"));
+    assert_eq!(verify_record(&v(e)), malformed("the ed25519 key is not 64 lowercase hex"));
+
+    // A third entry under neither prefix: one of each kind is present, only the count is wrong.
+    let mut e = j(&rec);
+    e["signatures"].as_array_mut().unwrap().push(serde_json::json!({ "keyid": "tet-other:x", "sig": "" }));
+    assert_eq!(verify_record(&v(e)), malformed("expected exactly one ed25519 and one ml-dsa-44 signature"));
+    let mut e = j(&rec);
+    e["signatures"][1] = e["signatures"][0].clone();
+    assert_eq!(verify_record(&v(e)), malformed("expected exactly one ed25519 and one ml-dsa-44 signature"));
+
+    // Two entries, one of them under neither prefix: each half's own set check, on its own (the
+    // duplicate above is refused by both, so it cannot tell them apart).
+    let mut e = j(&rec);
+    e["signatures"][0]["keyid"] = serde_json::json!("tet-other:x");
+    assert_eq!(verify_record(&v(e)), malformed("expected exactly one ed25519 and one ml-dsa-44 signature"));
+    let mut e = j(&rec);
+    e["signatures"][1]["keyid"] = serde_json::json!("tet-other:x");
+    assert_eq!(verify_record(&v(e)), malformed("expected exactly one ed25519 and one ml-dsa-44 signature"));
+
+    let mut e = j(&rec);
+    e["signatures"][0]["keyid"] = serde_json::json!(format!("tet-ed25519:{}", "ab".repeat(32)));
+    assert_eq!(verify_record(&v(e)), malformed("a keyid doesn't match the key it names"));
+    let mut e = j(&rec);
+    e["signatures"][1]["keyid"] = serde_json::json!(format!("tet-mldsa44:{}", "cd".repeat(32)));
+    assert_eq!(verify_record(&v(e)), malformed("a keyid doesn't match the key it names"));
+
+    // One half at a time: the other record's valid signature from the same key.
+    let mut e = j(&rec);
+    e["signatures"][0]["sig"] = j(&rec_b)["signatures"][0]["sig"].clone();
+    match verify_record(&v(e)) {
+        Err(SigsError::Signature(s)) => assert!(s.starts_with("Ed25519("), "the Ed25519 half was not the one refused: {s}"),
+        other => panic!("a swapped Ed25519 half was not refused by the signature check: {other:?}"),
+    }
+    let mut e = j(&rec);
+    e["signatures"][1]["sig"] = j(&rec_b)["signatures"][1]["sig"].clone();
+    match verify_record(&v(e)) {
+        Err(SigsError::Signature(s)) => assert!(s.starts_with("Mldsa44("), "the ML-DSA half was not the one refused: {s}"),
+        other => panic!("a swapped ML-DSA half was not refused by the signature check: {other:?}"),
+    }
+
+    // Hash-only: the type, and the length, each on its own (both records correctly signed).
+    let plain = hash_record_for_tests(&words, b"x", "text/plain");
+    assert_eq!(verify_record(&plain), Err(SigsError::NotHashOnly));
+    let short = envelope_for_tests(&words, HASH_PAYLOAD_TYPE, &[7u8; 31]);
+    assert_eq!(verify_record(&short), Err(SigsError::NotHashOnly));
+
+    // Consent: the type; each half of the signer; the record it names.
+    let consent = |s: &str| Err(SigsError::Consent(s.to_string()));
+    let wrong_type = envelope_for_tests(&words, HASH_PAYLOAD_TYPE, &sha2::Sha256::digest(&rec));
+    assert_eq!(verify_consent(&rec, &wrong_type), consent("not a consent to publish"));
+    let rec_digest = sha2::Sha256::digest(&rec);
+    let ml_other = mixed_envelope_for_tests(&words, &other, CONSENT_PAYLOAD_TYPE, &rec_digest);
+    assert_eq!(verify_consent(&rec, &ml_other), consent("signed by a different key than the record"));
+    let ed_other = mixed_envelope_for_tests(&other, &words, CONSENT_PAYLOAD_TYPE, &rec_digest);
+    assert_eq!(verify_consent(&rec, &ed_other), consent("signed by a different key than the record"));
+    assert_eq!(verify_consent(&rec, &consent_for_tests(&words, &rec_b)), consent("it's for a different record"));
+}

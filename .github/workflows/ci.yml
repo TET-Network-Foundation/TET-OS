@@ -366,6 +366,7 @@ jobs:
             ui_signed_sponsor_request_verifies_in_rust
             sdk_question_envelope_verifies_in_rust
             ui_answer_envelope_verifies_in_rust
+            signature_registry_refuses_each_case_for_its_own_reason
           )
           pins=(
             wallclock_time_changes_spendability_for_the_same_block
@@ -632,6 +633,12 @@ jobs:
       - if: needs.gate.outputs.code == 'true'
         name: verify without TET — offline, deterministic, no network
         run: node --experimental-strip-types scripts/offline_verify_guard.mjs
+      # Every refusal in the offline verifier, the page's verifier and the published CLI fires for its
+      # own reason: one record per check, built so every earlier check passes; hybrid halves one at a
+      # time. Controls: each check removed in turn makes it fail.
+      - if: needs.gate.outputs.code == 'true'
+        name: verify — every refusal fires for its own reason
+        run: node --experimental-strip-types scripts/verifier_refusals_guard.mjs
       # The node's clock refusals ("your device clock is off", the UTC day changed) are shown plainly
       # and translated word for word.
       - if: needs.gate.outputs.code == 'true'
@@ -879,8 +886,8 @@ jobs:
           # jest exits 0 when a filter matches nothing, so the counts are asserted rather than the
           # exit code. The skipped suite is tests/slashing_audit.test.ts, which posts to a route the
           # September clean-up removed; the reason is recorded in the file.
-          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 60 passed, 61 total' || {
-            echo "::error::the agent SDK guards did not run — expected 60 passed and 1 skipped"
+          echo "$out" | grep -qE 'Tests:[[:space:]]+1 skipped, 66 passed, 67 total' || {
+            echo "::error::the agent SDK guards did not run — expected 66 passed and 1 skipped"
             exit 1
           }
 
