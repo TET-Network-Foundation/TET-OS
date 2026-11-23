@@ -50,8 +50,8 @@ TET_CLI=$PWD/target/release/tet-cli python3 prep/demos/two-party-v0/controls.py
 `test_twoparty.py`: 54 tests through the real notebook.py and tet-cli. Each refusal test asserts the
 exact list of problems. `controls.py`: 37 controls; each removes one check in a scratch copy, and every
 test it lists must then fail on its own.
-One test loads v0.1's `twoparty.py` from git (commit 1d3186a0) to run the two-deals case on the old code;
-it needs this repository's history.
+`Reservation.test_on_v01_two_deals_at_one_position_frame_the_honest_side` runs the two-deals case on v0.1's
+code, loaded from commit 1d3186a0. A clone of the public repository does not hold that commit, so there this one test is skipped and prints why, and 53 run.
 
 ## Shows
 

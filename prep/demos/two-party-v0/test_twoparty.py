@@ -540,8 +540,14 @@ def load_v01(test):
     d = os.path.join(root, "prep", "demos", "two-party-v0")
     os.makedirs(d)
     os.symlink(os.path.normpath(os.path.join(HERE, "..", "..", "..", "tools")), os.path.join(root, "tools"))
-    src = subprocess.run(["git", "show", "1d3186a0:prep/demos/two-party-v0/twoparty.py"], cwd=HERE,
-                         capture_output=True, check=True).stdout
+    reason = "needs commit 1d3186a0 of the sketch's own branch, which this repository does not hold"
+    if subprocess.run(["git", "cat-file", "-e", "1d3186a0^{commit}"], cwd=HERE, capture_output=True).returncode != 0:
+        test.skipTest(reason)
+    shown = subprocess.run(["git", "show", "1d3186a0:prep/demos/two-party-v0/twoparty.py"], cwd=HERE,
+                           capture_output=True)
+    if shown.returncode != 0:
+        test.skipTest(reason)
+    src = shown.stdout
     path = os.path.join(d, "twoparty_v01.py")
     with open(path, "wb") as f:
         f.write(src)
