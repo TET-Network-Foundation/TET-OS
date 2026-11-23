@@ -276,6 +276,16 @@ jobs:
           TET_CLI: target/debug/tet-cli
         run: python3 prep/demos/agent-console/test_console.py
 
+      # The home permit scene (prep/demos/home-permit) runs the two-party sketch (prep/demos/two-party-v0)
+      # with one one-time permit, through the machine notebook and tet-cli. A second use of the permit, a
+      # summary changed and signed again, and a record dropped from one export must each be refused or
+      # shown for its own reason; the page must keep "simulation: no robot moved" on screen.
+      - if: needs.gate.outputs.code == 'true'
+        name: home permit scene — the permit acts once, each tamper shown for its reason
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 prep/demos/home-permit/test_scene.py
+
       # The demo folders: a file of a listed video type, a flight log outside a
       # fixtures/ folder or over 300 KiB, and any file over 1 MiB (except a vendored file whose sha256 its
       # SHA256SUMS lists) are refused. Videos are kept outside git.
