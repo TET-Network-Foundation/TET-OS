@@ -3,7 +3,8 @@ Simulation: no robot moved. Design sketch: not a format.
 # Home permit: one one-time permit, a home helper robot and a visiting-care tablet
 
 Local only, throwaway. There is no real robot, no real home and no real care provider. Test keys on a
-made-up chain. Nothing is sent anywhere.
+made-up chain: made and kept in software, in this simulation. No real device holds them. Nothing is
+sent anywhere.
 
 Two simulated machines, each with its own machine notebook (`tools/machine-notebook/notebook.py`):
 
@@ -48,6 +49,10 @@ python3 -m http.server --bind 127.0.0.1 -d prep/demos 8000                    # 
 The page draws a stick figure and a tablet with the three.js already vendored in
 `../robot-sim/px4/vendor/three`. Nothing is downloaded. The drawing is a picture only.
 
+## What this check judges about the permit
+
+- A second use of the permit inside H's log.
+
 ## What this check does not judge
 
 - Whether a person decided the command: the check judges which key signed. It does not judge people or
@@ -56,7 +61,7 @@ The page draws a stick figure and a tablet with the three.js already vendored in
   agreement, not about the action.
 - When it happened: only the order inside each log. No date is judged.
 - The permit's terms: the permit was made by H's own notebook, and its terms are not in the record.
-- Use in another notebook: judged only up to once within this record and this export.
+- Use of the same permit in another notebook: not judged.
 - This is not a safety device. It plays no part in stopping or moving anything.
 
 The sketch's own list of what it does not show is in `../two-party-v0/README.md`.

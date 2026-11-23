@@ -41,6 +41,8 @@
   <section>
     <p>This is a simulation. A home helper robot and a visiting-care tablet. There is no real robot and no real home.</p>
     <p class="ja">シミュレーションです。家の手伝いロボットと、訪問看護の端末。本物のロボットも家もありません。</p>
+    <p id="test-keys">The keys are test keys, made and kept in software, in this simulation. No real device holds them.</p>
+    <p class="ja">鍵はテスト用の鍵で、このシミュレーションの中でソフトウェアが作って持っています。本物の機器は持っていません。</p>
     <p>H: a simulated home helper robot; its notebook stands for the home's side. N: a simulated visiting-care tablet;
       its notebook stands for the care provider's side. The check does not show who holds a key.</p>
     <p class="ja">H: 家の手伝いロボット(シミュレーション)。そのノートは家の側。N: 訪問看護の端末(シミュレーション)。そのノートは事業者の側。確認は、誰が鍵を所有しているかを示さない。</p>
@@ -48,8 +50,8 @@
 
   <section>
     <h2>The scene <span class="ja">場面</span></h2>
-    <canvas id="view" aria-label="A stick figure (H) and a tablet (N) beside a shelf. A drawing only."></canvas>
-    <p id="permit" aria-live="polite">Permit: 1, unused <span class="ja">許可 1 件: 未使用</span></p>
+    <canvas id="view" aria-label="A stick figure labelled H and a tablet labelled N beside a shelf. A drawing only."></canvas>
+    <p id="permit" aria-live="polite">Permit: no scene loaded <span class="ja">許可: 場面がまだありません</span></p>
     <div id="steps" role="group" aria-label="Steps"></div>
     <div class="cols">
       <div><h2 id="step-en">No scene loaded yet</h2><p id="step-ja" class="ja"></p></div>
@@ -59,6 +61,11 @@
   </section>
 
   <section>
+    <h2>What this check judges about the permit <span class="ja">この確認が許可について判定すること</span></h2>
+    <ul id="judged">
+      <li>A second use of the permit inside H's log.
+        <div class="ja">H のログの中での、許可の2回目の使用。</div></li>
+    </ul>
     <h2>What this check does not judge <span class="ja">この確認が判定しないこと</span></h2>
     <ul id="not-judged">
       <li>Whether a person decided the command: the check judges which key signed. It does not judge people or organisations.
@@ -69,8 +76,8 @@
         <div class="ja">いつ起きたか: 各ログの中の順序だけ。日付は判定しない。</div></li>
       <li>The permit's terms: the permit was made by H's own notebook, and its terms are not in the record.
         <div class="ja">許可の条件: 許可は H 自身のノートが出したもので、条件は記録に入っていない。</div></li>
-      <li>Use in another notebook: judged only up to once within this record and this export.
-        <div class="ja">他のノートでの使用: この記録とこの書き出しの中で1回、までしか判定しない。</div></li>
+      <li>Use of the same permit in another notebook: not judged.
+        <div class="ja">同じ許可の、他のノートでの使用: 判定しない。</div></li>
       <li>This is not a safety device. It plays no part in stopping or moving anything.
         <div class="ja">これは安全装置ではない。止める・動かす判断には使わない。</div></li>
     </ul>
@@ -106,6 +113,14 @@ try {
   scene.add(line([[-2.8, 0.8, 0], [-2.2, 0.8, 0]])); scene.add(line([[-2.8, 1.3, 0], [-2.2, 1.3, 0]])); // shelf
   const box = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.16), new THREE.MeshBasicMaterial({ color: 0xb3261e }));
   box.position.set(-2.5, 1.38, 0); scene.add(box);
+  const label = (text) => {  // a letter drawn on a small canvas, shown as a sprite above its machine
+    const c = Object.assign(document.createElement("canvas"), { width: 64, height: 64 }), g = c.getContext("2d");
+    g.fillStyle = "#1d1f23"; g.font = "600 48px -apple-system, Arial, sans-serif"; g.textAlign = "center"; g.textBaseline = "middle";
+    g.fillText(text, 32, 34);
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c) })); s.scale.set(0.4, 0.4, 1); return s;
+  };
+  const hLabel = label("H"); hLabel.position.set(-0.25, 1.8, 0); robot.add(hLabel);
+  const nLabel = label("N"); nLabel.position.set(1.8, 1.8, 0); scene.add(nLabel);
   draw = (id) => {
     const handed = ["hand", "again", "check", "tamper-1", "tamper-2"].includes(id);
     robot.position.x = handed ? 0.9 : -1.6;
@@ -118,17 +133,14 @@ try {
   canvas.replaceWith(Object.assign(document.createElement("p"), { textContent: "No WebGL here: the drawing is left out. The lines below are the check." }));
 }
 
-const PERMIT = { unused: ["Permit: 1, unused", "許可 1 件: 未使用"], "used by this record": ["Permit: 1, used by this record", "許可 1 件: この記録で使用"] };
 function show(step, buttons) {
   for (const b of buttons) b.setAttribute("aria-pressed", String(b.dataset.id === step.id));
   document.getElementById("step-en").textContent = step.en;
   document.getElementById("step-ja").textContent = step.ja;
   document.getElementById("lines").textContent = step.lines.join("\n");
-  if (step.permit) {
-    const [en, ja] = PERMIT[step.permit];
-    const p = document.getElementById("permit"); p.textContent = en + " ";
-    p.append(Object.assign(document.createElement("span"), { className: "ja", textContent: ja }));
-  }
+  const [en, ja] = step.permit || ["Permit: not given for this step", "許可: この段階では示されていない"];
+  const p = document.getElementById("permit"); p.textContent = en + " ";
+  p.append(Object.assign(document.createElement("span"), { className: "ja", textContent: ja }));
   draw(step.id);
 }
 fetch("out/scene.json").then((r) => { if (!r.ok) throw new Error("out/scene.json: " + r.status); return r.json(); }).then((s) => {

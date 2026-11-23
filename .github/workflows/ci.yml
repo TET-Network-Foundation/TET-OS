@@ -281,7 +281,7 @@ jobs:
       # summary changed and signed again, and a record dropped from one export must each be refused or
       # shown for its own reason; the page must keep "simulation: no robot moved" on screen.
       - if: needs.gate.outputs.code == 'true'
-        name: home permit scene — the permit acts once, each tamper shown for its reason
+        name: home permit scene — a second use of the permit is refused, each tamper shown for its reason
         env:
           TET_CLI: target/debug/tet-cli
         run: python3 prep/demos/home-permit/test_scene.py

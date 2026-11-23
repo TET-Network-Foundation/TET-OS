@@ -56,6 +56,30 @@ class Scene(unittest.TestCase):
         self.assertEqual(self.s.refusal, "append: notebook.py record refused: error: not recorded: "
                          f"permit: {self.s.permit_id} was already used by record {seq}")
 
+    def test_every_step_shows_the_permit_and_after_the_second_request_it_reads_used(self):
+        seq = tp.decode(self.s.R)[self.h + ".seq"]
+        for step in self.out["steps"]:
+            self.assertEqual(len(step.get("permit") or []), 2, step["id"])  # EN and JA, on every step
+        labels = {st["id"]: st["permit"] for st in self.out["steps"]}
+        self.assertEqual(labels["permit"], ["Permit: 1, unused", "許可 1 件: 未使用"])
+        for sid in ("agree", "hand", "again", "check", "tamper-1", "tamper-2"):
+            self.assertTrue(labels[sid][0].startswith(f"Permit: 1, used by record {seq} in H's notebook"), sid)
+            self.assertTrue(labels[sid][1].startswith(f"許可 1 件: H のノートの記録 {seq} で使用済み"), sid)
+            self.assertNotIn("unused", labels[sid][0])
+        self.assertIn("a second request citing it was refused", labels["again"][0])
+
+    def test_again_step_says_both_signed_then_h_refused_the_write_and_both_aborted(self):
+        step = [st for st in self.out["steps"] if st["id"] == "again"][0]
+        for part in ("Both sides check the new record and both sign it.",
+                     "Then H's notebook refuses to write it: the permit was already used.",
+                     "Both sides write an abort entry at its position."):
+            self.assertIn(part, step["en"])
+        for part in ("両方が新しい記録を確かめ、両方が署名する。", "そのあと H のノートが書き込みを拒否する",
+                     "両方が、その位置に中止の項目を書く。"):
+            self.assertIn(part, step["ja"])
+        self.assertEqual(step["lines"], ["both signatures given: H, N", self.s.refusal, "abort entry written: H, N"])
+        self.assertNotRegex(step["en"] + step["ja"], r"(?i)refuses? to sign|refused to sign|署名を拒否|署名しない")
+
     def test_tamper_summary_resigned_by_n_is_refused_on_h_signature(self):
         t = self.s.tamper1
         sig_problems = [p for p in t["problems"] if not isinstance(p, tp.LogConflict)]
@@ -116,10 +140,28 @@ class Page(unittest.TestCase):
                    "ロボットがその動作をしたか、安全だったか: 判定しない。記録は取り決めについてで、動作についてではない。",
                    "いつ起きたか: 各ログの中の順序だけ。日付は判定しない。",
                    "許可の条件: 許可は H 自身のノートが出したもので、条件は記録に入っていない。",
-                   "他のノートでの使用: この記録とこの書き出しの中で1回、までしか判定しない。",
+                   "同じ許可の、他のノートでの使用: 判定しない。",
                    "これは安全装置ではない。"):
             self.assertIn(ja, self.page)
-        self.assertEqual(self.page.count("<li>"), 6)
+        not_judged = self.page.split('<ul id="not-judged">', 1)[1].split("</ul>", 1)[0]
+        self.assertEqual(not_judged.count("<li>"), 6)
+        self.assertIn("<li>Use of the same permit in another notebook: not judged.", not_judged)
+        judged = self.page.split('<ul id="judged">', 1)[1].split("</ul>", 1)[0]
+        self.assertEqual(judged.count("<li>"), 1)
+        self.assertIn("<li>A second use of the permit inside H's log.", judged)
+        self.assertNotIn("up to once", self.page)
+
+    def test_page_says_the_keys_are_test_keys_in_software_in_a_simulation(self):
+        m = re.search(r'<p id="test-keys">([^<]*)</p>\s*<p class="ja">([^<]*)</p>', self.page)
+        self.assertIsNotNone(m)
+        for word in ("test keys", "software", "simulation"):
+            self.assertIn(word, m.group(1))
+        for word in ("テスト用の鍵", "ソフトウェア", "シミュレーション"):
+            self.assertIn(word, m.group(2))
+
+    def test_page_shows_each_step_s_own_permit_label(self):
+        self.assertIn("const [en, ja] = step.permit || [", self.page)
+        self.assertNotIn("if (step.permit)", self.page)
 
     def test_page_uses_only_the_vendored_three_and_fetches_nothing_remote(self):
         self.assertIn('"three": "../robot-sim/px4/vendor/three/three.module.js"', self.page)

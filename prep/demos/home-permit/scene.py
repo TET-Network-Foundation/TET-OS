@@ -50,6 +50,7 @@ EXPIRES_SEQ = 10
 NAMES = {"H": "home helper robot (simulated)", "N": "visiting-care tablet (simulated)"}
 FORGERY_LINE = "a conflict is not a verdict of forgery"
 BANNER = "simulation: no robot moved"
+CAUSES = "the check's own list of problems (the verdict line above does not name a cause):"
 
 
 class SceneError(Exception):
@@ -116,7 +117,8 @@ class Scene:
                                   "--expires-seq", str(EXPIRES_SEQ)).strip()
         self.step("permit", "Morning. H's notebook holds one one-time permit.",
                   "朝。H のノートに、一回だけの許可が1つ用意される。",
-                  [f"permit {self.permit_id} ({ACTION}) in H's notebook"], permit="unused")
+                  [f"permit {self.permit_id} ({ACTION}) in H's notebook"],
+                  permit=["Permit: 1, unused", "許可 1 件: 未使用"])
 
     def request(self, summary):
         """Make R, check it field by field on both sides, both sign. Returns (record, sigs, random value)."""
@@ -136,9 +138,11 @@ class Scene:
         self.R, self.sigs = rec, sigs
         fields = tp.decode(rec)
         h, n = self.party(rec, "H"), self.party(rec, "N")
+        self.used = used = [f"Permit: 1, used by record {fields[h + '.seq']} in H's notebook",
+                            f"許可 1 件: H のノートの記録 {fields[h + '.seq']} で使用済み"]
         self.step("agree", "The visit. N asks: take the medicine box from shelf 2 and hand it over. "
-                  "Both check R field by field, both sign, each keeps R in its own log; H's entry cites the permit.",
-                  "訪問。N が命令を出す: 「棚2の薬箱を取って渡す」。H と N が記録 R を項目ごとに確かめ、両方が署名し、"
+                  "Both check R field by field, both sign, each keeps R in its own log; H's entry cites the permit once.",
+                  "訪問。N が依頼する: 「棚2の薬箱を取って渡す」。H と N が記録 R を項目ごとに確かめ、両方が署名し、"
                   "それぞれ自分のログに R を置く。H のログの項目は、その許可を1回引用する。",
                   [f"summary: {fields['summary']}",
                    f"H: record {fields[h + '.seq']} after {fields[h + '.prev'][:16]}…",
@@ -146,23 +150,40 @@ class Scene:
                    f"agreed: {fields['agreed'][:16]}…",
                    f"permit: in H's notebook, {fields['permit.id']}",
                    "the care tablet's key signed; the home robot's key signed"],
-                  permit="used by this record")
+                  permit=used)
         self.step("hand", "The drawing shows the medicine box handed over. A drawing only: no robot moved, and an action is not what is checked.",
-                  "絵: 薬箱が渡される様子。絵だけで、ロボットは動いていない。動作そのものは確認の対象ではない。", [])
+                  "絵: 薬箱が渡される様子。絵だけで、ロボットは動いていない。動作そのものは確認の対象ではない。", [], permit=used)
 
     def second_request(self):
-        """The same permit again. H's notebook writes before N's and refuses; both sides then abort."""
+        """The same permit again. Both sides check and sign; H's notebook writes before N's and refuses
+        the write; both sides then write an abort entry. If H's notebook takes the record instead, the
+        refusal is None: the scene goes on so its test fails on that, and main() writes no scene.json."""
         rec, sigs = self.request(REQUEST)
+        self.second_sigs = sorted(sigs)
         try:
             tp.append(self.dirs["H"], rec, sigs, self.pin["N"])
         except tp.Refused as e:
             self.refusal = str(e)
         else:
-            raise SceneError("H's notebook took a second record citing the same permit")
+            self.refusal = None
+            tp.abort(self.dirs["N"], rec)
+            self.step("again", "H's notebook took a second record citing the same permit. The scene is broken.",
+                      "H のノートが同じ許可を引用する2つ目の記録を受け入れた。この場面は壊れている。", [],
+                      permit=["Permit: 1, cited twice", "許可 1 件: 2回引用された"])
+            return
         tp.abort(self.dirs["H"], rec)
         tp.abort(self.dirs["N"], rec)
-        self.step("again", "N asks again with the same permit. H's notebook refuses.",
-                  "N が同じ許可でもう一度命令を出す。H のノートは拒否する。", [self.refusal])
+        self.step("again", "N asks again with the same permit. Both sides check the new record and both sign it. "
+                  "Then H's notebook refuses to write it: the permit was already used. "
+                  "Both sides write an abort entry at its position.",
+                  "N が同じ許可でもう一度依頼する。両方が新しい記録を確かめ、両方が署名する。"
+                  "そのあと H のノートが書き込みを拒否する: 許可はもう使われている。"
+                  "両方が、その位置に中止の項目を書く。",
+                  ["both signatures given: " + ", ".join(sorted(self.letters(rec)[p] for p in self.second_sigs)),
+                   self.refusal,
+                   "abort entry written: H, N"],
+                  permit=[self.used[0] + "; a second request citing it was refused",
+                          self.used[1] + "。2回目の依頼は拒否された"])
 
     # ── a week later, on another computer ────────────────────────────────────────────────────
 
@@ -202,7 +223,7 @@ class Scene:
                   "received from outside the two parties.",
                   "1週間後。別のPCで確かめる。受け取るもの: R、両方の署名、両方のログの書き出し、"
                   "そして二者の外から受け取った2つのピン。オフライン。",
-                  list(shown) + [cited_line(cited)])
+                  list(shown) + [cited_line(cited)], permit=self.used)
 
     def tamper_summary(self):
         """N's side changes the summary and signs the changed record again with N's key. H's signature is
@@ -223,7 +244,8 @@ class Scene:
         self.tamper1 = {"record": changed, "sigs": sigs, "pins": pins, "exports": exports,
                         "problems": problems, "notes": notes, "raw": raw, "shown": shown}
         self.step("tamper-1", "Tamper 1: N's side changes the summary to another item and signs again.",
-                  "書き換え1: N 側が要約を別の物に変えて署名し直す。", list(shown) + ["  " + as_named(x, self.letters(changed)) for x in problems])
+                  "書き換え1: N 側が要約を別の物に変えて署名し直す。",
+                  list(shown) + [CAUSES] + ["  " + as_named(x, self.letters(changed)) for x in problems], permit=self.used)
 
     def tamper_drop(self):
         """H's side hands over an export cut back to before R: R and every later record are gone. N's copy
@@ -234,7 +256,8 @@ class Scene:
         self.tamper2 = {"problems": problems, "notes": notes, "raw": raw, "shown": shown}
         self.step("tamper-2", "Tamper 2: H's side drops the record from its log. N's copy still holds H's valid signature.",
                   "書き換え2: H 側が記録を消す → N の控えに H の有効な署名が残っている。",
-                  list(shown) + ["  " + as_named(x, self.letters(self.R)) for x in problems] + [FORGERY_LINE + " / 食い違いは偽造の判定ではありません"])
+                  list(shown) + [CAUSES] + ["  " + as_named(x, self.letters(self.R)) for x in problems]
+                  + [FORGERY_LINE + " / 食い違いは偽造の判定ではありません"], permit=self.used)
 
     def run(self):
         self.give_permit()
@@ -282,9 +305,12 @@ def main(argv=None):
     a = ap.parse_args(argv)
     work = tempfile.mkdtemp(prefix="home-permit-")
     try:
-        scene = Scene(work).run()
+        s = Scene(work)
+        scene = s.run()
     finally:
         shutil.rmtree(work)
+    if s.refusal is None:
+        raise SceneError("H's notebook took a second record citing the same permit; no scene.json written")
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "scene.json"), "w") as f:
         json.dump(scene, f, ensure_ascii=False, indent=1)
