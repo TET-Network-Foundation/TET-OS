@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent console (simulation)</title>
+<style>
+  /* Same colours, type and rules as ../robot-sim/page.html (see ../robot-sim/DESIGN.md): the two demos
+     are one style. test_console.py holds the light colour line identical to the simulation page's. */
+  :root, [data-theme="light"] { --bg:#f6f4ef; --paper:#ffffff; --ink:#1d1f23; --dim:#55595f; --rule:#c9c6be; --soft:#ece9e2;
+    --accent:#1f4e8c; --accent-bg:#e3ebf5; --ok:#2e7d32; --bad:#b3261e; --bad-bg:#f8e7e5; --warn:#8a5a00; --warn-bg:#f6edd9; }
+  :root { --mute:var(--dim); --line:var(--rule); --panel:var(--soft); --okbg:#e8f2e8; --no:var(--bad); --nobg:var(--bad-bg); --acc:var(--accent); }
+  * { box-sizing:border-box; }
+  body { margin:0; font:16px/1.5 Charter, "Bitstream Charter", "Iowan Old Style", Georgia, "Hiragino Mincho ProN", "Yu Mincho", serif; color:var(--ink); background:var(--bg); }
+  header { display:flex; flex-wrap:wrap; align-items:baseline; gap:8px 24px; padding:12px 24px 10px; border-bottom:2px solid var(--ink); background:var(--paper); }
+  header h1 { font-size:22px; font-weight:600; margin:0; }
+  .status { color:var(--mute); font:12.5px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  .lang { margin-left:auto; display:flex; gap:4px; }
+  main { max-width:1060px; margin:0 auto; padding:8px 24px 40px; }
+  section { border:1px solid var(--line); border-radius:0; padding:16px 20px; margin:18px 0; background:var(--paper); }
+  h2 { font-size:19px; font-weight:600; margin:0 0 8px; }
+  h2 .n { display:inline-block; min-width:1.6em; color:var(--mute); font-weight:normal; }
+  p.lead { margin:0 0 12px; color:var(--mute); }
+  table { width:100%; border-collapse:collapse; font-family:-apple-system, "Helvetica Neue", "Hiragino Sans", Arial, sans-serif; font-size:15px; }
+  th, td { text-align:left; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-size:13px; color:var(--mute); font-weight:600; } thead th { background:var(--soft); } tbody th { color:var(--ink); font-size:15px; }
+  code, pre { font:13px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  pre { background:var(--panel); border:1px solid var(--line); padding:10px; border-radius:0; overflow:auto; white-space:pre-wrap; word-break:break-all; margin:8px 0 0; }
+  button { font:14px/1.3 -apple-system, "Helvetica Neue", "Hiragino Sans", Arial, sans-serif; padding:7px 12px; min-height:36px; border:1px solid var(--line); border-radius:2px; background:var(--paper); color:var(--ink); cursor:pointer; }
+  button:hover { border-color:var(--accent); color:var(--accent); }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.primary:hover { color:#fff; }
+  button[aria-pressed="true"] { background:var(--accent-bg); color:var(--accent); border-color:var(--accent); font-weight:600; }
+  button:disabled { color:var(--dim); border-color:var(--line); cursor:not-allowed; background:var(--soft); opacity:.7; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  select, input { font:15px -apple-system, "Helvetica Neue", "Hiragino Sans", Arial, sans-serif; padding:6px 8px; min-height:36px; border:1px solid var(--dim); border-radius:2px; background:var(--paper); color:var(--ink); }
+  label { display:block; font:600 13px/1.4 -apple-system, "Helvetica Neue", "Hiragino Sans", Arial, sans-serif; margin-bottom:4px; }
+  .row { display:flex; flex-wrap:wrap; gap:14px; align-items:flex-end; }
+  /* state: a word and a mark as well as a colour */
+  .pill { display:inline-block; padding:1px 7px; border:1px solid currentColor; border-radius:2px; font:600 13px/1.5 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  .active { background:var(--okbg); color:var(--ok); } .active::before { content:"● "; }
+  .paused { background:var(--warn-bg); color:var(--warn); } .paused::before { content:"‖ "; }
+  .revoked { background:var(--nobg); color:var(--no); } .revoked::before { content:"× "; }
+  .who { background:var(--panel); border-left:3px solid var(--rule); padding:8px 12px; margin:10px 0; }
+  .verdict { font:600 18px/1.3 -apple-system, "Helvetica Neue", Arial, sans-serif; padding:10px 14px; border:1px solid currentColor; border-radius:0; margin-top:12px; }
+  .verdict.ok { background:var(--okbg); color:var(--ok); }
+  .verdict.no { background:var(--nobg); color:var(--no); }
+  .cheats { margin-top:14px; }
+  .cheats li { margin:8px 0; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  @media (max-width:760px) { .cols { grid-template-columns:1fr; } main, header { padding-left:12px; padding-right:12px; } button, select, input { min-height:40px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; animation:none !important; scroll-behavior:auto !important; } }
+  .msg { color:var(--no); font-weight:600; min-height:1.5em; }
+  .small { font-size:14px; color:var(--mute); }
+  .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1 data-t="Agent console">Agent console</h1>
+  <span class="status"><span data-t="Status:">Status:</span> <span data-t="simulation: simulated agents, local only (127.0.0.1); test keys made for this demo">simulation: simulated agents, local only (127.0.0.1); test keys made for this demo</span></span>
+  <div class="lang" role="group" aria-label="Language / 言語">
+    <button id="l-en" type="button" aria-pressed="true" lang="en">EN</button>
+    <button id="l-ja" type="button" aria-pressed="false" lang="ja">日本語</button>
+  </div>
+</header>
+<main>
+  <section aria-labelledby="h1">
+    <h2 id="h1"><span class="n">1</span><span data-t="My agents">My agents</span></h2>
+    <p class="lead" data-t="One row per agent key. Uses left are counted in this agent's own log.">One row per agent key. Uses left are counted in this agent's own log.</p>
+    <table>
+      <thead><tr>
+        <th scope="col" data-t="Name">Name</th><th scope="col" data-t="Key id">Key id</th>
+        <th scope="col" data-t="May do (uses left in this log)">May do (uses left in this log)</th>
+        <th scope="col" data-t="Records">Records</th><th scope="col" data-t="State">State</th><th scope="col" data-t="Actions">Actions</th>
+      </tr></thead>
+      <tbody id="agents"></tbody>
+    </table>
+    <p class="small" data-t="Pause and revoke are this console's own: they are not signed, and an outside check cannot see them.">Pause and revoke are this console's own: they are not signed, and an outside check cannot see them.</p>
+    <p class="msg" id="m1" role="status" aria-live="polite"></p>
+  </section>
+
+  <section aria-labelledby="h2">
+    <h2 id="h2"><span class="n">2</span><span data-t="Give a permit">Give a permit</span></h2>
+    <p class="lead" data-t="Pick an agent, what it may do, and how many times. Each time is one one-time permit.">Pick an agent, what it may do, and how many times. Each time is one one-time permit.</p>
+    <div class="who">
+      <strong data-t="Who signs today:">Who signs today:</strong>
+      <span data-t="the agent's own key, on this computer (the device itself).">the agent's own key, on this computer (the device itself).</span><br>
+      <strong data-t="Permits signed by the owner:">Permits signed by the owner:</strong>
+      <span data-t="planned">planned</span>
+    </div>
+    <form id="grant" class="row" novalidate>
+      <div><label for="g-agent" data-t="Agent">Agent</label><select id="g-agent"></select></div>
+      <div><label for="g-action" data-t="What it may do">What it may do</label><select id="g-action"></select></div>
+      <div><label for="g-count"><span data-t="How many times">How many times</span> <span class="small" id="g-max"></span></label>
+        <input id="g-count" type="number" min="1" value="1" inputmode="numeric" style="width:6em"></div>
+      <div><button class="primary" type="submit" data-t="Sign the permit">Sign the permit</button></div>
+    </form>
+    <p class="msg" id="m2" role="status" aria-live="polite"></p>
+    <div id="g-out" hidden>
+      <p class="small" id="g-sum"></p>
+      <h3 style="font-size:16px;margin:10px 0 0" data-t="The signed permit (the newest one)">The signed permit (the newest one)</h3>
+      <pre id="g-permit"></pre>
+      <h3 style="font-size:16px;margin:10px 0 0" data-t="Its signature envelope: two halves, Ed25519 and ML-DSA-44">Its signature envelope: two halves, Ed25519 and ML-DSA-44</h3>
+      <pre id="g-env"></pre>
+    </div>
+  </section>
+
+  <section aria-labelledby="h3">
+    <h2 id="h3"><span class="n">3</span><span data-t="Check from outside">Check from outside</span></h2>
+    <p class="lead" data-t="The log is copied into a second folder that holds no key, and checked there against the key id you pick, the way another project would check it. No node is asked.">The log is copied into a second folder that holds no key, and checked there against the key id you pick, the way another project would check it. No node is asked.</p>
+    <div class="row">
+      <div><label for="c-log" data-t="Whose log">Whose log</label><select id="c-log"></select></div>
+      <div><label for="c-key" data-t="Against which key id">Against which key id</label><select id="c-key"></select></div>
+      <div><button class="primary" type="button" id="b-check" data-t="Run the check">Run the check</button></div>
+    </div>
+    <div class="cheats">
+      <h3 style="font-size:16px;margin:0" data-t="Try to cheat (each changes the outside copy only, then checks it)">Try to cheat (each changes the outside copy only, then checks it)</h3>
+      <p class="small" style="margin:4px 0 0" data-t="Each row checks the log against that agent's own key id.">Each row checks the log against that agent's own key id.</p>
+      <ul>
+        <li><button type="button" id="b-overuse" data-t="Use a permit one time too many">Use a permit one time too many</button>
+          <span class="small" data-t="the agent signs one more record citing a permit already used">the agent signs one more record citing a permit already used</span></li>
+        <li><button type="button" id="b-alter" data-t="Alter a record">Alter a record</button>
+          <span class="small" data-t="the newest record's value is edited after signing">the newest record's value is edited after signing</span></li>
+        <li><button type="button" id="b-swapkey" data-t="Swap in another key">Swap in another key</button>
+          <span class="small" data-t="the newest record is signed again by another agent's key">the newest record is signed again by another agent's key</span></li>
+      </ul>
+    </div>
+    <p class="msg" id="m3" role="status" aria-live="polite"></p>
+    <div id="c-out" aria-live="polite"></div>
+  </section>
+
+  <section aria-labelledby="h4">
+    <h2 id="h4"><span class="n">4</span><span data-t="What this shows, and what it does not">What this shows, and what it does not</span></h2>
+    <div class="cols">
+      <div><h3 style="font-size:16px" data-t="The check shows, about the log it is given">The check shows, about the log it is given</h3><ul id="shows"></ul></div>
+      <div><h3 style="font-size:16px" data-t="It does not show">It does not show</h3><ul id="notshown"></ul></div>
+    </div>
+  </section>
+  <p class="small" id="events" aria-label="Recent events"></p>
+</main>
+<script>
+"use strict";
+const JA = {
+  "Agent console": "エージェント管理コンソール",
+  "Status:": "状態：",
+  "simulation: simulated agents, local only (127.0.0.1); test keys made for this demo": "シミュレーション・模擬のエージェント・このパソコン内だけで動作（127.0.0.1）・このデモ用に作ったテスト鍵",
+  "My agents": "自分のエージェント",
+  "One row per agent key. Uses left are counted in this agent's own log.": "エージェントの鍵ごとに1行。残り回数は、そのエージェント自身のログで数えています。",
+  "Name": "名前", "Key id": "鍵ID", "May do (uses left in this log)": "許可された動作（このログでの残り回数）",
+  "Records": "記録", "State": "状態", "Actions": "操作",
+  "active": "有効", "paused": "一時停止", "revoked": "失効",
+  "nothing": "なし",
+  "Use {a} once": "{a} を1回使う",
+  "Pause": "一時停止", "Resume": "再開", "Revoke": "失効させる",
+  "Revoke {name}? Its key file on this computer is destroyed; this cannot be undone.": "{name} を失効させますか？このパソコン上の鍵ファイルが消去されます。元に戻せません。",
+  "Give a permit": "許可を出す",
+  "Pick an agent, what it may do, and how many times. Each time is one one-time permit.": "エージェント、許可する動作、回数を選びます。1回ごとに1回限りの許可が1つ作られます。",
+  "Who signs today:": "現在の署名者：",
+  "the agent's own key, on this computer (the device itself).": "エージェント自身の鍵（このパソコン上、つまり機械そのもの）。",
+  "Permits signed by the owner:": "所有者が署名する許可：",
+  "planned": "設計中",
+  "Agent": "エージェント", "What it may do": "許可する動作", "How many times": "回数",
+  "(1 to {n})": "（1〜{n}）",
+  "Sign the permit": "許可に署名する",
+  "The signed permit (the newest one)": "署名された許可（最新のもの）",
+  "Its signature envelope: two halves, Ed25519 and ML-DSA-44": "その署名（Ed25519 と ML-DSA-44 の2つ）",
+  "{n} one-time permit(s) signed by {name}'s own key. Records up to number {exp} may use them.": "{name} 自身の鍵で1回限りの許可を {n} 件署名しました。記録番号 {exp} までの記録が使えます。",
+  "Check from outside": "外から確かめる",
+  "The log is copied into a second folder that holds no key, and checked there against the key id you pick, the way another project would check it. No node is asked.": "ログを鍵のない別のフォルダーにコピーし、選んだ鍵IDに照らして、そこで確かめます。別のプロジェクトが確かめるのと同じやり方です。ノードには問い合わせません。",
+  "Whose log": "誰のログか", "Against which key id": "どの鍵IDに照らすか", "Run the check": "確かめる",
+  "Try to cheat (each changes the outside copy only, then checks it)": "ごまかしてみる（外のコピーだけを変えてから確かめます）",
+  "Use a permit one time too many": "許可を1回多く使う",
+  "the agent signs one more record citing a permit already used": "エージェントが、使用済みの許可を挙げた記録をもう1件署名します",
+  "Alter a record": "記録を書き換える",
+  "the newest record's value is edited after signing": "最新の記録の値を、署名の後で書き換えます",
+  "Swap in another key": "別の鍵にすり替える",
+  "the newest record is signed again by another agent's key": "最新の記録を、別のエージェントの鍵で署名し直します",
+  "Checks out": "確認できました", "Refused": "拒否されました", "Could not run the check": "確認を実行できませんでした",
+  "{log}'s log, record(s) checked: {n}; against {key}'s key id; {ms} ms.": "{log} のログ、確かめた記録 {n} 件、{key} の鍵IDに照らして（{ms} ms）。",
+  "What was changed:": "変えたこと：",
+  "Why, record by record (the check's own words):": "記録ごとの理由（確認ツールの出力のまま）：",
+  "record {n}": "記録 {n}", "the whole log": "ログ全体",
+  "What this shows, and what it does not": "これで分かること、分からないこと",
+  "The check shows, about the log it is given": "渡されたログについて、確認で分かること", "It does not show": "分からないこと",
+  "which key signed each record": "どの鍵が各記録に署名したか",
+  "that the records are in this order": "記録がこの順番であること",
+  "that each record names the hash of the one before it": "各記録が一つ前の記録のハッシュを含んでいること",
+  "that no one-time permission was used twice in this log, or after it ran out": "このログの中で、1回限りの許可が2回使われていないこと、期限切れの後に使われていないこと",
+  "Which machine signed: the check judges which key signed each record; it does not judge which machine held that key.": "どの機械が署名したか：確認するのは各記録にどの鍵が署名したかで、その鍵をどの機械が持っていたかは判断しません。",
+  "Use of a permit in another log: the permit check judges reuse of a permit within one log; it does not judge use of that permit in another log.": "別のログでの許可の使用：許可の確認は一つのログの中での再使用を判断し、別のログでの使用は判断しません。",
+  "Pause and revoke here are this console's own. The outside check cannot see them.": "ここでの一時停止と失効はこのコンソールだけのものです。外からの確認には見えません。",
+  "When each record was written: the check judges the order of records in the log it is given; it does not judge when each record was written.": "各記録がいつ書かれたか：確認するのは渡されたログの中の記録の順番で、各記録がいつ書かれたかは判断しません。",
+  "That a reading or action really happened, or that the machine's clock was right.": "読み取った値や動作が本当にあったこと、機械の時計が正しかったこと。",
+  "Pause and revoke are this console's own: they are not signed, and an outside check cannot see them.": "一時停止と失効はこのコンソールだけのものです。署名されておらず、外からの確認には見えません。",
+  "Each row checks the log against that agent's own key id.": "どの行も、そのエージェント自身の鍵IDに照らして確かめます。",
+  "{what}: {name}": "{name}：{what}",
+  "That the log is complete at its end: not judged. A log produced by the key's holder: not judged; the check judges the log it is given against the pinned key.": "ログが最後までそろっていること：判断しません。鍵の持ち主が作ったログ：判断しません。確認するのは、渡されたログを固定した鍵に照らしてです。",
+  "Who signs: today the agent's own key signs its permits. A permit signed by the owner is planned.": "署名者：現在はエージェント自身の鍵が許可に署名します。所有者が署名する許可は設計中です。",
+  "Nothing here runs on a robot: the agents are folders on this computer.": "ここではロボットの上で何も動いていません。エージェントはこのパソコン上のフォルダーです。",
+  "That the signature format is final: not judged.": "署名の形式が確定していること：判断しません。",
+};
+let lang = "en", S = null;
+const t = (s, v) => { let r = lang === "ja" && JA[s] ? JA[s] : s; for (const k in v || {}) r = r.split("{" + k + "}").join(v[k]); return r; };
+const $ = (id) => document.getElementById(id);
+const el = (tag, attrs, ...kids) => { const e = document.createElement(tag); for (const k in attrs || {}) { if (k === "text") e.textContent = attrs[k]; else e.setAttribute(k, attrs[k]); } kids.forEach((k) => e.append(k)); return e; };
+
+function setLang(l) {
+  lang = l; document.documentElement.lang = l;
+  $("l-en").setAttribute("aria-pressed", String(l === "en")); $("l-ja").setAttribute("aria-pressed", String(l === "ja"));
+  document.querySelectorAll("[data-t]").forEach((e) => { e.textContent = t(e.dataset.t); });
+  document.title = t("Agent console");
+  render(); if (lastCheck) showCheck(lastCheck); if (lastGrant) showGrant(lastGrant);
+}
+
+async function post(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j.result;
+}
+async function load() { S = await (await fetch("/state")).json(); render(); }
+const name = (slug) => (S.agents.find((a) => a.slug === slug) || {}).name || slug;
+
+function fillSelect(sel, items) {
+  const keep = sel.value; sel.replaceChildren(...items.map(([v, txt]) => el("option", { value: v, text: txt })));
+  if (items.some(([v]) => v === keep)) sel.value = keep;
+}
+
+function render() {
+  if (!S) return;
+  const tb = $("agents"); tb.replaceChildren();
+  for (const a of S.agents) {
+    const may = a.may.length ? el("ul", { style: "margin:0;padding-left:18px" }, ...a.may.map((m) => el("li", {}, el("code", { text: m.action }), " × " + m.left))) : el("span", { class: "small", text: t("nothing") });
+    const doCell = el("td", {});
+    for (const m of a.may) {
+      const b = el("button", { type: "button", text: t("Use {a} once", { a: m.action }), "aria-label": t("{what}: {name}", { what: t("Use {a} once", { a: m.action }), name: a.name }) });
+      b.disabled = a.state !== "active";
+      b.onclick = () => act($("m1"), () => post("/use", { agent: a.slug, action: m.action }));
+      doCell.append(b, " ");
+    }
+    const pl = a.state === "paused" ? t("Resume") : t("Pause");
+    const p = el("button", { type: "button", text: pl, "aria-label": t("{what}: {name}", { what: pl, name: a.name }) });
+    p.disabled = a.state === "revoked";
+    p.onclick = () => act($("m1"), () => post("/pause", { agent: a.slug }));
+    const r = el("button", { type: "button", text: t("Revoke"), "aria-label": t("{what}: {name}", { what: t("Revoke"), name: a.name }) });
+    r.disabled = a.state === "revoked";
+    r.onclick = () => { if (confirm(t("Revoke {name}? Its key file on this computer is destroyed; this cannot be undone.", { name: a.name }))) act($("m1"), () => post("/revoke", { agent: a.slug })); };
+    doCell.append(p, " ", r);
+    tb.append(el("tr", {},
+      el("th", { scope: "row", text: a.name }),
+      el("td", {}, el("code", { title: a.keyid, text: a.keyid_short + "…" })),
+      el("td", {}, may), el("td", { text: String(a.records) }),
+      el("td", {}, el("span", { class: "pill " + a.state, text: t(a.state) })), doCell));
+  }
+  fillSelect($("g-agent"), S.agents.filter((a) => a.state === "active").map((a) => [a.slug, a.name]));
+  fillSelect($("g-action"), S.actions.map((x) => [x, x]));
+  $("g-count").max = S.max_per_grant; $("g-max").textContent = t("(1 to {n})", { n: S.max_per_grant });
+  fillSelect($("c-log"), S.agents.map((a) => [a.slug, a.name]));
+  fillSelect($("c-key"), S.agents.map((a) => [a.slug, `${a.name}: ${a.keyid_short}…`]));
+  $("shows").replaceChildren(...S.shows.map((s) => el("li", { text: t(s) })));
+  $("notshown").replaceChildren(...S.not_shown.map((s) => el("li", { text: t(s) })));
+  $("events").lang = "en"; $("events").textContent = S.events.slice(-4).join(" · ");
+}
+
+async function act(msg, fn) {
+  msg.textContent = ""; msg.lang = "en";
+  try { const r = await fn(); await load(); return r; } catch (e) { msg.textContent = e.message; await load(); }
+}
+
+let lastGrant = null, lastCheck = null;
+function showGrant(g) {
+  $("g-out").hidden = false;
+  $("g-sum").textContent = t("{n} one-time permit(s) signed by {name}'s own key. Records up to number {exp} may use them.", { n: g.count, name: g.name, exp: JSON.parse(g.permit).expires_seq });
+  $("g-permit").textContent = JSON.stringify(JSON.parse(g.permit), null, 1);
+  $("g-env").textContent = JSON.stringify(g.envelope, null, 1);
+}
+$("grant").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const agent = $("g-agent").value;
+  const g = await act($("m2"), () => post("/grant", { agent, action: $("g-action").value, count: Number($("g-count").value) }));
+  if (g) { g.name = name(agent); lastGrant = g; showGrant(g); }
+};
+
+function showCheck(r) {
+  const out = $("c-out"); out.replaceChildren();
+  const ok = r.verdict === "VALID";
+  out.append(el("div", { class: "verdict " + (ok ? "ok" : "no"), text: (ok ? "✓ " : "✗ ") + t(ok ? "Checks out" : r.verdict === "INVALID" ? "Refused" : "Could not run the check") }));
+  out.append(el("p", { class: "small", text: t("{log}'s log, record(s) checked: {n}; against {key}'s key id; {ms} ms.", { n: r.records, log: name(r.log_of), key: name(r.key_of), ms: r.ms }) }));
+  if (r.cheat) out.append(el("p", {}, el("strong", { text: t("What was changed:") + " " }), el("span", { lang: "en", text: r.cheat.what })));
+  const rows = Object.entries(r.by_seq).map(([n, ws]) => [t("record {n}", { n }), ws]);
+  if (r.log.length) rows.push([t("the whole log"), r.log]);
+  if (rows.length) {
+    out.append(el("p", { text: t("Why, record by record (the check's own words):") }));
+    out.append(el("ul", {}, ...rows.map(([k, ws]) => el("li", {}, el("strong", { text: k + ": " }), el("code", { lang: "en", text: ws.join("; ") })))));
+  }
+}
+async function check(cheat) {
+  $("c-out").replaceChildren(); lastCheck = null;
+  const r = await act($("m3"), () => post("/check", { log: $("c-log").value, key: $("c-key").value, cheat }));
+  if (r) { lastCheck = r; showCheck(r); }
+}
+$("b-check").onclick = () => check(null);
+$("b-overuse").onclick = () => { $("c-key").value = $("c-log").value; check("overuse"); };
+$("b-alter").onclick = () => { $("c-key").value = $("c-log").value; check("alter"); };
+$("b-swapkey").onclick = () => { $("c-key").value = $("c-log").value; check("swapkey"); };
+$("l-en").onclick = () => setLang("en");
+$("l-ja").onclick = () => setLang("ja");
+load();
+</script>
+</body>
+</html>

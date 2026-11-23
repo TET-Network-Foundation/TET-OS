@@ -42,6 +42,14 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: none
+          # The scan leaves out one folder and nothing else: the pinned upstream three.js that the
+          # PX4 replay page loads (prep/demos/robot-sim/px4/vendor/three). Those files are upstream's
+          # release, unchanged; their sha256 are listed in that folder's SHA256SUMS. The demo-files
+          # guard (prep/demos/guards/test_demo_files.py) reads this list and refuses any entry that is
+          # not a folder under prep/demos whose every file, other than its LICENSE, is pinned there.
+          config: |
+            paths-ignore:
+              - prep/demos/robot-sim/px4/vendor/three
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
         with:
           category: /language:${{ matrix.language }}
