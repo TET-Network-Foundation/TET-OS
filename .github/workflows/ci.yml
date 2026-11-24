@@ -286,6 +286,16 @@ jobs:
           TET_CLI: target/debug/tet-cli
         run: python3 prep/demos/home-permit/test_scene.py
 
+      # Sample records for an exchange (prep/demos/two-party-v0/samples.py): three honest two-party
+      # records and six broken ones, made with test keys through the machine notebook and tet-cli. Each
+      # broken one must be refused for the reason it is named for and no other, and no sample may hold a
+      # private key.
+      - if: needs.gate.outputs.code == 'true'
+        name: two-party sample records — each broken sample refused for its own reason, no private key in a sample
+        env:
+          TET_CLI: target/debug/tet-cli
+        run: python3 prep/demos/two-party-v0/test_samples.py
+
       # The demo folders: a file of a listed video type, a flight log outside a
       # fixtures/ folder or over 300 KiB, and any file over 1 MiB (except a vendored file whose sha256 its
       # SHA256SUMS lists) are refused. Videos are kept outside git.

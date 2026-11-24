@@ -53,6 +53,47 @@ test it lists must then fail on its own.
 `Reservation.test_on_v01_two_deals_at_one_position_frame_the_honest_side` runs the two-deals case on v0.1's
 code, loaded from commit 1d3186a0. A clone of the public repository does not hold that commit, so there this one test is skipped and prints why, and 53 run.
 
+## Sample records for an exchange
+
+A set of sample records that someone else can check with one command, and the expected result for each.
+
+```sh
+RISC0_SKIP_BUILD=1 cargo build -p tet-cli --release
+export TET_CLI=$PWD/target/release/tet-cli
+python3 prep/demos/two-party-v0/samples.py make samples-out        # writes a new folder
+python3 prep/demos/two-party-v0/samples.py check samples-out/honest-1
+python3 prep/demos/two-party-v0/samples.py check-all samples-out
+```
+
+`make` writes nine folders: `honest-1`, `honest-2-permit` (it cites a one-time permit) and `honest-3`, and
+six broken ones, each changed in one way: `broken-a-ed25519-half` and `broken-b-ml-dsa-half` (one side's
+half of that kind replaced by the same key's valid half over another record, one kind at a time),
+`broken-c-summary-changed` (after both signed), `broken-d-permit-used-twice` (a second record citing a
+permit the side's export already shows used), `broken-e-number-skipped` (the record names a number past
+the next one in that side's export) and `broken-f-one-key-both-parties`.
+
+A folder holds the record's bytes (`record.bin`), both signatures (`sig-a.json`, `sig-b.json`), both
+pins (`pin-1.txt`, `pin-2.txt`), the chain the signatures are bound to (`chain.json`), each side's
+notebook export (`export-1/`, `export-2/`; `broken-c-summary-changed` has none, so that its result is
+the signatures alone) and `WHAT.txt`: one line on what was done to it, then the exact lines `check` must
+print before "Shows:". No folder holds a private key.
+
+`check` prints what `twoparty.check()` finds, through `twoparty.report()`, wording unchanged, and exits
+0 only when there is no problem. `check-all` prints one line per folder (name, expected, got, MATCH or
+DIFFERS) and exits 1 on any DIFFERS.
+
+The keys, hashes and permit ids are new in every run; the folder names, the first line of each
+`WHAT.txt` and the two verdict lines are the same in every run. The broken samples other than (c) are
+made by a side using tet-cli directly or writing its own notebook entry, which this sketch's `sign()`
+and `append()` would refuse.
+
+What the samples do not show: the content is made up, the keys are throwaway test keys on a made-up
+chain, and the layout of a folder is a sketch, not a format.
+
+`test_samples.py` makes one set and asserts each folder's exact problem list. `controls_samples.py`
+makes each broken sample honest again, one at a time, and the test for it must then fail; it also makes
+`check` print a wrong verdict and puts a device key into a sample, and the tests for those must fail.
+
 ## Shows
 
 - that both pinned keys signed exactly this record, each with both halves
