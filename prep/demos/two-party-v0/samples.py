@@ -21,8 +21,8 @@ A sample folder holds what a third party needs, and no private key:
                           "Shows:"
 
 `make` writes the expected lines of WHAT.txt from what was done to the sample, never by running the
-check. Keys, hashes and permit ids are new in every run; the folder names, the WHAT.txt first lines and
-the verdict lines repeat.
+check. Keys, hashes, permit ids and which side is a or b are new in every run; the folder names, the
+WHAT.txt first lines and the verdict lines up to the party letter repeat.
 """
 
 import argparse
@@ -290,7 +290,7 @@ class Maker:
         sig_lines = [f"{self.letter(third, d)}: signature: " + BYTES_REFUSAL.format(n=len(third)) for d in (A, B)]
         notes = [f"{p}: no export, so nothing here shows that {p} kept this record" for p in (self.letter(third, A), self.letter(third, B))]
         self.write("broken-c-summary-changed",
-                   "broken: the summary was changed after both sides signed; no exports are given (see README)",
+                   "broken: the summary was changed after both sides signed; no exports are given, so the result is the signatures alone",
                    changed, third_sigs, (A, B), (None, None), verdict_lines(sig_lines, (), notes))
 
         # (d): a second record citing the permit honest-2-permit already used. Both sides sign it through

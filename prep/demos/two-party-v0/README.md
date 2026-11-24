@@ -82,10 +82,18 @@ print before "Shows:". No folder holds a private key.
 0 only when there is no problem. `check-all` prints one line per folder (name, expected, got, MATCH or
 DIFFERS) and exits 1 on any DIFFERS.
 
-The keys, hashes and permit ids are new in every run; the folder names, the first line of each
-`WHAT.txt` and the two verdict lines are the same in every run. The broken samples other than (c) are
-made by a side using tet-cli directly or writing its own notebook entry, which this sketch's `sign()`
-and `append()` would refuse.
+The keys, hashes and permit ids are new in every run, and so is which side is `a` and which is `b`
+(the side whose Ed25519 key id sorts lower is `a`). The folder names, the first line of each `WHAT.txt`
+and the two verdict lines up to that letter are the same in every run; the lines after them carry the
+letters, record numbers, permit ids and byte counts of that run.
+
+Samples (a) and (b) borrow one half from the same key's signature over another record, made with
+tet-cli directly. Samples (d), (e) and (f) are made by a side acting outside this sketch's `sign()` and
+`append()`, which would refuse them: (d) and (e) write their own notebook entry, (e) and (f) sign with
+tet-cli directly. A side with its own key can always do that; the check is what finds it.
+
+`check` also exits 0 when an export is missing and nothing else is wrong; the second line then says
+which side gave no export.
 
 What the samples do not show: the content is made up, the keys are throwaway test keys on a made-up
 chain, and the layout of a folder is a sketch, not a format.
@@ -93,6 +101,8 @@ chain, and the layout of a folder is a sketch, not a format.
 `test_samples.py` makes one set and asserts each folder's exact problem list. `controls_samples.py`
 makes each broken sample honest again, one at a time, and the test for it must then fail; it also makes
 `check` print a wrong verdict and puts a device key into a sample, and the tests for those must fail.
+Three more switch off a check inside `twoparty.py` (tet-cli's refusal, the export check, the two-keys
+rule) and the tests of the samples that rest on it must fail.
 
 ## Shows
 

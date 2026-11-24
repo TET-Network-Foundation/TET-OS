@@ -34,6 +34,7 @@ BROKEN = ("broken-a-ed25519-half", "broken-b-ml-dsa-half", "broken-c-summary-cha
 # The only files a sample folder may hold. An export holds only the log's own files.
 TOP = {"record.bin", "sig-a.json", "sig-b.json", "pin-1.txt", "pin-2.txt", "chain.json", "WHAT.txt"}
 IN_EXPORT = re.compile(r"chain\.json|chain\.txt|records/[1-9][0-9]*\.json(\.sig\.json)?|permits/[0-9a-f]{32}\.json(\.sig\.json)?")
+# A line that is a 12- to 24-word phrase of short lowercase words, as device.key holds.
 PHRASE = re.compile(rb"(?m)^\s*[a-z]{3,8}( [a-z]{3,8}){11,23}\s*$")
 
 

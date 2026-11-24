@@ -47,6 +47,19 @@ CONTROLS = [
      'o.write(what + "\\n" + "\\n".join(expected) + "\\n")',
      'o.write(what + "\\n" + "\\n".join(expected) + "\\n")\n        if exports[0]:\n            shutil.copyfile(os.path.join(self.A, "device.key"), os.path.join(f, "export-1", "records", "99.json"))',
      ["test_no_private_key_anywhere_in_the_set"]),
+    # The checks themselves, switched off one at a time in the scratch copy of twoparty.py.
+    ("twoparty: tet-cli agent verify's refusal is ignored", "twoparty.py",
+     "    if rc != 0:\n        return f\"signature: {nb.refusal(out)}\"", "    pass",
+     ["test_a_ed25519_half_of_another_record_is_refused_for_that_half",
+      "test_b_ml_dsa_half_of_another_record_is_refused_for_that_half",
+      "test_c_summary_changed_after_signing_is_refused_by_both_signatures"]),
+    ("twoparty: the exports are not checked", "twoparty.py",
+     "problems += log_problems(p, rec, h, exports[i], pins[i])", "pass",
+     ["test_d_second_use_of_a_permit_is_a_log_conflict_at_the_permit_holder",
+      "test_e_record_number_past_the_next_one_is_a_log_conflict_at_that_side"]),
+    ("twoparty: two different Ed25519 keys in key-id order are not required", "twoparty.py",
+     'if not rec["a.ed"] < rec["b.ed"]:', "if False:",
+     ["test_f_one_key_for_both_parties_is_refused_as_a_record"]),
 ]
 
 
