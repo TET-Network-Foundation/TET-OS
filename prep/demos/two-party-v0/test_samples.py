@@ -9,13 +9,16 @@ a fixed value.
     TET_CLI=/path/to/tet-cli python3 -m unittest prep/demos/two-party-v0/test_samples.py
 """
 
+import getpass
 import json
 import os
 import re
+import socket
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -36,6 +39,10 @@ TOP = {"record.bin", "sig-a.json", "sig-b.json", "pin-1.txt", "pin-2.txt", "chai
 IN_EXPORT = re.compile(r"chain\.json|chain\.txt|records/[1-9][0-9]*\.json(\.sig\.json)?|permits/[0-9a-f]{32}\.json(\.sig\.json)?")
 # A line that is a 12- to 24-word phrase of short lowercase words, as device.key holds.
 PHRASE = re.compile(rb"(?m)^\s*[a-z]{3,8}( [a-z]{3,8}){11,23}\s*$")
+# The one time a sample set may carry: the Unix epoch, typed out here, not taken from samples.py.
+SAMPLE_TIME = "1970-01-01T00:00:00Z"
+# A date with a year after 1970 written as digits, as a clock time is.
+DATE = re.compile(rb"(?<![0-9])(197[1-9]|19[89][0-9]|2[0-9]{3})-[01][0-9]-[0-3][0-9]")
 
 
 def run(*argv):
@@ -48,7 +55,9 @@ class Samples(unittest.TestCase):
     def setUpClass(cls):
         cls.t = tempfile.mkdtemp(prefix="two-party-samples-test-")
         cls.set = os.path.join(cls.t, "set")
+        cls.made_from = time.time()
         rc, out, err = run("make", cls.set)
+        cls.made_to = time.time()
         assert rc == 0, err
 
     @classmethod
@@ -127,6 +136,66 @@ class Samples(unittest.TestCase):
                 with open(path, "rb") as f:
                     self.assertIsNone(PHRASE.search(f.read()), path)
                 seen += 1
+        self.assertGreater(seen, 100)
+
+    def records(self):
+        """(path, parsed JSON) of every notebook record in every export of the set."""
+        out = []
+        for root, _, files in os.walk(self.set):
+            if os.path.basename(root) == "records":
+                for n in files:
+                    if re.fullmatch(r"[1-9][0-9]*\.json", n):
+                        with open(os.path.join(root, n), encoding="utf-8") as f:
+                            out.append((os.path.join(root, n), json.load(f)))
+        return out
+
+    def test_every_record_carries_the_sample_time_and_not_the_clock_at_make_time(self):
+        records = self.records()
+        self.assertGreater(len(records), 50)
+        made = (time.strftime("%Y-%m-%dT%H:%M", time.gmtime(t)) for t in (self.made_from, self.made_to))
+        made = set(made)
+        for path, r in records:
+            self.assertEqual(r["clock_utc"], SAMPLE_TIME, path)
+            self.assertNotIn(r["clock_utc"][:16], made, path)
+
+    def test_nothing_of_the_machine_that_made_it_is_in_the_set(self):
+        """No user name, home path, host name, temporary folder or date after 1970 in any file; no number
+        within two days of make time (in seconds or milliseconds) in any JSON; every file and folder
+        carries the sample time as its modification time."""
+        marks = {getpass.getuser(), os.path.expanduser("~"), socket.gethostname(),
+                 socket.gethostname().split(".")[0], os.path.realpath(tempfile.gettempdir()), tempfile.gettempdir()}
+        marks = {m.lower().encode() for m in marks if len(m) >= 3}
+        near = (self.made_from - 2 * 86400, self.made_to + 2 * 86400)
+
+        def numbers(v):
+            if isinstance(v, bool):
+                return
+            if isinstance(v, (int, float)):
+                yield v
+            elif isinstance(v, dict):
+                for x in v.values():
+                    yield from numbers(x)
+            elif isinstance(v, list):
+                for x in v:
+                    yield from numbers(x)
+
+        seen = 0
+        for root, dirs, files in os.walk(self.set):
+            for n in dirs + files:
+                path = os.path.join(root, n)
+                self.assertEqual(os.lstat(path).st_mtime, 0, path)
+            for n in files:
+                path = os.path.join(root, n)
+                with open(path, "rb") as f:
+                    b = f.read()
+                for m in marks:
+                    self.assertNotIn(m, b.lower(), path)
+                self.assertIsNone(DATE.search(b), path)
+                if n.endswith(".json"):
+                    for x in numbers(json.loads(b)):
+                        self.assertFalse(near[0] <= x <= near[1] or near[0] <= x / 1000 <= near[1], (path, x))
+                seen += 1
+        self.assertEqual(os.lstat(self.set).st_mtime, 0)
         self.assertGreater(seen, 100)
 
     # ── honest ──

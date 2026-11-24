@@ -23,11 +23,15 @@ A sample folder holds what a third party needs, and no private key:
 `make` writes the expected lines of WHAT.txt from what was done to the sample, never by running the
 check. Keys, hashes, permit ids and which side is a or b are new in every run; the folder names, the
 WHAT.txt first lines and the verdict lines up to the party letter repeat.
+
+No time of the machine that made a set is in it. Every notebook record carries a clock time
+(clock_utc); in a sample set it is always 1970-01-01T00:00:00Z (the Unix epoch, sample_clock.py), set
+here and not read from any clock. Every file and folder of the set is given that time as its
+modification time too.
 """
 
 import argparse
 import contextlib
-import datetime as dt
 import hashlib
 import io
 import json
@@ -40,6 +44,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import twoparty as tp  # noqa: E402
+import sample_clock  # noqa: E402
 
 nb = tp.nb
 CHAIN = {"TET_CHAIN_ID": "tet-two-party-samples",
@@ -139,7 +144,7 @@ def hand_entry(d, record, permit=None):
     seq = len(chain) + 1
     entry = {"v": 1, "kind": nb.KIND, "seq": seq, "prev": chain[-1] if chain else nb.ZERO,
              "reading": {"value": f"two-party {tp.sha(record)}", "unit": tp.UNIT},
-             "clock_utc": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
+             "clock_utc": sample_clock.SAMPLE_CLOCK_UTC}
     if permit:
         entry["permit"] = permit
     body = nb.canonical(entry)
@@ -180,6 +185,9 @@ def verdict_lines(sig_problems=(), log_problems=(), notes=()):
 class Maker:
     def __init__(self, out):
         self.out = out
+        # Every notebook.py run while making samples, here and in twoparty.py, goes through
+        # sample_clock.py: the real notebook.py with its clock fixed at the epoch.
+        self.real_notebook, tp.NOTEBOOK = tp.NOTEBOOK, os.path.join(HERE, "sample_clock.py")
         self.t = tempfile.mkdtemp(prefix="two-party-samples-")
         self.scratch = os.path.join(self.t, "scratch")
         os.makedirs(self.scratch)
@@ -338,6 +346,16 @@ class Maker:
 
     def close(self):
         shutil.rmtree(self.t)
+        tp.NOTEBOOK = self.real_notebook
+
+
+def set_times(out):
+    """Every file and folder under out gets the sample clock as its access and modification time."""
+    t = sample_clock.SAMPLE_CLOCK.timestamp()
+    for root, dirs, files in os.walk(out, topdown=False):
+        for n in files + dirs:
+            os.utime(os.path.join(root, n), (t, t), follow_symlinks=False)
+    os.utime(out, (t, t))
 
 
 def cmd_make(out):
@@ -350,6 +368,7 @@ def cmd_make(out):
         m.run()
     finally:
         m.close()
+    set_times(out)
     print(f"wrote {len(os.listdir(out))} sample folders to {out}; no private key is among them")
     return 0
 

@@ -87,6 +87,14 @@ The keys, hashes and permit ids are new in every run, and so is which side is `a
 and the two verdict lines up to that letter are the same in every run; the lines after them carry the
 letters, record numbers, permit ids and byte counts of that run.
 
+**The time in a sample is not real.** The record itself (`record.bin`) carries no time. The notebook
+entries in `export-1/` and `export-2/` do: every `records/<n>.json` has a `clock_utc` field, which a
+real notebook fills from its device clock. In a sample set it is always `1970-01-01T00:00:00Z`, the
+Unix epoch, for every entry in every run: `make` runs the real `notebook.py` through `sample_clock.py`,
+which fixes its clock there, and writes the same value into the entries it writes by hand. No clock of
+the machine that made the set is read for it. Every file and folder of the set also gets that time as
+its modification time, so a copy of the set does not carry the time it was made either.
+
 Samples (a) and (b) borrow one half from the same key's signature over another record, made with
 tet-cli directly. Samples (d), (e) and (f) are made by a side acting outside this sketch's `sign()` and
 `append()`, which would refuse them: (d) and (e) write their own notebook entry, (e) and (f) sign with
@@ -102,7 +110,11 @@ chain, and the layout of a folder is a sketch, not a format.
 makes each broken sample honest again, one at a time, and the test for it must then fail; it also makes
 `check` print a wrong verdict and puts a device key into a sample, and the tests for those must fail.
 Three more switch off a check inside `twoparty.py` (tet-cli's refusal, the export check, the two-keys
-rule) and the tests of the samples that rest on it must fail.
+rule) and the tests of the samples that rest on it must fail. Four put the machine's clock back, one
+way at a time (`notebook.py` run directly, `sample_clock.py` leaving the clock alone, the hand-written
+entries reading the clock, the file times left as written), and the tests that the set carries only the
+sample time and nothing of the machine that made it (no user name, home path, host name, temporary
+folder, date after 1970, or number near the time it was made) must fail.
 
 ## Shows
 
